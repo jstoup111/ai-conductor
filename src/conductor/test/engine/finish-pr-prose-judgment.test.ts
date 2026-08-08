@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { PrProseJudgmentResult } from '../../src/engine/finish-publication.js';
 import {
   decodePrProseJudgment,
   parseFinishPrProseJudgment,
@@ -20,5 +21,37 @@ describe('FINISH PR-prose judgment adapter', () => {
     // defect no human could act on.
     expect(decodePrProseJudgment({ success: true, output: 'The prose looks good.' }))
       .toEqual({ kind: 'malformed_response' });
+  });
+
+  it('retains an optional detail on refused and revision-required verdicts', () => {
+    const expectedRefusal: PrProseJudgmentResult = {
+      kind: 'refused', detail: 'The PR cannot be safely published.',
+    };
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'refused', detail: 'The PR cannot be safely published.' },
+    })).toEqual(expectedRefusal);
+
+    for (const reason of ['placeholder', 'halt', 'structurally_incomplete'] as const) {
+      const expectedRevision: PrProseJudgmentResult = {
+        kind: 'revision_required', reason, detail: `${reason} detail`,
+      };
+      expect(decodePrProseJudgment({
+        success: true,
+        publicationDisposition: { kind: 'revision_required', reason, detail: `${reason} detail` },
+      })).toEqual(expectedRevision);
+    }
+  });
+
+  it('continues to accept the legacy no-detail refusal and revision-required shapes', () => {
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'refused' },
+    })).toEqual({ kind: 'refused' });
+
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'revision_required', reason: 'placeholder' },
+    })).toEqual({ kind: 'revision_required', reason: 'placeholder' });
   });
 });

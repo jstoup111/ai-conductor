@@ -952,10 +952,14 @@ export type PrProseAuthoringRequest = {
  */
 export type PrProseJudgmentResult =
   | { kind: 'accepted' }
-  | { kind: 'revision_required'; reason: 'placeholder' | 'halt' | 'structurally_incomplete' }
+  | {
+    kind: 'revision_required';
+    reason: 'placeholder' | 'halt' | 'structurally_incomplete';
+    detail?: string;
+  }
   | { kind: 'timed_out' }
   | { kind: 'provider_unavailable' }
-  | { kind: 'refused' }
+  | { kind: 'refused'; detail?: string }
   | { kind: 'malformed_response' };
 
 /**

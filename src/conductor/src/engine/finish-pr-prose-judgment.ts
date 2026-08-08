@@ -8,13 +8,15 @@ export interface FinishPrProseJudgmentResponse {
 
 function isPrProseJudgmentResult(value: unknown): value is PrProseJudgmentResult {
   if (typeof value !== 'object' || value === null || !('kind' in value)) return false;
-  const result = value as { kind?: unknown; reason?: unknown };
+  const result = value as { kind?: unknown; reason?: unknown; detail?: unknown };
+  const hasOptionalStringDetail = result.detail === undefined || typeof result.detail === 'string';
   return result.kind === 'accepted' ||
     result.kind === 'timed_out' ||
     result.kind === 'provider_unavailable' ||
-    result.kind === 'refused' ||
+    (result.kind === 'refused' && hasOptionalStringDetail) ||
     result.kind === 'malformed_response' ||
     (result.kind === 'revision_required' &&
+      hasOptionalStringDetail &&
       (result.reason === 'placeholder' || result.reason === 'halt' || result.reason === 'structurally_incomplete'));
 }
 
