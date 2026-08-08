@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import type { ViewMode } from './ui/types.js';
 import type { EffortLevel } from './types/config.js';
 import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
+import { readUserConfig } from './engine/user-config.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -110,6 +111,35 @@ export interface PlanProtectedTargetsDispatch {
   path: string;
 }
 
+export interface UserConfigReadDispatch {
+  kind: 'user-config-read';
+  path: string;
+}
+
+/** Detect `conduct config read <dotted.path>` without starting the pipeline. */
+export function detectUserConfigReadCommand(argv: string[]): UserConfigReadDispatch | null {
+  if (argv[2] !== 'config' || argv[3] !== 'read' || !argv[4]) return null;
+  return { kind: 'user-config-read', path: argv[4] };
+}
+
+/** Print a scalar user-config value for shell callers. */
+export async function userConfigReadCommand(
+  cmd: UserConfigReadDispatch,
+  write: (output: string) => void = (output) => process.stdout.write(output),
+): Promise<number> {
+  const { config } = await readUserConfig();
+  let value: unknown = config;
+  for (const segment of cmd.path.split('.')) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      value = undefined;
+      break;
+    }
+    value = (value as Record<string, unknown>)[segment];
+  }
+  write(`${Array.isArray(value) ? value.join(' ') : value ?? ''}\n`);
+  return 0;
+}
+
 /** Parse argv for `conduct-ts plan-protected-targets <path>` without I/O. */
 export function detectPlanProtectedTargetsCommand(
   argv: string[],
@@ -175,10 +205,13 @@ export function createProgram(): Command {
     .option('--remote <url>', 'Add an origin remote (add-only, no push)');
   const config = program
     .command('config')
-    .description('Manage project-scoped harness configuration');
+    .description('Manage project- and user-scoped harness configuration');
   config
     .command('init')
-    .description('Create .ai-conductor/config.yml from the project template if absent');
+    .description('Create project-scoped .ai-conductor/config.yml from the template if absent');
+  config
+    .command('read <path>')
+    .description('Print a value from user-scoped ~/.ai-conductor/config.yml');
 
   // Engineer subcommands (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
   // (detectEngineerCommand) before the pipeline boots. Bare `engineer` launches the
