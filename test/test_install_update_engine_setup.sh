@@ -261,3 +261,30 @@ else
   cat "$TMP_ROOT/configure_md_viewer.out" "$TMP_ROOT/configure_mermaid_renderer.out" >&2
   exit 1
 fi
+
+# A present but failing conduct-ts write must not be followed by either setup
+# success line; the functions must return failure for their caller to handle.
+WRITE_FAIL_HOME="$TMP_ROOT/write-fail-home"
+WRITE_FAIL_PATH="$TMP_ROOT/write-fail-path"
+WRITE_FAIL_FRAGMENT="$CHECKOUT/bin/install-write-fail-test"
+mkdir -p "$WRITE_FAIL_HOME" "$WRITE_FAIL_PATH"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$WRITE_FAIL_PATH/conduct-ts"
+chmod +x "$WRITE_FAIL_PATH/conduct-ts"
+awk '/# ─── Main ─────────────────────────────────────────────────────────────────────/{exit} {print}' \
+  "$CHECKOUT/bin/install" > "$WRITE_FAIL_FRAGMENT"
+printf '%s\n' 'configure_md_viewer || printf "md-write-status=%s\\n" "$?"' >> "$WRITE_FAIL_FRAGMENT"
+printf '%s\n' 'configure_mermaid_renderer || printf "mermaid-write-status=%s\\n" "$?"' >> "$WRITE_FAIL_FRAGMENT"
+chmod +x "$WRITE_FAIL_FRAGMENT"
+
+printf '\n\n' | HOME="$WRITE_FAIL_HOME" PATH="$WRITE_FAIL_PATH:/usr/bin:/bin" \
+  script -qefc "$WRITE_FAIL_FRAGMENT" /dev/null > "$TMP_ROOT/write-fail.out" 2>&1
+
+if rg -q 'md-write-status=1' "$TMP_ROOT/write-fail.out" && \
+  rg -q 'mermaid-write-status=1' "$TMP_ROOT/write-fail.out" && \
+  ! rg -q 'Markdown viewer:|Mermaid renderer:' "$TMP_ROOT/write-fail.out"; then
+  echo 'PASS failed conduct-ts writes never report viewer or renderer success'
+else
+  echo 'FAIL failed conduct-ts writes never report viewer or renderer success' >&2
+  cat "$TMP_ROOT/write-fail.out" >&2
+  exit 1
+fi
