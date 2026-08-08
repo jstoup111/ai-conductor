@@ -91,6 +91,7 @@ interface FinishPublicationEffects {
     gh: (args: string[]) => Promise<{ stdout: string }>;
   };
   createShippedRecord: () => Promise<void>;
+  authorProse: () => Promise<void>;
   dispatchJudgment: () => Promise<{ kind: string; reason?: string }>;
   repairPresentation: () => Promise<void>;
   recordOutcome: () => Promise<void>;
@@ -182,6 +183,12 @@ function makePublicationFixture(initial: PublicationSnapshot) {
       mutate('create-shipped-record', () => {
         snapshot.shippedRecord = 'valid';
       }),
+    // The engine-selected authoring pass: the only thing that can turn an
+    // unauthored SHIP-entry body into reader-facing prose.
+    authorProse: () =>
+      mutate('author-prose', () => {
+        snapshot.pr.prose = 'accepted';
+      }),
     dispatchJudgment: () =>
       mutate('dispatch-judgment', () => {
         snapshot.pr.prose = 'accepted';
@@ -213,11 +220,11 @@ async function driveToTerminal(
   advance: AdvanceFinishPublication,
   fixture: ReturnType<typeof makePublicationFixture>,
 ): Promise<PublicationResult> {
-  for (let count = 0; count < 12; count++) {
+  for (let count = 0; count < 14; count++) {
     const result = await advance({ observe: fixture.observe, effects: fixture.effects });
     if (result.kind !== 'advanced') return result;
   }
-  throw new Error('publication did not converge within 12 transitions');
+  throw new Error('publication did not converge within 14 transitions');
 }
 
 describe('Story 1 — deterministic blockers precede judgment (FR-1, FR-2)', () => {
@@ -227,8 +234,10 @@ describe('Story 1 — deterministic blockers precede judgment (FR-1, FR-2)', () 
 
     const result = await advance({ observe: fixture.observe, effects: fixture.effects });
 
-    expect(result).toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
-    expect(fixture.calls).toEqual(['dispatch-judgment']);
+    // A SHIP-entry body is unauthored, so the FIRST provider pass authors it.
+    // Judgment is never asked to grade prose that does not exist yet.
+    expect(result).toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+    expect(fixture.calls).toEqual(['author-prose']);
   });
 
   it.each([
@@ -391,7 +400,7 @@ describe('Story 3 — recovery remains local to FINISH unless implementation pro
 });
 
 describe('Story 4 — judgment is one bounded prose-quality pass (FR-7, FR-8)', () => {
-  it('uses one judgment pass for placeholder prose and none after accepted content is observed', async () => {
+  it('uses one authoring pass for placeholder prose and none after accepted content is observed', async () => {
     const advance = await loadAdvanceFinishPublication();
     const fixture = makePublicationFixture(
       readySnapshot({ pr: { identity: 'missing', prose: 'placeholder', ready: false } }),
@@ -402,7 +411,8 @@ describe('Story 4 — judgment is one bounded prose-quality pass (FR-7, FR-8)', 
 
     expect(terminal.kind).toBe('complete');
     expect(retry.kind).toBe('complete');
-    expect(fixture.calls.filter((call) => call === 'dispatch-judgment')).toHaveLength(1);
+    expect(fixture.calls.filter((call) => call === 'author-prose')).toHaveLength(1);
+    expect(fixture.calls).not.toContain('dispatch-judgment');
   });
 
   it.each(['malformed', 'halt'] as const)(
@@ -428,20 +438,20 @@ describe('Story 4 — judgment is one bounded prose-quality pass (FR-7, FR-8)', 
     },
   );
 
-  it('preserves verified effects across provider failure and does not repeat accepted prose judgment', async () => {
+  it('preserves verified effects across provider failure and does not repeat accepted prose authoring', async () => {
     const advance = await loadAdvanceFinishPublication();
     const fixture = makePublicationFixture(readySnapshot());
-    fixture.fail.set('dispatch-judgment', new Error('provider timeout'));
+    fixture.fail.set('author-prose', new Error('provider timeout'));
 
     const failed = await advance({ observe: fixture.observe, effects: fixture.effects });
-    fixture.fail.delete('dispatch-judgment');
+    fixture.fail.delete('author-prose');
     const terminal = await driveToTerminal(advance, fixture);
     const resumed = await advance({ observe: fixture.observe, effects: fixture.effects });
 
     expect(failed.kind).toBe('publication_retry');
     expect(terminal.kind).toBe('complete');
     expect(resumed.kind).toBe('complete');
-    expect(fixture.calls.filter((call) => call === 'dispatch-judgment')).toHaveLength(2);
+    expect(fixture.calls.filter((call) => call === 'author-prose')).toHaveLength(2);
   });
 });
 
@@ -476,7 +486,7 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     expect(terminal.kind).toBe('complete');
     expect(fixture.calls).toEqual([
       'establish-pr',
-      'dispatch-judgment',
+      'author-prose',
       'repair-presentation',
       'record-outcome',
     ]);
@@ -563,6 +573,7 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     });
     const transitions: string[] = [];
     let judgmentDispatches = 0;
+    let authoringDispatches = 0;
     let terminal: Awaited<ReturnType<typeof coordinator.advance>> | undefined;
 
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -573,8 +584,8 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
         dispatchJudgment: async (request) => {
           if (!pullRequest) throw new Error('judgment requires a PR');
           // Faithful provider fake: it sees only the coordinator's bounded
-          // title/body contract, repairs those two fields, and returns the
-          // structured result the production adapter decodes.
+          // title/body contract and returns the structured result the
+          // production adapter decodes.
           expect(request).toEqual({
             kind: 'finish_pr_prose_quality',
             pullRequestUrl: prUrl,
@@ -582,9 +593,22 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
             maximumPasses: 1,
           });
           judgmentDispatches++;
+          return { success: true, publicationDisposition: { kind: 'accepted' } };
+        },
+        dispatchAuthoring: async (request) => {
+          if (!pullRequest) throw new Error('authoring requires a PR');
+          // The authoring pass receives its own bounded contract and writes the
+          // reader-facing title and body the SHIP-entry draft never had.
+          expect(request).toEqual({
+            kind: 'finish_pr_prose_authoring',
+            pullRequestUrl: prUrl,
+            authoringScope: ['title', 'body'],
+            maximumPasses: 1,
+          });
+          authoringDispatches++;
           pullRequest.title = 'feat: publish coherent finish';
           pullRequest.body = 'A reader-facing summary of the completed change.';
-          return { success: true, publicationDisposition: { kind: 'accepted' } };
+          return { success: true };
         },
         emit: async (event) => {
           if (event.type === 'finish_publication_transition' && event.phase === 'completed') {
@@ -596,16 +620,21 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     }
 
     expect(terminal).toEqual({ kind: 'complete' });
+    // Prose is authored BEFORE the shipped record is committed, so a prose
+    // failure never leaves the daemon a deduped feature it can never re-run.
     expect(transitions).toEqual([
       'establish_pr',
+      'author_pr_prose',
       'write_shipped_record',
-      'judge_pr_prose',
       'ready_pr',
       'record_outcome',
     ]);
     expect(githubCalls.some((args) => args[0] === 'pr' && args[1] === 'merge')).toBe(false);
     expect(githubCalls.some((args) => /auto-merge|enablepullrequestautomerge|--auto/i.test(args.join(' ')))).toBe(false);
-    expect(judgmentDispatches).toBe(1);
+    expect({ authoringDispatches, judgmentDispatches }).toEqual({
+      authoringDispatches: 1,
+      judgmentDispatches: 0,
+    });
   });
 
   it('retains prior verified state when GitHub is unavailable during a load-bearing write', async () => {

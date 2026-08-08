@@ -13,6 +13,7 @@ function isPrProseJudgmentResult(value: unknown): value is PrProseJudgmentResult
     result.kind === 'timed_out' ||
     result.kind === 'provider_unavailable' ||
     result.kind === 'refused' ||
+    result.kind === 'malformed_response' ||
     (result.kind === 'revision_required' &&
       (result.reason === 'placeholder' || result.reason === 'halt' || result.reason === 'structurally_incomplete'));
 }
@@ -32,7 +33,16 @@ export function parseFinishPrProseJudgment(output: string | undefined): unknown 
   }
 }
 
-/** Decode the bounded provider contract; successful unstructured replies fail closed. */
+/**
+ * Decode the bounded provider contract; successful unstructured replies fail
+ * closed.
+ *
+ * An unparsable reply resolves to `malformed_response` — its own kind. It used
+ * to be reported as `revision_required: structurally_incomplete`, which
+ * collapsed "the provider judged the prose incomplete" and "the provider said
+ * something we could not read" into one reason and halted a feature for a
+ * human on either. They are now routed separately by the coordinator.
+ */
 export function decodePrProseJudgment(
   result: FinishPrProseJudgmentResponse,
 ): PrProseJudgmentResult {
@@ -41,5 +51,5 @@ export function decodePrProseJudgment(
     ? parseFinishPrProseJudgment(result.output)
     : result.publicationDisposition;
   if (isPrProseJudgmentResult(structured)) return structured;
-  return { kind: 'revision_required', reason: 'structurally_incomplete' };
+  return { kind: 'malformed_response' };
 }

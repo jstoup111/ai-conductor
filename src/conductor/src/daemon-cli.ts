@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
+import { access, mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
@@ -1370,6 +1370,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         }
         return false;
       },
+      // The shipped record is written by a MID-sequence publication transition,
+      // so it cannot prove the ship completed. These two probes let the dedup
+      // tell "shipped and awaiting the human merge" from "shipped record
+      // written, then FINISH halted": a retained worktree with no recorded
+      // outcome is resumable, so an operator who clears the HALT gets the
+      // feature re-dispatched. An absent worktree still skips — there is
+      // nothing to resume, and re-dispatching it is the "path does not exist"
+      // loop this dedup was added to prevent.
+      featureWorktreePresent: async (slug) =>
+        access(join(projectRoot, '.worktrees', slug)).then(() => true).catch(() => false),
+      finishOutcomeRecorded: async (slug) =>
+        access(join(projectRoot, '.worktrees', slug, '.pipeline', 'finish-choice'))
+          .then(() => true)
+          .catch(() => false),
       fastForwardRoot,
       discoverBacklog,
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),

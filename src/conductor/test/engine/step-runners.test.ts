@@ -1970,6 +1970,46 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).not.toContain('git push');
   });
 
+  // The authoring pass is the fix for a PR that reached FINISH with an
+  // unauthored body: the provider is told to WRITE the prose from the diff,
+  // and is given the authoring contract instead of a grading rubric.
+  it('finish authoring pass mandates writing the body from the diff and names both hosts', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+
+    await runner.run('finish', emptyState, { finishProsePass: 'author' });
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('FINISH PR PROSE AUTHORING');
+    expect(opts.systemPrompt).toContain('full diff');
+    expect(opts.systemPrompt).toContain('base branch');
+    expect(opts.systemPrompt).toContain('`/pr`');
+    expect(opts.systemPrompt).toContain('`$pr`');
+    // It authors; it does not grade, and it makes no publication mechanics.
+    expect(opts.systemPrompt).not.toContain('revision_required');
+    expect(opts.systemPrompt).not.toContain('gh pr create');
+    expect(opts.systemPrompt).not.toContain('git push');
+    expect(opts.systemPrompt).not.toContain('finish-record');
+  });
+
+  it('finish judgment pass keeps the bounded verdict contract and defers unauthored bodies', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {
+      mode: 'auto',
+      pipelineDir: '/wt/feature-x/.pipeline',
+    });
+
+    await runner.run('finish', emptyState, { finishProsePass: 'judge' });
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).not.toContain('FINISH PR PROSE AUTHORING');
+    expect(opts.systemPrompt).toContain('revision_required');
+    expect(opts.systemPrompt).toContain('separate authoring pass');
+  });
+
   it('auto-mode finish prompt has no pipeline-path-dependent mechanical instruction', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', {

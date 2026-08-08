@@ -172,6 +172,7 @@ import {
   routeFinishPublicationDisposition,
   type PublicationDisposition,
   type PublicationTransition,
+  type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
 } from './finish-publication.js';
 import {
@@ -663,6 +664,15 @@ export interface StepRunOptions {
    */
   sessionId?: string;
   /**
+   * FINISH publication dispatch only: which bounded provider pass this
+   * invocation is. `author` mandates writing the retained PR's reader-facing
+   * title and body from the feature's own diff; `judge` mandates the bounded
+   * quality verdict. The publication coordinator selects it deterministically
+   * from its own observation of the PR body, so the provider is never left to
+   * infer which job it has.
+   */
+  finishProsePass?: 'author' | 'judge';
+  /**
    * Concurrent-group branch dispatch only: whether this branch dispatch
    * should resume `sessionId` above (true on retry) or start it fresh
    * (false on the branch's first attempt). Absent for ordinary serial-loop
@@ -800,6 +810,12 @@ export interface FinishPublicationCoordinator {
     mode: RunMode;
     daemon: boolean;
     dispatchJudgment(request: PrProseJudgmentRequest): Promise<StepRunResult>;
+    /**
+     * The authoring pass that guarantees the judgment above never sees an
+     * unauthored body. Optional so an existing coordinator implementation keeps
+     * compiling; the coordinator fails closed on an unwired effect.
+     */
+    dispatchAuthoring?(request: PrProseAuthoringRequest): Promise<StepRunResult>;
     emit(event: FinishPublicationEvent): Promise<void>;
   }): Promise<PublicationDisposition>;
 }
@@ -1581,7 +1597,14 @@ export class Conductor {
       state,
       mode: this.mode,
       daemon: this.daemon,
-      dispatchJudgment: async (_request) => this.stepRunner.run('finish', state, options),
+      dispatchJudgment: async (_request) =>
+        this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' }),
+      // The authoring pass is the same FINISH dispatch under a different
+      // mandate: the step runner selects the authoring instruction block, so
+      // the provider is told to write the prose from the diff rather than to
+      // grade prose that was never written.
+      dispatchAuthoring: async (_request) =>
+        this.stepRunner.run('finish', state, { ...options, finishProsePass: 'author' }),
       emit: async (event) => this.events.emit(event),
     });
     return {

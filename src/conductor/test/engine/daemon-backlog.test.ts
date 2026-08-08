@@ -2096,6 +2096,52 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     expect(logs.join('\n')).toMatch(/awaiting the human merge/i);
   });
 
+  it('re-dispatches a feature whose shipped record was written but whose FINISH never recorded an outcome', async () => {
+    // The shipped record proves ONE publication transition ran, not that the
+    // ship completed. A FINISH that halted mid-publication retains its
+    // worktree and recorded no outcome, so an operator who clears the HALT
+    // must get the feature back — not a permanent "awaiting the human merge".
+    await writeSpec('halted-mid-publication');
+    const logs: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      shippedOnFeatureBranch: async () => true,
+      featureWorktreePresent: async () => true,
+      finishOutcomeRecorded: async () => false,
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['halted-mid-publication']);
+    expect(logs.join('\n')).not.toMatch(/awaiting the human merge/i);
+  });
+
+  it('still skips a shipped feature that recorded its finish outcome', async () => {
+    await writeSpec('finished-and-recorded');
+    const logs: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      shippedOnFeatureBranch: async () => true,
+      featureWorktreePresent: async () => true,
+      finishOutcomeRecorded: async () => true,
+    });
+    expect(backlog).toEqual([]);
+    expect(logs.join('\n')).toMatch(/awaiting the human merge/i);
+  });
+
+  it('still skips a shipped feature whose worktree is gone, so the torn-down re-dispatch loop cannot return', async () => {
+    // Without a worktree there is nothing to resume and no outcome record to
+    // read; re-dispatching is the opaque "path does not exist" loop the dedup
+    // was added to prevent.
+    await writeSpec('finished-and-reaped');
+    const logs: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir),
+      shippedOnFeatureBranch: async () => true,
+      featureWorktreePresent: async () => false,
+      finishOutcomeRecorded: async () => false,
+    });
+    expect(backlog).toEqual([]);
+    expect(logs.join('\n')).toMatch(/awaiting the human merge/i);
+  });
+
   it('the feature-branch probe never blocks a candidate it cannot prove shipped', async () => {
     await writeSpec('still-building');
     const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {

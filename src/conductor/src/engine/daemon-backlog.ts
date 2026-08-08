@@ -505,6 +505,31 @@ export interface DiscoverBacklogOpts {
    */
   shippedOnFeatureBranch?: (slug: string) => Promise<boolean>;
   /**
+   * Whether this feature's worktree still exists. The shipped-record dedup
+   * above may only skip a feature it can still resume in place; without a
+   * worktree there is nothing to resume, and re-dispatching produces exactly
+   * the opaque "path does not exist" loop the dedup exists to prevent.
+   * Optional; when unset the dedup keeps its prior skip-on-record behavior.
+   */
+  featureWorktreePresent?: (slug: string) => Promise<boolean>;
+  /**
+   * Whether FINISH recorded this feature's final outcome — the durable
+   * completion commit point (`.pipeline/finish-choice`), written by the LAST
+   * publication transition.
+   *
+   * This is the evidence the shipped-record dedup actually needs. The shipped
+   * record is committed by the `write_shipped_record` transition, so on its own
+   * it proves one transition ran, NOT that the ship completed: a FINISH that
+   * halted after it (prose, presentation, or recording) left the record on the
+   * branch, retained its worktree, and recorded nothing. Treating the record as
+   * proof of completion made every such halt terminal — an operator could clear
+   * the HALT and the daemon would still refuse the feature forever, and because
+   * the run never reported `done` it was never enrolled in the mergeable watch
+   * either, so nothing could reap it. Optional; when unset the dedup keeps its
+   * prior skip-on-record behavior.
+   */
+  finishOutcomeRecorded?: (slug: string) => Promise<boolean>;
+  /**
    * Operator-park boundary. Defaults to the durable `.daemon/parked/<slug>`
    * marker reader; injectable so discovery tests never need filesystem or git
    * parking setup. A parked spec is already held by an operator decision and
@@ -965,17 +990,37 @@ export async function discoverBacklog(
 
     // Pre-merge shipped dedup: `/finish` already committed this feature's
     // shipped record onto its own branch, so the implementation is complete and
-    // waiting on a human merge. Re-dispatching here re-runs `finish` on a
-    // feature whose worktree the finished run already tore down, which surfaces
-    // as an opaque "path does not exist" provider error and loops. Runs AFTER
-    // the base-branch dedup (a merged feature reports as merged, not pending).
+    // waiting on a human merge. Re-dispatching a feature whose worktree the
+    // finished run already tore down surfaces as an opaque "path does not
+    // exist" provider error and loops. Runs AFTER the base-branch dedup (a
+    // merged feature reports as merged, not pending).
+    //
+    // The record alone is NOT completion evidence. `write_shipped_record` is a
+    // mid-sequence publication transition, so a FINISH that halted after it
+    // left the record committed while recording no outcome and retaining its
+    // worktree. Skipping on the record alone made that halt terminal: clearing
+    // the HALT could never get the feature re-dispatched, and the run never
+    // reported done, so it was never enrolled in the mergeable watch either.
+    // A retained worktree with no recorded outcome is therefore resumed, while
+    // a recorded outcome — or an absent worktree — still skips.
     if (await opts.shippedOnFeatureBranch?.(slug)) {
-      await warnOnce(
-        slug,
-        `skip ${slug}: shipped dedup — finish already recorded the ship on this feature's ` +
-          'branch; awaiting the human merge, not re-dispatching.',
+      const resumableHaltedPublication =
+        opts.featureWorktreePresent !== undefined &&
+        opts.finishOutcomeRecorded !== undefined &&
+        (await opts.featureWorktreePresent(slug)) &&
+        !(await opts.finishOutcomeRecorded(slug));
+      if (!resumableHaltedPublication) {
+        await warnOnce(
+          slug,
+          `skip ${slug}: shipped dedup — finish already recorded the ship on this feature's ` +
+            'branch; awaiting the human merge, not re-dispatching.',
+        );
+        continue;
+      }
+      log(
+        `re-dispatch ${slug}: shipped record is on this feature's branch but FINISH recorded no ` +
+          'outcome and its worktree is retained — resuming the unfinished publication.',
       );
-      continue;
     }
 
     // Fail-CLOSED gate (D3 / Story 3): a supplied-but-UNRESOLVED daemon owner

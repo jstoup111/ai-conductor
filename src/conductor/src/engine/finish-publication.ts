@@ -345,7 +345,7 @@ export type PublicationTransition = FinishPublicationTransition;
  * A FINISH execution may observe every transition twice before a non-converging
  * publication state requires operator review.
  */
-export const FINISH_PUBLICATION_PROGRESS_ALLOWANCE = 2 * 6;
+export const FINISH_PUBLICATION_PROGRESS_ALLOWANCE = 2 * 7;
 
 type PublicationEventEmitter = (event: FinishPublicationEvent) => void | Promise<void>;
 
@@ -372,12 +372,24 @@ export function nextFinishPublicationTransition(
     return 'verify_release_readiness';
   }
 
-  if (snapshot.shippedRecord !== 'valid') {
-    return 'write_shipped_record';
+  // A placeholder body is deterministically unauthored: the SHIP-entry draft
+  // carries the engine's own body-floor marker and "not yet authored" sections.
+  // Nothing can judge prose that was never written, so author it FIRST. The
+  // judgment transition therefore only ever sees authored prose.
+  if (snapshot.pr.prose === 'placeholder') {
+    return 'author_pr_prose';
   }
 
   if (snapshot.pr.prose !== 'accepted') {
     return 'judge_pr_prose';
+  }
+
+  // The shipped record is `daemon-backlog`'s dedup key, so it is committed only
+  // AFTER prose is accepted. Writing it earlier made every prose halt
+  // unrecoverable: the feature was deduped as shipped and FINISH was never
+  // re-dispatched to fix the prose the halt was asking a human about.
+  if (snapshot.shippedRecord !== 'valid') {
+    return 'write_shipped_record';
   }
 
   if (!snapshot.pr.ready) {
@@ -458,6 +470,15 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'pr_identity_not_verified_after_establish',
   ],
   verify_release_readiness: [],
+  author_pr_prose: [
+    'authoring_effect_unavailable',
+    'authoring_dispatch_failed',
+    'authoring_not_verified_after_pass',
+    // The judgment pass observed prose the deterministic classifier accepted as
+    // authored but the reader-facing verdict did not. Authoring — not a human —
+    // is the remedy, so the coordinator routes back to it rather than halting.
+    'authoring_required_after_judgment',
+  ],
   write_shipped_record: [
     'shipped_record_effect_unavailable',
     'shipped_record_write_failed',
@@ -467,6 +488,11 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'judgment_timed_out',
     'judgment_provider_unavailable',
     'judgment_dispatch_failed',
+    // An undecodable provider reply is NOT a verdict. It is kept distinct from
+    // the `structurally_incomplete` verdict it used to be collapsed into, so an
+    // unparsable response earns a fresh judgment session instead of halting a
+    // feature whose prose may be perfectly fine.
+    'judgment_malformed_response',
     'judgment_completed_reobserve',
   ],
   ready_pr: [
@@ -503,6 +529,8 @@ const NON_RETRYABLE_PUBLICATION_REASONS: Readonly<Record<string, string>> = {
     'the establish-PR effect is not wired into this coordinator, and the effect set is identical on every attempt',
   shipped_record_effect_unavailable:
     'the shipped-record effect is not wired into this coordinator, and the effect set is identical on every attempt',
+  authoring_effect_unavailable:
+    'the PR-prose authoring effect is not wired into this coordinator, and the effect set is identical on every attempt',
   presentation_repair_effect_unavailable:
     'the presentation-repair effect is not wired into this coordinator, and the effect set is identical on every attempt',
   outcome_record_effect_unavailable:
@@ -633,6 +661,7 @@ function isPublicationTransition(value: unknown): value is PublicationTransition
     value === 'establish_pr' ||
     value === 'verify_release_readiness' ||
     value === 'write_shipped_record' ||
+    value === 'author_pr_prose' ||
     value === 'judge_pr_prose' ||
     value === 'ready_pr' ||
     value === 'record_outcome'
@@ -823,13 +852,35 @@ export type PrProseJudgmentRequest = {
   maximumPasses: 1;
 };
 
-/** The bounded provider result, including fail-closed judgment outcomes. */
+/**
+ * The one provider-owned FINISH *authoring* request. It is selected
+ * deterministically — `prose === 'placeholder'` is the engine's own
+ * observation of its own body-floor marker — so no prompt discipline decides
+ * whether prose gets written. The provider's self-report is not trusted: the
+ * coordinator verifies the pass by re-observing the PR.
+ */
+export type PrProseAuthoringRequest = {
+  kind: 'finish_pr_prose_authoring';
+  pullRequestUrl: string;
+  authoringScope: readonly ['title', 'body'];
+  maximumPasses: 1;
+};
+
+/**
+ * The bounded provider result, including fail-closed judgment outcomes.
+ *
+ * `revision_required` carries a real verdict the provider reached.
+ * `malformed_response` is the decoder's fail-closed fallback for a reply it
+ * could not parse at all — deliberately NOT collapsed into
+ * `structurally_incomplete`, because the two need opposite routing.
+ */
 export type PrProseJudgmentResult =
   | { kind: 'accepted' }
   | { kind: 'revision_required'; reason: 'placeholder' | 'halt' | 'structurally_incomplete' }
   | { kind: 'timed_out' }
   | { kind: 'provider_unavailable' }
-  | { kind: 'refused' };
+  | { kind: 'refused' }
+  | { kind: 'malformed_response' };
 
 /**
  * The coordinator passes only an already-authorized outcome to the existing
@@ -841,18 +892,40 @@ export type FinishOutcomeRecordRequest =
   | { choice: 'keep' };
 
 type PrWithJudgmentNeeded = Extract<PublicationPullRequest, { identity: 'one' }> & {
-  prose: 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+  prose: 'stale' | 'halt' | 'indeterminate';
+};
+
+type PrWithAuthoringNeeded = Extract<PublicationPullRequest, { identity: 'one' }> & {
+  prose: 'placeholder';
 };
 
 /**
  * A typed predicate protects the expensive boundary: accepted observed prose
  * is final for this pass, while a stale or incomplete observation earns one
- * request. The predicate performs no provider work itself.
+ * request. A placeholder body is excluded — it has no prose to judge and is
+ * routed to the authoring transition instead. The predicate performs no
+ * provider work itself.
  */
 function isPrProseJudgmentNeeded(
   pr: PublicationPullRequest,
 ): pr is PrWithJudgmentNeeded {
-  return pr.identity === 'one' && pr.prose !== 'accepted';
+  return pr.identity === 'one' && pr.prose !== 'accepted' && pr.prose !== 'placeholder';
+}
+
+/** The deterministic complement: an unauthored body needs an authoring pass. */
+function isPrProseAuthoringNeeded(
+  pr: PublicationPullRequest,
+): pr is PrWithAuthoringNeeded {
+  return pr.identity === 'one' && pr.prose === 'placeholder';
+}
+
+function prProseAuthoringRequest(pr: PrWithAuthoringNeeded): PrProseAuthoringRequest {
+  return {
+    kind: 'finish_pr_prose_authoring',
+    pullRequestUrl: pr.url,
+    authoringScope: ['title', 'body'],
+    maximumPasses: 1,
+  };
 }
 
 function prProseJudgmentRequest(pr: PrWithJudgmentNeeded): PrProseJudgmentRequest {
@@ -870,6 +943,15 @@ export interface AdvanceFinishPublicationInput {
   emit?: PublicationEventEmitter;
   effects: {
     dispatchJudgment(request: PrProseJudgmentRequest): Promise<PrProseJudgmentResult>;
+    /**
+     * Author the retained PR's reader-facing title and body from the feature's
+     * own diff and specification context. Optional only so an isolated caller
+     * that never observes a placeholder body need not wire it; reaching the
+     * transition without it is reported as an unwired effect, never skipped.
+     * Its return value is ignored: the coordinator re-observes the PR and
+     * accepts the transition only when the body is no longer a placeholder.
+     */
+    authorProse?: (request: PrProseAuthoringRequest) => Promise<void>;
     /**
      * The existing shipped-record primitive writes, commits, and pushes the
      * record. It is injected here because `observe` remains the authority for
@@ -927,9 +1009,7 @@ export type AdvanceFinishPublicationResult =
       reason:
         | 'ambiguous_pr_identity'
         | 'invalid_shipped_record'
-        | 'judgment_placeholder_prose'
         | 'judgment_halt_prose'
-        | 'judgment_malformed_prose'
         | 'judgment_refused';
     };
 
@@ -992,14 +1072,33 @@ function mapPrProseJudgmentResult(
       };
     case 'refused':
       return { kind: 'human_required', reason: 'judgment_refused' };
+    case 'malformed_response':
+      // The decoder could not parse the reply at all. That is a provider
+      // response defect, not a prose verdict, so it earns a fresh judgment
+      // session rather than a halt on prose nobody actually judged.
+      return {
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_malformed_response',
+      };
     case 'revision_required':
       switch (result.reason) {
-        case 'placeholder':
-          return { kind: 'human_required', reason: 'judgment_placeholder_prose' };
         case 'halt':
+          // Halt boilerplate on a PR is a genuine operator condition: the
+          // remediation narrative must not be silently overwritten by an
+          // authoring pass.
           return { kind: 'human_required', reason: 'judgment_halt_prose' };
+        case 'placeholder':
         case 'structurally_incomplete':
-          return { kind: 'human_required', reason: 'judgment_malformed_prose' };
+          // Both verdicts say the same thing — the reader-facing prose is not
+          // there yet. Authoring is the remedy, and it is exactly the pass the
+          // judge was never equipped to perform. Bounded by the publication
+          // progress allowance, so a non-converging pair still halts.
+          return {
+            kind: 'publication_retry',
+            transition: 'author_pr_prose',
+            reason: 'authoring_required_after_judgment',
+          };
       }
   }
 }
@@ -1100,6 +1199,77 @@ export async function advanceFinishPublication(
     });
   }
 
+  if (isPrProseAuthoringNeeded(snapshot.pr)) {
+    const pr = snapshot.pr;
+    if (!input.effects.authorProse) {
+      return {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'authoring_effect_unavailable',
+      };
+    }
+
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'author_pr_prose',
+    });
+    return coalescePublicationEffect(input.effects, 'author_pr_prose', async () => {
+      let dispatchFailure = false;
+      try {
+        await input.effects.authorProse!(prProseAuthoringRequest(pr));
+      } catch {
+        // A dispatcher can lose its response after the provider already edited
+        // the PR. The mandatory re-observation below is the only authority.
+        dispatchFailure = true;
+      }
+
+      const observedAfterAuthoring = await input.observe();
+      if (observedAfterAuthoring.pr.identity === 'ambiguous') {
+        return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+      }
+      if (
+        observedAfterAuthoring.pr.identity === 'one' &&
+        observedAfterAuthoring.pr.prose !== 'placeholder' &&
+        observedAfterAuthoring.pr.prose !== 'indeterminate'
+      ) {
+        return advancedPublicationTransition(input.emit, 'author_pr_prose');
+      }
+
+      return {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: dispatchFailure
+          ? 'authoring_dispatch_failed'
+          : 'authoring_not_verified_after_pass',
+      };
+    });
+  }
+
+  if (isPrProseJudgmentNeeded(snapshot.pr)) {
+    const pr = snapshot.pr;
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'judge_pr_prose',
+    });
+    return coalescePublicationEffect(input.effects, 'judge_pr_prose', async () => {
+      try {
+        const result = mapPrProseJudgmentResult(
+          await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
+        );
+        return result.kind === 'advanced'
+          ? advancedPublicationTransition(input.emit, 'judge_pr_prose')
+          : result;
+      } catch {
+        // The dispatcher can lose its response after the provider has returned.
+        // Re-observation on the next FINISH pass is authoritative, so retain the
+        // already verified PR effects and retry only judgment.
+        return {
+          kind: 'publication_retry',
+          transition: 'judge_pr_prose',
+          reason: 'judgment_dispatch_failed',
+        };
+      }
+    });
+  }
+
   if (nextFinishPublicationTransition(snapshot) === 'write_shipped_record') {
     // An invalid record can be a different feature's evidence, a stale hash,
     // or an unpushed/malformed write. Replacing it would destroy the only
@@ -1143,32 +1313,6 @@ export async function advanceFinishPublication(
           ? 'shipped_record_write_failed'
           : 'shipped_record_not_verified_after_write',
       };
-    });
-  }
-
-  if (isPrProseJudgmentNeeded(snapshot.pr)) {
-    const pr = snapshot.pr;
-    await emitPublicationEvent(input.emit, {
-      type: 'finish_publication_transition', phase: 'started', transition: 'judge_pr_prose',
-    });
-    return coalescePublicationEffect(input.effects, 'judge_pr_prose', async () => {
-      try {
-        const result = mapPrProseJudgmentResult(
-          await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
-        );
-        return result.kind === 'advanced'
-          ? advancedPublicationTransition(input.emit, 'judge_pr_prose')
-          : result;
-      } catch {
-        // The dispatcher can lose its response after the provider has returned.
-        // Re-observation on the next FINISH pass is authoritative, so retain the
-        // already verified PR and shipped-record effects and retry only judgment.
-        return {
-          kind: 'publication_retry',
-          transition: 'judge_pr_prose',
-          reason: 'judgment_dispatch_failed',
-        };
-      }
     });
   }
 

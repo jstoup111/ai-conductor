@@ -30,6 +30,7 @@ import {
   resolveInteractivePublicationIntent,
   resolveUnattendedPublicationIntent,
   type PublicationDisposition,
+  type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
   type PrProseJudgmentResult,
 } from './finish-publication.js';
@@ -41,6 +42,12 @@ export interface ProductionFinishPublicationCoordinator {
     mode: RunMode;
     daemon: boolean;
     dispatchJudgment(request: PrProseJudgmentRequest): Promise<StepRunResult>;
+    /**
+     * Dispatch the reader-facing authoring pass. Optional so existing callers
+     * keep compiling; when absent the coordinator reports the unwired-effect
+     * reason rather than letting an unauthored body reach judgment.
+     */
+    dispatchAuthoring?(request: PrProseAuthoringRequest): Promise<StepRunResult>;
     emit(event: FinishPublicationEvent): Promise<void>;
   }): Promise<PublicationDisposition>;
 }
@@ -152,7 +159,7 @@ export function createProductionFinishPublicationCoordinator(
   let attendedRequestedOutcome: Promise<unknown> | undefined;
 
   return {
-    async advance({ state, mode, daemon, dispatchJudgment, emit }) {
+    async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
       const attended = !daemon && (mode === 'default' || mode === 'interactive');
       const requestedOutcome = attended
         ? await (attendedRequestedOutcome ??= Promise.resolve().then(
@@ -267,6 +274,17 @@ export function createProductionFinishPublicationCoordinator(
           ),
         emit,
         effects: {
+          // Authoring is dispatched only when the engine itself observed an
+          // unauthored body. The provider's reply is not inspected at all: the
+          // coordinator re-observes the PR and only a body that no longer
+          // carries the placeholder classification counts as progress.
+          ...(dispatchAuthoring
+            ? {
+                authorProse: async (request: PrProseAuthoringRequest) => {
+                  await dispatchAuthoring(request);
+                },
+              }
+            : {}),
           dispatchJudgment: async (request) => {
             const revision = proseRevisionByPr.get(request.pullRequestUrl);
             const cached = revision === undefined ? undefined : judgmentByRevision.get(revision);
