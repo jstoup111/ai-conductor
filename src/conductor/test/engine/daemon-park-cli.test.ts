@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, realpath, writeFile, readFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
@@ -220,6 +220,35 @@ describe('engine/daemon-park-cli', () => {
         usageCode: 1,
         usageOut: ['Usage: conduct daemon reconcile-parked <slug>'],
         usageCalls: [],
+      });
+    });
+  });
+
+  describe('dispatchDaemonPark reclaim-worktree', () => {
+    it('runs bin/teardown before removal without changing the normal reclaim output', async () => {
+      const slug = 'retained-worktree';
+      const worktreePath = join(root, '.worktrees', slug);
+      await mkdir(join(worktreePath, 'bin'), { recursive: true });
+      const teardownPath = join(worktreePath, 'bin', 'teardown');
+      await writeFile(teardownPath, '#!/bin/sh\nprintf released > teardown-ran\n');
+      await chmod(teardownPath, 0o755);
+      const out: string[] = [];
+      const removeWorktree = vi.fn(async (_repoRoot: string, path: string) => {
+        expect(await readFile(join(path, 'teardown-ran'), 'utf-8')).toBe('released');
+      });
+
+      const code = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug },
+        { cwd: root, out: (line) => out.push(line), removeWorktree },
+      );
+
+      expect({ code, calls: removeWorktree.mock.calls, out }).toEqual({
+        code: 0,
+        calls: [[root, worktreePath]],
+        out: [
+          `Reclaiming retained worktree: ${worktreePath}`,
+          `Removed retained worktree '${slug}': ${worktreePath}`,
+        ],
       });
     });
   });

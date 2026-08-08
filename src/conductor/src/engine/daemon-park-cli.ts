@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
 import { removeWorktree } from './worktree-shared.js';
+import { runProjectTeardown } from './worktree-prepare.js';
 import { detectAutoResume } from './auto-resume.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 import type { GitRunner, GhRunner } from './pr-labels.js';
@@ -217,6 +218,7 @@ export async function dispatchDaemonPark(
         return 1;
       }
       out(`Reclaiming retained worktree: ${worktreePath}`);
+      await runProjectTeardown(worktreePath, out);
       await (deps.removeWorktree ?? removeWorktree)(resolvedRoot, worktreePath);
       out(`Removed retained worktree '${cmd.slug}': ${worktreePath}`);
       return 0;
