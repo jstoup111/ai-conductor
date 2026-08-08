@@ -145,6 +145,7 @@ describe('engine/daemon-park-cli', () => {
           log: expect.any(Function),
           requestRecordRepair: expect.any(Function),
           teardownTimeoutSeconds: 120,
+          verbose: false,
         }]],
         out: ["Reconciled 'merged': worktree-removed, branch-deleted, unparked"],
       });
@@ -251,6 +252,30 @@ describe('engine/daemon-park-cli', () => {
           `Removed retained worktree '${slug}': ${worktreePath}`,
         ],
       });
+    });
+
+    it.each([
+      [true, ['teardown: first release', 'teardown: second release']],
+      [false, ['teardown: 2 line(s) of output suppressed (set daemon_verbose: true to echo them)']],
+    ])('uses daemon_verbose=%s to control successful teardown output', async (verbose, teardownOutput) => {
+      const slug = `verbose-${verbose}`;
+      const worktreePath = join(root, '.worktrees', slug);
+      await mkdir(join(worktreePath, 'bin'), { recursive: true });
+      await mkdir(join(root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(root, '.ai-conductor', 'config.yml'), `daemon_verbose: ${verbose}\n`);
+      await writeFile(
+        join(worktreePath, 'bin', 'teardown'),
+        '#!/bin/sh\nprintf "first release\\n\\nsecond release\\n"\n',
+      );
+      await chmod(join(worktreePath, 'bin', 'teardown'), 0o755);
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug },
+        { cwd: root, out: (line) => out.push(line), removeWorktree: vi.fn() },
+      );
+
+      expect({ code, teardownOutput: out.slice(1, -1) }).toEqual({ code: 0, teardownOutput });
     });
 
     it('does not run teardown for refused or empty reclaims, and contains a teardown failure', async () => {

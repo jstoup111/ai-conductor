@@ -120,6 +120,8 @@ export interface DaemonParkDeps {
     runGit?: GitRunner;
     runGh?: GhRunner;
     requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
+    teardownTimeoutSeconds?: number;
+    verbose?: boolean;
   }) => Promise<ReconcileMergedParkOutcome>;
   /** ST-916 record-only repair hand-off; defaults to the production adapter. */
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
@@ -193,7 +195,8 @@ export async function dispatchDaemonPark(
       const teardownTimeoutSeconds = deps.teardownTimeoutSeconds ?? resolveTeardownTimeoutSeconds(
         configResult.ok ? configResult.config : undefined,
       );
-      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out, runGit: deps.runGit, runGh: deps.runGh, requestRecordRepair, teardownTimeoutSeconds });
+      const verbose = configResult.ok ? (configResult.config?.daemon_verbose ?? false) : false;
+      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out, runGit: deps.runGit, runGh: deps.runGh, requestRecordRepair, teardownTimeoutSeconds, verbose });
       if (outcome.refusal) {
         out(`Could not reconcile '${slug}': ${outcome.refusal}`);
         if (outcome.refusal === 'unmerged-commits' && outcome.unmergedCommits) {
@@ -230,7 +233,8 @@ export async function dispatchDaemonPark(
       const teardownTimeoutSeconds = deps.teardownTimeoutSeconds ?? resolveTeardownTimeoutSeconds(
         configResult.ok ? configResult.config : undefined,
       );
-      await runProjectTeardown(worktreePath, out, { timeoutSeconds: teardownTimeoutSeconds });
+      const verbose = configResult.ok ? (configResult.config?.daemon_verbose ?? false) : false;
+      await runProjectTeardown(worktreePath, out, { timeoutSeconds: teardownTimeoutSeconds, verbose });
       await (deps.removeWorktree ?? removeWorktree)(resolvedRoot, worktreePath);
       out(`Removed retained worktree '${cmd.slug}': ${worktreePath}`);
       return 0;
