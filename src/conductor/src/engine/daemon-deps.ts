@@ -59,6 +59,8 @@ export interface RealDepsConfig {
    * Default false: a one-line summary instead. Failure output is unaffected.
    */
   verbose?: boolean;
+  /** Resolved bounded runtime for the project teardown hook. */
+  teardownTimeoutSeconds?: number;
   /** Deterministic setup-failure triage (adr-2026-07-09-setup-failure-triage), daemon-only. */
   runSetupTriage?: (
     error: SetupFailureError,
@@ -125,7 +127,10 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
 
     teardownWorktree: async (wt, keep) => {
       if (keep) return; // halt/error → leave it for the human
-      await runProjectTeardown(wt.path, cfg.log, { verbose: cfg.verbose ?? false });
+      await runProjectTeardown(wt.path, cfg.log, {
+        verbose: cfg.verbose ?? false,
+        timeoutSeconds: cfg.teardownTimeoutSeconds,
+      });
       await execa('git', ['worktree', 'remove', '--force', wt.path], {
         cwd: cfg.projectRoot,
       }).catch(() => {

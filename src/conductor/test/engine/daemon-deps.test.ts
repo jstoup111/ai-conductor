@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 vi.mock('execa', () => ({ execa: vi.fn() }));
 const { runProjectTeardown } = vi.hoisted(() => ({
   runProjectTeardown: vi.fn<
-    (worktreePath: string, log?: (message: string) => void, opts?: { verbose?: boolean }) => Promise<void>
+    (worktreePath: string, log?: (message: string) => void, opts?: { verbose?: boolean; timeoutSeconds?: number }) => Promise<void>
   >(),
 }));
 vi.mock('../../src/engine/worktree-prepare.js', () => ({
@@ -207,6 +207,24 @@ describe('engine/daemon-deps', () => {
 
       expect(calls).toEqual(['teardown', 'remove']);
       expect(runProjectTeardown).toHaveBeenCalledTimes(1);
+    });
+
+    it('passes the resolved teardown timeout to the project hook', async () => {
+      const d = makeFeatureRunnerDeps({
+        projectRoot: dir,
+        worktreeBase: join(dir, '.worktrees'),
+        baseBranch: 'main',
+        teardownTimeoutSeconds: 7,
+        runConductorInWorktree: async () => {},
+      });
+      vi.mocked(execa).mockResolvedValue({ stdout: '' } as Awaited<ReturnType<typeof execa>>);
+
+      await d.teardownWorktree(worktree, false);
+
+      expect(runProjectTeardown).toHaveBeenCalledWith(worktree.path, undefined, {
+        verbose: false,
+        timeoutSeconds: 7,
+      });
     });
 
     it('does not run project teardown or remove a retained worktree', async () => {

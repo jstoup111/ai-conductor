@@ -25,7 +25,11 @@ import {
   preflightCiFixInvocation,
   defaultCiFixProbe,
 } from './engine/ci-fix.js';
-import { resolveRebaseResolutionAttempts, resolveSelfHostConfig } from './engine/resolved-config.js';
+import {
+  resolveRebaseResolutionAttempts,
+  resolveSelfHostConfig,
+  resolveTeardownTimeoutSeconds,
+} from './engine/resolved-config.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
@@ -1239,6 +1243,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     memoryProvider,
     log,
     verbose: config?.daemon_verbose ?? false,
+    teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
     runSetupTriage,
   });
   const runFeature = makeRunFeature(deps);
