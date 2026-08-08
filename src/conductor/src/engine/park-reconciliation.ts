@@ -9,6 +9,7 @@ import { access, readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
+import { runProjectTeardown } from './worktree-prepare.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -635,6 +636,7 @@ export async function reconcileMergedPark(
   }
 
   if (worktreeOnDisk) {
+    await runProjectTeardown(worktreePath, opts.log);
     try {
       await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
     } catch {
