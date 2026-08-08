@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PrProseJudgmentResult } from '../../src/engine/finish-publication.js';
 import {
   decodePrProseJudgment,
+  MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH,
   parseFinishPrProseJudgment,
 } from '../../src/engine/finish-pr-prose-judgment.js';
 
@@ -78,5 +79,25 @@ describe('FINISH PR-prose judgment adapter', () => {
       success: true,
       publicationDisposition: { kind: 'refused', detail: '  The PR cannot be safely published.  ' },
     })).toEqual({ kind: 'refused', detail: 'The PR cannot be safely published.' });
+  });
+
+  it('bounds overlong detail at the decode boundary without changing detail at the bound', () => {
+    const detailAtBound = 'x'.repeat(MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH);
+    const overlongDetail = `${detailAtBound}x`;
+
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'refused', detail: detailAtBound },
+    })).toEqual({ kind: 'refused', detail: detailAtBound });
+
+    const decoded = decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'refused', detail: overlongDetail },
+    });
+    expect(decoded).toEqual({
+      kind: 'refused',
+      detail: expect.stringMatching(/…$/),
+    });
+    expect(decoded.kind === 'refused' && decoded.detail).toHaveLength(MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH);
   });
 });

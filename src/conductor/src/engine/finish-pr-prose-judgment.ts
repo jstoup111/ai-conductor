@@ -1,5 +1,8 @@
 import type { PrProseJudgmentResult } from './finish-publication.js';
 
+export const MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH = 1_000;
+const DETAIL_TRUNCATION_MARKER = '…';
+
 export interface FinishPrProseJudgmentResponse {
   success: boolean;
   output?: string;
@@ -21,7 +24,10 @@ function isPrProseJudgmentResult(value: unknown): value is PrProseJudgmentResult
 function normalizeDetail(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const detail = value.trim();
-  return detail.length > 0 ? detail : undefined;
+  if (detail.length === 0) return undefined;
+  if (detail.length <= MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH) return detail;
+  return detail.slice(0, MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH - DETAIL_TRUNCATION_MARKER.length) +
+    DETAIL_TRUNCATION_MARKER;
 }
 
 /**
