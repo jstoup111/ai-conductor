@@ -381,7 +381,7 @@ disposition travels in the PR body per this repository's Release & Update Gates.
 - skills/finish/SKILL.md — verdict-contract section
 - src/conductor/test/engine/finish-pr-prose-judgment.test.ts — docs-to-validator agreement test
 
-**Wired-into:** src/conductor/src/engine/skill-invocation.ts#SKILL_INVOCATIONS
+**Wired-into:** src/conductor/src/engine/skill-invocation.ts#STEP_SKILL_INVOCATIONS
 **Dependencies:** Task 13
 
 ---
