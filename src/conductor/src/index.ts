@@ -51,6 +51,9 @@ import {
   detectInline,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
+  createProgram,
+  detectUserConfigReadCommand,
+  userConfigReadCommand,
   type CLIOptions,
 } from './cli.js';
 import type { ConductState, StepName } from './types/index.js';
@@ -463,6 +466,21 @@ async function main(): Promise<void> {
   if (registryCmd) {
     const code = await dispatchRegistry(registryCmd);
     process.exitCode = code;
+    return;
+  }
+
+  const userConfigReadCmd = detectUserConfigReadCommand(process.argv);
+  if (userConfigReadCmd) {
+    process.exitCode = await userConfigReadCommand(userConfigReadCmd);
+    return;
+  }
+
+  if (
+    process.argv[2] === 'config' &&
+    process.argv.slice(3).some((arg) => arg === '--help' || arg === '-h')
+  ) {
+    const config = createProgram().commands.find((command) => command.name() === 'config');
+    process.stdout.write(config?.helpInformation() ?? '');
     return;
   }
 
