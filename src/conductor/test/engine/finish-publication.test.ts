@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from '../../src/engine/pr-labels.js';
 import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
+import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { HUMAN_REQUIRED_REASONS } from '../../src/engine/finish-publication.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
+import { Conductor } from '../test-conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { writeState } from '../../src/engine/state.js';
 
 const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
 
@@ -324,6 +332,91 @@ function deferred<T = void>() {
   });
   return { promise, resolve };
 }
+
+describe('FINISH human-required halt marker', () => {
+  it('writes the rendered provider refusal through the coordinator to the needs-human halt marker', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'finish-publication-refusal-marker-'));
+    const pipelineDir = join(projectRoot, '.pipeline');
+    const stateFilePath = join(pipelineDir, 'conduct-state.json');
+    const prUrl = 'https://github.com/acme/widget/pull/1172';
+    const detail = 'The provider declined the requested prose judgment.';
+
+    try {
+      await mkdir(join(projectRoot, '.docs', 'shipped'), { recursive: true });
+      await mkdir(pipelineDir);
+      await writeFile(join(pipelineDir, 'finish-choice'), 'pr\n');
+      await writeFile(join(projectRoot, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
+      const state: Record<string, unknown> = {
+        complexity_tier: 'S',
+        feature_desc: 'finish-publication',
+        worktree_branch: 'feat/finish-publication',
+        pr_url: prUrl,
+      };
+      for (const step of [
+        'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
+        'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+        'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+        'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+        'architecture_review_as_built', 'retro', 'rebase',
+      ] satisfies StepName[]) {
+        state[step] = 'done';
+      }
+      await writeState(stateFilePath, state as ConductState);
+
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot,
+        stateFilePath,
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/finish-publication\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              stdout: JSON.stringify({
+                url: prUrl,
+                title: 'feat: publish FINISH refusal guidance',
+                body: `Reader-facing prose.\n${HALT_PR_BANNER_SENTINEL}`,
+                isDraft: true,
+              }),
+            };
+          }
+          throw new Error(`unexpected GitHub call: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+      const provider = vi.fn(async () => ({
+        success: true,
+        output: JSON.stringify({ kind: 'refused', detail }),
+      }));
+      const conductor = new Conductor({
+        stateFilePath,
+        stepRunner: { run: provider },
+        finishPublication: coordinator,
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        fromStep: 'finish',
+        mode: 'auto',
+        daemon: true,
+        git: async () => ({ stdout: '' }),
+        gh: async () => ({ stdout: '' }),
+        runGh: async () => ({ stdout: '' }),
+      });
+
+      await conductor.run();
+
+      const haltBody = await readFile(join(pipelineDir, 'HALT'), 'utf8');
+      expect(provider).toHaveBeenCalledOnce();
+      expect(haltBody).toContain(HUMAN_REQUIRED_REASONS.judgment_refused.message);
+      expect(haltBody).toContain(HUMAN_REQUIRED_REASONS.judgment_refused.nextAction);
+      expect(haltBody).toContain(detail);
+      await expect(readFile(join(pipelineDir, 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('finish-publication domain types', () => {
   it('exports the semantic unions for the publication lifecycle', async () => {
