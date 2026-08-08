@@ -315,7 +315,8 @@ describe('engine/daemon — runDaemon', () => {
           '\nResume procedure:\n' +
           '  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n' +
           '  2. rm .pipeline/HALT\n' +
-          '  3. Re-queue the feature (restart the daemon if it was excluded this run).\n',
+          '  3. conduct-ts daemon unpark f0\n' +
+          '  4. Re-queue the feature (restart the daemon if it was excluded this run).\n',
         haltClass: 'needs-human',
       });
     } finally {

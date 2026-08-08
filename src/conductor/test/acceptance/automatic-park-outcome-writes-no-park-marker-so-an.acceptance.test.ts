@@ -231,6 +231,8 @@ describe('automatic park termination — real runner to durable daemon consumers
     expect(halt).toContain('Contract outcome: setup-still-failing');
     expect(halt).toContain('tmp/setup-debug.log');
     expect(halt).toContain('Resume procedure:');
+    expect(halt).toContain('2. rm .pipeline/HALT');
+    expect(halt).toContain(`3. conduct-ts daemon unpark ${SLUG}`);
     expect(await readFile(haltClassPath(), 'utf8')).toBe('needs-human');
 
     expect(await discoverSlugs()).not.toContain(SLUG);
@@ -311,6 +313,9 @@ describe('automatic park termination — real runner to durable daemon consumers
     const halt = await readFile(haltPath(), 'utf8');
     expect(halt).toMatch(/^feature errored — will re-dispatch on the next scan/i);
     expect(halt).not.toContain('parked for human inspection');
+    expect(halt).toContain('2. rm .pipeline/HALT');
+    expect(halt).toContain('3. Re-queue the feature (restart the daemon if it was excluded this run).');
+    expect(halt).not.toContain(`conduct-ts daemon unpark ${SLUG}`);
     expect(await discoverSlugs()).toContain(SLUG);
     expect(record.escalations).toHaveLength(mode === 'false-ship' ? 1 : 0);
   });

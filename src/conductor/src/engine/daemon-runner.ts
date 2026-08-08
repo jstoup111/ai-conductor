@@ -570,8 +570,8 @@ export function makeRunFeature(
     } catch (err) {
       // Any thrown error (a step crash, or worktree-prep / bin/setup failing) —
       // capture it into a diagnostic `.pipeline/HALT` so the operator can see WHY
-      // (the daemon log otherwise shows a bare `error`) and the feature parks for
-      // inspection instead of being silently excluded for the run's lifetime.
+      // (the daemon log otherwise shows a bare `error`). This non-parked path remains
+      // re-dispatchable once the operator clears the HALT.
       const reason = err instanceof Error ? err.message : String(err);
       const haltRoot = worktree?.path ?? (
         deps.projectRoot ? join(deps.projectRoot, '.worktrees', item.slug) : undefined
@@ -661,11 +661,19 @@ export async function terminateFeature({
     }
   }
 
+  const resumeProcedure = autoParkWriteOutcome === 'written'
+    ?
+      `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
+      `  2. rm .pipeline/HALT\n` +
+      `  3. conduct-ts daemon unpark ${slug}\n` +
+      `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`
+    :
+      `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
+      `  2. rm .pipeline/HALT\n` +
+      `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
   note +=
     `\nResume procedure:\n` +
-    `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
-    `  2. rm .pipeline/HALT\n` +
-    `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
+    resumeProcedure;
   await writeHaltMarker(worktreePath, note, 'needs-human');
   await Promise.all([
     readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8'),
