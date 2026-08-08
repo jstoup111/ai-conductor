@@ -491,8 +491,7 @@ export const DEFAULT_TEARDOWN_TIMEOUT_SECONDS = 120;
  * the default, and invalid runtime values warn once before falling back to it.
  */
 export function resolveTeardownTimeoutSeconds(config?: HarnessConfig): number {
-  const override = (config as (HarnessConfig & { teardown_timeout_seconds?: unknown }) | undefined)
-    ?.teardown_timeout_seconds;
+  const override = config?.teardown_timeout_seconds;
   if (override === undefined) {
     return DEFAULT_TEARDOWN_TIMEOUT_SECONDS;
   }

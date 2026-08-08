@@ -10,6 +10,8 @@ import { basename, join } from 'node:path';
 import { listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
 import { runProjectTeardown } from './worktree-prepare.js';
+import { loadConfig } from './config.js';
+import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -19,6 +21,8 @@ export interface ReconcileMergedParkOptions {
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   log?: (message: string) => void;
   disposeHaltWatcher?: (slug: string) => void;
+  /** Resolved project teardown timeout, carried by daemon and operator paths. */
+  teardownTimeoutSeconds?: number;
 }
 
 export interface ReconcileMergedParkOutcome {
@@ -86,6 +90,8 @@ export interface ReconcileParkedFeaturesOptions {
   log?: (message: string) => void;
   autoCleanup?: boolean;
   cache?: Map<string, ParkClassification>;
+  /** Resolved project teardown timeout, passed to each cleanup operation. */
+  teardownTimeoutSeconds?: number;
 }
 
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -465,6 +471,7 @@ export async function reconcileParkedFeatures(
         // supplies them.
         requestRecordRepair: opts.requestRecordRepair,
         disposeHaltWatcher: opts.disposeHaltWatcher,
+        teardownTimeoutSeconds: opts.teardownTimeoutSeconds,
       });
       if (outcome.refusal === undefined) {
         counts.reconciled++;
@@ -636,7 +643,11 @@ export async function reconcileMergedPark(
   }
 
   if (worktreeOnDisk) {
-    await runProjectTeardown(worktreePath, opts.log);
+    const configResult = await loadConfig(opts.projectRoot);
+    const timeoutSeconds = opts.teardownTimeoutSeconds ?? resolveTeardownTimeoutSeconds(
+      configResult.ok ? configResult.config : undefined,
+    );
+    await runProjectTeardown(worktreePath, opts.log, { timeoutSeconds });
     try {
       await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
     } catch {

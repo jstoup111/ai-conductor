@@ -310,6 +310,16 @@ describe('provider_preparation_timeout_minutes config field', () => {
   });
 });
 
+describe('teardown_timeout_seconds config field', () => {
+  it('accepts a finite positive override without treating it as an unknown key', () => {
+    expect(validateConfig({ teardown_timeout_seconds: 0.1 })).toMatchObject({
+      ok: true,
+      config: { teardown_timeout_seconds: 0.1 },
+      warnings: [],
+    });
+  });
+});
+
 describe('reconcile_parked_auto_cleanup config field', () => {
   it('hard-errors a non-boolean value with the field name', () => {
     expect(validateConfig({ reconcile_parked_auto_cleanup: 'yes' })).toMatchObject({

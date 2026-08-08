@@ -1744,6 +1744,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
           disposeHaltWatcher,
+          teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
         });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.

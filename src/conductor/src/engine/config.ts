@@ -316,6 +316,8 @@ export function validateConfig(
     'stale_claim_window_hours',
     // Provider lifecycle preparation deadline.
     'provider_preparation_timeout_minutes',
+    // Bounded grace period for project-supplied worktree teardown hooks.
+    'teardown_timeout_seconds',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {

@@ -144,6 +144,7 @@ describe('engine/daemon-park-cli', () => {
           slug: 'merged',
           log: expect.any(Function),
           requestRecordRepair: expect.any(Function),
+          teardownTimeoutSeconds: 120,
         }]],
         out: ["Reconciled 'merged': worktree-removed, branch-deleted, unparked"],
       });

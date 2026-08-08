@@ -274,6 +274,37 @@ describe('project teardown hook — real removal entry points', () => {
     expect(failingOut.join('\n')).toContain('reclaim-failure-marker');
   });
 
+  it('applies the configured teardown bound when an operator reclaims a worktree', async () => {
+    const { root, git } = await initRepo();
+    const slug = 'reclaim-configured-timeout';
+    const worktree = await addWorktree(root, git, slug);
+    const record = join(root, 'reclaim-timeout-record.txt');
+    const lines: string[] = [];
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(root, '.ai-conductor', 'config.yml'), 'teardown_timeout_seconds: 0.1\n', 'utf8');
+    await installTeardown(
+      worktree,
+      `sleep 0.25\nprintf 'completed-after-timeout\\n' >> ${JSON.stringify(record)}`,
+    );
+
+    const code = await dispatchDaemonPark(
+      { kind: 'reclaim-worktree', slug },
+      { cwd: root, out: (line) => lines.push(line) },
+    );
+
+    expect({
+      code,
+      record: await recorded(record),
+      timeout: lines.some((line) => line === `teardown: timed out in ${worktree} after 0.1 second(s)`),
+      worktreeExists: await exists(worktree),
+    }).toEqual({
+      code: 0,
+      record: '',
+      timeout: true,
+      worktreeExists: false,
+    });
+  });
+
   it('runs teardown once before parked reconciliation falls back to directory removal', async () => {
     const { root, git, runGit } = await initRepo(true);
     const slug = 'reconcile-leftover';
@@ -307,5 +338,45 @@ describe('project teardown hook — real removal entry points', () => {
     });
     expect(logs.join('\n')).toContain(worktree);
     expect(logs.join('\n')).toContain('reconcile-failure-marker');
+  });
+
+  it('applies the configured teardown bound during parked reconciliation', async () => {
+    const { root, git, runGit } = await initRepo(true);
+    const slug = 'reconcile-configured-timeout';
+    await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+    await writeFile(join(root, '.docs', 'shipped', `${slug}.md`), '# shipped\n', 'utf8');
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(root, '.ai-conductor', 'config.yml'), 'teardown_timeout_seconds: 0.1\n', 'utf8');
+    await git('add', '.docs/shipped', '.ai-conductor/config.yml');
+    await git('commit', '-q', '-m', 'record shipment');
+    await git('push', '-q', 'origin', 'main');
+
+    const worktree = join(root, '.worktrees', slug);
+    const record = join(root, 'reconcile-timeout-record.txt');
+    const logs: string[] = [];
+    await mkdir(worktree, { recursive: true });
+    await installTeardown(
+      worktree,
+      `sleep 0.25\nprintf 'completed-after-timeout\\n' >> ${JSON.stringify(record)}`,
+    );
+
+    const outcome = await reconcileMergedPark({
+      projectRoot: root,
+      slug,
+      runGit,
+      log: (line) => logs.push(line),
+    });
+
+    expect({
+      outcome,
+      record: await recorded(record),
+      timeout: logs.includes(`teardown: timed out in ${worktree} after 0.1 second(s)`),
+      worktreeExists: await exists(worktree),
+    }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-absent', 'unparked'] },
+      record: '',
+      timeout: true,
+      worktreeExists: false,
+    });
   });
 });
