@@ -131,6 +131,31 @@ function callsProjectTeardown(source: ts.SourceFile): boolean {
   return found;
 }
 
+function projectTeardownCalls(source: ts.SourceFile): ts.CallExpression[] {
+  const calls: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && calleeName(node.expression) === 'runProjectTeardown') calls.push(node);
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  return calls;
+}
+
+function isWithinOnDiskGuard(call: ts.CallExpression): boolean {
+  for (let node: ts.Node | undefined = call.parent; node; node = node.parent) {
+    if (
+      ts.isIfStatement(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'worktreeOnDisk' &&
+      call.pos >= node.thenStatement.pos &&
+      call.end <= node.thenStatement.end
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function assertWorktreeRemovalCoverage(
   modules: readonly { module: string; source: ts.SourceFile }[],
   exemptions = WORKTREE_REMOVAL_EXEMPTIONS,
@@ -237,6 +262,15 @@ describe('structural: worktree-removal coverage', () => {
     expect(() => assertWorktreeRemovalCoverage([
       { module: 'engine/daemon-deps.ts', source: fixture },
     ], [])).toThrow(/engine\/daemon-deps\.ts.*runProjectTeardown/s);
+  });
+
+  it('skips teardown for a reconciliation worktree that is already absent', async () => {
+    const path = join(sourceRoot, 'engine/park-reconciliation.ts');
+    const source = ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true);
+    const calls = projectTeardownCalls(source);
+
+    expect(calls).toHaveLength(1);
+    expect(isWithinOnDiskGuard(calls[0]!)).toBe(true);
   });
 
   it('does not classify the guard source itself', () => {

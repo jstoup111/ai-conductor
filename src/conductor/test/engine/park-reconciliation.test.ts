@@ -996,14 +996,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'missing-worktree';
     const { run, deleted } = makeGit({ shipped: [slug], branches: [`fix/${slug}`], merged: [`fix/${slug}`] });
-    const worktree = join(projectRoot, '.worktrees', slug);
-    const observation = join(projectRoot, 'missing-worktree-teardown-ran');
     try {
-      const teardown = join(worktree, TEARDOWN_SCRIPT);
-      await mkdir(join(worktree, 'bin'), { recursive: true });
-      await writeFile(teardown, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(observation)}, 'ran');\n`);
-      await chmod(teardown, 0o755);
-      await rm(worktree, { recursive: true });
       await writeOperatorPark(projectRoot, slug);
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
@@ -1011,12 +1004,10 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       expect({
         outcome,
         deleted,
-        teardownRan: await access(observation).then(() => true, () => false),
         parked: await isOperatorParked(projectRoot, slug),
       }).toEqual({
         outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
         deleted: [`fix/${slug}`],
-        teardownRan: false,
         parked: false,
       });
     } finally {
