@@ -499,8 +499,8 @@ async function writeNamespaceEnv(
 }
 
 /**
- * Run the project's `bin/teardown` if present. The runner is intentionally
- * inert until its execution contract is added in subsequent tasks.
+ * Run the project's `bin/teardown` if present. Like setup, teardown gets the
+ * worktree's isolated namespace and a non-interactive CI environment.
  */
 export async function runProjectTeardown(
   worktreePath: string,
@@ -512,6 +512,14 @@ export async function runProjectTeardown(
   } catch {
     return;
   }
+
+  await execa(join(worktreePath, TEARDOWN_SCRIPT), [], {
+    cwd: worktreePath,
+    env: {
+      CI: 'true',
+      [NAMESPACE_VAR]: sanitizeNamespace(basename(worktreePath)),
+    },
+  });
 }
 
 /** Run the project's `bin/setup` if present; no-op otherwise; throw on failure. */

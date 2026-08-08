@@ -51,6 +51,38 @@ describe('engine/worktree-prepare', () => {
         expect(log).not.toHaveBeenCalled();
       },
     );
+
+    it('runs bin/teardown in the worktree with its CI namespace environment', async () => {
+      const teardownPath = join(dir, TEARDOWN_SCRIPT);
+      const observationDir = await mkdtemp(join(tmpdir(), 'teardown-observation-'));
+      const observationPath = join(observationDir, 'teardown-saw.json');
+      await mkdir(join(dir, 'bin'), { recursive: true });
+      await writeFile(
+        teardownPath,
+        `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(observationPath)}, JSON.stringify({
+  ci: process.env.CI,
+  namespace: process.env.WORKTREE_NAMESPACE,
+  cwd: process.cwd(),
+}));
+`,
+        'utf-8',
+      );
+      await chmod(teardownPath, 0o755);
+
+      try {
+        await runProjectTeardown(dir);
+
+        expect(JSON.parse(await readFile(observationPath, 'utf-8'))).toEqual({
+          ci: 'true',
+          namespace: expect.stringMatching(/\S/),
+          cwd: dir,
+        });
+      } finally {
+        await rm(observationDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('sanitizeNamespace', () => {
