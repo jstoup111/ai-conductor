@@ -54,6 +54,8 @@ import {
   createProgram,
   detectUserConfigReadCommand,
   userConfigReadCommand,
+  detectUserConfigWriteCommand,
+  userConfigWriteCommand,
   type CLIOptions,
 } from './cli.js';
 import type { ConductState, StepName } from './types/index.js';
@@ -472,6 +474,12 @@ async function main(): Promise<void> {
   const userConfigReadCmd = detectUserConfigReadCommand(process.argv);
   if (userConfigReadCmd) {
     process.exitCode = await userConfigReadCommand(userConfigReadCmd);
+    return;
+  }
+
+  const userConfigWriteCmd = detectUserConfigWriteCommand(process.argv);
+  if (userConfigWriteCmd) {
+    process.exitCode = await userConfigWriteCommand(userConfigWriteCmd);
     return;
   }
 
