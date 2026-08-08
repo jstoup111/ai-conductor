@@ -772,7 +772,10 @@ configure_md_viewer() {
       warn "args must contain {file} — appending"
       c_args="${c_args} {file}"
     fi
-    write_md_viewer_config "custom" "$c_cmd" "$c_args" "$c_mode"
+    if ! write_md_viewer_config "custom" "$c_cmd" "$c_args" "$c_mode"; then
+      warn "Could not save markdown viewer configuration"
+      return 1
+    fi
     ok "Markdown viewer: custom (${c_cmd})"
     return 0
   fi
@@ -794,7 +797,10 @@ configure_md_viewer() {
     fi
   fi
 
-  write_md_viewer_config "$key" "$cmd" "$args" "$mode"
+  if ! write_md_viewer_config "$key" "$cmd" "$args" "$mode"; then
+    warn "Could not save markdown viewer configuration"
+    return 1
+  fi
   ok "Markdown viewer: ${key} (${mode})"
 }
 
@@ -863,7 +869,10 @@ configure_mermaid_renderer() {
     fi
   fi
 
-  write_mermaid_renderer_config "$key" "$cmd" "$args" "$mode"
+  if ! write_mermaid_renderer_config "$key" "$cmd" "$args" "$mode"; then
+    warn "Could not save mermaid renderer configuration"
+    return 1
+  fi
   ok "Mermaid renderer: ${key} (${mode})"
 }
 
