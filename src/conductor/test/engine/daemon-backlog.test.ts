@@ -18,6 +18,7 @@ import {
   specHash,
   makeIsProcessed,
 } from '../../src/engine/shipped-record.js';
+import { writeAutoPark } from '../../src/engine/park-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -455,6 +456,20 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.blocked).toEqual([]);
     expect(result.items).toEqual([]);
     expect(isOperatorParked).toHaveBeenCalledWith('operator-parked');
+  });
+
+  it('excludes an otherwise eligible spec when its durable marker has automatic provenance', async () => {
+    const slug = 'auto-parked';
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+    await writeCoherence(slug);
+    await writeAutoPark(dir, slug, 'terminal daemon failure');
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.items.map((item) => item.slug)).not.toContain(slug);
   });
 
   it('Task 8: an undeduped content plan still reports its eligibility failure as blocked', async () => {

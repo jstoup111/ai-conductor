@@ -31,6 +31,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { writeHaltMarker } from './halt-marker.js';
+import { writeAutoPark } from './park-marker.js';
 import type { OperatorParkedTermination } from './conductor.js';
 
 /**
@@ -353,7 +354,15 @@ export function makeRunFeature(
               featureLog(
                 `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
               );
-              await writeErrorHalt(worktree.path, triageOutcome.outputTail, featureLog, triageOutcome, item.slug);
+              await terminateFeature({
+                worktreePath: worktree.path,
+                projectRoot: deps.projectRoot,
+                reason: triageOutcome.outputTail,
+                park: true,
+                log: featureLog,
+                triageEvidence: triageOutcome,
+                slug: item.slug,
+              });
               await deps.teardownWorktree(worktree, true);
               return {
                 slug: item.slug,
@@ -481,7 +490,14 @@ export function makeRunFeature(
         const reason = shipmentFailure;
         const doneMarker = join(worktree.path, '.pipeline', 'DONE');
         await rm(doneMarker, { force: true }).catch(() => {});
-        await writeErrorHalt(worktree.path, reason, featureLog, undefined, item.slug);
+        await terminateFeature({
+          worktreePath: worktree.path,
+          projectRoot: deps.projectRoot,
+          reason,
+          park: false,
+          log: featureLog,
+          slug: item.slug,
+        });
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -528,12 +544,20 @@ export function makeRunFeature(
 
       // Loop ended without DONE or HALT — treat as an error, keep the worktree.
       const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
-      // If triage evidence is present (and it's a park outcome), pass it to writeErrorHalt
+      // If triage evidence is present (and it's a park outcome), preserve it in the HALT note.
       const triageEvidenceForHalt =
         outcome.triageEvidence && outcome.triageEvidence.kind === 'park'
           ? outcome.triageEvidence
           : undefined;
-      await writeErrorHalt(worktree.path, noMarkerReason, featureLog, triageEvidenceForHalt, item.slug);
+      await terminateFeature({
+        worktreePath: worktree.path,
+        projectRoot: deps.projectRoot,
+        reason: noMarkerReason,
+        park: false,
+        log: featureLog,
+        triageEvidence: triageEvidenceForHalt,
+        slug: item.slug,
+      });
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -546,14 +570,21 @@ export function makeRunFeature(
     } catch (err) {
       // Any thrown error (a step crash, or worktree-prep / bin/setup failing) —
       // capture it into a diagnostic `.pipeline/HALT` so the operator can see WHY
-      // (the daemon log otherwise shows a bare `error`) and the feature parks for
-      // inspection instead of being silently excluded for the run's lifetime.
+      // (the daemon log otherwise shows a bare `error`). This non-parked path remains
+      // re-dispatchable once the operator clears the HALT.
       const reason = err instanceof Error ? err.message : String(err);
       const haltRoot = worktree?.path ?? (
         deps.projectRoot ? join(deps.projectRoot, '.worktrees', item.slug) : undefined
       );
       if (haltRoot) {
-        await writeErrorHalt(haltRoot, reason, featureLog, undefined, item.slug);
+        await terminateFeature({
+          worktreePath: haltRoot,
+          projectRoot: deps.projectRoot,
+          reason,
+          park: false,
+          log: featureLog,
+          slug: item.slug,
+        });
       }
       if (worktree) {
         await deps.teardownWorktree(worktree, true).catch(() => {});
@@ -569,68 +600,90 @@ export function makeRunFeature(
   };
 }
 
-/**
- * Write a diagnostic `.pipeline/HALT` into a worktree whose feature errored, so
- * the failure is visible (the daemon log only shows `error`) and the feature
- * parks for human inspection rather than being silently excluded. Best-effort:
- * a write failure must never mask the original error.
- */
-async function writeErrorHalt(
-  worktreePath: string,
-  reason: string,
-  log?: (msg: string) => void,
-  triageEvidence?: unknown,
-  slug?: string,
-): Promise<void> {
-  let note = `feature errored — parked for human inspection\n${reason}\n`;
+export interface TerminateFeatureOptions {
+  worktreePath: string;
+  reason: string;
+  park: boolean;
+  log?: (msg: string) => void;
+  triageEvidence?: unknown;
+  slug?: string;
+  projectRoot?: string;
+}
 
-  // If triage evidence is present and it's a park outcome, render extended diagnostics
+type AutoParkWriteOutcome = 'not-requested' | 'written' | 'failed';
+
+/**
+ * Record an errored feature's diagnostic HALT. A non-parked termination leaves
+ * no daemon park marker so the normal backlog scan may dispatch it again.
+ */
+export async function terminateFeature({
+  worktreePath,
+  reason,
+  park,
+  log,
+  triageEvidence,
+  slug,
+  projectRoot,
+}: TerminateFeatureOptions): Promise<void> {
+  let autoParkWriteError: string | undefined;
+  const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug
+    ? await writeAutoPark(projectRoot ?? worktreePath, slug, reason)
+      .then(() => 'written' as const)
+      .catch((err) => {
+        autoParkWriteError = err instanceof Error ? err.message : String(err);
+        log?.(`[daemon-runner] auto-park write failed for ${slug}: ${autoParkWriteError}`);
+        return 'failed' as const;
+      })
+    : 'not-requested';
+  const haltReason = autoParkWriteOutcome === 'failed'
+    ? `${reason}\n\nAutomatic park marker write failed: ${autoParkWriteError}\nRun: conduct-ts daemon park ${slug}`
+    : reason;
+
+  const heading = autoParkWriteOutcome === 'written'
+    ? 'feature parked — will not re-dispatch on the next scan'
+    : autoParkWriteOutcome === 'not-requested'
+      ? 'feature errored — will re-dispatch on the next scan'
+      : `feature errored — automatic park failed: ${autoParkWriteError}; run conduct-ts daemon park ${slug}`;
+  let note = `${heading}\n${haltReason}\n`;
+
   const triage = triageEvidence as any;
   if (triage && typeof triage === 'object' && triage.kind === 'park') {
     note += `\n──── Triage Evidence ────\n`;
-
-    // Output tail
-    if (triage.outputTail) {
-      note += `\nOutput tail:\n${triage.outputTail}\n`;
-    }
-
-    // Quarantine ref or explicit no-quarantine statement
+    if (triage.outputTail) note += `\nOutput tail:\n${triage.outputTail}\n`;
     if (triage.quarantineRef) {
       note += `\nQuarantine ref: ${triage.quarantineRef}\n`;
     } else {
       note += `\nNo quarantine ref exists (clean-HEAD case)\n`;
     }
-
-    // Contract outcome
-    if (triage.contractOutcome) {
-      note += `\nContract outcome: ${triage.contractOutcome}\n`;
-    }
-
-    // Dirty paths left behind by an unverifiable half-fix
+    if (triage.contractOutcome) note += `\nContract outcome: ${triage.contractOutcome}\n`;
     if (Array.isArray(triage.preservedPaths) && triage.preservedPaths.length > 0) {
       note += `\nDirty paths after fix-session:\n${triage.preservedPaths.map((p: string) => `  - ${p}`).join('\n')}\n`;
     }
   }
 
+  const resumeProcedure = autoParkWriteOutcome === 'written'
+    ?
+      `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
+      `  2. rm .pipeline/HALT\n` +
+      `  3. conduct-ts daemon unpark ${slug}\n` +
+      `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`
+    :
+      `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
+      `  2. rm .pipeline/HALT\n` +
+      `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
   note +=
     `\nResume procedure:\n` +
-    `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
-    `  2. rm .pipeline/HALT\n` +
-    `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
+    resumeProcedure;
   await writeHaltMarker(worktreePath, note, 'needs-human');
   await Promise.all([
     readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8'),
     readFile(join(worktreePath, '.pipeline', 'HALT.class'), 'utf-8'),
   ]).then(([body, haltClass]) => {
-    if (body !== note || haltClass !== 'needs-human') {
-      throw new Error('marker verification failed');
-    }
+    if (body !== note || haltClass !== 'needs-human') throw new Error('marker verification failed');
   }).catch((err) => {
-    if (log) {
-      log(
-        `[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
+    log?.(
+      `[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   });
 }
 

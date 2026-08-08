@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,7 +9,13 @@ import {
   reconcileParkedFeatures,
 } from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
-import { isOperatorParked, removeOperatorPark, writeOperatorPark } from '../../src/engine/park-marker.js';
+import {
+  getProvenanceType,
+  isOperatorParked,
+  removeOperatorPark,
+  writeAutoPark,
+  writeOperatorPark,
+} from '../../src/engine/park-marker.js';
 
 /**
  * A faithful in-memory stand-in for the four git reads the reconciler makes,
@@ -976,6 +982,43 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 });
 
 describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
+  it('counts an open-intake automatic park and preserves machine versus operator provenance', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const autoSlug = 'auto-parked';
+    const operatorSlug = 'operator-parked';
+    const { run } = makeGit({ branches: [`feat/${autoSlug}`, `feat/${operatorSlug}`] });
+    try {
+      await writeAutoPark(projectRoot, autoSlug, 'terminal daemon failure');
+      await writeOperatorPark(projectRoot, operatorSlug);
+      await mkdir(join(projectRoot, '.docs', 'intake'), { recursive: true });
+      for (const slug of [autoSlug, operatorSlug]) {
+        await writeFile(join(projectRoot, '.docs', 'intake', `${slug}.md`), 'Source-Ref: acme/app#42\n');
+      }
+
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        getIssueState: async () => 'OPEN',
+        autoCleanup: false,
+      });
+
+      expect({
+        counts: result.counts,
+        entries: result.entries.sort((left, right) => left.slug.localeCompare(right.slug)),
+        provenance: await Promise.all([autoSlug, operatorSlug].map((slug) => getProvenanceType(projectRoot, slug))),
+      }).toEqual({
+        counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 2, refused: 0, skipped: 0 },
+        entries: [
+          { slug: autoSlug, classification: 'normal', annotation: undefined },
+          { slug: operatorSlug, classification: 'normal', annotation: undefined },
+        ],
+        provenance: ['auto', 'operator'],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       slug: 'merged-by-record',
@@ -1211,6 +1254,99 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
           skipped: 0,
         },
         refusedByReason: {},
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps an auto-parked no-own-commit branch, worktree, and marker when its shipped record is missing', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'auto-no-own-commits';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const branch = `feat/${slug}`;
+    const { run, deleted } = makeGit({ branches: [branch], merged: [branch] });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeAutoPark(projectRoot, slug, 'terminal daemon failure');
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh });
+
+      expect({
+        entries: result.entries,
+        counts: result.counts,
+        refusedByReason: result.refusedByReason,
+        markerRemains: await isOperatorParked(projectRoot, slug),
+        worktreeRemains: await access(worktree).then(() => true, () => false),
+        deleted,
+      }).toEqual({
+        entries: [{ slug, classification: 'merged', annotation: undefined }],
+        counts: { reconciled: 0, deferred: 1, orphaned: 0, parked: 1, refused: 0, skipped: 0 },
+        refusedByReason: {},
+        markerRemains: true,
+        worktreeRemains: true,
+        deleted: [],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies an auto-park whose intake issue closed as orphan without removing its marker', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'auto-closed-intake';
+    const { run } = makeGit({ branches: [`feat/${slug}`] });
+    try {
+      await writeAutoPark(projectRoot, slug, 'terminal daemon failure');
+      await mkdir(join(projectRoot, '.docs', 'intake'), { recursive: true });
+      await writeFile(join(projectRoot, '.docs', 'intake', `${slug}.md`), 'Source-Ref: acme/app#42\n');
+
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        getIssueState: async () => 'CLOSED',
+      });
+
+      expect({
+        entries: result.entries,
+        counts: result.counts,
+        markerRemains: await isOperatorParked(projectRoot, slug),
+        provenance: await getProvenanceType(projectRoot, slug),
+      }).toEqual({
+        entries: [{ slug, classification: 'orphan', annotation: 'orphan' }],
+        counts: { reconciled: 0, deferred: 0, orphaned: 1, parked: 0, refused: 0, skipped: 0 },
+        markerRemains: true,
+        provenance: 'auto',
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: 'empty', body: '', mode: undefined },
+    { name: 'unreadable', body: 'auto-parked: terminal daemon failure\n', mode: 0o000 },
+  ])('fails closed for a $name marker body without throwing or removing the marker', async ({ body, mode }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = `marker-${body === '' ? 'empty' : 'unreadable'}`;
+    const marker = join(projectRoot, '.daemon', 'parked', slug);
+    const { run } = makeGit();
+    try {
+      await mkdir(join(projectRoot, '.daemon', 'parked'), { recursive: true });
+      await writeFile(marker, body);
+      if (mode !== undefined) await chmod(marker, mode);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run });
+
+      expect({
+        entries: result.entries,
+        counts: result.counts,
+        markerRemains: await access(marker).then(() => true, () => false),
+      }).toEqual({
+        entries: [{ slug, classification: 'unclassified', annotation: undefined }],
+        counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, refused: 0, skipped: 1 },
+        markerRemains: true,
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

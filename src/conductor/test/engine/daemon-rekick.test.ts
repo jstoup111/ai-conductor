@@ -1772,6 +1772,38 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
     expect(await fileExists(mainMarkerPath)).toBe(true);
     expect(await readFile(mainMarkerPath, 'utf-8')).toContain('auto-parked:');
   });
+
+  it('automatic marker skips the re-kick without changing HALT, adding REKICK, or recording its SHA', async () => {
+    const pipelineDir = join(worktreeDir, '.pipeline');
+    const haltPath = join(pipelineDir, 'HALT');
+    const rekickPath = join(pipelineDir, REKICK_SENTINEL);
+    await mkdir(pipelineDir, { recursive: true });
+    await writeFile(haltPath, 'terminal daemon failure\n', 'utf-8');
+    await checkAndAutoPark(worktreeDir, SLUG, { daemon: true, reason: 'terminal daemon failure' });
+    const lastRekickSha = new Map<string, string>();
+
+    const result = await rekickSweep({
+      listHaltedWorktrees: async () => [SLUG],
+      readHaltReason: async () => 'terminal daemon failure',
+      hasRebaseInProgress: async () => false,
+      abortRebase: async () => { throw new Error('must not abort an automatic park'); },
+      clearMarker: async () => { throw new Error('must not clear an automatic park'); },
+      lastRekickSha,
+      isOperatorParked: async (slug) => isOperatorParked(mainRepoDir, slug),
+    }, SHA_B);
+
+    expect({
+      result,
+      halt: await readFile(haltPath, 'utf-8'),
+      rekickExists: await fileExists(rekickPath),
+      hasLastRekickSha: lastRekickSha.has(SLUG),
+    }).toEqual({
+      result: { cleared: [], skipped: [SLUG] },
+      halt: 'terminal daemon failure\n',
+      rekickExists: false,
+      hasLastRekickSha: false,
+    });
+  });
 });
 
 // ── Task 15 (#486): Wire reconciliation at sweep start + same-sweep skip e2e ───
