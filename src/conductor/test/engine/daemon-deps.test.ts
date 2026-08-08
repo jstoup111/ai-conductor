@@ -209,6 +209,18 @@ describe('engine/daemon-deps', () => {
       expect(runProjectTeardown).toHaveBeenCalledTimes(1);
     });
 
+    it('does not run project teardown or remove a retained worktree', async () => {
+      const d = makeFeatureRunnerDeps({
+        projectRoot: dir,
+        worktreeBase: join(dir, '.worktrees'),
+        baseBranch: 'main',
+        runConductorInWorktree: async () => {},
+      });
+      await d.teardownWorktree(worktree, true);
+
+      expect(runProjectTeardown).not.toHaveBeenCalled();
+      expect(execa).not.toHaveBeenCalled();
+    });
   });
 
   describe('isProcessed', () => {
