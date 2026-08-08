@@ -525,14 +525,15 @@ The leading `*/` is the monorepo idiom for "any immediate subdirectory."
 ## test_suite
 
 The project-owned aggregate verification command run by the pre-SHIP `test_suite` gate. Validated by
-`validateTestSuiteBlock` (`config.ts:1120-1196`); an unknown key inside the block is a hard error.
+`validateTestSuiteBlock` (`config.ts:1191-1290`); an unknown key inside the block is a hard error.
 
 | Key | Type | Required | Validation | Default |
 | --- | --- | --- | --- | --- |
-| `test_suite.command` | string | Yes, when the block exists | Non-empty after trim (`config.ts:1138-1143`) | — |
-| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1145-1168`) | project root |
-| `test_suite.timeout_seconds` | number | No | Finite and `> 0` (`config.ts:1170-1180`) | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts:7`) |
-| `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1182-1193`) | none |
+| `test_suite.command` | string | Yes, unless `test_suite.scoped_command` is configured | Non-empty after trim (`config.ts:1217-1221`) | — |
+| `test_suite.scoped_command` | string | No | Non-empty after trim and must contain `{selectors}`. `conduct-ts scoped-run <selectors...>` replaces that placeholder with the selected tests; it never falls back to `command`. (`config.ts:1223-1236`) | none; scoped runs are unavailable |
+| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1239-1262`) | project root |
+| `test_suite.timeout_seconds` | number | No | Finite and `> 0` (`config.ts:1264-1274`) | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts:7`) |
+| `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1276-1287`) | none |
 | `test_suite.environment` | string[] | No | Array of strings | none |
 
 `environment` holds environment variable **names**, not values. Each value is HMAC'd into the full-suite
@@ -540,7 +541,8 @@ fingerprint (`src/conductor/src/engine/full-suite-fingerprint.ts:209-228`) so th
 invalidates cached verification with reason `environment_changed`, and each is redacted from verifier
 output. See [environment](environment.md).
 
-Omitting the block entirely is a gating failure at SHIP: the verifier returns
+The block must configure at least one of `command` or `scoped_command`. `command` is still required for
+the aggregate pre-SHIP gate. Omitting the block entirely is a gating failure at SHIP: the verifier returns
 `{ status: 'FAILED', reason: 'missing_config' }` (`src/conductor/src/engine/full-suite-verifier.ts:717-724`)
 and the run HALTs. The gate itself is described in [gates](../explanation/gates.md).
 
@@ -1081,6 +1083,7 @@ steps:
 
 test_suite:
   command: npm test
+  scoped_command: npx vitest run {selectors}
   working_directory: .
   timeout_seconds: 1800
   environment:

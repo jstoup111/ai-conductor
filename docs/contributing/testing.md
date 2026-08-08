@@ -37,9 +37,10 @@ Run everything from `src/conductor` unless stated otherwise.
 vitest run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'
 ```
 
-The `AGGREGATE_TEST_SUITE_PASS` sentinel is load-bearing: it is the success token the pre-SHIP
-`test_suite` gate reads. Do not replace `npm test` with a raw `vitest run` when producing completion
-evidence.
+`AGGREGATE_TEST_SUITE_PASS` is a human-readable shell success indicator. The pre-SHIP `test_suite`
+gate classifies the aggregate command's exit code and records its evidence; it does not inspect this
+sentinel. A raw `vitest run` may therefore satisfy the gate when it exits successfully, though the npm
+script remains the repository's canonical full-suite command.
 
 ### The engine-dist guard
 

@@ -322,6 +322,10 @@ export async function executeFullSuite(
       processTreeCleanup,
     )
   );
+  if (testSuite.command === undefined) {
+    throw new Error('test_suite.command is required for aggregate execution');
+  }
+  const command = testSuite.command;
   const cwd = resolve(projectRoot, testSuite.working_directory ?? '.');
   const timeoutMs = testSuite.timeout_seconds === undefined
     ? DEFAULT_FULL_SUITE_TIMEOUT_MS
@@ -329,7 +333,7 @@ export async function executeFullSuite(
   const started = clock();
   let result: FullSuiteCommandSuccess;
   try {
-    result = await runner(testSuite.command, {
+    result = await runner(command, {
       cwd,
       env: environment,
       shell: true,
@@ -342,7 +346,7 @@ export async function executeFullSuite(
     return {
       ok: false,
       ...classification,
-      command: testSuite.command,
+      command,
       cwd,
       startedAt: started.toISOString(),
       endedAt: ended.toISOString(),
@@ -359,7 +363,7 @@ export async function executeFullSuite(
 
   return {
     ok: true,
-    command: testSuite.command,
+    command,
     cwd,
     startedAt: started.toISOString(),
     endedAt: ended.toISOString(),

@@ -334,11 +334,12 @@ later frontier, and Conservative remains sequential. If the selected provider ca
 fan-out, Standard and Full stop with the provider, missing capability, and recovery action named;
 they never silently serialize.
 
-**Intermediate test execution policy:** Ordinary TDD RED/GREEN runs the scoped union of affected tests.
-Debugging and conduct progression use the same policy. Pipeline batch boundaries,
-parallel joins, and evaluators use pipeline's existing named `BATCH_AFFECTED_TESTS`
-union. A known scoped failure blocks its current BUILD activity; it is never
-deferred to the aggregate gate.
+**Intermediate test execution policy:** Ordinary TDD RED/GREEN runs the scoped union of affected tests
+through `conduct-ts scoped-run <selectors...>`. The agent derives the selectors; it does not
+hand-assemble or narrate a test command. Debugging and conduct progression use the same policy.
+Pipeline batch boundaries, parallel joins, and evaluators use pipeline's existing named
+`BATCH_AFFECTED_TESTS` union through the same interface. A known scoped failure blocks its current
+BUILD activity; it is never deferred to the aggregate gate.
 
 **Test isolation policy:** Automated unit, acceptance, integration, and end-to-end tests
 must not call real third-party systems. Unit tests inject mocked adapters. Acceptance,

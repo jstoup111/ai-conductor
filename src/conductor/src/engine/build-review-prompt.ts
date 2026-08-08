@@ -61,8 +61,7 @@ All-or-FAIL rule: PASS only if all four rubric items pass. If any one of the
 four rubric items fails, the overall verdict is FAIL.
 
 Before judging, run only the scoped tests exercised by this diff (the changed
-test files) — observe their output firsthand. The full project suite runs at
-CI and at finish, not here.
+test files) through \`conduct-ts scoped-run\` — observe their output firsthand.
 
 When you are done, write your verdict to \`.pipeline/build-review.json\` using
 exactly this JSON schema:

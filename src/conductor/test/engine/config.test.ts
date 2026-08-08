@@ -970,6 +970,77 @@ complexity:
   });
 
   describe('test_suite config block', () => {
+    it('loads and exposes an optional scoped_command template', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  scoped_command: npx vitest run {selectors}\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite?.scoped_command).toBe('npx vitest run {selectors}');
+    });
+
+    it('accepts a scoped-only test_suite declaration', () => {
+      const result = validateConfig({
+        test_suite: { scoped_command: 'npx vitest run {selectors}' },
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects a scoped_command template without the selector placeholder', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  scoped_command: npx vitest run\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.scoped_command.*\{selectors\}/),
+        },
+      });
+    });
+
+    it.each([
+      ['an empty string', ''],
+      ['a whitespace-only string', '   '],
+      ['a number', 42],
+      ['a list', ['npx', 'vitest', 'run', '{selectors}']],
+      ['an object', { command: 'npx vitest run {selectors}' }],
+    ])('rejects scoped_command that is %s', (_name, scopedCommand) => {
+      const result = validateConfig({
+        test_suite: { command: 'npm test', scoped_command: scopedCommand },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.scoped_command/),
+        },
+      });
+    });
+
+    it('loads a test_suite without scoped_command as undefined', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite?.scoped_command).toBeUndefined();
+    });
+
     it('accepts an aggregate suite declaration with every supported field', () => {
       const testSuite = {
         command: 'npm test',

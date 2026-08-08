@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
@@ -23,6 +24,13 @@ import type { GitRunner } from '../../src/engine/rebase.js';
 //      full grader prompt from it, and assert the sentinel never appears.
 
 const SENTINEL = 'MAKER_SUMMARY_SENTINEL_12345';
+const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
+const BROAD_FALLBACK_TRIGGERS = [
+  'A shared/core module has 3+ production importers.',
+  'The diff touches config, migrations, dependency manifests, or test infrastructure.',
+  'The scoped/affected set is empty.',
+  'Module-to-test mapping is low-confidence and cannot be made confidently.',
+] as const;
 
 const execFileAsync = promisify(execFile);
 
@@ -121,5 +129,23 @@ describe('build_review input isolation', () => {
 
     expect(assembleArity).toBe(true);
     expect(promptArity).toBe(true);
+  });
+
+  it('keeps scoped verification agent-owned and preserves the broad-fallback contract', async () => {
+    const [pipeline, tdd, harness] = await Promise.all([
+      readFile(join(REPOSITORY_ROOT, 'skills/pipeline/SKILL.md'), 'utf8'),
+      readFile(join(REPOSITORY_ROOT, 'skills/tdd/SKILL.md'), 'utf8'),
+      readFile(join(REPOSITORY_ROOT, 'HARNESS.md'), 'utf8'),
+    ]);
+
+    for (const policy of [pipeline, tdd, harness]) {
+      expect(policy).toContain('conduct-ts scoped-run <selectors...>');
+      expect(policy).toMatch(/agent derives the selectors/i);
+    }
+
+    for (const trigger of BROAD_FALLBACK_TRIGGERS) {
+      expect(harness).toContain(trigger);
+      expect(pipeline).toContain(trigger);
+    }
   });
 });

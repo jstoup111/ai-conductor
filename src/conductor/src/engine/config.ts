@@ -1196,6 +1196,7 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
 
   const allowed = new Set([
     'command',
+    'scoped_command',
     'working_directory',
     'timeout_seconds',
     'inputs',
@@ -1207,11 +1208,33 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
     }
   }
 
-  if (typeof raw.command !== 'string' || raw.command.trim() === '') {
+  if (raw.command === undefined && raw.scoped_command === undefined) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.command or test_suite.scoped_command must be configured',
+    };
+  }
+
+  if (raw.command !== undefined && (typeof raw.command !== 'string' || raw.command.trim() === '')) {
     return {
       type: 'validation_error',
       message: 'test_suite.command must be a non-empty string',
     };
+  }
+
+  if (raw.scoped_command !== undefined) {
+    if (typeof raw.scoped_command !== 'string' || raw.scoped_command.trim() === '') {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.scoped_command must be a non-empty string',
+      };
+    }
+    if (!raw.scoped_command.includes('{selectors}')) {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.scoped_command must contain the "{selectors}" placeholder',
+      };
+    }
   }
 
   if (raw.working_directory !== undefined) {

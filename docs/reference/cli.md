@@ -563,6 +563,22 @@ Failure reasons and their guidance:
 This command is dispatched before every other detector and sets the process exit code rather than
 exiting immediately. It does not appear in `--help`.
 
+## `conduct-ts scoped-run`
+
+```bash
+conduct-ts scoped-run <selectors...>
+```
+
+Runs the configured scoped test command for one or more selectors. It expands the selectors only at
+the `{selectors}` placeholder in `test_suite.scoped_command`; see [configuration](configuration.md).
+It does not run the aggregate `test_suite.command` or create, replace, or reuse aggregate verification
+evidence.
+
+At least one non-blank selector is required. An empty selection exits 1 and directs the caller to the
+shared aggregate verifier. If `test_suite.scoped_command` is not configured, it exits 1 without falling
+back to the aggregate command. A selected-test failure returns that command's nonzero exit code; a
+successful selected run exits 0. This command does not appear in `--help`.
+
 ## `conduct-ts shipped-record`
 
 ```bash
