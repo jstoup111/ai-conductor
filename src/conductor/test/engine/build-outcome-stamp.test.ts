@@ -26,8 +26,10 @@ describe('conductor build-outcome baseline capture', () => {
   let dir: string;
   let statePath: string;
   let fixtureHead: string;
+  let fixtureSeed = 0;
 
   beforeEach(async () => {
+    fixtureSeed += 1;
     dir = await mkdtemp(join(tmpdir(), 'conductor-build-outcome-'));
     statePath = join(dir, '.pipeline', 'conduct-state.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -37,7 +39,11 @@ describe('conductor build-outcome baseline capture', () => {
     await writeFile(join(dir, 'README.md'), '# Fixture\n');
     await writeFile(join(dir, '.gitignore'), '.pipeline/\n');
     await execa('git', ['add', 'README.md', '.gitignore'], { cwd: dir });
-    await execa('git', ['commit', '-m', 'test: seed fixture'], { cwd: dir });
+    // A per-test commit message keeps each fixture HEAD distinct. Identical
+    // fixtures committed inside one wall-clock second produce the same SHA,
+    // which would let a leaked mock value from a neighbouring test pass
+    // unnoticed on a fast machine and fail only on a slow CI runner.
+    await execa('git', ['commit', '-m', `test: seed fixture ${fixtureSeed}`], { cwd: dir });
     fixtureHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
     await writeFile(statePath, JSON.stringify({
       worktree: 'done',
@@ -60,13 +66,15 @@ describe('conductor build-outcome baseline capture', () => {
       join(dir, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '8', status: 'completed' }] }),
     );
-    vi.mocked(projectPrelude.currentCommitSha).mockClear();
-    vi.mocked(projectPrelude.currentTreeHash).mockClear();
-    vi.mocked(projectPrelude.currentCommitSha)
-      .mockResolvedValueOnce(fixtureHead)
-      .mockResolvedValue('head-after-build');
-    vi.mocked(projectPrelude.currentTreeHash)
-      .mockResolvedValue('tree-witness');
+    // mockReset, not mockClear: clearing only drops recorded calls and would
+    // leave any queued one-shot value armed for the next test. Every probe
+    // answers with this fixture's HEAD; a test that needs the build to move
+    // HEAD re-arms the mock from its own step runner, so no assertion depends
+    // on how many times the conductor probes before the build settles.
+    vi.mocked(projectPrelude.currentCommitSha).mockReset();
+    vi.mocked(projectPrelude.currentTreeHash).mockReset();
+    vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue(fixtureHead);
+    vi.mocked(projectPrelude.currentTreeHash).mockResolvedValue('tree-witness');
   });
 
   afterEach(async () => {
@@ -121,9 +129,13 @@ describe('conductor build-outcome baseline capture', () => {
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         dispatched.push(step);
-        return dispatched.length === 1
-          ? { success: true, output }
-          : { success: false, output: 'sentinel stop after successful build settle' };
+        if (dispatched.length === 1) {
+          // The build moved HEAD: every probe from the settle onward observes
+          // the new commit, whatever the conductor probed before dispatch.
+          vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue('head-after-build');
+          return { success: true, output };
+        }
+        return { success: false, output: 'sentinel stop after successful build settle' };
       }),
     };
     const conductor = new Conductor({
