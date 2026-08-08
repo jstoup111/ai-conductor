@@ -7,7 +7,7 @@
 // change to how the marker is written or where it lives had to be mirrored across
 // all of them. Both the constant and the best-effort writer now live here.
 
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** The park-for-human marker the daemon loop treats as a stop. */
@@ -63,6 +63,65 @@ export async function writeHaltMarker(
     await rename(haltClassTempPath, haltClassPath);
   } catch {
     await unlink(haltClassTempPath).catch(() => {});
+  }
+}
+
+/**
+ * The identity of the `.pipeline/HALT` marker at one instant, used to tell a
+ * marker written DURING an operation apart from one that was already lying
+ * around before it. `.pipeline/HALT` persists across steps and across runs, so
+ * presence alone proves nothing about who wrote it or when.
+ */
+export interface HaltMarkerSnapshot {
+  present: boolean;
+  mtimeMs: number;
+  size: number;
+}
+
+/**
+ * Capture `.pipeline/HALT`'s identity. An absent or unreadable marker resolves
+ * to `{ present: false }` rather than throwing — this is only ever used to
+ * compare against a later observation.
+ */
+export async function snapshotHaltMarker(projectRoot: string): Promise<HaltMarkerSnapshot> {
+  try {
+    const info = await stat(join(projectRoot, HALT_MARKER));
+    return { present: true, mtimeMs: info.mtimeMs, size: info.size };
+  } catch {
+    return { present: false, mtimeMs: 0, size: 0 };
+  }
+}
+
+/**
+ * The reason from a `needs-human` HALT that appeared — or changed — since
+ * `before` was captured; `null` when there is no such marker.
+ *
+ * This is how a HALT written by an operation itself is distinguished from a
+ * stale one it merely inherited: the marker must be present now AND differ from
+ * the snapshot (absent before, or a different mtime/size). It also requires the
+ * `needs-human` class and a non-empty body, so a `mechanical` park, a legacy
+ * marker with no sidecar, and an empty file are all ignored.
+ *
+ * Deliberately fails SAFE. Every ambiguous case — unreadable marker, missing
+ * sidecar, a rewrite that somehow lands on an identical mtime AND size —
+ * resolves to `null`, i.e. "treat it as stale", which leaves the caller's
+ * pre-existing behavior untouched. A false negative costs a retry; a false
+ * positive would halt a healthy run on someone else's marker.
+ */
+export async function readStepWrittenHaltReason(
+  projectRoot: string,
+  before: HaltMarkerSnapshot,
+): Promise<string | null> {
+  const now = await snapshotHaltMarker(projectRoot);
+  if (!now.present) return null;
+  const unchanged = before.present && now.mtimeMs === before.mtimeMs && now.size === before.size;
+  if (unchanged) return null;
+  if ((await readHaltClass(projectRoot)) !== 'needs-human') return null;
+  try {
+    const body = (await readFile(join(projectRoot, HALT_MARKER), 'utf-8')).trim();
+    return body.length > 0 ? body : null;
+  } catch {
+    return null;
   }
 }
 

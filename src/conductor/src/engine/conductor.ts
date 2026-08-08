@@ -18,6 +18,8 @@ import { homedir, tmpdir } from 'node:os';
 import {
   HALT_MARKER,
   PROTECTED_ARTIFACT_HALT_CLASS,
+  readStepWrittenHaltReason,
+  snapshotHaltMarker,
   writeHaltMarker,
 } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
@@ -5149,6 +5151,12 @@ export class Conductor {
           const recoveryProbeFailure = authorizedRecoveryProbeFailure;
           authorizedRecoveryProbeFailure = undefined;
 
+          // Freshness anchor for the step-written HALT check below. `.pipeline/HALT`
+          // persists across steps and across runs, so the ONLY way to tell a marker
+          // this attempt produced from one it inherited is to record the marker's
+          // identity here, before the attempt is dispatched.
+          const haltBeforeAttempt = await snapshotHaltMarker(this.projectRoot);
+
           // Self-host live-boundary enforcement point. A violation observed
           // while an EARLIER dispatch was in flight is enforced HERE — before
           // the next dispatch spends any provider work — never retroactively
@@ -5784,6 +5792,33 @@ export class Conductor {
               if (haltExists) {
                 // HALT marker was written by preflight check; exit immediately
                 break;
+              }
+            }
+
+            // A step that wrote its OWN `needs-human` HALT during this attempt has
+            // already judged that the run cannot continue without a human (e.g. the
+            // accepted DECIDE artifacts contradict merged code, so no honest
+            // acceptance spec can be authored). Retrying re-dispatches the identical,
+            // unresolvable condition and buries the agent's stated reason under a
+            // generic step failure. Honor the marker and surface its reason verbatim.
+            //
+            // Freshness is the whole safety story here: `.pipeline/HALT` persists
+            // across steps and runs, so only a marker that APPEARED or CHANGED since
+            // `haltBeforeAttempt` counts. A leftover HALT from an earlier step or run
+            // can never suppress a legitimate retry, and every ambiguous case resolves
+            // to "stale", leaving today's retry behavior untouched.
+            {
+              const stepWrittenHalt = await readStepWrittenHaltReason(
+                this.projectRoot,
+                haltBeforeAttempt,
+              );
+              if (stepWrittenHalt) {
+                state[step.name] = 'failed';
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await emitTracked({ type: 'loop_halt', reason: stepWrittenHalt });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
               }
             }
 
@@ -6431,6 +6466,28 @@ export class Conductor {
                 }
                 resolvedTasksBefore = resolvedTasksAfter;
                 headShaAttemptStart = headShaAfterBuild;
+              }
+
+              // Same step-written HALT rule as the dispatch-failure path above, at
+              // the OTHER retry decision point: the step reported success but its
+              // completion contract missed. This is the shape the failure was first
+              // observed in — `acceptance_specs` refused, wrote a `needs-human` HALT,
+              // was scored ✓, missed on `.pipeline/acceptance-specs-red.json`, and was
+              // re-dispatched into the same contradiction. Same freshness guarantee:
+              // only a marker this attempt produced can stop the retry.
+              {
+                const stepWrittenHalt = await readStepWrittenHaltReason(
+                  this.projectRoot,
+                  haltBeforeAttempt,
+                );
+                if (stepWrittenHalt) {
+                  state[step.name] = 'failed';
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await emitTracked({ type: 'loop_halt', reason: stepWrittenHalt });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
               }
 
               if (progressBypassed || attempt < stepMaxRetries) {
