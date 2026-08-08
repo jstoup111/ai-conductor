@@ -295,7 +295,7 @@ describe('project teardown hook — real removal entry points', () => {
     expect({
       code,
       record: await recorded(record),
-      timeout: lines.some((line) => line === `teardown: timed out in ${worktree} after 0.1 second(s)`),
+      timeout: lines.some((line) => line.startsWith(`teardown: timed out in ${worktree} after 0.1 second(s):`)),
       worktreeExists: await exists(worktree),
     }).toEqual({
       code: 0,
@@ -370,7 +370,7 @@ describe('project teardown hook — real removal entry points', () => {
     expect({
       outcome,
       record: await recorded(record),
-      timeout: logs.includes(`teardown: timed out in ${worktree} after 0.1 second(s)`),
+      timeout: logs.some((line) => line.startsWith(`teardown: timed out in ${worktree} after 0.1 second(s):`)),
       worktreeExists: await exists(worktree),
     }).toEqual({
       outcome: { slug, steps: ['worktree-removed', 'branch-absent', 'unparked'] },
