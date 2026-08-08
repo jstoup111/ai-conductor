@@ -94,7 +94,9 @@ absent from the provisioned skill catalog) stays distinct from an ordinary
 outcome failure in these diagnostics.
 
 It needs the `claude` binary and the `CLAUDE_CODE_OAUTH_TOKEN` secret; set
-`DAEMON_E2E_LIVE_SMOKE=0` to disable an otherwise credentialed local run. Its
+`SMOKE_FORCE_SKIP=capability:credentialed` to disable an otherwise credentialed
+local run (see [Smoke tests](#smoke-tests) — the override skips in advisory mode
+and fails in gate mode, so it can never turn a release gate green). Its
 token meter defaults `DAEMON_E2E_LIVE_TOKEN_CAP` to `100000`; lower that value
 when running the smoke manually. A separate always-on case asserts the
 uncredentialed path skips before provisioning any home at all — set
