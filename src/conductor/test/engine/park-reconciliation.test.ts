@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -799,16 +799,24 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'unregistered-leftover';
     const worktree = join(projectRoot, '.worktrees', slug);
+    const observation = join(projectRoot, 'fallback-teardown-runs');
     const { run, deleted } = makeGit({
       shipped: [slug],
       branches: [`feat/${slug}`],
       merged: [`feat/${slug}`],
       worktreeRemoveFails: `fatal: '${worktree}' is not a working tree`,
       registeredWorktrees: [projectRoot],
+      onWorktreeRemove: async () => {
+        expect(await access(observation).then(() => true, () => false)).toBe(true);
+      },
     });
     try {
       await mkdir(worktree, { recursive: true });
       await writeFile(join(worktree, 'leftover.txt'), 'not a git worktree');
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, `#!/usr/bin/env node\nrequire('node:fs').appendFileSync(${JSON.stringify(observation)}, 'ran\\n');\n`);
+      await chmod(teardown, 0o755);
       await writeOperatorPark(projectRoot, slug);
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
@@ -817,11 +825,13 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         outcome,
         deleted,
         stillOnDisk: await access(worktree).then(() => true, () => false),
+        teardownRuns: await access(observation).then(async () => (await readFile(observation, 'utf-8')).trim().split('\n'), () => []),
         parked: await isOperatorParked(projectRoot, slug),
       }).toEqual({
         outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
         deleted: [`feat/${slug}`],
         stillOnDisk: false,
+        teardownRuns: ['ran'],
         parked: false,
       });
     } finally {
@@ -954,16 +964,58 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'missing-worktree';
     const { run, deleted } = makeGit({ shipped: [slug], branches: [`fix/${slug}`], merged: [`fix/${slug}`] });
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const observation = join(projectRoot, 'missing-worktree-teardown-ran');
     try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(observation)}, 'ran');\n`);
+      await chmod(teardown, 0o755);
+      await rm(worktree, { recursive: true });
       await writeOperatorPark(projectRoot, slug);
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
 
-      expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+      expect({
+        outcome,
+        deleted,
+        teardownRan: await access(observation).then(() => true, () => false),
+        parked: await isOperatorParked(projectRoot, slug),
+      }).toEqual({
         outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
         deleted: [`fix/${slug}`],
+        teardownRan: false,
         parked: false,
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves worktree-remove-failed when contained teardown and git removal both fail', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'failing-teardown-and-removal';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      worktreeRemoveFails: 'fatal: cannot remove a locked working tree',
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, '#!/usr/bin/env bash\necho teardown failed\nexit 1\n');
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, log });
+
+      expect(outcome).toEqual({ slug, steps: [], refusal: 'worktree-remove-failed' });
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0]?.[0]).toContain(`teardown: failed in ${worktree}`);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
