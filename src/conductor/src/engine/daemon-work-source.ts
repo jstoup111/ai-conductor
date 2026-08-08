@@ -57,6 +57,14 @@ export interface LocalWorkSourceDeps {
    * and discovery behaves exactly as before.
    */
   shippedOnFeatureBranch?: DiscoverBacklogOpts['shippedOnFeatureBranch'];
+  /**
+   * Companion probes for the pre-merge dedup: the shipped record only proves a
+   * mid-sequence publication transition ran, so the dedup skips a candidate
+   * only when FINISH recorded its outcome or its worktree is already gone.
+   * Optional → absent keeps the prior skip-on-record behavior.
+   */
+  featureWorktreePresent?: DiscoverBacklogOpts['featureWorktreePresent'];
+  finishOutcomeRecorded?: DiscoverBacklogOpts['finishOutcomeRecorded'];
   fastForwardRoot: (root: string, log: (m: string) => void) => Promise<unknown>;
   discoverBacklog: (
     root: string,
@@ -167,6 +175,12 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           ...(deps.repairProcessed ? { repairProcessed: deps.repairProcessed } : {}),
           ...(deps.shippedOnFeatureBranch
             ? { shippedOnFeatureBranch: deps.shippedOnFeatureBranch }
+            : {}),
+          ...(deps.featureWorktreePresent
+            ? { featureWorktreePresent: deps.featureWorktreePresent }
+            : {}),
+          ...(deps.finishOutcomeRecorded
+            ? { finishOutcomeRecorded: deps.finishOutcomeRecorded }
             : {}),
           ...gateOpts,
         },

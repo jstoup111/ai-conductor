@@ -790,6 +790,19 @@ branch (`feat/daemon-<slug>`, pre-merge). The pre-merge half exists because a fi
 ship but then reports failure would otherwise leave a completed feature eligible for re-dispatch,
 re-running `finish` and duplicating publication work while the original worktree remains retained.
 
+The pre-merge half needs a second piece of evidence, because `.docs/shipped/<slug>.md` is committed
+by the mid-sequence `write_shipped_record` publication transition — on its own it proves one
+transition ran, not that the ship completed. So the pre-merge dedup skips a candidate only when
+FINISH **recorded its outcome** (`.pipeline/finish-choice` in the feature's worktree) or the worktree
+is already gone; a retained worktree with no outcome record is re-dispatched and logged as
+`re-dispatch <slug>: shipped record is on this feature's branch but FINISH recorded no outcome …`.
+Without that, a FINISH that halted after writing the record was terminal: an operator could clear the
+HALT and discovery would still refuse the feature forever, and because the run never reported done it
+was never enrolled in the mergeable watch either, so nothing could reap it. The absent-worktree case
+still skips — there is nothing to resume, and re-dispatching it is the "path does not exist" loop the
+dedup was added to prevent. See [a cleared FINISH halt resumes to a recorded
+ship](../runbooks/stalled-or-stuck-feature.md#a-cleared-finish-halt-resumes-to-a-recorded-ship).
+
 **A step fails with `Cannot dispatch '<step>': its working directory … does not exist`.** The
 feature's worktree was removed while the run was in flight. The engine refuses the dispatch before
 launching any provider, and the run halts immediately rather than retrying into the same absent path

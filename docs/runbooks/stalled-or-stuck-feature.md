@@ -280,6 +280,11 @@ procedure](#clear-a-halt-and-let-the-feature-resume).
 
 An unrecognised reason always keeps its retries: the classifier fails closed toward retrying.
 
+Clearing any FINISH publication halt is enough to get the feature back: see [a cleared FINISH halt
+resumes to a recorded ship](#a-cleared-finish-halt-resumes-to-a-recorded-ship) for what the daemon
+does next and how to confirm it. Never repair a halted FINISH by hand — an operator-opened PR is not
+a harness finish, and the daemon has no way to learn about it.
+
 #### `draft_pr_lease-rejected`
 
 **Symptom:** `.pipeline/HALT` reads
@@ -720,6 +725,31 @@ relies on polling instead; it still picks the feature up, just on the next poll.
 
 **How to confirm:** the next dashboard snapshot lists the slug under ELIGIBLE or IN-PROGRESS
 rather than HALTED, and the log shows `↻ resume <slug>`.
+
+### A cleared FINISH halt resumes to a recorded ship
+
+**Blast radius:** none beyond the feature. Clearing the halt re-enters FINISH; the coordinator
+re-observes every publication boundary and performs only the transitions still outstanding.
+
+Clear the halt with [the resume procedure](#clear-a-halt-and-let-the-feature-resume). Nothing else
+is required, and nothing should be repaired by hand:
+
+- The daemon re-dispatches the feature even when `.docs/shipped/<slug>.md` is already committed on
+  its branch. That record is written by the mid-sequence `write_shipped_record` transition, so on its
+  own it proves one transition ran, not that the ship completed. The shipped-record dedup therefore
+  skips a candidate only when FINISH **recorded its outcome** (`.pipeline/finish-choice` in the
+  worktree) or the worktree is already gone. A retained worktree with no outcome record is resumed.
+- FINISH authors the PR prose itself. If the body is still the engine-seeded placeholder, the
+  coordinator dispatches its `author_pr_prose` pass with the branch diff and the feature's spec
+  artifacts; you do not need to write the body.
+- The resumed run records the outcome, enrolls the PR in `.daemon/mergeable-watch.jsonl`, and the
+  mergeable sweep reaps the worktree after the shipped record is proven on the default branch.
+
+**How to confirm:** the daemon log shows `re-dispatch <slug>: shipped record is on this feature's
+branch but FINISH recorded no outcome …`, then the FINISH publication transitions, and finally the
+enrollment. If it instead logs `skip <slug>: shipped dedup — … awaiting the human merge`, FINISH
+*did* record an outcome (`.pipeline/finish-choice` exists) — the work really is complete and waiting
+on your merge.
 
 ### An auth park timed out
 
