@@ -23,6 +23,17 @@ describe('FINISH human-required guidance', () => {
       nextAction: expect.any(String),
     });
   });
+
+  it('provides distinct non-blank messages and next actions for every human-required reason', () => {
+    const messages = Object.values(HUMAN_REQUIRED_REASONS).map(({ message, nextAction }) => {
+      expect(message.trim()).not.toBe('');
+      expect(nextAction.trim()).not.toBe('');
+      return message;
+    });
+
+    expect(messages).toHaveLength(10);
+    expect(new Set(messages)).toHaveLength(messages.length);
+  });
 });
 
 async function routeFinishPublicationDisposition(disposition: unknown) {
