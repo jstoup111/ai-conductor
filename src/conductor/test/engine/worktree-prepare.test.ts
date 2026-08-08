@@ -40,6 +40,13 @@ describe('engine/worktree-prepare', () => {
     await chmod(path, mode);
   }
 
+  async function writeTeardown(body: string, mode = 0o755): Promise<void> {
+    await mkdir(join(dir, 'bin'), { recursive: true });
+    const path = join(dir, TEARDOWN_SCRIPT);
+    await writeFile(path, body, 'utf-8');
+    await chmod(path, mode);
+  }
+
   describe('runProjectTeardown', () => {
     it.each([undefined, { verbose: true }] as const)(
       'is completely silent when bin/teardown is absent (%o)',
@@ -114,6 +121,51 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
         await rm(worktreePath, { recursive: true, force: true });
         await rm(observationDir, { recursive: true, force: true });
       }
+    });
+
+    describe('successful output logging', () => {
+      const CHATTY_TEARDOWN =
+        '#!/usr/bin/env bash\n' +
+        'echo "removed 402 packages"\n' +
+        'echo ""\n' +
+        'echo "{\\"cleanupId\\":\\"20260807T113046Z-abc\\",\\"dir\\":\\"/x/y\\"}"\n' +
+        'echo "Teardown complete."\n';
+
+      it('summarizes successful output instead of echoing it by default', async () => {
+        await writeTeardown(CHATTY_TEARDOWN);
+        const lines: string[] = [];
+
+        await runProjectTeardown(dir, (message) => lines.push(message));
+
+        expect(lines).toEqual([
+          'teardown: 3 line(s) of output suppressed (set daemon_verbose: true to echo them)',
+        ]);
+      });
+
+      it('echoes each non-blank successful output line when verbose', async () => {
+        await writeTeardown(CHATTY_TEARDOWN);
+        const lines: string[] = [];
+
+        await runProjectTeardown(dir, (message) => lines.push(message), { verbose: true });
+
+        expect(lines).toEqual([
+          'teardown: removed 402 packages',
+          'teardown: {"cleanupId":"20260807T113046Z-abc","dir":"/x/y"}',
+          'teardown: Teardown complete.',
+        ]);
+      });
+
+      it.each([
+        ['no output', '#!/usr/bin/env bash\n'],
+        ['blank-only output', '#!/usr/bin/env bash\necho ""\necho "   "\n'],
+      ])('does not summarize %s', async (_description, script) => {
+        await writeTeardown(script);
+        const log = vi.fn();
+
+        await runProjectTeardown(dir, log);
+
+        expect(log).not.toHaveBeenCalled();
+      });
     });
   });
 

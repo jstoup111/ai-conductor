@@ -504,8 +504,8 @@ async function writeNamespaceEnv(
  */
 export async function runProjectTeardown(
   worktreePath: string,
-  _log?: (msg: string) => void,
-  _opts?: { verbose?: boolean },
+  log?: (msg: string) => void,
+  opts?: { verbose?: boolean },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
 
@@ -515,13 +515,23 @@ export async function runProjectTeardown(
     return;
   }
 
-  await execa(join(worktreePath, TEARDOWN_SCRIPT), [], {
+  const result = await execa(join(worktreePath, TEARDOWN_SCRIPT), [], {
     cwd: worktreePath,
+    all: true,
     env: {
       CI: 'true',
       [NAMESPACE_VAR]: namespace,
     },
   });
+  const lines = (result.all ?? '').split('\n').filter((line) => line.trim() !== '');
+  if (opts?.verbose) {
+    for (const line of lines) log?.(`teardown: ${line}`);
+  } else if (lines.length > 0) {
+    log?.(
+      `teardown: ${lines.length} line(s) of output suppressed ` +
+        `(set daemon_verbose: true to echo them)`,
+    );
+  }
 }
 
 /** Run the project's `bin/setup` if present; no-op otherwise; throw on failure. */
