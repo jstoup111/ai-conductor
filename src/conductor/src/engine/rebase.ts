@@ -572,6 +572,25 @@ export async function classifyMergeableSkip(
 }
 
 /** Optional capabilities injectable into `performRebase` (Task 15). */
+/**
+ * The running feature's `feature_desc`, read from the worktree's own conduct
+ * state. Returns undefined when no state file exists or it carries no usable
+ * value — a repository with no feature identity is indistinguishable from one
+ * whose protected artifacts all belong to other features, and the seal's
+ * fail-closed branch is the correct outcome for both.
+ */
+async function resolveFeatureDesc(projectRoot: string): Promise<string | undefined> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline', 'conduct-state.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as { feature_desc?: unknown };
+    return typeof parsed.feature_desc === 'string' && parsed.feature_desc.trim()
+      ? parsed.feature_desc
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface PerformRebaseOpts {
   /**
    * Enables the normal-finish-only prospective-merge policy. Omitted callers
@@ -664,6 +683,11 @@ export async function performRebase(
     await access(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
     const verdict = await verifyProtectedArtifactSeal({
       projectRoot,
+      // #1379: the #1047 self-amendment tolerance is guarded on this field, so
+      // omitting it silently reports a feature's OWN amended DECIDE artifact as
+      // a foreign mutation. Resolved here rather than accepted from the caller
+      // so no call site can disable the tolerance by forgetting to pass it.
+      featureDesc: await resolveFeatureDesc(projectRoot),
       baseBranch: base.branch,
     });
     if (!verdict.ok) throw new ProtectedArtifactSealRejection(verdict.reason);
