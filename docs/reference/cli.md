@@ -510,6 +510,25 @@ file already exists, it reports that path, preserves the file byte-for-byte, and
 The command exits 1 without writing when the current directory is not a Git repository or when the
 template cannot be resolved or written.
 
+## `conduct-ts config read` / `conduct-ts config write`
+
+```bash
+conduct-ts config read <dotted.path>
+conduct-ts config write <markdown_viewer|mermaid_renderer> <preset> <command> <args> <mode>
+```
+
+Read and write user-scoped `~/.ai-conductor/config.yml` — the config `bin/install` uses to persist
+the chosen markdown viewer and mermaid renderer, replacing its earlier direct PyYAML reads/writes.
+
+`read` prints the value at `<dotted.path>` (e.g. `markdown_viewer.command`) to stdout, joining an
+array value with spaces, and prints an empty line for a missing key. It exits 1 and prints the
+config path and parse error to stderr when the file exists but fails to parse.
+
+`write` sets `markdown_viewer` or `mermaid_renderer` to `{preset, command, args, mode}` — `<args>`
+is a single space-separated argument, split on whitespace — preserving every other top-level key
+already in the file. It exits 1 and prints the config path and error to stderr when the existing
+file fails to parse or the write fails (e.g. an unwritable directory).
+
 ## `conduct-ts task`
 
 ```bash

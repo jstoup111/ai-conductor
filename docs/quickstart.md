@@ -19,8 +19,7 @@ one is missing, so install them first.
 | `gh`, authenticated | opening spec and implementation PRs | `gh auth status` |
 | `tmux` | `conduct-ts daemon start/stop/restart/connect/debug` | `tmux -V` |
 | `python3` | writing permissions and hooks into `~/.claude/settings.json` | `python3 --version` |
-| PyYAML | writing the markdown-viewer and mermaid-renderer config | `python3 -c "import yaml"` |
-| Node >= 20.5.0 (repo pins 20.19.2) | building and running the engine | `node --version` |
+| Node >= 20.5.0 (repo pins 20.19.2) | building and running the engine, and reading/writing the markdown-viewer and mermaid-renderer config | `node --version` |
 | `npm` | `npm ci` + `npm run build` for the engine | `npm --version` |
 | `claude` and/or `codex` | executing steps — at least one is required | `claude --version` / `codex --version` |
 
@@ -58,7 +57,7 @@ selection up front to skip the first prompt:
 
 `--providers` gates only the install-time readiness report. Both skill catalogs
 (`~/.claude/skills` and `~/.agents/skills`) are written regardless of the value, and the flag never
-writes a host into any config. It is also absent from `./bin/install --help`.
+writes a host into any config.
 
 You should see `Installation complete.` followed by a quick-start banner.
 
@@ -93,9 +92,9 @@ conduct-ts --help
 | `1` | Drift: missing, stale, or duplicated skill links, or a failed host-CLI or bin-symlink check. Prints a per-category count and `Run ./bin/install to fix.` |
 | `2` | Everything else is clean but `conduct-ts build-auth-status` failed |
 
-Exit `2` returns before the summary line, so a build-auth-only failure prints no closing message —
-read the `build-auth-status:` line in the body instead. The engine treats both `0` and `2` as
-passing; any other code blocks `conduct-ts daemon start` on a stale install.
+Exit `2` prints `Build authentication check failed.` instead of the `All checks passed.` summary —
+read the `build-auth-status:` line in the body for the underlying reason. The engine treats both
+`0` and `2` as passing; any other code blocks `conduct-ts daemon start` on a stale install.
 
 ## Register a project
 
@@ -237,14 +236,28 @@ fails closed on the same identity — an unidentified daemon builds nothing and 
 Exit `1`. The guard applies to the default and `--update` modes only; `--check`, `--uninstall`, and
 `--help` are unaffected. Install from the main checkout.
 
-### Missing PyYAML
+### Missing or broken `conduct-ts` at viewer/renderer configuration time
 
-`python3` absence is reported (`python3 not found — skipping permissions configuration`), but
-PyYAML is never probed. The markdown-viewer and mermaid-renderer writers `import yaml`
-unconditionally, so a missing module produces a raw Python traceback that the installer's
-`|| warn` wrapper swallows — the install reports success and `~/.ai-conductor/config.yml` gets no
-viewer or renderer block. Install it (`python3 -m pip install PyYAML`) and re-run `./bin/install`.
-`./bin/install --check` then reports the configured viewer and renderer.
+The markdown-viewer and mermaid-renderer prompts write their selection through
+`conduct-ts config write`, not Python/YAML. If `conduct-ts` is not yet on `PATH` (for example the
+engine build failed — see [Missing engine bundle](#missing-engine-bundle) above), the prompts are
+skipped:
+
+```text
+  ⚠ conduct-ts is required to save the markdown viewer; install or restore it, then re-run bin/install
+```
+
+and if the write itself fails (e.g. the target directory is unwritable), the installer warns and
+the step fails rather than silently reporting success:
+
+```text
+  ⚠ Could not save markdown viewer configuration
+```
+
+Either way, `~/.ai-conductor/config.yml` gets no viewer or renderer block, and install continues
+with a warning rather than aborting. Fix the underlying `conduct-ts` problem and re-run
+`./bin/install`. `./bin/install --check` reports the configured viewer and renderer, or
+`conduct-ts not on PATH` / `configuration unreadable` when it cannot read them back.
 
 ### Missing tmux
 
