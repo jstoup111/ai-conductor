@@ -8,7 +8,7 @@ import type {
   MermaidRendererConfig,
 } from './types/config.js';
 import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
-import { readUserConfig, writeUserConfig } from './engine/user-config.js';
+import { readUserConfig, userConfigPath, writeUserConfig } from './engine/user-config.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -164,7 +164,11 @@ export async function userConfigReadCommand(
   cmd: UserConfigReadDispatch,
   write: (output: string) => void = (output) => process.stdout.write(output),
 ): Promise<number> {
-  const { config } = await readUserConfig();
+  const { config, parseError } = await readUserConfig();
+  if (parseError) {
+    write(`Unable to read user config at ${userConfigPath()}: ${parseError}\n`);
+    return 1;
+  }
   let value: unknown = config;
   for (const segment of cmd.path.split('.')) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -178,16 +182,29 @@ export async function userConfigReadCommand(
 }
 
 /** Set one user-scoped viewer or renderer section without replacing other config. */
-export async function userConfigWriteCommand(cmd: UserConfigWriteDispatch): Promise<number> {
-  const { config } = await readUserConfig();
+export async function userConfigWriteCommand(
+  cmd: UserConfigWriteDispatch,
+  write: (output: string) => void = (output) => process.stderr.write(output),
+): Promise<number> {
+  const { config, parseError } = await readUserConfig();
+  if (parseError) {
+    write(`Unable to read user config at ${userConfigPath()}: ${parseError}\n`);
+    return 1;
+  }
   config[cmd.section] = {
     preset: cmd.preset,
     command: cmd.command,
     args: cmd.args,
     mode: cmd.mode,
   };
-  await writeUserConfig(config);
-  return 0;
+  try {
+    await writeUserConfig(config);
+    return 0;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    write(`Unable to write user config at ${userConfigPath()}: ${reason}\n`);
+    return 1;
+  }
 }
 
 /** Parse argv for `conduct-ts plan-protected-targets <path>` without I/O. */
