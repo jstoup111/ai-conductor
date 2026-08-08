@@ -594,7 +594,12 @@ export class DefaultStepRunner implements StepRunner {
           }
         : baseResolved;
 
-    const systemPrompt = await this.buildSystemPrompt(step, autonomous, opts?.retryReason);
+    const systemPrompt = await this.buildSystemPrompt(
+      step,
+      autonomous,
+      opts?.retryReason,
+      opts?.finishProsePass,
+    );
 
     // Autonomous steps use invoke() (captured output) so we can detect rate
     // limits and stale sessions. Collaborative steps use invokeInteractive()
@@ -2012,7 +2017,12 @@ export class DefaultStepRunner implements StepRunner {
     }
   }
 
-  private async buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): Promise<string> {
+  private async buildSystemPrompt(
+    step: StepName,
+    autonomous: boolean,
+    retryReason?: string,
+    finishProsePass?: 'author' | 'judge',
+  ): Promise<string> {
     const stepDef = this.stepRegistry.find((candidate) => candidate.name === step)
       ?? getStepDefinition(step);
     // Out-of-band steps (e.g. `remediate`) have no position in the linear
@@ -2044,6 +2054,29 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
+    // The engine observed the retained PR's body as still unauthored (its own
+    // body-floor marker / "not yet authored" sections). Authoring reader-facing
+    // prose needs a provider; deciding that it must happen does not — the
+    // coordinator selected this pass deterministically. The judgment pass is
+    // never asked to author, and this pass is never asked to grade.
+    if (step === 'finish' && finishProsePass === 'author') {
+      prompt +=
+        '\n\nFINISH PR PROSE AUTHORING — the retained pull request still carries the engine-seeded ' +
+        'placeholder body, so there is no prose to judge yet. Write it. Read the full diff of this ' +
+        'feature branch against its base branch, plus the feature specification, plan, and story ' +
+        'artifacts, then rewrite the retained PR title and body in place following this repository\'s ' +
+        'PR authoring contract — the `pr` skill (Claude Code invokes it as `/pr`; Codex invokes it as ' +
+        '`$pr`). Keep the template section shape (`## Why`, `## What Changed`, `## Testing`, and the ' +
+        '`Closes` reference), replace every "not yet authored" marker and the body-floor marker with ' +
+        'specific reader-facing content, and preserve any release metadata already present. Change ' +
+        'nothing else: do not create, push, merge, or ready a pull request, do not alter labels, ' +
+        'shipment evidence, or completion files, and do not commit. The publication coordinator ' +
+        're-reads the pull request afterwards and judges the prose in a separate pass; it owns every ' +
+        'mechanical transition and records the final outcome.';
+      if (retryReason) prompt = `RETRY: ${retryReason}\n${prompt}`;
+      return prompt;
+    }
+
     // FINISH publication mechanics are engine-owned. The provider crosses this
     // boundary only for one reader-facing PR-prose judgment and may repair
     // only that retained PR's title/body; it must never create/push/merge/ready
@@ -2055,6 +2088,8 @@ export class DefaultStepRunner implements StepRunner {
         '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
         '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
         'Do not create, push, merge, or ready a PR; do not alter labels, shipment evidence, or completion files. ' +
+        'If the body is unauthored placeholder text, return revision_required with reason placeholder and stop: ' +
+        'the coordinator owns a separate authoring pass for that, so you are never asked to write prose here. ' +
         'The publication coordinator owns every other mechanical transition and records the final outcome.';
     }
 
@@ -2065,7 +2100,9 @@ export class DefaultStepRunner implements StepRunner {
         '\n\nINTERACTIVE FINISH — gather the operator publication intent (PR or keep) and, when a PR is present, ' +
         'inspect only its title/body quality. For the bounded prose judgment you may repair only that retained PR title/body once, ' +
         'then return exactly one JSON object using accepted, revision_required (placeholder|halt|structurally_incomplete), timed_out, ' +
-        'provider_unavailable, or refused. Do not create, push, merge, or ready a PR; do not alter labels, shipment evidence, ' +
+        'provider_unavailable, or refused. If the body is unauthored placeholder text, return revision_required with ' +
+        'reason placeholder and stop — the coordinator owns a separate authoring pass for that. Do not create, push, ' +
+        'merge, or ready a PR; do not alter labels, shipment evidence, ' +
         'or completion files; the publication coordinator performs every other authorized transition.';
     }
 

@@ -259,11 +259,12 @@ describe('Conductor FINISH publication routing', () => {
       transitions: ['establish_pr', 'ready_pr'] as const,
       lastTransition: 'ready_pr',
     },
-  ])('halts %s at the twelve-transition allowance', async ({ transitions, lastTransition }) => {
+  ])('halts %s at the fourteen-transition allowance', async ({ transitions, lastTransition }) => {
     const advance = vi.fn(async () => {
       // The sentinel bounds the pre-fix infinite loop. A correct implementation
-      // halts after the twelfth verified transition and never reaches it.
-      if (advance.mock.calls.length > 12) throw ROUTED_SENTINEL;
+      // halts after the fourteenth verified transition and never reaches it
+      // (two passes over each of the seven publication transitions).
+      if (advance.mock.calls.length > 14) throw ROUTED_SENTINEL;
       return {
         kind: 'publication_progress',
         transition: transitions[(advance.mock.calls.length - 1) % transitions.length],
@@ -289,7 +290,7 @@ describe('Conductor FINISH publication routing', () => {
       halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8').catch(() => ''),
       haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf8').catch(() => ''),
     }).toEqual({
-      publicationAdvances: 12,
+      publicationAdvances: 14,
       halt: expect.stringContaining(lastTransition),
       haltClass: 'needs-human',
     });
@@ -751,7 +752,7 @@ describe('Conductor FINISH publication routing', () => {
       runGh: async () => ({ stdout: '' }),
     });
     await exhausted.run();
-    expect(exhaustedAdvance).toHaveBeenCalledTimes(12);
+    expect(exhaustedAdvance).toHaveBeenCalledTimes(14);
 
     await unlink(join(dir, '.pipeline/HALT'));
     await unlink(join(dir, '.pipeline/HALT.class'));

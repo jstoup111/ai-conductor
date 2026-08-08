@@ -1,6 +1,6 @@
 ---
 name: finish
-description: "Use at the FINISH boundary to gather an operator's publication intent and judge reader-facing PR prose; the engine-owned publication coordinator performs all deterministic publication mechanics."
+description: "Use at the FINISH boundary to gather an operator's publication intent, author the retained PR's reader-facing prose when it is still unauthored, and judge that prose; the engine-owned publication coordinator performs all deterministic publication mechanics."
 enforcement: gating
 phase: ship
 standalone: true
@@ -9,10 +9,12 @@ requires: []
 
 ## Purpose
 
-FINISH keeps human authority over interactive publication choices and retains one
-reader-facing quality judgment for a pull request's title and body. The
-engine-owned publication coordinator observes evidence, advances deterministic
-publication transitions, and records completion.
+FINISH keeps human authority over interactive publication choices, authors the
+retained pull request's reader-facing title and body when the coordinator
+observes them as still unauthored, and retains one reader-facing quality
+judgment for that title and body. The engine-owned publication coordinator
+observes evidence, selects which of those two passes is required, advances
+deterministic publication transitions, and records completion.
 
 ## Responsibility Boundary
 
@@ -21,10 +23,16 @@ and publication evidence, creating or reusing a PR identity, pushing commits,
 creating durable shipment evidence, marking a PR ready, and recording the
 final outcome.
 
-For `judge_pr_prose`, this skill may inspect and repair only the retained PR's
-title and body. It must not create, push, merge, ready, or otherwise change a
-PR; write shipment evidence, completion markers, or outcome records; or infer
-deterministic repository or external state.
+For `author_pr_prose` and `judge_pr_prose` alike, this skill may
+inspect and repair only the retained PR's title and body.
+It must not create, push, merge, ready, or otherwise change a PR; write shipment
+evidence, completion markers, or outcome records; or infer deterministic
+repository or external state.
+
+Reading the feature's own diff, specification, plan, and story artifacts to
+write that title and body is inside this boundary, not outside it — authoring
+reader-facing prose is exactly the work FINISH keeps for a provider. Only
+publication *mechanics* are the coordinator's.
 
 ## Fresh Verification
 
@@ -51,6 +59,30 @@ requires a human decision and performs no publication action.
 Explicit `foreground-auto` and daemon modes use their engine policy. Do not
 invent an alternative outcome.
 
+## PR Prose Authoring
+
+The engine seeds the SHIP-entry draft with the PR body template already in
+place — `## Why`, `## What Changed`, `## Testing`, and the `Closes` reference —
+with each section explicitly marked "not yet authored", plus its own body-floor
+marker. A body still carrying those markers is **unauthored by construction**,
+and the coordinator detects that deterministically rather than asking anyone to
+judge it.
+
+When the coordinator dispatches `author_pr_prose`, write the prose. Read the
+full diff of the feature branch against its base branch together with the
+feature's specification, plan, and story artifacts, then rewrite the retained
+PR's title and body in place following the `/pr` authoring contract (Claude Code
+invokes that skill as `/pr`; Codex invokes it as `$pr`). Keep the template
+section shape, replace every "not yet authored" marker and the body-floor marker
+with specific reader-facing content, and preserve release metadata already
+present.
+
+Never return a verdict instead of prose here, and never report that the body
+cannot be authored because the diff was not supplied — obtaining the diff is
+part of this pass. The coordinator re-reads the pull request afterwards; a body
+that still carries the placeholder classification is a failed authoring pass,
+not an accepted one, and no self-report substitutes for that observation.
+
 ## PR Prose Judgment
 
 When the coordinator supplies a retained PR for judgment, make one bounded
@@ -62,12 +94,10 @@ title/body quality and repair pass:
 - If the provider is unavailable or cannot make the judgment, report that
   bounded failure without changing publication state.
 
-The engine seeds the SHIP-entry draft with the PR body template already in
-place — `## Why`, `## What Changed`, `## Testing`, and the `Closes` reference —
-with each section explicitly marked "not yet authored". That skeleton is the
-structure the judgment expects to see filled in, not prose to accept: a body
-still carrying those markers, or the engine's body-floor marker, is placeholder
-by construction.
+An unauthored body never reaches this pass — it is routed to `author_pr_prose`
+first. If one somehow arrives here, report `revision_required` with reason
+`placeholder` and stop: the coordinator owns the authoring pass, so this pass is
+never the place to write missing prose.
 
 Accepted prose authorizes the coordinator to continue with its deterministic
 transitions. It does not itself authorize any publication effect.
@@ -89,6 +119,8 @@ is proven on origin/default branch. FINISH does not delete a worktree.
 
 - [ ] Attended default and interactive foreground intent is explicit before
       publication activity.
+- [ ] An unauthored PR body was authored from the feature's own diff before any
+      prose judgment was requested.
 - [ ] The provider judged and, when needed, repaired only the retained PR
       title/body, at most once per observed prose revision.
 - [ ] No provider action created, pushed, merged, readied, or recorded

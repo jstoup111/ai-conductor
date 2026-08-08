@@ -182,7 +182,10 @@ function readyPublicationSnapshot(
     pr: {
       identity: 'one',
       url: 'https://github.com/acme/widget/pull/1172',
-      prose: 'placeholder',
+      // Prose that needs the bounded JUDGMENT pass. A `placeholder` body is
+      // deterministically unauthored and routes to `author_pr_prose` instead,
+      // so it is opted into explicitly by the tests that mean it.
+      prose: 'stale',
       ready: false,
     },
     shippedRecord: 'valid',
@@ -345,15 +348,27 @@ describe('finish-publication domain types', () => {
     ['missing release readiness', readyPublicationSnapshot({ releaseReadiness: 'missing' }), 'verify_release_readiness'],
     ['invalid release readiness', readyPublicationSnapshot({ releaseReadiness: 'invalid' }), 'verify_release_readiness'],
     ['indeterminate release readiness', readyPublicationSnapshot({ releaseReadiness: 'indeterminate' }), 'verify_release_readiness'],
-    ['a missing shipped record', readyPublicationSnapshot({ shippedRecord: 'missing' }), 'write_shipped_record'],
-    ['an invalid shipped record', readyPublicationSnapshot({ shippedRecord: 'invalid' }), 'write_shipped_record'],
-    ['an indeterminate shipped record', readyPublicationSnapshot({ shippedRecord: 'indeterminate' }), 'write_shipped_record'],
+    // The shipped record is written only after prose is accepted, so these
+    // rows carry accepted prose: an unauthored body must never commit the
+    // daemon-backlog dedup key ahead of a prose halt.
+    ['a missing shipped record', readyPublicationSnapshot({
+      shippedRecord: 'missing',
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+    }), 'write_shipped_record'],
+    ['an invalid shipped record', readyPublicationSnapshot({
+      shippedRecord: 'invalid',
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+    }), 'write_shipped_record'],
+    ['an indeterminate shipped record', readyPublicationSnapshot({
+      shippedRecord: 'indeterminate',
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+    }), 'write_shipped_record'],
     ['stale PR prose', readyPublicationSnapshot({
       pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: true },
     }), 'judge_pr_prose'],
     ['placeholder PR prose', readyPublicationSnapshot({
       pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'placeholder', ready: true },
-    }), 'judge_pr_prose'],
+    }), 'author_pr_prose'],
     ['halt PR prose', readyPublicationSnapshot({
       pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'halt', ready: true },
     }), 'judge_pr_prose'],
@@ -975,6 +990,17 @@ describe('advanceFinishPublication PR identity', () => {
 });
 
 describe('advanceFinishPublication durable shipped evidence', () => {
+  // `write_shipped_record` now follows accepted prose, so every fixture that
+  // must reach it observes an authored body.
+  const acceptedProsePr = {
+    identity: 'one',
+    url: 'https://github.com/acme/widget/pull/1172',
+    prose: 'accepted',
+    ready: false,
+  } as const;
+  const shippedSnapshot = (overrides: Partial<PublicationSnapshot> = {}): PublicationSnapshot =>
+    readyPublicationSnapshot({ pr: acceptedProsePr, ...overrides });
+
   it('reuses an existing verified shipped record without invoking its writer', async () => {
     const createShippedRecord = vi.fn(async () => undefined);
     const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
@@ -992,7 +1018,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
 
   it('creates an absent shipped record once and re-observes strict evidence before advancing', async () => {
     let shippedRecord: PublicationSnapshot['shippedRecord'] = 'missing';
-    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord }));
+    const observe = vi.fn(async () => shippedSnapshot({ shippedRecord }));
     const createShippedRecord = vi.fn(async () => {
       shippedRecord = 'valid';
     });
@@ -1018,7 +1044,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
 
     await expect(
       advanceFinishPublication({
-        observe: async () => readyPublicationSnapshot({ shippedRecord: 'invalid' }),
+        observe: async () => shippedSnapshot({ shippedRecord: 'invalid' }),
         effects: { dispatchJudgment, createShippedRecord },
       }),
     ).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
@@ -1028,7 +1054,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
   });
 
   it('keeps FINISH retryable when the shipped-record push fails', async () => {
-    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord: 'missing' }));
+    const observe = vi.fn(async () => shippedSnapshot({ shippedRecord: 'missing' }));
     const createShippedRecord = vi.fn(async () => {
       throw new Error('git push failed');
     });
@@ -1054,7 +1080,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
 
   it('recovers a lost writer response by verifying the record before retrying', async () => {
     let shippedRecord: PublicationSnapshot['shippedRecord'] = 'missing';
-    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord }));
+    const observe = vi.fn(async () => shippedSnapshot({ shippedRecord }));
     const createShippedRecord = vi.fn(async () => {
       shippedRecord = 'valid';
       throw new Error('writer response lost after push');
@@ -1126,12 +1152,20 @@ describe('advanceFinishPublication concurrent mutation reconciliation', () => {
         };
         break;
       }
-      case 'write_shipped_record':
-        snapshot = readyPublicationSnapshot({ shippedRecord: 'missing' });
+      case 'write_shipped_record': {
+        // Accepted prose is a prerequisite for the shipped record now.
+        const acceptedPr = {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: false,
+        } as const;
+        snapshot = readyPublicationSnapshot({ pr: acceptedPr, shippedRecord: 'missing' });
         effects.createShippedRecord = () => mutate(() => {
-          snapshot = readyPublicationSnapshot();
+          snapshot = readyPublicationSnapshot({ pr: acceptedPr });
         });
         break;
+      }
       case 'ready_pr':
         snapshot = readyPublicationSnapshot({
           pr: {
@@ -1218,7 +1252,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
     expect(dispatchJudgment).not.toHaveBeenCalled();
   });
 
-  it.each(['placeholder', 'halt'] as const)(
+  it.each(['stale', 'halt'] as const)(
     'dispatches one bounded judgment pass for %s PR prose',
     async (prose) => {
       let request: unknown;
@@ -1328,11 +1362,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
 
   it.each([
     ['refusal', { kind: 'refused' }, 'judgment_refused'],
-    [
-      'malformed prose',
-      { kind: 'revision_required', reason: 'structurally_incomplete' },
-      'judgment_malformed_prose',
-    ],
+    ['halt boilerplate', { kind: 'revision_required', reason: 'halt' }, 'judgment_halt_prose'],
   ] as const)(
     'requires a human without rolling back verified publication progress when judgment returns %s',
     async (_failure, judgmentResult, reason) => {
@@ -1355,7 +1385,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
   );
 
   it('does not repeat judgment after a successful pass is re-observed as accepted', async () => {
-    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'placeholder';
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
     let ready = false;
     const dispatchJudgment = vi.fn(async () => {
       prose = 'accepted';
@@ -1632,7 +1662,11 @@ describe('advanceFinishPublication accepted PR presentation', () => {
         }),
         effects: { dispatchJudgment, repairPresentation },
       }),
-    ).resolves.toEqual({ kind: 'human_required', reason: 'judgment_malformed_prose' });
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'author_pr_prose',
+      reason: 'authoring_required_after_judgment',
+    });
 
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
     expect(repairPresentation).not.toHaveBeenCalled();

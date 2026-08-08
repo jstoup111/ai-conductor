@@ -581,20 +581,27 @@ respectively. Both are blocking and cannot be tier-skipped or satisfied by a sco
 
 ### finish
 
-> Judge reader-facing PR prose at the engine-owned FINISH boundary after deterministic publication prerequisites pass.
+> Author and then judge reader-facing PR prose at the engine-owned FINISH boundary after deterministic publication prerequisites pass.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`, `requires: []`, no model
   pin.
 - **Engine step** — `finish` (index 21, SHIP, prerequisite `rebase`). Loop gate, gating, no tier skip.
-  The production coordinator dispatches this skill only for one bounded retained-PR title/body quality
-  and repair pass.
-- **Inputs** — the retained PR identity plus its observed title and body. Deterministic BUILD, SHIP,
-  release-readiness, push, shipped-record, and outcome evidence stays engine-owned.
-- **Outputs** — accepted reader-facing PR prose or a bounded repair to the retained PR title/body. The
-  coordinator separately persists `state.pr_url`, commits `.docs/shipped/<slug>.md`, and writes
-  `.pipeline/finish-choice` through `conduct-ts finish-record` after verification.
+  The production coordinator dispatches this skill for exactly two bounded retained-PR title/body
+  passes, and picks between them deterministically from its own observation of the PR body:
+  `author_pr_prose` when the body is still the engine-seeded placeholder, `judge_pr_prose` for the
+  quality verdict on prose that exists. The judgment pass is therefore never handed an unauthored body.
+- **Inputs** — the retained PR identity plus its observed title and body. The authoring pass
+  additionally reads the feature branch's full diff against its base and the feature's spec, plan, and
+  story artifacts. Deterministic BUILD, SHIP, release-readiness, push, shipped-record, and outcome
+  evidence stays engine-owned.
+- **Outputs** — a rewritten reader-facing PR title/body (authoring), or an accepted verdict or bounded
+  repair (judgment). Neither is trusted on self-report: the coordinator re-reads the PR and a body that
+  still classifies as a placeholder is a failed pass. The coordinator separately persists
+  `state.pr_url`, commits `.docs/shipped/<slug>.md`, and writes `.pipeline/finish-choice` through
+  `conduct-ts finish-record` after verification.
 - **Gate role** — blocking. Missing or invalid deterministic evidence stops before this skill is
-  dispatched. Placeholder, halt, or structurally incomplete prose prevents the final outcome record.
+  dispatched. A placeholder body routes back to authoring; halt boilerplate and a refused judgment
+  require a human. No prose defect commits the shipped record, so the halt stays re-dispatchable.
 - **Interaction** — attended default and interactive foreground conduct asks the operator for PR, keep,
   or defer before any publication observation or mutation. Explicit foreground-auto and daemon modes
   use engine policy. No FINISH transition has PR merge or auto-merge authority.

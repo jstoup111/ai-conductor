@@ -131,7 +131,10 @@ describe('operator park boundary contract', () => {
       "return this.stepRunner.run('wiring_check', state);",
       'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);',
       "return this.stepRunner.run('finish', state, options);",
-      'dispatchJudgment: async (_request) => this.stepRunner.run(\'finish\', state, options),',
+      // The two bounded FINISH prose passes. Both are reached only from inside
+      // the already-park-guarded FINISH dispatch.
+      "this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' })",
+      "this.stepRunner.run('finish', state, { ...options, finishProsePass: 'author' })",
     ];
     const dispatchPrimitives = [
       'this.stepRunner.run(',

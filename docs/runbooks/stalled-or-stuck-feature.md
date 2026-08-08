@@ -256,20 +256,23 @@ A FINISH publication failure or non-converging progress halts one of three ways,
   before giving up.
 - `FINISH publication cannot proceed: <reason> is not retryable — …` — the reason can never be
   satisfied by re-running the identical transition, so the run halted on the **first** observation
-  and the retry budget was deliberately left unspent. Nothing but `judge_pr_prose` crosses the
-  provider boundary between attempts, so no retry authors a commit, wires a missing effect, or
-  reconciles a remote. These are `draft_pr_no-commits`, `draft_pr_skipped`,
-  `draft_pr_lease-rejected`, and the four `*_effect_unavailable` reasons. Both halts are
+  and the retry budget was deliberately left unspent. Only `author_pr_prose` and `judge_pr_prose`
+  cross the provider boundary between attempts, so no retry authors a commit, wires a missing effect,
+  or reconciles a remote. These are `draft_pr_no-commits`, `draft_pr_skipped`,
+  `draft_pr_lease-rejected`, and the five `*_effect_unavailable` reasons. Both halts are
   `needs-human`; recovery is the same — resolve the cited condition, then clear the HALT.
 - `FINISH publication progress allowance exhausted after <N> transition(s); last transition: <transition>.
   Human review required.` — FINISH made verified publication progress, so none of the step retry
-  budget was spent. The separate progress allowance reached its 12-transition bound before the
-  publication state converged, and this is a `needs-human` halt.
+  budget was spent. The separate progress allowance reached its 14-transition bound (two passes over
+  each of the seven publication transitions) before the publication state converged, and this is a
+  `needs-human` halt.
 
 **Diagnosis:** inspect the named last transition and the preceding FINISH publication events in the
-daemon log. Twelve verified transitions without convergence means the publication state machine is
+daemon log. Fourteen verified transitions without convergence means the publication state machine is
 cycling or an external publication state is not settling; do not clear the HALT merely to repeat the
-same cycle.
+same cycle. An `author_pr_prose` / `judge_pr_prose` alternation means the authoring pass keeps
+producing prose the judgment pass rejects — read the PR body and fix it by hand rather than
+re-running the pair.
 
 **Recovery:** reconcile the cited transition and the external PR/remote state until the next FINISH
 entry can converge. Only then clear the HALT using [the resume

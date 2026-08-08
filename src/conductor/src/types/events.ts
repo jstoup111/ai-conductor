@@ -16,8 +16,9 @@ export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 export type FinishPublicationTransition =
   | 'establish_pr'
   | 'verify_release_readiness'
-  | 'write_shipped_record'
+  | 'author_pr_prose'
   | 'judge_pr_prose'
+  | 'write_shipped_record'
   | 'ready_pr'
   | 'record_outcome';
 

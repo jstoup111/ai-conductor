@@ -195,14 +195,15 @@ describe('FINISH publication progress accounting', () => {
   });
 
   it('halts alternating progress at the total allowance and names the last transition', async () => {
-    const stuck = Array.from({ length: 12 }, (_, index): ScenarioDisposition => ({
+    // Two passes over each of the seven publication transitions.
+    const stuck = Array.from({ length: 14 }, (_, index): ScenarioDisposition => ({
       kind: 'publication_progress',
       transition: index % 2 === 0 ? 'establish_pr' : 'ready_pr',
     }));
 
     const result = await runFinishScenario(stuck);
 
-    expect(result.advanceCalls).toBe(12);
+    expect(result.advanceCalls).toBe(14);
     expect(result.retryReasons).toEqual([]);
     await expect(readFile(join(result.root, '.pipeline/HALT'), 'utf8')).resolves.toContain(
       'ready_pr',
