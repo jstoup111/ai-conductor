@@ -167,6 +167,31 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
         expect(log).not.toHaveBeenCalled();
       });
     });
+
+    describe('failure containment', () => {
+      it('contains a non-zero exit and logs the worktree with a bounded output tail', async () => {
+        const output = Array.from({ length: 55 }, (_, index) => `tail-line-${index + 1}`).join('\n');
+        await writeTeardown(`#!/usr/bin/env bash\nprintf '%s\\n' ${output.split('\n').map((line) => JSON.stringify(line)).join(' ')}\nexit 3\n`);
+        const lines: string[] = [];
+
+        await expect(runProjectTeardown(dir, (message) => lines.push(message))).resolves.toBeUndefined();
+
+        expect(lines).toEqual([
+          expect.stringContaining(`teardown: failed in ${dir}: tail-line-6`),
+        ]);
+        expect(lines[0]).toContain('tail-line-55');
+        expect(lines[0]).not.toContain('tail-line-1\n');
+      });
+
+      it('logs an identifying failure when a non-zero exit has no output', async () => {
+        await writeTeardown('#!/usr/bin/env bash\nexit 3\n');
+        const lines: string[] = [];
+
+        await expect(runProjectTeardown(dir, (message) => lines.push(message))).resolves.toBeUndefined();
+
+        expect(lines).toEqual([expect.stringContaining(`teardown: failed in ${dir}:`)]);
+      });
+    });
   });
 
   describe('sanitizeNamespace', () => {

@@ -515,22 +515,32 @@ export async function runProjectTeardown(
     return;
   }
 
-  const result = await execa(join(worktreePath, TEARDOWN_SCRIPT), [], {
-    cwd: worktreePath,
-    all: true,
-    env: {
-      CI: 'true',
-      [NAMESPACE_VAR]: namespace,
-    },
-  });
-  const lines = (result.all ?? '').split('\n').filter((line) => line.trim() !== '');
-  if (opts?.verbose) {
-    for (const line of lines) log?.(`teardown: ${line}`);
-  } else if (lines.length > 0) {
-    log?.(
-      `teardown: ${lines.length} line(s) of output suppressed ` +
-        `(set daemon_verbose: true to echo them)`,
+  try {
+    const result = await execa(join(worktreePath, TEARDOWN_SCRIPT), [], {
+      cwd: worktreePath,
+      all: true,
+      env: {
+        CI: 'true',
+        [NAMESPACE_VAR]: namespace,
+      },
+    });
+    const lines = (result.all ?? '').split('\n').filter((line) => line.trim() !== '');
+    if (opts?.verbose) {
+      for (const line of lines) log?.(`teardown: ${line}`);
+    } else if (lines.length > 0) {
+      log?.(
+        `teardown: ${lines.length} line(s) of output suppressed ` +
+          `(set daemon_verbose: true to echo them)`,
+      );
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    const outputText = (err as { all?: unknown }).all;
+    const outputTail = extractTail(
+      typeof outputText === 'string' && outputText.trim() ? outputText : detail,
+      50,
     );
+    log?.(`teardown: failed in ${worktreePath}: ${outputTail}`);
   }
 }
 
