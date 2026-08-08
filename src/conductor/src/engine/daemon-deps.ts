@@ -14,7 +14,7 @@ import type {
   WorktreeOutcome,
 } from './daemon-runner.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
-import { prepareWorktree } from './worktree-prepare.js';
+import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
@@ -125,6 +125,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
 
     teardownWorktree: async (wt, keep) => {
       if (keep) return; // halt/error → leave it for the human
+      await runProjectTeardown(wt.path, cfg.log, { verbose: cfg.verbose ?? false });
       await execa('git', ['worktree', 'remove', '--force', wt.path], {
         cwd: cfg.projectRoot,
       }).catch(() => {

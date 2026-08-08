@@ -4,6 +4,15 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
+const { runProjectTeardown } = vi.hoisted(() => ({
+  runProjectTeardown: vi.fn<
+    (worktreePath: string, log?: (message: string) => void, opts?: { verbose?: boolean }) => Promise<void>
+  >(),
+}));
+vi.mock('../../src/engine/worktree-prepare.js', () => ({
+  prepareWorktree: vi.fn(),
+  runProjectTeardown,
+}));
 import { execa } from 'execa';
 import {
   isProcessed,
@@ -161,6 +170,45 @@ describe('engine/daemon-deps', () => {
       expect(addCalls).toHaveLength(1);
       expect(addCalls[0]).not.toContain('-b'); // attach: add <path> <branch>
     });
+  });
+
+  describe('teardownWorktree', () => {
+    const worktree = { path: join('/tmp', 'daemon-feature'), branch: 'feat/daemon-feature' };
+
+    beforeEach(() => {
+      vi.mocked(execa).mockReset();
+      runProjectTeardown.mockReset();
+      runProjectTeardown.mockResolvedValue(undefined);
+    });
+
+    it('runs project teardown once before reaping an unretained worktree', async () => {
+      const calls: string[] = [];
+      runProjectTeardown.mockImplementation(async (path) => {
+        expect(path).toBe(worktree.path);
+        calls.push('teardown');
+      });
+      vi.mocked(execa).mockImplementation((async (...args: unknown[]) => {
+        expect(args).toEqual([
+          'git',
+          ['worktree', 'remove', '--force', worktree.path],
+          { cwd: dir },
+        ]);
+        calls.push('remove');
+        return { stdout: '' };
+      }) as unknown as typeof execa);
+
+      const d = makeFeatureRunnerDeps({
+        projectRoot: dir,
+        worktreeBase: join(dir, '.worktrees'),
+        baseBranch: 'main',
+        runConductorInWorktree: async () => {},
+      });
+      await d.teardownWorktree(worktree, false);
+
+      expect(calls).toEqual(['teardown', 'remove']);
+      expect(runProjectTeardown).toHaveBeenCalledTimes(1);
+    });
+
   });
 
   describe('isProcessed', () => {
