@@ -281,6 +281,15 @@ Not every gate reruns on retry. For the three judged SHIP gates, a genuine fresh
 immediately, while an identical repeat on provably unchanged inputs only routes on the second attempt —
 retrying a judgement that already looked at the same bytes is not progress.
 
+**A step's own refusal ends the run.** A step that decides its work cannot honestly be done — say
+`acceptance_specs` finding that the accepted DECIDE artifacts contradict already-merged code — can write
+`.pipeline/HALT` with a `needs-human` `.pipeline/HALT.class` and refuse. When an attempt settles with such a
+marker, the run stops and surfaces that HALT's own body as the halt reason, instead of spending the rest of
+the retry budget re-dispatching the same unresolvable condition and reporting a generic gate miss. Only a
+marker that appeared or changed during that attempt counts: `.pipeline/HALT` persists across steps and runs,
+so a leftover marker from earlier work never suppresses a legitimate retry, and anything ambiguous is treated
+as leftover.
+
 **Exhausted but working.** A `build` step whose retry budget runs out is not automatically a wedge. Three
 signals do three distinct jobs, and none substitutes for another: the attributed-task count is advisory
 routing and telemetry, commit movement is the liveness authority, and `build_review` is the sole completion
