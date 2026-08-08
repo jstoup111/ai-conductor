@@ -251,6 +251,57 @@ describe('engine/daemon-park-cli', () => {
         ],
       });
     });
+
+    it('does not run teardown for refused or empty reclaims, and contains a teardown failure', async () => {
+      const refusedSlug = 'in-progress-worktree';
+      const refusedWorktreePath = join(root, '.worktrees', refusedSlug);
+      await mkdir(join(refusedWorktreePath, 'bin'), { recursive: true });
+      const refusedTeardownPath = join(refusedWorktreePath, 'bin', 'teardown');
+      await writeFile(refusedTeardownPath, '#!/bin/sh\nprintf released > teardown-ran\n');
+      await chmod(refusedTeardownPath, 0o755);
+      await mkdir(join(refusedWorktreePath, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(refusedWorktreePath, '.pipeline', 'conduct-state.json'),
+        JSON.stringify({ feature_desc: refusedSlug, last_step: 'explore' }),
+      );
+      const refusedRemove = vi.fn();
+
+      const refusedCode = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug: refusedSlug },
+        { cwd: root, out: () => {}, removeWorktree: refusedRemove },
+      );
+
+      expect(refusedCode).toBe(1);
+      expect(refusedRemove).not.toHaveBeenCalled();
+      await expect(readFile(join(refusedWorktreePath, 'teardown-ran'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+
+      const emptyRemove = vi.fn();
+      const emptyCode = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug: 'missing-worktree' },
+        { cwd: root, out: () => {}, removeWorktree: emptyRemove },
+      );
+
+      expect(emptyCode).toBe(0);
+      expect(emptyRemove).not.toHaveBeenCalled();
+
+      const failingSlug = 'failing-worktree';
+      const failingWorktreePath = join(root, '.worktrees', failingSlug);
+      await mkdir(join(failingWorktreePath, 'bin'), { recursive: true });
+      const failingTeardownPath = join(failingWorktreePath, 'bin', 'teardown');
+      await writeFile(failingTeardownPath, '#!/bin/sh\nexit 1\n');
+      await chmod(failingTeardownPath, 0o755);
+      const failingRemove = vi.fn();
+
+      const failingCode = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug: failingSlug },
+        { cwd: root, out: () => {}, removeWorktree: failingRemove },
+      );
+
+      expect(failingCode).toBe(0);
+      expect(failingRemove).toHaveBeenCalledWith(root, failingWorktreePath);
+    });
   });
 
   describe('detectDaemonParkCommand', () => {
