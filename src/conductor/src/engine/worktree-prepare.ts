@@ -6,6 +6,7 @@ import {
   PRE_DISPATCH_HOOK,
   DOCS_GUARD_HOOK,
 } from './session-hook-assets.js';
+import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
@@ -505,9 +506,10 @@ async function writeNamespaceEnv(
 export async function runProjectTeardown(
   worktreePath: string,
   log?: (msg: string) => void,
-  opts?: { verbose?: boolean },
+  opts?: { verbose?: boolean; timeoutSeconds?: number },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
+  const timeoutSeconds = opts?.timeoutSeconds ?? resolveTeardownTimeoutSeconds();
 
   try {
     await access(join(worktreePath, TEARDOWN_SCRIPT));
@@ -523,6 +525,7 @@ export async function runProjectTeardown(
         CI: 'true',
         [NAMESPACE_VAR]: namespace,
       },
+      timeout: timeoutSeconds * 1000,
     });
     const lines = (result.all ?? '').split('\n').filter((line) => line.trim() !== '');
     if (opts?.verbose) {
@@ -534,6 +537,10 @@ export async function runProjectTeardown(
       );
     }
   } catch (err) {
+    if ((err as { timedOut?: unknown }).timedOut === true) {
+      log?.(`teardown: timed out in ${worktreePath} after ${timeoutSeconds} second(s)`);
+      return;
+    }
     const detail = err instanceof Error ? err.message : String(err);
     const outputText = (err as { all?: unknown }).all;
     const outputTail = extractTail(
