@@ -469,6 +469,23 @@ describe('finish-publication domain types', () => {
 });
 
 describe('FINISH publication disposition routing', () => {
+  it('renders human-required guidance into the halt reason', async () => {
+    const guidance = HUMAN_REQUIRED_REASONS.ambiguous_pr_identity;
+    const route = await routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'ambiguous_pr_identity',
+    });
+
+    expect(route).toEqual({
+      kind: 'halt',
+      reason: expect.stringContaining(guidance.message),
+    });
+    expect(route).toMatchObject({
+      reason: expect.stringContaining(guidance.nextAction),
+    });
+    expect(route).not.toEqual({ kind: 'halt', reason: 'ambiguous_pr_identity' });
+  });
+
   it('accepts a human-required disposition with a non-empty detail through exact validation', async () => {
     await expect(isExactDisposition({
       kind: 'human_required',

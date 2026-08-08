@@ -616,6 +616,13 @@ export function nonRetryablePublicationReason(reason: string): string | undefine
     : undefined;
 }
 
+function renderHumanRequiredHaltReason(
+  disposition: Extract<PublicationDisposition, { kind: 'human_required' }>,
+): string {
+  const { message, nextAction } = HUMAN_REQUIRED_REASONS[disposition.reason];
+  return `${message} Next action: ${nextAction}`;
+}
+
 /**
  * Fail-closed boundary between the publication coordinator and conductor.
  * Publication-only work may retry FINISH, while every other currently-known
@@ -664,7 +671,7 @@ export function routeFinishPublicationDisposition(
         evidence: disposition.evidence,
       };
     case 'human_required':
-      return { kind: 'halt', reason: disposition.reason };
+      return { kind: 'halt', reason: renderHumanRequiredHaltReason(disposition) };
   }
 }
 
