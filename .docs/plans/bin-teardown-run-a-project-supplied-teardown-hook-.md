@@ -87,7 +87,7 @@ are satisfied by the wired step and the standing validation rule respectively.
 - src/conductor/src/engine/worktree-prepare.ts — new `TEARDOWN_SCRIPT` const and `runProjectTeardown`
 - src/conductor/test/engine/worktree-prepare.test.ts — absent-script silence test
 
-**Wired-into:** none (inert until src/conductor/src/engine/daemon-deps.ts)
+**Wired-into:** src/conductor/src/engine/daemon-deps.ts#teardownWorktree, src/conductor/src/engine/daemon-park-cli.ts#dispatchDaemonPark, src/conductor/src/engine/park-reconciliation.ts#reconcileMergedPark
 **Dependencies:** none
 
 ---
@@ -328,7 +328,7 @@ are satisfied by the wired step and the standing validation rule respectively.
 - src/conductor/src/engine/park-reconciliation.ts — single teardown invitation
 - src/conductor/test/engine/park-reconciliation.test.ts — ordering and step assertions
 
-**Wired-into:** src/conductor/src/engine/park-reconciliation.ts#reconcile
+**Wired-into:** src/conductor/src/engine/park-reconciliation.ts#reconcileMergedPark
 **Dependencies:** Task 8
 
 ---
