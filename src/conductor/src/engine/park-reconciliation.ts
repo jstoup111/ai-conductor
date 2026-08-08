@@ -20,6 +20,8 @@ export interface ReconcileMergedParkOptions {
   runGh?: GhRunner;
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   log?: (message: string) => void;
+  /** Logger reserved for project-teardown output during a quiet sweep. */
+  teardownLog?: (message: string) => void;
   disposeHaltWatcher?: (slug: string) => void;
   /** Resolved project teardown timeout, carried by daemon and operator paths. */
   teardownTimeoutSeconds?: number;
@@ -469,7 +471,8 @@ export async function reconcileParkedFeatures(
       const outcome = await reconcileMergedPark({
         ...opts,
         slug,
-        log: opts.verbose ? opts.log : undefined,
+        log: undefined,
+        teardownLog: opts.verbose ? opts.log : undefined,
         // Named explicitly (not merely carried by the spread) so the two
         // production hand-off seams stay visible at the only call site that
         // supplies them.
@@ -652,7 +655,7 @@ export async function reconcileMergedPark(
     const timeoutSeconds = opts.teardownTimeoutSeconds ?? resolveTeardownTimeoutSeconds(
       configResult.ok ? configResult.config : undefined,
     );
-    await runProjectTeardown(worktreePath, opts.log, { timeoutSeconds, verbose: opts.verbose });
+    await runProjectTeardown(worktreePath, opts.teardownLog ?? opts.log, { timeoutSeconds, verbose: opts.verbose });
     try {
       await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
     } catch {

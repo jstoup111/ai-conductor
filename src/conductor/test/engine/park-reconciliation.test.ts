@@ -1159,6 +1159,31 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
+  it('does not add per-slug output for a verbose cleanup with no teardown script', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-verbose-no-teardown';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeOperatorPark(projectRoot, slug);
+
+      await reconcileParkedFeatures({ projectRoot, runGit: run, log, verbose: true });
+
+      expect(log.mock.calls).toEqual([[
+        '[parked-reconciliation] reconciled=1 deferred=0 orphaned=0 parked=1 refused=0 skipped=0; next: no action required',
+      ]]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       slug: 'merged-by-record',
