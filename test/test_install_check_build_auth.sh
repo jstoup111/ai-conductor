@@ -94,6 +94,42 @@ assert "clean state: line is formatted as ok (✓)" "$r"
 [ "$rc" -eq 0 ] && r=0 || r=1
 assert "clean state: overall --check exits 0" "$r"
 
+# ─── Case 1b: configured viewer/renderer keep their successful output ────────
+
+CONFIG_BIN="${TMP_ROOT}/config-bin"
+CONFIG_READ_CALLS="${TMP_ROOT}/config-read-calls"
+mkdir -p "$CONFIG_BIN" "$FAKE_HOME/.ai-conductor"
+printf '%s\n' 'markdown_viewer: {command: glow}' 'mermaid_renderer: {preset: mmdc-png, command: mmdc}' \
+  > "$FAKE_HOME/.ai-conductor/config.yml"
+cat > "${CONFIG_BIN}/conduct-ts" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "$*" in
+  build-auth-status) echo 'build-auth-status: mode=daemon-token state=valid'; exit 0 ;;
+  config\ read\ markdown_viewer.command) echo 'glow' ;;
+  config\ read\ mermaid_renderer.preset) echo 'mmdc-png' ;;
+  config\ read\ mermaid_renderer.command) echo 'mmdc' ;;
+  *) exit 91 ;;
+esac
+printf '%s\n' "$*" >> "$CONFIG_READ_CALLS"
+EOF
+for tool in glow mmdc; do
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "${CONFIG_BIN}/${tool}"
+  chmod +x "${CONFIG_BIN}/${tool}"
+done
+chmod +x "${CONFIG_BIN}/conduct-ts"
+
+out=$(CONFIG_READ_CALLS="$CONFIG_READ_CALLS" run_check "$CONFIG_BIN" 2>&1) && rc=0 || rc=$?
+printf '%s\n' "$out" | grep -q 'markdown viewer: glow (artifact review)' && r=0 || r=1
+assert "configured viewer: preserves the successful artifact-review output" "$r"
+printf '%s\n' "$out" | grep -q 'mermaid renderer: mmdc-png (diagram approval gates)' && r=0 || r=1
+assert "configured renderer: preserves the successful diagram-gate output" "$r"
+[ "$(cat "$CONFIG_READ_CALLS")" = $'config read markdown_viewer.command\nconfig read mermaid_renderer.preset\nconfig read mermaid_renderer.command' ] && r=0 || r=1
+assert "configured dependencies: reads viewer and renderer fields through conduct-ts" "$r"
+[ "$rc" -eq 0 ] && r=0 || r=1
+assert "configured dependencies: overall --check remains successful" "$r"
+
 # ─── Case 2: conduct-ts reports a non-clean state (exit 1) → fail line, fail counter increments ──
 
 FAIL_BIN="${TMP_ROOT}/fail-bin"
