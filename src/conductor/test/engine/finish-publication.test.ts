@@ -446,6 +446,17 @@ describe('FINISH publication disposition routing', () => {
   });
 
   it.each([
+    ['a blank detail', { kind: 'human_required', reason: 'judgment_refused', detail: '' }],
+    ['a whitespace-only detail', { kind: 'human_required', reason: 'judgment_refused', detail: '   ' }],
+    ['a numeric detail', { kind: 'human_required', reason: 'judgment_refused', detail: 42 }],
+    ['an object detail', { kind: 'human_required', reason: 'judgment_refused', detail: {} }],
+    ['an extra key', { kind: 'human_required', reason: 'judgment_refused', detail: 'x', extra: 'x' }],
+    ['a missing reason', { kind: 'human_required', detail: 'x' }],
+  ])('rejects a human-required disposition with %s through exact validation', async (_shape, disposition) => {
+    await expect(isExactDisposition(disposition)).resolves.toBe(false);
+  });
+
+  it.each([
     ['establish_pr', 'pr_identity_not_verified_after_establish'],
     ['write_shipped_record', 'shipped_record_not_verified_after_write'],
     ['judge_pr_prose', 'judgment_completed_reobserve'],
