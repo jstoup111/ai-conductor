@@ -68,10 +68,10 @@ paths — the harness overwrites or deletes them.
 | `CONDUCT_ENGINE_SELF_VERSION` | the daemon's engine version id, or empty | the daemon lock | Names the version GC must not evict. |
 | `WORKTREE_NAMESPACE` | the sanitized worktree basename | worktree preparation and teardown | Per-feature isolation for ports, database names, and dev-server state. Written idempotently into the worktree's `.env` and passed to `bin/setup`; `bin/teardown` receives the same value derived again from its worktree path, so it remains available even if `.env` or `.pipeline/` is gone. |
 
-The child environment passed to a project's `bin/setup` or `bin/teardown` is a replacement, not an
-overlay: only `CI` and `WORKTREE_NAMESPACE` plus the process-runner defaults reach it. Both are a
-contract your project hooks may opt into rather than something the harness enforces — nothing in the
-harness reads `WORKTREE_NAMESPACE` back, and this repo's own hooks ignore both it and `CI`.
+The child environment passed to a project's `bin/setup` or `bin/teardown` inherits the parent process
+environment and overlays `CI` and `WORKTREE_NAMESPACE`. Both are a contract your project hooks may
+opt into rather than something the harness enforces — nothing in the harness reads
+`WORKTREE_NAMESPACE` back, and this repo's own hooks ignore both it and `CI`.
 
 ## Kill-switches and test seams
 
