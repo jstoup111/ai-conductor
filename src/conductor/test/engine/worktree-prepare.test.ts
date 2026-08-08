@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -80,6 +80,38 @@ fs.writeFileSync(${JSON.stringify(observationPath)}, JSON.stringify({
           cwd: dir,
         });
       } finally {
+        await rm(observationDir, { recursive: true, force: true });
+      }
+    });
+
+    it('derives its namespace from a sanitized worktree basename without persisted state', async () => {
+      const worktreePath = await mkdtemp(join(tmpdir(), 'teardown namespace.v1-'));
+      const observationDir = await mkdtemp(join(tmpdir(), 'teardown-observation-'));
+      const observationPath = join(observationDir, 'teardown-namespace.txt');
+      const teardownPath = join(worktreePath, TEARDOWN_SCRIPT);
+      await mkdir(join(worktreePath, 'bin'), { recursive: true });
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreePath, '.env'), `${NAMESPACE_VAR}=persisted-state\n`, 'utf-8');
+      await writeFile(
+        teardownPath,
+        `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env.WORKTREE_NAMESPACE);
+`,
+        'utf-8',
+      );
+      await chmod(teardownPath, 0o755);
+
+      try {
+        await rm(join(worktreePath, '.pipeline'), { recursive: true });
+        await rm(join(worktreePath, '.env'));
+
+        await runProjectTeardown(worktreePath);
+
+        expect(await readFile(observationPath, 'utf-8')).toBe(
+          sanitizeNamespace(basename(worktreePath)),
+        );
+      } finally {
+        await rm(worktreePath, { recursive: true, force: true });
         await rm(observationDir, { recursive: true, force: true });
       }
     });

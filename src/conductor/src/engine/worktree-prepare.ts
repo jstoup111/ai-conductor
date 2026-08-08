@@ -507,6 +507,8 @@ export async function runProjectTeardown(
   _log?: (msg: string) => void,
   _opts?: { verbose?: boolean },
 ): Promise<void> {
+  const namespace = sanitizeNamespace(basename(worktreePath));
+
   try {
     await access(join(worktreePath, TEARDOWN_SCRIPT));
   } catch {
@@ -517,7 +519,7 @@ export async function runProjectTeardown(
     cwd: worktreePath,
     env: {
       CI: 'true',
-      [NAMESPACE_VAR]: sanitizeNamespace(basename(worktreePath)),
+      [NAMESPACE_VAR]: namespace,
     },
   });
 }
