@@ -61,12 +61,7 @@ async function initGitRepo(dir: string): Promise<void> {
   // it with ENOTEMPTY.
   await initTestRepo(dir);
   await writeFile(join(dir, 'README.md'), '# Test\n');
-  // Match a real conductor worktree: runtime state and gate evidence are
-  // gitignored. The BUILD completion predicate deliberately rejects a dirty
-  // worktree, so a scratch repository must not mistake those runtime files
-  // for uncommitted implementation work.
-  await writeFile(join(dir, '.gitignore'), '.pipeline/\nconduct-state.json\n');
-  await execa('git', ['add', 'README.md', '.gitignore'], { cwd: dir });
+  await execa('git', ['add', 'README.md'], { cwd: dir });
   await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
 }
 
@@ -120,18 +115,6 @@ function withPassingBuildVerification(dir: string, runner: StepRunner): StepRunn
   };
 }
 
-async function writePassingBuildReview(dir: string): Promise<void> {
-  const { stdout: head } = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
-  await writeFile(
-    join(dir, '.pipeline/build-review.json'),
-    JSON.stringify({
-      verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false },
-      codeStamp: head.trim(),
-    }),
-  );
-}
-
 // Fast-forwards every pre-build step's completion check by seeding the
 // artifacts each already requires — ported verbatim from
 // test/engine/conductor.test.ts's stall-breaker fixture (`
@@ -166,24 +149,6 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     await mkdir(full.substring(0, full.lastIndexOf('/')), { recursive: true });
     await writeFile(full, content);
   }
-  // These fixtures exercise the BUILD retry seam. The plan is an already
-  // approved DECIDE artifact, so record that precondition rather than asking
-  // a daemon test to cross the unrelated DECIDE authorization boundary.
-  await writeFile(
-    join(dir, 'conduct-state.json'),
-    JSON.stringify({
-      explore: 'skipped',
-      complexity: 'skipped',
-      prd: 'done',
-      architecture_diagram: 'done',
-      architecture_review: 'done',
-      stories: 'done',
-      conflict_check: 'done',
-      plan: 'done',
-      coherence_check: 'done',
-      acceptance_specs: 'done',
-    }),
-  );
 }
 
 // Writes the plan (Task 1..total headings) and task-status.json rows.
@@ -271,7 +236,6 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
       stepRunner: withPassingBuildVerification(dir, runner),
       events,
       projectRoot: dir,
-      fromStep: 'build',
       verifyArtifacts: true,
       maxRetries,
       onRecovery,
@@ -550,15 +514,10 @@ describe('budget exhaustion with real, unattributed commits every attempt (RED �
       stepRunner: withPassingBuildVerification(dir, runner),
       events,
       projectRoot: dir,
-      fromStep: 'build',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 3,
-      fullSuiteVerifier: {
-        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
-        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
-      },
     });
 
     await conductor.run();
@@ -638,8 +597,6 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
           await commitWithTaskTrailer(dir, '1', 1);
           await commitWithTaskTrailer(dir, '2', 2);
           await commitWithTaskTrailer(dir, '3', 3);
-        } else if (step === 'build_review') {
-          await writePassingBuildReview(dir);
         }
         return { success: true };
       }),
@@ -650,15 +607,10 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
       stepRunner: withPassingBuildVerification(dir, gateRunner),
       events,
       projectRoot: dir,
-      fromStep: 'build',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 3,
-      fullSuiteVerifier: {
-        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
-        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
-      },
     });
     await gateConductor.run();
 
@@ -679,13 +631,9 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
     });
     let seq = 0;
     const routedRunner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
-      run: vi.fn().mockImplementation(async (step: StepName) => {
-        if (step === 'build') {
-          seq++;
-          await commitPlainWork(dir2, seq);
-        } else if (step === 'build_review') {
-          await writePassingBuildReview(dir2);
-        }
+      run: vi.fn().mockImplementation(async () => {
+        seq++;
+        await commitPlainWork(dir2, seq);
         return { success: true };
       }),
       runInteractive: vi.fn().mockResolvedValue(undefined),
@@ -695,15 +643,10 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
       stepRunner: withPassingBuildVerification(dir2, routedRunner),
       events: events2,
       projectRoot: dir2,
-      fromStep: 'build',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 3,
-      fullSuiteVerifier: {
-        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
-        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
-      },
     });
     await routedConductor.run();
 
@@ -786,7 +729,6 @@ describe('genuine wedge preserved — remediation and HALT shapes unchanged (pla
       stepRunner: withPassingBuildVerification(dir, runner),
       events,
       projectRoot: dir,
-      fromStep: 'build',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
@@ -900,7 +842,6 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
       stepRunner: withPassingBuildVerification(dir, runner),
       events,
       projectRoot: dir,
-      fromStep: 'build',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
@@ -1014,7 +955,6 @@ describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
       stepRunner: withPassingBuildVerification(dir, runner),
       events,
       projectRoot: dir,
-      fromStep: 'build',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
@@ -1198,7 +1138,6 @@ describe('invariant — count alone can never kill a build (plan Task 14)', () =
         stepRunner: withPassingBuildVerification(dir, runner),
         events,
         projectRoot: dir,
-        fromStep: 'build',
         mode: 'auto',
         daemon: true,
         verifyArtifacts: true,
