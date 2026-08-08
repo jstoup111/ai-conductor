@@ -152,3 +152,41 @@ else
   cat "$TMP_ROOT/permissions.out" >&2
   exit 1
 fi
+
+# The viewer/renderer prompts delegate their persisted selections to conduct-ts.
+# This faithful fake records the CLI contract and renders the sections so the
+# installer boundary can assert the observable config result without a real bundle.
+CONFIG_STUB_HOME="$TMP_ROOT/config-stub-home"
+CONFIG_WRITE_CALLS="$TMP_ROOT/config-write-calls"
+CONFIG_FRAGMENT="$CHECKOUT/bin/install-config-test"
+mkdir -p "$CONFIG_STUB_HOME"
+cat > "$STUBS_DIR/conduct-ts" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "$CONFIG_WRITE_CALLS"
+section=$3
+mkdir -p "$HOME/.ai-conductor"
+printf '%s:\n  preset: %s\n  command: %s\n  args: [%s]\n  mode: %s\n' \
+  "$section" "$4" "$5" "$6" "$7" >> "$HOME/.ai-conductor/config.yml"
+EOF
+chmod +x "$STUBS_DIR/conduct-ts"
+
+awk '/# ─── Main ─────────────────────────────────────────────────────────────────────/{exit} {print}' \
+  "$CHECKOUT/bin/install" > "$CONFIG_FRAGMENT"
+printf '%s\n' 'write_md_viewer_config "glow" "glow" "-p {file}" "inline"' >> "$CONFIG_FRAGMENT"
+printf '%s\n' 'write_mermaid_renderer_config "mmdc-png" "mmdc" "-i {file}" "external"' >> "$CONFIG_FRAGMENT"
+chmod +x "$CONFIG_FRAGMENT"
+
+HOME="$CONFIG_STUB_HOME" PATH="$STUBS_DIR:$PATH" CONFIG_WRITE_CALLS="$CONFIG_WRITE_CALLS" \
+  "$CONFIG_FRAGMENT"
+
+if [ "$(cat "$CONFIG_WRITE_CALLS")" = $'config write markdown_viewer glow glow -p {file} inline\nconfig write mermaid_renderer mmdc-png mmdc -i {file} external' ] && \
+  rg -Uq 'markdown_viewer:\n  preset: glow\n  command: glow\n  args: \[-p \{file\}\]\n  mode: inline' "$CONFIG_STUB_HOME/.ai-conductor/config.yml" && \
+  rg -Uq 'mermaid_renderer:\n  preset: mmdc-png\n  command: mmdc\n  args: \[-i \{file\}\]\n  mode: external' "$CONFIG_STUB_HOME/.ai-conductor/config.yml"; then
+  echo 'PASS viewer and renderer configuration delegate to conduct-ts'
+else
+  echo 'FAIL viewer and renderer configuration delegate to conduct-ts' >&2
+  cat "$CONFIG_WRITE_CALLS" "$CONFIG_STUB_HOME/.ai-conductor/config.yml" >&2 || true
+  exit 1
+fi
