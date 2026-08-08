@@ -183,7 +183,6 @@ import {
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
-  decideKickbackDisposition,
   readOperatorGrant,
   renderDecideEntryHalt,
 } from './decide-entry-policy.js';
@@ -2484,24 +2483,52 @@ export class Conductor {
             ' — human needed to provide a resolvable remediation target',
         };
       }
-      // #644: DECIDE is operator-only in daemon mode. An autonomous rewind to a
-      // DECIDE-phase step (architecture_review, plan, …) would re-run the whole
-      // downstream DECIDE tail unattended — HALT to the human instead. Phase is
-      // derived from the step definitions (no hardcoded step list). BUILD-phase
-      // targets (build, acceptance_specs) keep routing so re-audit-after-gap-
-      // close still works. Interactive mode never reaches planRemediation.
-      const disposition = decideKickbackDisposition({
+      const targetStep = steps.find((step) => step.name === target);
+      const hasContract = hasCompletionContract(target, this.config);
+      let satisfied: boolean | 'unknown' = 'unknown';
+      let completionEvidence: string | undefined;
+      if (targetStep?.phase === 'DECIDE' && hasContract) {
+        try {
+          const completion = await checkStepCompletion(
+            this.projectRoot,
+            target,
+            await this.completionCtx(state),
+          );
+          satisfied = completion.done;
+          completionEvidence = completion.reason;
+        } catch {
+          // Completion verification is an authorization boundary. If the
+          // predicate cannot establish the DECIDE artifact's state, do not
+          // turn that uncertainty into an unattended authoring dispatch.
+          satisfied = 'unknown';
+        }
+      }
+      const remediationEvidence = fixes.map((g) => `${g.id}→${g.disposition}`).join('; ');
+      const disposition = await this.resolveDecideEntryDisposition({
         target,
         steps,
         daemon: this.daemon,
+        tier: state.complexity_tier,
+        hasContract,
+        satisfied,
+        grant: null,
+        sourceGate: 'remediate',
+        evidence: completionEvidence
+          ? `${remediationEvidence}; completion: ${completionEvidence}`
+          : remediationEvidence,
       });
       if (disposition.kind === 'halt') {
         return {
           kind: 'halt',
-          detail:
-            `autonomous remediation would rewind to DECIDE step '${target}' — ` +
-            `human gate required (DECIDE is operator-only in daemon mode). Gaps: ` +
-            fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
+          detail: renderDecideEntryHalt({
+            ...disposition.halt,
+            reason:
+              targetStep?.phase === 'DECIDE' && satisfied === false
+                ? `artifact unsatisfied — ${completionEvidence ?? 'completion check reported no evidence'}`
+                : targetStep?.phase === 'DECIDE' && satisfied === 'unknown' && hasContract
+                  ? 'artifact satisfaction is unknown — completion verification could not establish it'
+                  : disposition.halt.reason,
+          }),
         };
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
@@ -2533,7 +2560,7 @@ export class Conductor {
         kind: 'route',
         target,
         hint: buildRemediationHint(fixes, hintSource.source, hintSource.evidenceFile),
-        evidence: fixes.map((g) => `${g.id}→${g.disposition}`).join('; '),
+        evidence: remediationEvidence,
       };
     }
     return { kind: 'none' };
