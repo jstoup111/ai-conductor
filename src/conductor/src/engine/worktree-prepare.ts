@@ -1,3 +1,44 @@
+/**
+ * Worktree-prepare module — owns **both** sides of the project-script boundary,
+ * not preparation alone.
+ *
+ * A consumer project may supply two conventional entrypoints, and this module
+ * is the sole runner for each: `bin/setup` (`SETUP_SCRIPT`, via
+ * `runProjectSetup`) provisions whatever a feature build needs before it
+ * starts, and `bin/teardown` (`TEARDOWN_SCRIPT`, via `runProjectTeardown`)
+ * releases it immediately before the worktree is removed. Setup acquires,
+ * teardown releases; keeping the pair here is what lets them share one
+ * execution contract — the same executable resolution, the same
+ * `sanitizeNamespace(basename(worktreePath))` namespace derivation, the same
+ * `CI: 'true'` non-interactive environment, and the same output-tail helper —
+ * rather than drifting apart in two modules.
+ *
+ * The module name says "prepare" while teardown is a removal-time concern.
+ * That mismatch is a known, accepted cost of co-location, recorded as Option
+ * A's con in `adr-2026-08-07-project-teardown-hook-contract-and-containment`
+ * §3; this docblock is the mitigation the ADR requires in its place. Read the
+ * name as "the project-script boundary", not "the pre-build step".
+ *
+ * Two divergences between the two runners are deliberate and easy to erase by
+ * copying one onto the other (ADR §1, §2):
+ *
+ * - **The absent-script path is silent on the teardown side** and logs a skip
+ *   notice on the setup side. FR-4 promises a non-adopting project
+ *   byte-identical log output, so teardown emits no line at all when
+ *   `bin/teardown` is absent.
+ * - **Only teardown is time-bound**, via `execa`'s `timeout` (default 120s,
+ *   overridable by `teardown_timeout_seconds`). There is deliberately no way
+ *   to disable the bound — an unbounded project script sits in the daemon's
+ *   critical path, which is the failure the ADR exists to prevent.
+ *
+ * `runProjectTeardown` is structurally contained (ADR §4): every failure mode
+ * — non-zero exit, timeout, spawn error, missing execute permission — is
+ * caught inside it and converted to a log entry. Its return type carries no
+ * error and it never throws, so each of its three call sites invokes it as a
+ * plain statement with no `try`/`catch` and still reaches removal on every
+ * branch. Preserve that property when editing: moving a throw out of the
+ * runner silently breaks all three callers at once.
+ */
 import { execa } from 'execa';
 import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
