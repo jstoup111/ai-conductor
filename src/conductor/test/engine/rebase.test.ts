@@ -1948,3 +1948,84 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
     await rm(pdir, { recursive: true, force: true });
   }, 20000);
 });
+
+describe('performRebase protected-artifact self-amendment (#1379, real git)', () => {
+  // #1047 lets a feature amend its OWN protected DECIDE artifact: the seal
+  // records it for build_review to judge rather than halting. That tolerance is
+  // guarded on `featureDesc`, so a caller that omits it silently disables the
+  // behavior and reports the feature's own plan as a foreign mutation. The
+  // rebase pre-flight was such a caller.
+  const setupAmendedFeatureRepo = async (
+    slug: string,
+    opts?: { stateFeatureDesc?: string },
+  ): Promise<{ repo: string; g: (args: string[]) => Promise<{ stdout: string }> }> => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-self-amend-'));
+    const g = (args: string[]) => execa('git', args, { cwd: repo });
+    await g(['init', '-q', '-b', 'main']);
+    await g(['config', 'user.email', 't@e']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(repo, '.docs', 'plans', `${slug}.md`), '# Plan\n\nTask 1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    await g(['checkout', '-q', '-b', 'feature']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'base-only.txt'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'base advance']);
+    await g(['checkout', '-q', 'feature']);
+
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: (await g(['rev-parse', 'HEAD'])).stdout.trim(),
+    });
+
+    await writeFile(
+      join(repo, '.pipeline', 'conduct-state.json'),
+      `${JSON.stringify({ feature_desc: opts?.stateFeatureDesc ?? slug }, null, 2)}\n`,
+    );
+
+    // The feature amends its own plan and commits it — exactly the shape the
+    // build produced in the observed incident.
+    await writeFile(join(repo, '.docs', 'plans', `${slug}.md`), '# Plan\n\nTask 1 (amended)\n');
+    await g(['add', '.docs']);
+    await g(['commit', '-q', '-m', 'spec: amend own plan']);
+
+    return { repo, g };
+  };
+
+  it('rebases a feature that amended its own plan instead of rejecting it as a foreign mutation', async () => {
+    const { repo, g } = await setupAmendedFeatureRepo('my-feature');
+    try {
+      const git = makeGitRunner(repo);
+      const outcome = await performRebase(git, repo, 'main');
+
+      expect(outcome.kind).not.toBe('conflict_halt');
+      // The rebase actually moved HEAD onto the advanced base.
+      const baseSha = (await g(['rev-parse', 'main'])).stdout.trim();
+      const ancestry = await execa('git', ['merge-base', '--is-ancestor', baseSha, 'HEAD'], {
+        cwd: repo,
+        reject: false,
+      });
+      expect(ancestry.exitCode).toBe(0);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it('still rejects an amendment to a protected artifact belonging to a different feature', async () => {
+    const { repo } = await setupAmendedFeatureRepo('my-feature', {
+      stateFeatureDesc: 'a-completely-different-feature',
+    });
+    try {
+      const git = makeGitRunner(repo);
+      await expect(performRebase(git, repo, 'main')).rejects.toThrow(
+        /Protected artifact changed: \.docs\/plans\/my-feature\.md/,
+      );
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  }, 20000);
+});
