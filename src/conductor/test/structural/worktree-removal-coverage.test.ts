@@ -17,6 +17,25 @@ const ROUTED_MODULES = new Set([
   'engine/daemon-park-cli.ts',
   'engine/park-reconciliation.ts',
 ]);
+const WORKTREE_REMOVAL_EXEMPTIONS = [
+  {
+    module: 'engine/autoresolve.ts',
+    reason: 'Deferred by operator: prepares its worktree and therefore leaks it.',
+  },
+  {
+    module: 'engine/engineer/worktree-authoring.ts',
+    reason: 'Does not call prepareWorktree, so it provisions nothing.',
+  },
+  {
+    module: 'engine/worktree.ts',
+    reason: 'Does not call prepareWorktree, so it provisions nothing.',
+  },
+  {
+    module: 'engine/worktree-shared.ts',
+    reason: 'Pass-through primitive: provisions nothing; callers decide classification.',
+  },
+];
+const EXEMPT_MODULES = new Set(WORKTREE_REMOVAL_EXEMPTIONS.map(({ module }) => module));
 const GUARD_MODULE = 'test/structural/worktree-removal-coverage.test.ts';
 const COVERAGE_GUARD_ADR = 'docs/decisions/adr-2026-08-07-worktree-removal-coverage-guard.md';
 
@@ -122,6 +141,7 @@ function assertWorktreeRemovalCoverage(modules: readonly { module: string; sourc
       }
       continue;
     }
+    if (EXEMPT_MODULES.has(module)) continue;
     throw new Error(
       `worktree-removal coverage: ${module} is unclassified; route it through runProjectTeardown ` +
         `or add it to the exemption registry (${COVERAGE_GUARD_ADR})`,
@@ -210,5 +230,35 @@ describe('structural: worktree-removal coverage', () => {
     expect(() => assertWorktreeRemovalCoverage([
       { module: 'test/structural/worktree-removal-coverage.test.ts', source: fixture },
     ])).not.toThrow();
+  });
+
+  it('classifies every worktree-removal module in the real source tree', async () => {
+    const modules = await Promise.all((await sourceFiles(sourceRoot)).map(async (path) => ({
+      module: relative(sourceRoot, path),
+      source: ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true),
+    })));
+
+    expect(() => assertWorktreeRemovalCoverage(modules)).not.toThrow();
+  });
+
+  it('ships the exact worktree-removal exemption registry', () => {
+    expect(WORKTREE_REMOVAL_EXEMPTIONS).toEqual([
+      {
+        module: 'engine/autoresolve.ts',
+        reason: 'Deferred by operator: prepares its worktree and therefore leaks it.',
+      },
+      {
+        module: 'engine/engineer/worktree-authoring.ts',
+        reason: 'Does not call prepareWorktree, so it provisions nothing.',
+      },
+      {
+        module: 'engine/worktree.ts',
+        reason: 'Does not call prepareWorktree, so it provisions nothing.',
+      },
+      {
+        module: 'engine/worktree-shared.ts',
+        reason: 'Pass-through primitive: provisions nothing; callers decide classification.',
+      },
+    ]);
   });
 });
