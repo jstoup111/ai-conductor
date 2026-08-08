@@ -619,7 +619,13 @@ export function nonRetryablePublicationReason(reason: string): string | undefine
 function renderHumanRequiredHaltReason(
   disposition: Extract<PublicationDisposition, { kind: 'human_required' }>,
 ): string {
-  const { message, nextAction } = HUMAN_REQUIRED_REASONS[disposition.reason];
+  const guidance = HUMAN_REQUIRED_REASONS[disposition.reason] as
+    | { message: string; nextAction: string }
+    | undefined;
+  if (!guidance) {
+    return `Human-required reason ${disposition.reason}: no guidance is registered.`;
+  }
+  const { message, nextAction } = guidance;
   const detail = disposition.detail ? ` Detail: ${disposition.detail}` : '';
   return `${message} Next action: ${nextAction}${detail}`;
 }

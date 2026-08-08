@@ -518,6 +518,18 @@ describe('FINISH publication disposition routing', () => {
     });
   });
 
+  it('fails closed when an unlisted human-required reason has no guidance', async () => {
+    const reason = 'future_unlisted_reason';
+
+    await expect(routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason,
+    } as unknown)).resolves.toEqual({
+      kind: 'halt',
+      reason: expect.stringMatching(new RegExp(`^.*${reason}.*no guidance is registered.*$`, 'i')),
+    });
+  });
+
   it('accepts a human-required disposition with a non-empty detail through exact validation', async () => {
     await expect(isExactDisposition({
       kind: 'human_required',
