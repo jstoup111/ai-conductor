@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseReleaseDisposition } from '../../src/engine/release-metadata.js';
+import {
+  mergeReleaseMetadataBlock,
+  parseReleaseDisposition,
+  snapshotReleaseMetadataBlock,
+} from '../../src/engine/release-metadata.js';
 
 describe('engine/release-metadata — structured PR release disposition (Task 1)', () => {
   it('normalizes a categorized reader note and its semver impact', () => {
@@ -128,6 +132,51 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       expect(() =>
         parseReleaseDisposition(`Release-Disposition: no-note\n\n## Migration\n\n${migration}\n${trailer}`),
       ).toThrow('Invalid release disposition: Migration');
+    });
+  });
+
+  describe('pre-finish snapshot of a body the parser already accepts', () => {
+    // Every producer in this repo — the PR template, the release-disposition
+    // skill, and the CHANGELOG renderer — writes a blank line between the
+    // `## Migration` heading and its runnable fence, and the parser accepts
+    // that form. A snapshot that demanded the fence on the very next line
+    // therefore rejected bodies it had just parsed, and the pre-finish
+    // snapshot HALTed the publication with "release metadata is malformed or
+    // non-canonical" (observed on PR #1349).
+    const fields = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Correct a defect.',
+    ].join('\n');
+    const migration = '```bash migration\n./bin/install --update\n```';
+
+    it('captures a migration separated from its heading by a blank line', () => {
+      const body = `## Summary\n\nReader prose.\n\n${fields}\n\n## Migration\n\n${migration}`;
+      expect(snapshotReleaseMetadataBlock(body)).toBe(
+        `${fields}\n\n## Migration\n\n${migration}`,
+      );
+    });
+
+    it('captures a migration on the line immediately after its heading', () => {
+      const body = `${fields}\n\n## Migration\n${migration}`;
+      expect(snapshotReleaseMetadataBlock(body)).toBe(`${fields}\n\n## Migration\n${migration}`);
+    });
+
+    it('re-snapshots its own output unchanged, so a restore can be verified', () => {
+      const body = `## Summary\n\nReader prose.\n\n${fields}\n\n## Migration\n\n${migration}`;
+      const block = snapshotReleaseMetadataBlock(body);
+      expect(block).not.toBeNull();
+      expect(snapshotReleaseMetadataBlock(block!)).toBe(block);
+    });
+
+    it('restores the captured block over a body finish rewrote, keeping reader prose', () => {
+      const body = `## Summary\n\nReader prose.\n\n${fields}\n\n## Migration\n\n${migration}`;
+      const block = snapshotReleaseMetadataBlock(body);
+      expect(block).not.toBeNull();
+      const merged = mergeReleaseMetadataBlock('## Summary\n\nRewritten by finish.', block!);
+      expect(merged).toBe(`## Summary\n\nRewritten by finish.\n\n${block}`);
+      expect(snapshotReleaseMetadataBlock(merged!)).toBe(block);
     });
   });
 });
