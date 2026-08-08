@@ -1,20 +1,19 @@
 /**
  * Acceptance spec for Stories 3-4's terminal FINISH refusal flow.
  *
- * The production coordinator's typed disposition is the input boundary. This
- * drives the real Conductor FINISH route and halt-marker writer, while the
- * provider itself remains a deterministic fake per the repository's test
- * isolation contract. Decoder and detail-normalization cases stay at the
- * lower engine-test layer owned by TDD.
+ * A deterministic provider fake returns a refused verdict. The real production
+ * coordinator decodes and maps it before the Conductor routes the resulting
+ * human-required disposition to the halt-marker writer.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { writeState } from '../../src/engine/state.js';
+import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../test-conductor.js';
 
@@ -26,11 +25,18 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'finish-correct-refusal-'));
-    stateFilePath = join(projectRoot, 'conduct-state.json');
+    const pipelineDir = join(projectRoot, '.pipeline');
+    stateFilePath = join(pipelineDir, 'conduct-state.json');
+    await mkdir(pipelineDir);
+    await mkdir(join(projectRoot, '.docs', 'shipped'), { recursive: true });
+    await writeFile(join(pipelineDir, 'finish-choice'), 'pr\n');
+    await writeFile(join(projectRoot, '.docs', 'shipped', 'finish-correct-refusal.md'), 'shipped\n');
     const state: Record<string, unknown> = {
       complexity_tier: 'M',
       track: 'technical',
       feature_desc: 'finish-correct-refusal',
+      worktree_branch: 'feat/finish-correct-refusal',
+      pr_url: 'https://github.com/acme/widget/pull/1172',
     };
     for (const step of [
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
@@ -49,17 +55,40 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
   it('writes the refusal message, next action, and provider detail as a needs-human HALT', async () => {
     const provider: StepRunner = {
       run: vi.fn(async () => ({
-        success: false,
+        success: true,
         publicationDisposition: {
-          kind: 'human_required',
-          reason: 'judgment_refused',
+          kind: 'refused',
           detail: BLOCKER,
         },
       })),
     };
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot,
+      stateFilePath,
+      baseBranch: 'main',
+      git: async (args) => args[0] === 'remote'
+        ? { stdout: 'origin\n' }
+        : { stdout: 'refs/remotes/origin/feat/finish-correct-refusal\n' },
+      gh: async (args) => {
+        if (args[0] === 'auth') return { stdout: '' };
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              url: 'https://github.com/acme/widget/pull/1172',
+              title: 'needs-remediation: publication',
+              body: 'Human remediation is required before this PR can be published.',
+              isDraft: true,
+            }),
+          };
+        }
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      },
+      observeReleaseReadiness: async () => 'present',
+    });
     const conductor = new Conductor({
       stateFilePath,
       stepRunner: provider,
+      finishPublication: coordinator,
       projectRoot,
       fromStep: 'finish',
       mode: 'auto',
@@ -75,9 +104,14 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
     await conductor.run();
 
     expect(provider.run).toHaveBeenCalledOnce();
+    expect(provider.run).toHaveBeenCalledWith(
+      'finish',
+      expect.any(Object),
+      expect.objectContaining({ finishProsePass: 'judge' }),
+    );
     const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
-    expect(halt).toContain('The FINISH provider deliberately refused publication');
-    expect(halt).toContain('Next action:');
+    expect(halt).toContain('The PR prose judgment was refused and requires an operator decision.');
+    expect(halt).toContain('Next action: Review the refusal and decide how to continue publication.');
     expect(halt).toContain(BLOCKER);
     await expect(readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf8'))
       .resolves.toBe('needs-human');
