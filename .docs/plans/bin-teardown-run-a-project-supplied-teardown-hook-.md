@@ -88,17 +88,6 @@ are satisfied by the wired step and the standing validation rule respectively.
 - src/conductor/test/engine/worktree-prepare.test.ts — absent-script silence test
 
 **Wired-into:** src/conductor/src/engine/daemon-deps.ts#teardownWorktree, src/conductor/src/engine/daemon-park-cli.ts#dispatchDaemonPark, src/conductor/src/engine/park-reconciliation.ts#reconcileMergedPark
-> **Amended 2026-08-08 by #1306:** this declaration was authored as
-> `none (inert until src/conductor/src/engine/daemon-deps.ts)`. That waiver is unsatisfiable for this
-> plan: `checkInertContractContradiction` (`wiring-probe.ts:732`) searches the whole tree at gate
-> time, not the declaring task's own diff, so an `inert until <ref>` waiver whose `<ref>` is wired by
-> a *later task in the same plan* is always contradicted once that task lands — the gate then reports
-> "contract is stale, switch to a declared call site". The three call sites above are the real
-> enclosing symbols of `runProjectTeardown`'s production callers (`daemon-deps.ts:128`,
-> `daemon-park-cli.ts:237`, `park-reconciliation.ts:655`), verified at
-> `6a97b6e16`. Amended per adr-2026-08-04-decide-owned-amendment-of-accepted-artifacts §5 (a
-> mid-BUILD discovery returns to DECIDE); the correction is recorded rather than silently replaced.
-
 **Dependencies:** none
 
 ---
@@ -340,14 +329,6 @@ are satisfied by the wired step and the standing validation rule respectively.
 - src/conductor/test/engine/park-reconciliation.test.ts — ordering and step assertions
 
 **Wired-into:** src/conductor/src/engine/park-reconciliation.ts#reconcileMergedPark
-> **Amended 2026-08-08 by #1306:** this declaration was authored as
-> `src/conductor/src/engine/park-reconciliation.ts#reconcile`. No symbol named `reconcile` is
-> exported from that file, on this branch or on `origin/main` — its exports are `proveByMergedPrHead`,
-> `reconcileParkedFeatures`, and `reconcileMergedPark`. The anchor named a symbol that never existed;
-> `reconcileMergedPark` is the function enclosing the `runProjectTeardown` call site
-> (`park-reconciliation.ts:655`). Amended per
-> adr-2026-08-04-decide-owned-amendment-of-accepted-artifacts §5.
-
 **Dependencies:** Task 8
 
 ---
