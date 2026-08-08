@@ -35,7 +35,6 @@ const WORKTREE_REMOVAL_EXEMPTIONS = [
     reason: 'Pass-through primitive: provisions nothing; callers decide classification.',
   },
 ];
-const EXEMPT_MODULES = new Set(WORKTREE_REMOVAL_EXEMPTIONS.map(({ module }) => module));
 const GUARD_MODULE = 'test/structural/worktree-removal-coverage.test.ts';
 const COVERAGE_GUARD_ADR = 'docs/decisions/adr-2026-08-07-worktree-removal-coverage-guard.md';
 
@@ -132,7 +131,28 @@ function callsProjectTeardown(source: ts.SourceFile): boolean {
   return found;
 }
 
-function assertWorktreeRemovalCoverage(modules: readonly { module: string; source: ts.SourceFile }[]): void {
+function assertWorktreeRemovalCoverage(
+  modules: readonly { module: string; source: ts.SourceFile }[],
+  exemptions = WORKTREE_REMOVAL_EXEMPTIONS,
+): void {
+  const exemptModules = new Set(exemptions.map(({ module }) => module));
+  for (const exemption of exemptions) {
+    if (!exemption.reason.trim()) {
+      throw new Error(`worktree-removal coverage: exemption ${exemption.module} needs a non-empty reason`);
+    }
+    const source = modules.find(({ module }) => module === exemption.module)?.source;
+    if (!source || !findsWorktreeRemoval(source)) {
+      throw new Error(`worktree-removal coverage: exemption ${exemption.module} is stale`);
+    }
+  }
+
+  const autoresolveReason = exemptions.find(({ module }) => module === 'engine/autoresolve.ts')?.reason;
+  if (autoresolveReason && exemptions.some(({ module, reason }) =>
+    module !== 'engine/autoresolve.ts' && reason.includes('provisions nothing') && reason === autoresolveReason,
+  )) {
+    throw new Error('worktree-removal coverage: autoresolve exemption reason must differ from provisions-nothing reasons');
+  }
+
   for (const { module, source } of modules) {
     if (module === GUARD_MODULE || !findsWorktreeRemoval(source)) continue;
     if (ROUTED_MODULES.has(module)) {
@@ -141,7 +161,7 @@ function assertWorktreeRemovalCoverage(modules: readonly { module: string; sourc
       }
       continue;
     }
-    if (EXEMPT_MODULES.has(module)) continue;
+    if (exemptModules.has(module)) continue;
     throw new Error(
       `worktree-removal coverage: ${module} is unclassified; route it through runProjectTeardown ` +
         `or add it to the exemption registry (${COVERAGE_GUARD_ADR})`,
@@ -203,7 +223,7 @@ describe('structural: worktree-removal coverage', () => {
 
     expect(() => assertWorktreeRemovalCoverage([
       { module: 'engine/unclassified-removal.ts', source: fixture },
-    ])).toThrow(/engine\/unclassified-removal\.ts.*runProjectTeardown.*exemption registry.*adr-2026-08-07-worktree-removal-coverage-guard/s);
+    ], [])).toThrow(/engine\/unclassified-removal\.ts.*runProjectTeardown.*exemption registry.*adr-2026-08-07-worktree-removal-coverage-guard/s);
   });
 
   it('rejects a routed removal module whose teardown invitation was deleted', () => {
@@ -216,7 +236,7 @@ describe('structural: worktree-removal coverage', () => {
 
     expect(() => assertWorktreeRemovalCoverage([
       { module: 'engine/daemon-deps.ts', source: fixture },
-    ])).toThrow(/engine\/daemon-deps\.ts.*runProjectTeardown/s);
+    ], [])).toThrow(/engine\/daemon-deps\.ts.*runProjectTeardown/s);
   });
 
   it('does not classify the guard source itself', () => {
@@ -229,7 +249,7 @@ describe('structural: worktree-removal coverage', () => {
 
     expect(() => assertWorktreeRemovalCoverage([
       { module: 'test/structural/worktree-removal-coverage.test.ts', source: fixture },
-    ])).not.toThrow();
+    ], [])).not.toThrow();
   });
 
   it('classifies every worktree-removal module in the real source tree', async () => {
@@ -260,5 +280,56 @@ describe('structural: worktree-removal coverage', () => {
         reason: 'Pass-through primitive: provisions nothing; callers decide classification.',
       },
     ]);
+  });
+
+  it('rejects an exemption with an empty or whitespace-only reason', () => {
+    const fixture = ts.createSourceFile(
+      'engine/exempt-removal.ts',
+      "execa('git', ['worktree', 'remove', '--force']);",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(() => assertWorktreeRemovalCoverage([
+      { module: 'engine/exempt-removal.ts', source: fixture },
+    ], [{ module: 'engine/exempt-removal.ts', reason: '   ' }])).toThrow(/exempt-removal\.ts.*non-empty reason/);
+  });
+
+  it('rejects a stale exemption whose module no longer removes a worktree', () => {
+    const fixture = ts.createSourceFile(
+      'engine/stale-exemption.ts',
+      'export const stale = true;',
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(() => assertWorktreeRemovalCoverage([
+      { module: 'engine/stale-exemption.ts', source: fixture },
+    ], [{ module: 'engine/stale-exemption.ts', reason: 'Does not call prepareWorktree, so it provisions nothing.' }]))
+      .toThrow(/stale-exemption\.ts.*stale/);
+  });
+
+  it('requires the autoresolve rationale to differ from provisions-nothing rationales', () => {
+    const autoresolve = ts.createSourceFile(
+      'engine/autoresolve.ts',
+      "execa('git', ['worktree', 'remove', '--force']);",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const provisionless = ts.createSourceFile(
+      'engine/worktree.ts',
+      "execa('git', ['worktree', 'remove', '--force']);",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const flattenedReason = 'Does not call prepareWorktree, so it provisions nothing.';
+
+    expect(() => assertWorktreeRemovalCoverage([
+      { module: 'engine/autoresolve.ts', source: autoresolve },
+      { module: 'engine/worktree.ts', source: provisionless },
+    ], [
+      { module: 'engine/autoresolve.ts', reason: flattenedReason },
+      { module: 'engine/worktree.ts', reason: flattenedReason },
+    ])).toThrow(/autoresolve.*differ.*provisions-nothing/);
   });
 });
