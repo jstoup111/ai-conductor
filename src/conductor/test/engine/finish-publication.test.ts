@@ -15,6 +15,17 @@ async function routeFinishPublicationDisposition(disposition: unknown) {
   return route(disposition);
 }
 
+async function isExactDisposition(disposition: unknown) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const guard = mod.isExactDisposition;
+  if (typeof guard !== 'function') {
+    throw new Error(
+      'expected export "isExactDisposition" to be a function (not yet implemented)',
+    );
+  }
+  return guard(disposition);
+}
+
 async function nonRetryablePublicationReason(reason: string) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
   const classify = mod.nonRetryablePublicationReason;
@@ -426,6 +437,14 @@ describe('finish-publication domain types', () => {
 });
 
 describe('FINISH publication disposition routing', () => {
+  it('accepts a human-required disposition with a non-empty detail through exact validation', async () => {
+    await expect(isExactDisposition({
+      kind: 'human_required',
+      reason: 'judgment_refused',
+      detail: 'x',
+    })).resolves.toBe(true);
+  });
+
   it.each([
     ['establish_pr', 'pr_identity_not_verified_after_establish'],
     ['write_shipped_record', 'shipped_record_not_verified_after_write'],

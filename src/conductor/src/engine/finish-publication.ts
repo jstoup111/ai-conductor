@@ -417,7 +417,7 @@ export type PublicationDisposition =
   | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | { kind: 'implementation_invalid'; evidence: string }
-  | { kind: 'human_required'; reason: HumanRequiredReason };
+  | { kind: 'human_required'; reason: HumanRequiredReason; detail?: string };
 
 /** The only actions the conductor may take for a typed FINISH result. */
 export type FinishPublicationRoute =
@@ -625,7 +625,7 @@ export function routeFinishPublicationDisposition(
   }
 }
 
-function isExactDisposition(
+export function isExactDisposition(
   disposition: unknown,
 ): disposition is PublicationDisposition {
   if (!disposition || typeof disposition !== 'object' || Array.isArray(disposition)) return false;
@@ -659,9 +659,16 @@ function isExactDisposition(
       );
     case 'human_required':
       return (
-        hasOnly('kind', 'reason') &&
         typeof value.reason === 'string' &&
-        value.reason.length > 0
+        value.reason.length > 0 &&
+        (
+          hasOnly('kind', 'reason') ||
+          (
+            hasOnly('kind', 'reason', 'detail') &&
+            typeof value.detail === 'string' &&
+            value.detail.trim().length > 0
+          )
+        )
       );
     default:
       return false;
