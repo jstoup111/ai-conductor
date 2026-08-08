@@ -518,6 +518,51 @@ describe('FINISH publication disposition routing', () => {
     });
   });
 
+  it.each([
+    ['complete', { kind: 'complete' }, { kind: 'complete' }],
+    [
+      'publication progress',
+      { kind: 'publication_progress', transition: 'record_outcome' },
+      { kind: 'progress_finish', transition: 'record_outcome' },
+    ],
+    [
+      'transition-based publication retry',
+      {
+        kind: 'publication_retry',
+        transition: 'record_outcome',
+        reason: 'outcome_record_write_failed',
+      },
+      { kind: 'retry_finish', reason: 'outcome_record_write_failed' },
+    ],
+    [
+      'condition-based publication retry',
+      {
+        kind: 'publication_retry',
+        condition: {
+          code: 'release_readiness_missing',
+          message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+          nextAction: 'publish_release_readiness',
+        },
+      },
+      { kind: 'retry_finish', reason: 'release_readiness_missing' },
+    ],
+    [
+      'implementation invalid',
+      { kind: 'implementation_invalid', evidence: 'build-review FAIL: finish-publication.ts' },
+      { kind: 'retry_build', evidence: 'build-review FAIL: finish-publication.ts' },
+    ],
+    [
+      'contradictory disposition',
+      { kind: 'complete', reason: 'contradictory' },
+      {
+        kind: 'halt',
+        reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
+      },
+    ],
+  ] as const)('preserves the established %s route without human-required rendering', async (_route, disposition, expected) => {
+    await expect(routeFinishPublicationDisposition(disposition)).resolves.toEqual(expected);
+  });
+
   it('fails closed when an unlisted human-required reason has no guidance', async () => {
     const reason = 'future_unlisted_reason';
 
