@@ -191,6 +191,19 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
 
         expect(lines).toEqual([expect.stringContaining(`teardown: failed in ${dir}:`)]);
       });
+
+      it.each([
+        ['is not executable', async () => writeTeardown('#!/usr/bin/env bash\nexit 0\n', 0o644)],
+        ['has a missing interpreter', async () => writeTeardown('#!/definitely/missing/interpreter\n', 0o755)],
+        ['is a directory', async () => mkdir(join(dir, TEARDOWN_SCRIPT), { recursive: true })],
+      ])('contains a teardown that %s instead of treating it as absent', async (_description, create) => {
+        await create();
+        const lines: string[] = [];
+
+        await expect(runProjectTeardown(dir, (message) => lines.push(message))).resolves.toBeUndefined();
+
+        expect(lines).toEqual([expect.stringContaining(`teardown: failed in ${dir}:`)]);
+      });
     });
   });
 
