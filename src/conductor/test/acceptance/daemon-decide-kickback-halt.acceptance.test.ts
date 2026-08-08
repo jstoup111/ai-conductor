@@ -617,6 +617,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       // step. It cannot authorize the separate architecture_review entry:
       // that entry is refused before its runner dispatches.
       expect(ran).toEqual(['conflict_check']);
+      expect(ran).not.toContain('architecture_review');
       expect(await exists('.pipeline/decide-grant.json')).toBe(false);
     });
   });
