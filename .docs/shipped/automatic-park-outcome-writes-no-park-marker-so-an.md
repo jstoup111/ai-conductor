@@ -12,14 +12,14 @@ output: 126583
 cache_read: 33316040
 cache_creation: 332047
 cost_usd: 9.1323
-dispatches: 22
+dispatches: 24
 retries: 4
 halts: 0
-unmetered: count: 9, duration_ms: 0
+unmetered: count: 11, duration_ms: 0
 cost_unmetered: count: 10
 providers:
   codex: input: 25532553, output: 74742, cache_read: 24461568, cache_creation: 0, cost_usd: 0, dispatches: 13, cost_unmetered: 10
-  claude: input: 178, output: 51841, cache_read: 8854472, cache_creation: 332047, cost_usd: 9.1323, dispatches: 7, cost_unmetered: 0
+  claude: input: 178, output: 51841, cache_read: 8854472, cache_creation: 332047, cost_usd: 9.1323, dispatches: 8, cost_unmetered: 0
 
 ## Time
 state: partial
