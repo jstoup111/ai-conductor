@@ -5,6 +5,7 @@ import {
   readdir,
   access as accessFile,
   unlink as unlinkFile,
+  rename as renameFile,
   stat,
 } from 'node:fs/promises';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
@@ -9491,8 +9492,11 @@ export async function appendRemediationTasks(
   const tempFile = `${planPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
     await writeFile(tempFile, updated, 'utf-8');
-    // Rename temp file to target (atomic on most filesystems)
-    await require('node:fs/promises').rename(tempFile, planPath);
+    // Rename temp file to target (atomic on most filesystems).
+    // MUST stay a static import: a dynamic `require` here is rewritten by
+    // esbuild into a shim that throws in the shipped pure-ESM bundle, and the
+    // catch below would swallow it into a silent remediation no-op.
+    await renameFile(tempFile, planPath);
   } catch (error) {
     // Clean up temp file if something went wrong
     try {
