@@ -206,14 +206,19 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       });
 
       it('abandons a non-terminating teardown at its configured bound and reports a timeout', async () => {
-        await writeTeardown('#!/usr/bin/env bash\nwhile true; do :; done\n');
+        const output = Array.from({ length: 55 }, (_, index) => `timeout-line-${index + 1}`).join('\n');
+        await writeTeardown(`#!/usr/bin/env bash\nprintf '%s\\n' ${output.split('\n').map((line) => JSON.stringify(line)).join(' ')}\nwhile true; do :; done\n`);
         const lines: string[] = [];
 
         await expect(
           runProjectTeardown(dir, (message) => lines.push(message), { timeoutSeconds: 0.05 }),
         ).resolves.toBeUndefined();
 
-        expect(lines).toEqual([`teardown: timed out in ${dir} after 0.05 second(s)`]);
+        expect(lines).toEqual([
+          expect.stringContaining(`teardown: timed out in ${dir} after 0.05 second(s)`),
+        ]);
+        expect(lines[0]).toContain(output.split('\n').slice(-50).join('\n'));
+        expect(lines[0]).not.toContain('timeout-line-1\n');
       });
     });
   });

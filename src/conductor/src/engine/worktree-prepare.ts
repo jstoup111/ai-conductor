@@ -538,7 +538,16 @@ export async function runProjectTeardown(
     }
   } catch (err) {
     if ((err as { timedOut?: unknown }).timedOut === true) {
-      log?.(`teardown: timed out in ${worktreePath} after ${timeoutSeconds} second(s)`);
+      const detail = err instanceof Error ? err.message : String(err);
+      const outputText =
+        err !== null && typeof err === 'object' ? (err as { all?: unknown }).all : undefined;
+      const outputTail = extractTail(
+        typeof outputText === 'string' && outputText.trim() ? outputText : detail,
+        50,
+      );
+      log?.(
+        `teardown: timed out in ${worktreePath} after ${timeoutSeconds} second(s): ${outputTail}`,
+      );
       return;
     }
     const detail = err instanceof Error ? err.message : String(err);

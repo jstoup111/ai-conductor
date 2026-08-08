@@ -874,6 +874,38 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     }
   });
 
+  it('forwards verbose reconciliation to successful project teardown output', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'verbose-teardown-output';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, '#!/usr/bin/env bash\necho cache-purge-complete\n');
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      await reconcileMergedPark({
+        projectRoot,
+        slug,
+        runGit: run,
+        log,
+        verbose: true,
+      } as Parameters<typeof reconcileMergedPark>[0]);
+
+      expect(log.mock.calls).toContainEqual(['teardown: cache-purge-complete']);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       name: 'the path is a registered worktree git refused to remove',
@@ -1105,6 +1137,32 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
         ],
         provenance: ['auto', 'operator'],
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards its logger to verbose successful teardown output during cleanup', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-verbose-teardown-output';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, '#!/usr/bin/env bash\necho sweep-cache-purge-complete\n');
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      await reconcileParkedFeatures({ projectRoot, runGit: run, log, verbose: true });
+
+      expect(log.mock.calls).toContainEqual(['teardown: sweep-cache-purge-complete']);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

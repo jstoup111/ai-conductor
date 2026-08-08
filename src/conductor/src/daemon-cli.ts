@@ -1642,6 +1642,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           // Rendering is observational. The daemon sweep below owns cleanup
           // and is the sole consumer of the startup-resolved toggle.
           autoCleanup: false,
+          verbose: config?.daemon_verbose ?? false,
         });
         const annotations = new Map(
           reconciliation.entries.map(({ slug, classification }) => [
@@ -1745,6 +1746,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
           disposeHaltWatcher,
           teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
+          verbose: config?.daemon_verbose ?? false,
         });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
