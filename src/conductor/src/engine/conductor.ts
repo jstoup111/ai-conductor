@@ -1226,6 +1226,14 @@ export class Conductor {
   private projectRoot: string;
   private log?: (message: string) => void;
   private readonly surfacedRebaselineRefusals = new Set<string>();
+  /**
+   * A successful remediation navigation may deliberately reopen a DECIDE
+   * artifact that the normal forward walk would otherwise fast-forward. This
+   * ephemeral hand-off is set only after the matching operator grant accepts
+   * that navigation, then cleared as the provider-dispatch boundary consumes
+   * the grant. No durable artifact is written by the daemon.
+   */
+  private readonly remediationDecideReentryTargets = new Set<StepName>();
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
@@ -2513,6 +2521,7 @@ export class Conductor {
       const hasContract = hasCompletionContract(target, this.config);
       let satisfied: boolean | 'unknown' = 'unknown';
       let completionEvidence: string | undefined;
+      let remediationReopensSatisfiedDecideArtifact = false;
       if (targetStep?.phase === 'DECIDE' && hasContract) {
         try {
           const completion = await checkStepCompletion(
@@ -2522,6 +2531,16 @@ export class Conductor {
           );
           satisfied = completion.done;
           completionEvidence = completion.reason;
+          // A remediation disposition naming a DECIDE step is evidence that
+          // the accepted artifact must be revisited. Its previous completion
+          // cannot fast-forward this navigation seam: that would convert an
+          // autonomous rewind into an unattended authoring dispatch. Keep the
+          // normal satisfaction result as evidence, but require the explicit
+          // step-scoped grant before re-entering DECIDE.
+          if (completion.done) {
+            remediationReopensSatisfiedDecideArtifact = true;
+            satisfied = false;
+          }
         } catch {
           // Completion verification is an authorization boundary. If the
           // predicate cannot establish the DECIDE artifact's state, do not
@@ -2549,13 +2568,18 @@ export class Conductor {
           detail: renderDecideEntryHalt({
             ...disposition.halt,
             reason:
-              targetStep?.phase === 'DECIDE' && satisfied === false
-                ? `artifact unsatisfied — ${completionEvidence ?? 'completion check reported no evidence'}`
+              remediationReopensSatisfiedDecideArtifact
+                ? `remediation requires a DECIDE revision of DECIDE step '${target}' despite the current artifact — explicit operator grant required`
+                : targetStep?.phase === 'DECIDE' && satisfied === false
+                ? `DECIDE step '${target}' artifact unsatisfied — ${completionEvidence ?? 'completion check reported no evidence'}`
                 : targetStep?.phase === 'DECIDE' && satisfied === 'unknown' && hasContract
-                  ? 'artifact satisfaction is unknown — completion verification could not establish it'
+                  ? `DECIDE step '${target}' artifact satisfaction is unknown — completion verification could not establish it`
                   : disposition.halt.reason,
           }),
         };
+      }
+      if (remediationReopensSatisfiedDecideArtifact && disposition.kind === 'enter') {
+        this.remediationDecideReentryTargets.add(target);
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
       // when the appended/upserted rem-* task(s) are already evidence-
@@ -3835,6 +3859,7 @@ export class Conductor {
           const hasContract = hasCompletionContract(step.name, this.config);
           let satisfied: boolean | 'unknown' = 'unknown';
           let evidence: string | undefined;
+          const reenteringAfterRemediation = this.remediationDecideReentryTargets.has(step.name);
           try {
             const completion = await checkStepCompletion(
               this.projectRoot,
@@ -3843,6 +3868,13 @@ export class Conductor {
             );
             satisfied = completion.done;
             evidence = completion.reason;
+            if (reenteringAfterRemediation && completion.done) {
+              // The remediation seam already proved that the operator granted
+              // this re-entry. Preserve that authority until this boundary
+              // consumes the grant instead of re-fast-forwarding the artifact
+              // the remediation explicitly asked to revise.
+              satisfied = false;
+            }
           } catch {
             // Completion verification is an authorization boundary: an
             // unreadable or throwing predicate must fail closed, not become
@@ -3869,6 +3901,9 @@ export class Conductor {
             sourceGate: 'forward-walk',
             evidence: haltEvidence,
           }, true);
+          if (disposition.kind === 'enter') {
+            this.remediationDecideReentryTargets.delete(step.name);
+          }
           if (disposition.kind === 'fast-forward') {
             await this.saveConductorStepStatus(state, step.name, disposition.as);
             continue;
@@ -3878,8 +3913,10 @@ export class Conductor {
             const reason = renderDecideEntryHalt({
               ...halt,
               evidence: haltEvidence ?? halt.evidence,
-              reason:
-                satisfied === false
+            reason:
+                reenteringAfterRemediation
+                  ? `remediation requires a DECIDE revision of DECIDE step '${step.name}' despite the current artifact — explicit operator grant required`
+                  : satisfied === false
                   ? `artifact unsatisfied — ${haltEvidence ?? 'completion check reported no evidence'}`
                   : satisfied === 'unknown'
                     ? 'artifact satisfaction is unknown — completion verification could not establish it'

@@ -180,7 +180,7 @@ describe('planRemediation DECIDE-entry policy wiring', () => {
     await expect(readFile(join(projectRoot, '.pipeline/decide-grant.json'), 'utf8')).resolves.toContain('plan');
   });
 
-  it('routes contract-less and verified-satisfied DECIDE targets through their fast-forward path', async () => {
+  it('routes contract-less DECIDE targets through their fast-forward path', async () => {
     delete CUSTOM_COMPLETION_PREDICATES.plan;
     STEP_ARTIFACT_GLOBS.plan = [];
 
@@ -188,11 +188,16 @@ describe('planRemediation DECIDE-entry policy wiring', () => {
       dispatched: ['remediate'],
       outcome: { kind: 'route', target: 'plan' },
     });
+  });
 
+  it('halts a remediation that reopens a verified-satisfied DECIDE artifact', async () => {
     CUSTOM_COMPLETION_PREDICATES.plan = async () => ({ done: true, reason: 'plan is current' });
     await expect(planRemediation([planGap])).resolves.toMatchObject({
       dispatched: ['remediate'],
-      outcome: { kind: 'route', target: 'plan' },
+      outcome: {
+        kind: 'halt',
+        detail: expect.stringContaining('remediation requires a DECIDE revision'),
+      },
     });
   });
 
