@@ -383,9 +383,10 @@ with open(settings_path, "w") as f:
 print(f"{added} added, {len(harness_perms) - added} already set")
 PYEOF
   )
+  local permission_write_status=$?
   rm -f "$perms_file"
 
-  if [ $? -eq 0 ]; then
+  if [ "$permission_write_status" -eq 0 ]; then
     ok "Permissions: ${output}"
   else
     warn "Could not configure permissions automatically"

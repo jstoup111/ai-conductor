@@ -110,3 +110,45 @@ run_install() {
 
 run_install update --update
 run_install fresh
+
+# Exercise configure_permissions directly so this regression remains focused on
+# the write/cleanup boundary rather than the rest of a full installation.
+PERMISSIONS_SETTINGS="$TMP_ROOT/permissions-settings.json"
+PERMISSIONS_TMP="$TMP_ROOT/permissions-tmp"
+PERMISSIONS_FRAGMENT="$CHECKOUT/bin/install-permissions-test"
+mkdir -p "$PERMISSIONS_TMP"
+printf '%s\n' '{"permissions":{"allow":[]}}' > "$PERMISSIONS_SETTINGS"
+
+# Keep the installer setup and function definitions, but omit its mode
+# dispatch; append one direct call to the function under test.
+awk '/# ─── Main ─────────────────────────────────────────────────────────────────────/{exit} {print}' \
+  "$CHECKOUT/bin/install" > "$PERMISSIONS_FRAGMENT"
+printf '%s\n' 'configure_permissions "$1"' >> "$PERMISSIONS_FRAGMENT"
+chmod +x "$PERMISSIONS_FRAGMENT"
+
+set +e
+TMPDIR="$PERMISSIONS_TMP" PATH="$STUBS_DIR:$PATH" \
+  "$PERMISSIONS_FRAGMENT" "$PERMISSIONS_SETTINGS" > "$TMP_ROOT/permissions.out" 2>&1
+permissions_code=$?
+set -e
+
+if [ "$permissions_code" -eq 0 ] && \
+  rg -q '8 added, 0 already set' "$TMP_ROOT/permissions.out" && \
+  python3 - "$PERMISSIONS_SETTINGS" <<'PYEOF' && \
+  [ -z "$(find "$PERMISSIONS_TMP" -mindepth 1 -print -quit)" ]; then
+import json
+import sys
+
+with open(sys.argv[1]) as settings_file:
+    permissions = json.load(settings_file)["permissions"]["allow"]
+
+assert "Bash(git status:*)" in permissions
+assert "Bash(git checkout -b:*)" in permissions
+PYEOF
+  echo 'PASS configure_permissions reports and persists a successful permission write'
+else
+  echo 'FAIL configure_permissions reports and persists a successful permission write' >&2
+  echo "exit code: $permissions_code" >&2
+  cat "$TMP_ROOT/permissions.out" >&2
+  exit 1
+fi
