@@ -190,3 +190,39 @@ else
   cat "$CONFIG_WRITE_CALLS" "$CONFIG_STUB_HOME/.ai-conductor/config.yml" >&2 || true
   exit 1
 fi
+
+# A missing conduct-ts must be reported before either interactive prompt tries
+# to write configuration, rather than surfacing the generic incomplete warning.
+NO_CONDUCT_HOME="$TMP_ROOT/no-conduct-home"
+NO_CONDUCT_PATH="$TMP_ROOT/no-conduct-path"
+mkdir -p "$NO_CONDUCT_HOME" "$NO_CONDUCT_PATH"
+
+run_missing_conduct_config() {
+  local function_name=$1
+  local fragment="$CHECKOUT/bin/install-${function_name}-missing-conduct-test"
+  awk '/# ─── Main ─────────────────────────────────────────────────────────────────────/{exit} {print}' \
+    "$CHECKOUT/bin/install" > "$fragment"
+  printf '%s\n' "$function_name" >> "$fragment"
+  chmod +x "$fragment"
+
+  set +e
+  printf '\n' | HOME="$NO_CONDUCT_HOME" PATH="$NO_CONDUCT_PATH:/usr/bin:/bin" \
+    script -qefc "$fragment" /dev/null > "$TMP_ROOT/${function_name}.out" 2>&1
+  local code=$?
+  set -e
+  printf '%s\n' "$code"
+}
+
+md_missing_code=$(run_missing_conduct_config configure_md_viewer)
+mermaid_missing_code=$(run_missing_conduct_config configure_mermaid_renderer)
+if [ "$md_missing_code" -eq 0 ] && [ "$mermaid_missing_code" -eq 0 ] && \
+  rg -q 'conduct-ts.*re-run bin/install' "$TMP_ROOT/configure_md_viewer.out" && \
+  rg -q 'conduct-ts.*re-run bin/install' "$TMP_ROOT/configure_mermaid_renderer.out" && \
+  ! rg -q 'configuration incomplete — continuing' "$TMP_ROOT/configure_md_viewer.out" "$TMP_ROOT/configure_mermaid_renderer.out" && \
+  ! rg -q 'Markdown viewer:|Mermaid renderer:' "$TMP_ROOT/configure_md_viewer.out" "$TMP_ROOT/configure_mermaid_renderer.out"; then
+  echo 'PASS missing conduct-ts names the write prerequisite without reporting success'
+else
+  echo 'FAIL missing conduct-ts names the write prerequisite without reporting success' >&2
+  cat "$TMP_ROOT/configure_md_viewer.out" "$TMP_ROOT/configure_mermaid_renderer.out" >&2
+  exit 1
+fi

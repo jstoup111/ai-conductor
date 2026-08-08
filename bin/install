@@ -723,6 +723,10 @@ configure_md_viewer() {
     fi
     return 0
   fi
+  if ! command -v conduct-ts &>/dev/null; then
+    warn "conduct-ts is required to save the markdown viewer; install or restore it, then re-run bin/install"
+    return 0
+  fi
 
   echo ""
   info "Markdown viewer — how should /conduct display artifacts for review?"
@@ -807,6 +811,10 @@ configure_mermaid_renderer() {
     if ! grep -q "^mermaid_renderer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
       info "mermaid renderer not configured — run bin/install (no flags) or edit $HARNESS_USER_CONFIG"
     fi
+    return 0
+  fi
+  if ! command -v conduct-ts &>/dev/null; then
+    warn "conduct-ts is required to save the mermaid renderer; install or restore it, then re-run bin/install"
     return 0
   fi
 
