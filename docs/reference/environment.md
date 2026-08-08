@@ -57,7 +57,7 @@ paths — the harness overwrites or deletes them.
 | --- | --- | --- | --- |
 | `AI_CONDUCTOR_PUBLISH_WRAPPER` | `1` | the publish wrapper | Marks the `tsup` subprocess as wrapper-invoked so the publish guard passes. |
 | `ASDF_NODEJS_VERSION` | the `nodejs` pin from `src/conductor/.tool-versions` | `bin/conduct-ts` | Pins Node for the engine bundle regardless of the caller's directory. Exported only when `.tool-versions` exists and `asdf` is on `PATH`; otherwise silently skipped. |
-| `CI` | `true` | worktree preparation | Signals non-interactive setup to the project's `bin/setup`. |
+| `CI` | `true` | worktree preparation and teardown | Signals non-interactive project hooks: `bin/setup` before dispatch and, when present, `bin/teardown` before an authorized worktree removal. |
 | `CLAUDE_CODE_EFFORT_LEVEL` | the step's resolved effort | the Claude provider | Per-step reasoning effort: `low`, `medium`, `high`, `xhigh`, or `max`. Chosen over `settings.json` and skill frontmatter because it overrides both and cascades to subagents. Never read from the ambient environment. When no effort and no self-host env apply, the child inherits the parent environment unmodified. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | the daemon build token, or the current ambient value | the engine, the self-host sandbox, token liveness | Auth by environment injection — the token is passed via the environment only, never in argv and never logged. Captured at call time, so it can change across retries and parks, and is restored or deleted afterwards. |
 | `CLAUDE_CONFIG_DIR` | a throwaway sandbox directory | the self-host sandbox, token liveness, provider home | Isolates a self-build from the operator's global provider config. The provider-home builder deletes any inherited `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `CLAUDE_CODE_OAUTH_TOKEN` before setting the isolated one. The daemon's own process value is mutated temporarily and restored in a `finally` block. |
@@ -66,12 +66,12 @@ paths — the harness overwrites or deletes them.
 | `CONDUCT_ENGINE_COMMIT` | `1` | the engine commit-env wrapper | Marks engine bookkeeping commits — spec authoring, the engineer loop, land, `shipped-record`, rebase — so the pre-commit hook exempts them. |
 | `CONDUCT_ENGINE_SELF_GUARD` | `1` | the daemon lock | Arms the engine-GC self-eviction guard for the daemon's own process. |
 | `CONDUCT_ENGINE_SELF_VERSION` | the daemon's engine version id, or empty | the daemon lock | Names the version GC must not evict. |
-| `WORKTREE_NAMESPACE` | the worktree namespace | worktree preparation | Per-feature isolation for ports, database names, and dev-server state. Written idempotently into the worktree's `.env` and passed to the project's `bin/setup`. |
+| `WORKTREE_NAMESPACE` | the sanitized worktree basename | worktree preparation and teardown | Per-feature isolation for ports, database names, and dev-server state. Written idempotently into the worktree's `.env` and passed to `bin/setup`; `bin/teardown` receives the same value derived again from its worktree path, so it remains available even if `.env` or `.pipeline/` is gone. |
 
-The child environment passed to a project's `bin/setup` is a replacement, not an overlay: only `CI` and
-`WORKTREE_NAMESPACE` plus the process-runner defaults reach it. Both are a contract your project's
-`bin/setup` may opt into rather than something the harness enforces — nothing in the harness reads
-`WORKTREE_NAMESPACE` back, and this repo's own `bin/setup` ignores both it and `CI`.
+The child environment passed to a project's `bin/setup` or `bin/teardown` is a replacement, not an
+overlay: only `CI` and `WORKTREE_NAMESPACE` plus the process-runner defaults reach it. Both are a
+contract your project hooks may opt into rather than something the harness enforces — nothing in the
+harness reads `WORKTREE_NAMESPACE` back, and this repo's own hooks ignore both it and `CI`.
 
 ## Kill-switches and test seams
 

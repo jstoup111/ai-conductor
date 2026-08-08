@@ -461,6 +461,33 @@ to the daemon prefix and explains the next action for every nonzero outcome, for
 [daemon][parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=7 refused=2 skipped=56; refusals: unmerged-commits=2; next: 1 deferred awaits shipped-record repair; 2 refusals requires resolving unmerged-commits; 7 parked remain parked; 56 skipped retry when merge/issue evidence is available
 ```
 
+## Project teardown hook
+
+To clean project-owned resources before the daemon removes a feature worktree, add an executable
+`bin/teardown` to the project. The daemon runs it from the worktree immediately before an already
+authorized removal: post-ship reaping, `conduct-ts daemon reclaim-worktree <slug>`, or parked-feature
+reconciliation. It never runs for a retained worktree or before the removal safety proofs pass.
+
+The hook receives a replacement child environment with `CI=true` and `WORKTREE_NAMESPACE` derived
+from the worktree directory name. It must not rely on inherited shell variables, `.env`, or
+`.pipeline/`; reconciliation can clean a leftover directory where those files are absent. A missing
+hook is a silent no-op.
+
+```sh
+#!/usr/bin/env sh
+set -eu
+
+# Remove only resources namespaced for this feature.
+./scripts/drop-preview-resources "$WORKTREE_NAMESPACE"
+```
+
+Keep the hook idempotent. Its output is summarized by default; set `daemon_verbose: true` to log each
+non-blank line. A non-zero exit, an unrunnable script, or a timeout is logged but does not prevent an
+otherwise authorized removal. The hook is bounded by `teardown_timeout_seconds` (default 120 seconds);
+that bound cannot be disabled. See [configuration](../reference/configuration.md#teardown_timeout_seconds)
+for value handling and [environment variables](../reference/environment.md#written-into-child-process-environments)
+for its process contract.
+
 ## Retained worktrees
 
 A feature's worktree is **not** removed when its implementation PR opens. The mergeable sweep

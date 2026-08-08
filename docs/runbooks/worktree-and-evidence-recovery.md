@@ -17,6 +17,12 @@ moved, or lost `.worktrees/<slug>`.
 `.worktrees/<slug>` except the git checkout itself can be rebuilt; the commits on
 `feat/daemon-<slug>` cannot.
 
+When a later authorized cleanup removes the recreated worktree, the daemon runs the project's
+optional `bin/teardown` first. Write that hook to tolerate missing `.pipeline/` and `.env`: it receives
+`CI=true` and a `WORKTREE_NAMESPACE` derived from the worktree path, not persisted recovery state. A
+hook failure or timeout is logged and contained, so it does not replace the cleanup safety proofs in
+this runbook. See [project teardown hook](../guides/running-the-daemon.md#project-teardown-hook).
+
 ## Symptom
 
 One or more of:

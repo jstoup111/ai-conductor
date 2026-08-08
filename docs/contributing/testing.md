@@ -208,6 +208,18 @@ The rule, in one line: a test may reach a third party only if it is an explicitl
 registries, and other network services. The policy text is `HARNESS.md:303-310`, restated at repo level
 in `AGENT_INSTRUCTIONS.md:60-64`.
 
+### Project teardown acceptance coverage
+
+`test/acceptance/project-teardown-hook.acceptance.test.ts` exercises the project-supplied
+`bin/teardown` hook through real local Git worktrees and executable scripts. It covers post-ship
+reaping, operator reclaim, and parked reconciliation while faking only GitHub and shipped-record
+boundaries. The hook's environment, ordering before removal, contained non-zero exits, retained
+worktree skip, and configured timeout are observable assertions. Run it with:
+
+```bash
+cd src/conductor && npx vitest run test/acceptance/project-teardown-hook.acceptance.test.ts
+```
+
 ## Global guards
 
 Four files run automatically and exist because each one prevented a real incident.

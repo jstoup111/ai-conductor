@@ -82,11 +82,11 @@ Validation is fail-closed at the top level: an unrecognized key is a hard load e
 | `harness_version` mismatch | `{ type: 'version_mismatch' }` (only when `loadConfig` is passed a `harnessVersion`) |
 | Malformed project config at run start | `process.exit(1)` |
 
-Only seven sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
+Only eight sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
 (`:708`), `auto_restart_on_stale_engine` (`:778`), `engine_refresh_min_interval_seconds` (`:807`),
 the deprecated `step_heartbeat_stall_minutes` compatibility normalizer (`:852-859`),
-`provider_preparation_timeout_minutes` (`:875-878`), and the `build_review` and `ci_watch`
-normalizers (`:52,898-927,929-961`).
+`provider_preparation_timeout_minutes` (`:875-878`), `teardown_timeout_seconds` at resolution,
+and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
@@ -130,6 +130,7 @@ normalizers (`:52,898-927,929-961`).
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
 | `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
 | `provider_preparation_timeout_minutes` | number | `5` | [provider_preparation_timeout_minutes](#provider_preparation_timeout_minutes) |
+| `teardown_timeout_seconds` | number | `120` | [teardown_timeout_seconds](#teardown_timeout_seconds) |
 | `step_heartbeat_stall_minutes` | number | deprecated no-op | [step_heartbeat_stall_minutes](#step_heartbeat_stall_minutes) |
 | `stale_claim_window_hours` | number | `24` | [stale_claim_window_hours](#stale_claim_window_hours) |
 
@@ -949,6 +950,28 @@ When an active deadline expires, the supervisor revokes the preparing attempt be
 provider and allows one replacement for that logical step. A second preparation timeout writes a
 `needs-human` HALT. See the [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#provider-preparation-exhausted)
 for recovery.
+
+## teardown_timeout_seconds
+
+Maximum time, in seconds, for a project's optional `bin/teardown` hook before an authorized feature
+worktree removal. Absent values resolve to `120`; a finite positive value, including a fractional
+number, replaces that bound. For example:
+
+```yaml
+teardown_timeout_seconds: 120
+```
+
+This timeout is deliberately non-disableable. `0`, negative, non-numeric, non-finite, and `null`
+values produce one warning at resolution and fall back to `120`, so a teardown hook always has a
+finite bound. It does not share the auth timeout contract: `harness_self_host.auth_park_timeout_minutes:
+0` requests an immediate authentication halt, while `teardown_timeout_seconds: 0` cannot opt out of
+the bound.
+
+The daemon passes this bound to post-ship reaping, `conduct-ts daemon reclaim-worktree <slug>`, and
+parked-feature reconciliation. A missing `bin/teardown` is silent. A timeout, non-zero exit, or an
+unrunnable script is logged and contained; removal continues once its normal safety proof has
+authorized it. See [running the daemon](../guides/running-the-daemon.md#project-teardown-hook) for
+the hook contract and [worktree recovery](../runbooks/worktree-and-evidence-recovery.md) for recovery.
 
 ## step_heartbeat_stall_minutes
 
