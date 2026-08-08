@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,9 +9,11 @@ import {
   ensureSessionHooks,
   sanitizeNamespace,
   SETUP_SCRIPT,
+  TEARDOWN_SCRIPT,
   NAMESPACE_VAR,
   SetupFailureError,
   OPERATOR_ONLY_SKILLS,
+  runProjectTeardown,
 } from '../../src/engine/worktree-prepare.js';
 import {
   PRE_DISPATCH_HOOK,
@@ -37,6 +39,19 @@ describe('engine/worktree-prepare', () => {
     await writeFile(path, body, 'utf-8');
     await chmod(path, mode);
   }
+
+  describe('runProjectTeardown', () => {
+    it.each([undefined, { verbose: true }] as const)(
+      'is completely silent when bin/teardown is absent (%o)',
+      async (opts) => {
+        const log = vi.fn();
+
+        await expect(runProjectTeardown(dir, log, opts)).resolves.toBeUndefined();
+
+        expect(log).not.toHaveBeenCalled();
+      },
+    );
+  });
 
   describe('sanitizeNamespace', () => {
     it('reduces a worktree dir name to a DB-safe token', () => {

@@ -10,6 +10,9 @@ import {
 /** Conventional, project-supplied setup entrypoint run before a feature build. */
 export const SETUP_SCRIPT = join('bin', 'setup');
 
+/** Conventional, project-supplied teardown entrypoint run before worktree removal. */
+export const TEARDOWN_SCRIPT = join('bin', 'teardown');
+
 /**
  * Skills declaring `operator_only: true` in their SKILL.md frontmatter.
  *
@@ -493,6 +496,22 @@ async function writeNamespaceEnv(
 
   await writeFile(envPath, kept.join('\n'), 'utf-8');
   log?.(`worktree env: ${NAMESPACE_VAR}=${namespace}`);
+}
+
+/**
+ * Run the project's `bin/teardown` if present. The runner is intentionally
+ * inert until its execution contract is added in subsequent tasks.
+ */
+export async function runProjectTeardown(
+  worktreePath: string,
+  _log?: (msg: string) => void,
+  _opts?: { verbose?: boolean },
+): Promise<void> {
+  try {
+    await access(join(worktreePath, TEARDOWN_SCRIPT));
+  } catch {
+    return;
+  }
 }
 
 /** Run the project's `bin/setup` if present; no-op otherwise; throw on failure. */
