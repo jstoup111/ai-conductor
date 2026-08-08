@@ -466,7 +466,7 @@ const PUBLICATION_CONDITIONS = {
   },
 } as const;
 
-export const HUMAN_REQUIRED_REASONS = {
+const HUMAN_REQUIRED_REASONS = {
   judgment_refused: {
     message: 'The PR prose judgment was refused and requires an operator decision.',
     nextAction: 'Review the refusal and decide how to continue publication.',
@@ -682,7 +682,7 @@ export function routeFinishPublicationDisposition(
   }
 }
 
-export function isExactDisposition(
+function isExactDisposition(
   disposition: unknown,
 ): disposition is PublicationDisposition {
   if (!disposition || typeof disposition !== 'object' || Array.isArray(disposition)) return false;

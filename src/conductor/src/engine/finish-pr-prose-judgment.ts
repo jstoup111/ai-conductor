@@ -1,6 +1,6 @@
 import type { PrProseJudgmentResult } from './finish-publication.js';
 
-export const MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH = 1_000;
+const MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH = 1_000;
 const DETAIL_TRUNCATION_MARKER = '…';
 
 export interface FinishPrProseJudgmentResponse {

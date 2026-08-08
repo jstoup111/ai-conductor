@@ -7,7 +7,6 @@ import {
 } from '../../src/engine/finish-publication.js';
 import {
   decodePrProseJudgment,
-  MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH,
   parseFinishPrProseJudgment,
 } from '../../src/engine/finish-pr-prose-judgment.js';
 
@@ -140,7 +139,7 @@ describe('FINISH PR-prose judgment adapter', () => {
   });
 
   it('bounds overlong detail at the decode boundary without changing detail at the bound', () => {
-    const detailAtBound = 'x'.repeat(MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH);
+    const detailAtBound = 'x'.repeat(1_000);
     const overlongDetail = `${detailAtBound}x`;
 
     expect(decodePrProseJudgment({
@@ -156,6 +155,6 @@ describe('FINISH PR-prose judgment adapter', () => {
       kind: 'refused',
       detail: expect.stringMatching(/…$/),
     });
-    expect(decoded.kind === 'refused' && decoded.detail).toHaveLength(MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH);
+    expect(decoded.kind === 'refused' && decoded.detail).toHaveLength(1_000);
   });
 });
