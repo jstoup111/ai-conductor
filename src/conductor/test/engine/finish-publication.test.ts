@@ -486,6 +486,38 @@ describe('FINISH publication disposition routing', () => {
     expect(route).not.toEqual({ kind: 'halt', reason: 'ambiguous_pr_identity' });
   });
 
+  it('renders a human-required provider detail alongside mapped guidance', async () => {
+    const guidance = HUMAN_REQUIRED_REASONS.judgment_refused;
+    const detail = 'The provider declined to make the requested judgment.';
+
+    const route = await routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'judgment_refused',
+      detail,
+    });
+
+    expect(route).toEqual({
+      kind: 'halt',
+      reason: expect.stringContaining(guidance.message),
+    });
+    expect(route).toMatchObject({
+      reason: expect.stringContaining(guidance.nextAction),
+    });
+    expect(route).toMatchObject({ reason: expect.stringContaining(detail) });
+  });
+
+  it('renders detail-less human-required guidance without an empty suffix', async () => {
+    const guidance = HUMAN_REQUIRED_REASONS.judgment_refused;
+
+    await expect(routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'judgment_refused',
+    })).resolves.toEqual({
+      kind: 'halt',
+      reason: `${guidance.message} Next action: ${guidance.nextAction}`,
+    });
+  });
+
   it('accepts a human-required disposition with a non-empty detail through exact validation', async () => {
     await expect(isExactDisposition({
       kind: 'human_required',

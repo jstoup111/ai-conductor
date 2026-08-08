@@ -620,7 +620,8 @@ function renderHumanRequiredHaltReason(
   disposition: Extract<PublicationDisposition, { kind: 'human_required' }>,
 ): string {
   const { message, nextAction } = HUMAN_REQUIRED_REASONS[disposition.reason];
-  return `${message} Next action: ${nextAction}`;
+  const detail = disposition.detail ? ` Detail: ${disposition.detail}` : '';
+  return `${message} Next action: ${nextAction}${detail}`;
 }
 
 /**
