@@ -54,4 +54,29 @@ describe('FINISH PR-prose judgment adapter', () => {
       publicationDisposition: { kind: 'revision_required', reason: 'placeholder' },
     })).toEqual({ kind: 'revision_required', reason: 'placeholder' });
   });
+
+  it.each([
+    ['', 'an empty string'],
+    ['  ', 'whitespace'],
+    [7, 'a number'],
+    [[], 'an array'],
+    [{}, 'an object'],
+  ])('drops %s detail while preserving the decoded verdict kind', (detail, _description) => {
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'refused', detail },
+    })).toEqual({ kind: 'refused' });
+
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'revision_required', reason: 'placeholder', detail },
+    })).toEqual({ kind: 'revision_required', reason: 'placeholder' });
+  });
+
+  it('trims a valid nonblank detail at the decode boundary', () => {
+    expect(decodePrProseJudgment({
+      success: true,
+      publicationDisposition: { kind: 'refused', detail: '  The PR cannot be safely published.  ' },
+    })).toEqual({ kind: 'refused', detail: 'The PR cannot be safely published.' });
+  });
 });
