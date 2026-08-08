@@ -112,6 +112,8 @@ assert "non-clean state: line is formatted as fail (✗)" "$r"
 assert "non-clean state: overall --check exit reflects the failure (FR-3)" "$r"
 [ "$rc" -eq 2 ] && r=0 || r=1
 assert "build-auth-only failure: exits 2 so install drift remains distinguishable" "$r"
+printf '%s\n' "$out" | tail -n 1 | grep -qi "build authentication" && r=0 || r=1
+assert "build-auth-only failure: terminal summary names build authentication" "$r"
 
 # ─── Case 3: install drift takes precedence over a build-auth failure ─────────
 

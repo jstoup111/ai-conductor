@@ -290,6 +290,7 @@ check_installation() {
   echo ""
   if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && [ "$duplicates" -eq 0 ] && $all_ok; then
     if [ "$build_auth_ok" = false ]; then
+      echo -e "${RED}${BOLD}Build authentication check failed.${NC}"
       return 2
     fi
     echo -e "${GREEN}${BOLD}All checks passed.${NC}"
