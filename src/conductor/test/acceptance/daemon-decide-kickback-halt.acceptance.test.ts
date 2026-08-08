@@ -315,7 +315,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(await exists(HALT_MARKER)).toBe(true);
     });
 
-    it('the HALT marker names the refused target, states DECIDE is operator-only, and carries the verdict evidence (happy path 2)', async () => {
+    it('the HALT marker uses the canonical DECIDE refusal and carries the target and verdict evidence (happy path 2)', async () => {
       await seedStoriesAndPlan();
       await writeState(statePath, { ...FRONT_DONE });
 
@@ -329,10 +329,12 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         .map((l) => l.trim())
         .find((l) => l.length > 0);
       expect(firstLine).toBeDefined();
-      // First non-empty line: the refused target step AND the operator-only rule.
-      expect(firstLine).toContain('plan');
-      expect(firstLine).toMatch(/DECIDE/);
-      expect(firstLine).toMatch(/daemon/i);
+      expect(firstLine).toBe(
+        'DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.',
+      );
+      // The structured body names the requested target separately from the
+      // canonical first-line refusal.
+      expect(body).toMatch(/Requested target:\s*plan/i);
       // Body carries the kickback evidence text from the verdict, so the
       // operator sees WHY the gate was re-opened without reading the verdict.
       expect(body).toContain(KICKBACK_EVIDENCE);
