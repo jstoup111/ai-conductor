@@ -1534,11 +1534,29 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
   );
 
   it.each([
-    ['refusal', { kind: 'refused' }, 'judgment_refused'],
-    ['halt boilerplate', { kind: 'revision_required', reason: 'halt' }, 'judgment_halt_prose'],
+    [
+      'refusal',
+      { kind: 'refused', detail: 'The provider declined the requested prose judgment.' },
+      { kind: 'human_required', reason: 'judgment_refused', detail: 'The provider declined the requested prose judgment.' },
+    ],
+    [
+      'halt boilerplate',
+      { kind: 'revision_required', reason: 'halt', detail: 'The PR contains an unresolved operator blocker.' },
+      { kind: 'human_required', reason: 'judgment_halt_prose', detail: 'The PR contains an unresolved operator blocker.' },
+    ],
+    [
+      'placeholder prose',
+      { kind: 'revision_required', reason: 'placeholder', detail: 'The title and body are placeholders.' },
+      { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
+    ],
+    [
+      'structurally incomplete prose',
+      { kind: 'revision_required', reason: 'structurally_incomplete', detail: 'The body is missing its validation section.' },
+      { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
+    ],
   ] as const)(
-    'requires a human without rolling back verified publication progress when judgment returns %s',
-    async (_failure, judgmentResult, reason) => {
+    'preserves the established route while forwarding detail only for human-required %s judgments',
+    async (_failure, judgmentResult, expected) => {
       const dispatchJudgment = vi.fn(async () => judgmentResult);
       const createShippedRecord = vi.fn(async () => undefined);
       const draft = draftPrFakes(() => new Error('must not create another PR'));
@@ -1548,7 +1566,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
           observe: async () => readyPublicationSnapshot(),
           effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
         }),
-      ).resolves.toEqual({ kind: 'human_required', reason });
+      ).resolves.toEqual(expected);
 
       expect(dispatchJudgment).toHaveBeenCalledTimes(1);
       expect(createShippedRecord).not.toHaveBeenCalled();

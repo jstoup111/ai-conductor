@@ -1086,11 +1086,12 @@ export type AdvanceFinishPublicationResult =
     }
   | {
       kind: 'human_required';
-      reason:
-        | 'ambiguous_pr_identity'
-        | 'invalid_shipped_record'
-        | 'judgment_halt_prose'
-        | 'judgment_refused';
+      reason: 'ambiguous_pr_identity' | 'invalid_shipped_record';
+    }
+  | {
+      kind: 'human_required';
+      reason: 'judgment_halt_prose' | 'judgment_refused';
+      detail?: string;
     };
 
 /**
@@ -1151,7 +1152,9 @@ function mapPrProseJudgmentResult(
         reason: 'judgment_provider_unavailable',
       };
     case 'refused':
-      return { kind: 'human_required', reason: 'judgment_refused' };
+      return result.detail === undefined
+        ? { kind: 'human_required', reason: 'judgment_refused' }
+        : { kind: 'human_required', reason: 'judgment_refused', detail: result.detail };
     case 'malformed_response':
       // The decoder could not parse the reply at all. That is a provider
       // response defect, not a prose verdict, so it earns a fresh judgment
@@ -1167,7 +1170,9 @@ function mapPrProseJudgmentResult(
           // Halt boilerplate on a PR is a genuine operator condition: the
           // remediation narrative must not be silently overwritten by an
           // authoring pass.
-          return { kind: 'human_required', reason: 'judgment_halt_prose' };
+          return result.detail === undefined
+            ? { kind: 'human_required', reason: 'judgment_halt_prose' }
+            : { kind: 'human_required', reason: 'judgment_halt_prose', detail: result.detail };
         case 'placeholder':
         case 'structurally_incomplete':
           // Both verdicts say the same thing — the reader-facing prose is not
