@@ -561,6 +561,12 @@ export interface HarnessConfig {
    */
   provider_preparation_timeout_minutes?: number;
   /**
+   * Maximum seconds a project-supplied `bin/teardown` hook may run while a
+   * feature worktree is removed. Omitted or invalid values use the bounded
+   * engine default.
+   */
+  teardown_timeout_seconds?: number;
+  /**
    * When true, the daemon automatically restarts when the engine becomes stale.
    * When false or absent, manual restart is required. Invalid values resolve to
    * false with a single warning. Default: false. Never throws.

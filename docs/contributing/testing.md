@@ -208,6 +208,40 @@ The rule, in one line: a test may reach a third party only if it is an explicitl
 registries, and other network services. The policy text is `HARNESS.md:303-310`, restated at repo level
 in `AGENT_INSTRUCTIONS.md:60-64`.
 
+### Project teardown acceptance coverage
+
+`test/acceptance/project-teardown-hook.acceptance.test.ts` exercises the project-supplied
+`bin/teardown` hook through real local Git worktrees and executable scripts. It covers post-ship
+reaping, operator reclaim, and parked reconciliation while faking only GitHub and shipped-record
+boundaries. The hook's environment, ordering before removal, contained non-zero exits, retained
+worktree skip, and configured timeout are observable assertions. Run it with:
+
+```bash
+cd src/conductor && npx vitest run test/acceptance/project-teardown-hook.acceptance.test.ts
+```
+
+### Worktree-removal classification guard
+
+`test/structural/worktree-removal-coverage.test.ts` parses every production source module and detects
+real `git worktree remove` calls. When adding or moving a removal path, run the guard and classify the
+**calling module** before landing it:
+
+1. Route a path that removes a provisioned feature worktree through `runProjectTeardown` before its
+   removal call.
+2. Otherwise add the module to that test's `WORKTREE_REMOVAL_EXEMPTIONS` registry with a specific,
+   non-empty reason. An exemption must still contain a real removal call; stale entries fail.
+3. Do not add teardown to the shared `worktree-shared.removeWorktree` primitive. Its callers have
+   different scope, so the primitive is deliberately an exempt pass-through and each caller is
+   classified separately.
+
+An unclassified path, a routed path with no teardown invitation, or a stale/empty exemption fails the
+standard suite. This is the enforcement described by
+`.docs/decisions/adr-2026-08-07-worktree-removal-coverage-guard.md`. Run it directly with:
+
+```bash
+cd src/conductor && npx vitest run test/structural/worktree-removal-coverage.test.ts
+```
+
 ## Global guards
 
 Four files run automatically and exist because each one prevented a real incident.

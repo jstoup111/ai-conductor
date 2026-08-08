@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
@@ -9,9 +9,11 @@ import {
   ensureSessionHooks,
   sanitizeNamespace,
   SETUP_SCRIPT,
+  TEARDOWN_SCRIPT,
   NAMESPACE_VAR,
   SetupFailureError,
   OPERATOR_ONLY_SKILLS,
+  runProjectTeardown,
 } from '../../src/engine/worktree-prepare.js';
 import {
   PRE_DISPATCH_HOOK,
@@ -37,6 +39,189 @@ describe('engine/worktree-prepare', () => {
     await writeFile(path, body, 'utf-8');
     await chmod(path, mode);
   }
+
+  async function writeTeardown(body: string, mode = 0o755): Promise<void> {
+    await mkdir(join(dir, 'bin'), { recursive: true });
+    const path = join(dir, TEARDOWN_SCRIPT);
+    await writeFile(path, body, 'utf-8');
+    await chmod(path, mode);
+  }
+
+  describe('runProjectTeardown', () => {
+    it.each([undefined, { verbose: true }] as const)(
+      'is completely silent when bin/teardown is absent (%o)',
+      async (opts) => {
+        const log = vi.fn();
+
+        await expect(runProjectTeardown(dir, log, opts)).resolves.toBeUndefined();
+
+        expect(log).not.toHaveBeenCalled();
+      },
+    );
+
+    it('runs bin/teardown in the worktree with its CI namespace environment', async () => {
+      const teardownPath = join(dir, TEARDOWN_SCRIPT);
+      const observationDir = await mkdtemp(join(tmpdir(), 'teardown-observation-'));
+      const observationPath = join(observationDir, 'teardown-saw.json');
+      await mkdir(join(dir, 'bin'), { recursive: true });
+      await writeFile(
+        teardownPath,
+        `#!/usr/bin/env node
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(observationPath)}, JSON.stringify({
+  ci: process.env.CI,
+  namespace: process.env.WORKTREE_NAMESPACE,
+  cwd: process.cwd(),
+}));
+`,
+        'utf-8',
+      );
+      await chmod(teardownPath, 0o755);
+
+      try {
+        await runProjectTeardown(dir);
+
+        expect(JSON.parse(await readFile(observationPath, 'utf-8'))).toEqual({
+          ci: 'true',
+          namespace: expect.stringMatching(/\S/),
+          cwd: dir,
+        });
+      } finally {
+        await rm(observationDir, { recursive: true, force: true });
+      }
+    });
+
+    it('derives its namespace from a sanitized worktree basename without persisted state', async () => {
+      const worktreePath = await mkdtemp(join(tmpdir(), 'teardown namespace.v1-'));
+      const observationDir = await mkdtemp(join(tmpdir(), 'teardown-observation-'));
+      const observationPath = join(observationDir, 'teardown-namespace.txt');
+      const teardownPath = join(worktreePath, TEARDOWN_SCRIPT);
+      await mkdir(join(worktreePath, 'bin'), { recursive: true });
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreePath, '.env'), `${NAMESPACE_VAR}=persisted-state\n`, 'utf-8');
+      await writeFile(
+        teardownPath,
+        `#!/usr/bin/env node
+require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env.WORKTREE_NAMESPACE);
+`,
+        'utf-8',
+      );
+      await chmod(teardownPath, 0o755);
+
+      try {
+        await rm(join(worktreePath, '.pipeline'), { recursive: true });
+        await rm(join(worktreePath, '.env'));
+
+        await runProjectTeardown(worktreePath);
+
+        expect(await readFile(observationPath, 'utf-8')).toBe(
+          sanitizeNamespace(basename(worktreePath)),
+        );
+      } finally {
+        await rm(worktreePath, { recursive: true, force: true });
+        await rm(observationDir, { recursive: true, force: true });
+      }
+    });
+
+    describe('successful output logging', () => {
+      const CHATTY_TEARDOWN =
+        '#!/usr/bin/env bash\n' +
+        'echo "removed 402 packages"\n' +
+        'echo ""\n' +
+        'echo "{\\"cleanupId\\":\\"20260807T113046Z-abc\\",\\"dir\\":\\"/x/y\\"}"\n' +
+        'echo "Teardown complete."\n';
+
+      it('summarizes successful output instead of echoing it by default', async () => {
+        await writeTeardown(CHATTY_TEARDOWN);
+        const lines: string[] = [];
+
+        await runProjectTeardown(dir, (message) => lines.push(message));
+
+        expect(lines).toEqual([
+          'teardown: 3 line(s) of output suppressed (set daemon_verbose: true to echo them)',
+        ]);
+      });
+
+      it('echoes each non-blank successful output line when verbose', async () => {
+        await writeTeardown(CHATTY_TEARDOWN);
+        const lines: string[] = [];
+
+        await runProjectTeardown(dir, (message) => lines.push(message), { verbose: true });
+
+        expect(lines).toEqual([
+          'teardown: removed 402 packages',
+          'teardown: {"cleanupId":"20260807T113046Z-abc","dir":"/x/y"}',
+          'teardown: Teardown complete.',
+        ]);
+      });
+
+      it.each([
+        ['no output', '#!/usr/bin/env bash\n'],
+        ['blank-only output', '#!/usr/bin/env bash\necho ""\necho "   "\n'],
+      ])('does not summarize %s', async (_description, script) => {
+        await writeTeardown(script);
+        const log = vi.fn();
+
+        await runProjectTeardown(dir, log);
+
+        expect(log).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('failure containment', () => {
+      it('contains a non-zero exit and logs the worktree with a bounded output tail', async () => {
+        const output = Array.from({ length: 55 }, (_, index) => `tail-line-${index + 1}`).join('\n');
+        await writeTeardown(`#!/usr/bin/env bash\nprintf '%s\\n' ${output.split('\n').map((line) => JSON.stringify(line)).join(' ')}\nexit 3\n`);
+        const lines: string[] = [];
+
+        await expect(runProjectTeardown(dir, (message) => lines.push(message))).resolves.toBeUndefined();
+
+        expect(lines).toEqual([
+          expect.stringContaining(`teardown: failed in ${dir}: tail-line-6`),
+        ]);
+        expect(lines[0]).toContain('tail-line-55');
+        expect(lines[0]).not.toContain('tail-line-1\n');
+      });
+
+      it('logs an identifying failure when a non-zero exit has no output', async () => {
+        await writeTeardown('#!/usr/bin/env bash\nexit 3\n');
+        const lines: string[] = [];
+
+        await expect(runProjectTeardown(dir, (message) => lines.push(message))).resolves.toBeUndefined();
+
+        expect(lines).toEqual([expect.stringContaining(`teardown: failed in ${dir}:`)]);
+      });
+
+      it.each([
+        ['is not executable', async () => writeTeardown('#!/usr/bin/env bash\nexit 0\n', 0o644)],
+        ['has a missing interpreter', async () => writeTeardown('#!/definitely/missing/interpreter\n', 0o755)],
+        ['is a directory', async () => mkdir(join(dir, TEARDOWN_SCRIPT), { recursive: true })],
+      ])('contains a teardown that %s instead of treating it as absent', async (_description, create) => {
+        await create();
+        const lines: string[] = [];
+
+        await expect(runProjectTeardown(dir, (message) => lines.push(message))).resolves.toBeUndefined();
+
+        expect(lines).toEqual([expect.stringContaining(`teardown: failed in ${dir}:`)]);
+      });
+
+      it('abandons a non-terminating teardown at its configured bound and reports a timeout', async () => {
+        const output = Array.from({ length: 55 }, (_, index) => `timeout-line-${index + 1}`).join('\n');
+        await writeTeardown(`#!/usr/bin/env bash\nprintf '%s\\n' ${output.split('\n').map((line) => JSON.stringify(line)).join(' ')}\nwhile true; do :; done\n`);
+        const lines: string[] = [];
+
+        await expect(
+          runProjectTeardown(dir, (message) => lines.push(message), { timeoutSeconds: 0.05 }),
+        ).resolves.toBeUndefined();
+
+        expect(lines).toEqual([
+          expect.stringContaining(`teardown: timed out in ${dir} after 0.05 second(s)`),
+        ]);
+        expect(lines[0]).toContain(output.split('\n').slice(-50).join('\n'));
+        expect(lines[0]).not.toContain('timeout-line-1\n');
+      });
+    });
+  });
 
   describe('sanitizeNamespace', () => {
     it('reduces a worktree dir name to a DB-safe token', () => {

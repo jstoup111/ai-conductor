@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   resolveStepConfig,
   resolveProviderNativeStepConfig,
@@ -12,11 +12,42 @@ import {
   FALLBACK_REVIEW,
   resolveBuildReviewConfig,
   resolveProviderPreparationTimeoutMinutes,
+  resolveTeardownTimeoutSeconds,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
+type TeardownTimeoutConfig = HarnessConfig & { teardown_timeout_seconds?: unknown };
+
 describe('engine/resolved-config', () => {
+  describe('resolveTeardownTimeoutSeconds', () => {
+    it.each([
+      { name: 'is absent', value: undefined, expected: 120, warnings: 0 },
+      { name: 'is positive', value: 30, expected: 30, warnings: 0 },
+      { name: 'is zero', value: 0, expected: 120, warnings: 1 },
+      { name: 'is negative', value: -1, expected: 120, warnings: 1 },
+      { name: 'is non-numeric', value: 'soon', expected: 120, warnings: 1 },
+      { name: 'is null', value: null, expected: 120, warnings: 1 },
+      { name: 'is NaN', value: Number.NaN, expected: 120, warnings: 1 },
+      { name: 'is infinite', value: Number.POSITIVE_INFINITY, expected: 120, warnings: 1 },
+      { name: 'is negatively infinite', value: Number.NEGATIVE_INFINITY, expected: 120, warnings: 1 },
+    ])('returns a bounded timeout when teardown_timeout_seconds $name', ({ value, expected, warnings }) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const config = value === undefined
+          ? undefined
+          : { teardown_timeout_seconds: value } as TeardownTimeoutConfig;
+        const result = resolveTeardownTimeoutSeconds(config);
+
+        expect(result).toBe(expected);
+        expect(Number.isFinite(result)).toBe(true);
+        expect(warn).toHaveBeenCalledTimes(warnings);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   describe('resolveProviderPreparationTimeoutMinutes', () => {
     it.each([0, -1, 20])('defaults to five minutes without reading legacy heartbeat value %s', (heartbeatMinutes) => {
       expect(resolveProviderPreparationTimeoutMinutes()).toBe(5);

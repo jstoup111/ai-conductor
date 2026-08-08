@@ -466,6 +466,36 @@ to the daemon prefix and explains the next action for every nonzero outcome, for
 [daemon][parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=7 refused=2 skipped=56; refusals: unmerged-commits=2; next: 1 deferred awaits shipped-record repair; 2 refusals requires resolving unmerged-commits; 7 parked remain parked; 56 skipped retry when merge/issue evidence is available
 ```
 
+## Project teardown hook
+
+To clean project-owned resources before the daemon removes a feature worktree, add an executable
+`bin/teardown` to the project. The daemon runs it from the worktree immediately before an already
+authorized removal: post-ship reaping, `conduct-ts daemon reclaim-worktree <slug>`, or parked-feature
+reconciliation. It never runs for a retained worktree or before the removal safety proofs pass.
+
+The hook inherits the daemon's process environment, with `CI=true` and `WORKTREE_NAMESPACE` overlaid.
+The namespace is derived from the worktree directory name. Do not depend on `.env` or `.pipeline/`:
+reconciliation can clean a leftover directory where those files are absent. A missing hook is a
+silent no-op.
+
+```sh
+#!/usr/bin/env sh
+set -eu
+
+# Remove only resources namespaced for this feature.
+./scripts/drop-preview-resources "$WORKTREE_NAMESPACE"
+```
+
+Keep the hook idempotent. Its output is summarized by default; set `daemon_verbose: true` to log each
+non-blank line. A non-zero exit, an unrunnable script, or a timeout is logged with the `teardown:`
+prefix and is contained: the daemon still attempts the already-authorized removal. This differs from
+a real Git removal failure. `daemon reclaim-worktree` returns an error instead of reporting removal,
+and parked reconciliation retains a registered worktree with `worktree-remove-failed` for recovery.
+The hook is bounded by `teardown_timeout_seconds` (default 120 seconds); that bound cannot be disabled.
+See [configuration](../reference/configuration.md#teardown_timeout_seconds) for value handling and
+[environment variables](../reference/environment.md#written-into-child-process-environments) for its
+process contract.
+
 ## Retained worktrees
 
 A feature's worktree is **not** removed when its implementation PR opens. The mergeable sweep
@@ -486,11 +516,11 @@ proof-gated cleanup paths.
   pr-closed-unmerged`. The PR is pruned from the watch registry (there is nothing left to poll), but
   the worktree itself is left behind for inspection or manual recovery — it is never deleted
   automatically.
-- **Record proven present.** Logged as `reaped <slug> — reason: shipped-record-on-main`, and the
-  worktree is torn down. A teardown failure logs `reap failed <slug> (<prUrl>) — reason:
-  shipped-record-on-main — error: <detail>`, leaves the worktree in place for operator recovery,
-  and prunes the watch entry. The failure is isolated from the rest of the sweep and is not retried
-  by later ticks.
+- **Record proven present.** The sweep invokes cleanup and logs `reaped <slug> — reason:
+  shipped-record-on-main`. A failing `bin/teardown` is logged separately with the `teardown:` prefix
+  and does not stop the removal attempt. Do not treat that hook log as proof that Git removal failed;
+  `daemon reclaim-worktree` and parked reconciliation surface their actual Git removal failures and
+  retain the worktree for recovery.
 
 `conduct-ts daemon status`'s startup dashboard groups every retained worktree under
 `RETAINED WORKTREES (<n>)`. A retained row includes an evidence-derived reason and a `remedy:`

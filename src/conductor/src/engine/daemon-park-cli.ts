@@ -16,6 +16,9 @@ import { promisify } from 'node:util';
 import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
 import { removeWorktree } from './worktree-shared.js';
+import { runProjectTeardown } from './worktree-prepare.js';
+import { loadConfig } from './config.js';
+import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { detectAutoResume } from './auto-resume.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 import type { GitRunner, GhRunner } from './pr-labels.js';
@@ -117,12 +120,16 @@ export interface DaemonParkDeps {
     runGit?: GitRunner;
     runGh?: GhRunner;
     requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
+    teardownTimeoutSeconds?: number;
+    verbose?: boolean;
   }) => Promise<ReconcileMergedParkOutcome>;
   /** ST-916 record-only repair hand-off; defaults to the production adapter. */
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   runGit?: GitRunner;
   runGh?: GhRunner;
   removeWorktree?: (repoRoot: string, worktreePath: string) => Promise<void>;
+  /** Resolved project teardown timeout; production callers may supply it. */
+  teardownTimeoutSeconds?: number;
 }
 
 /**
@@ -184,7 +191,12 @@ export async function dispatchDaemonPark(
             log: out,
           })(request);
         });
-      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out, runGit: deps.runGit, runGh: deps.runGh, requestRecordRepair });
+      const configResult = await loadConfig(resolvedRoot);
+      const teardownTimeoutSeconds = deps.teardownTimeoutSeconds ?? resolveTeardownTimeoutSeconds(
+        configResult.ok ? configResult.config : undefined,
+      );
+      const verbose = configResult.ok ? (configResult.config?.daemon_verbose ?? false) : false;
+      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out, runGit: deps.runGit, runGh: deps.runGh, requestRecordRepair, teardownTimeoutSeconds, verbose });
       if (outcome.refusal) {
         out(`Could not reconcile '${slug}': ${outcome.refusal}`);
         if (outcome.refusal === 'unmerged-commits' && outcome.unmergedCommits) {
@@ -217,6 +229,12 @@ export async function dispatchDaemonPark(
         return 1;
       }
       out(`Reclaiming retained worktree: ${worktreePath}`);
+      const configResult = await loadConfig(resolvedRoot);
+      const teardownTimeoutSeconds = deps.teardownTimeoutSeconds ?? resolveTeardownTimeoutSeconds(
+        configResult.ok ? configResult.config : undefined,
+      );
+      const verbose = configResult.ok ? (configResult.config?.daemon_verbose ?? false) : false;
+      await runProjectTeardown(worktreePath, out, { timeoutSeconds: teardownTimeoutSeconds, verbose });
       await (deps.removeWorktree ?? removeWorktree)(resolvedRoot, worktreePath);
       out(`Removed retained worktree '${cmd.slug}': ${worktreePath}`);
       return 0;

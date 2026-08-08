@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, realpath, writeFile, readFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
@@ -144,6 +144,8 @@ describe('engine/daemon-park-cli', () => {
           slug: 'merged',
           log: expect.any(Function),
           requestRecordRepair: expect.any(Function),
+          teardownTimeoutSeconds: 120,
+          verbose: false,
         }]],
         out: ["Reconciled 'merged': worktree-removed, branch-deleted, unparked"],
       });
@@ -221,6 +223,110 @@ describe('engine/daemon-park-cli', () => {
         usageOut: ['Usage: conduct daemon reconcile-parked <slug>'],
         usageCalls: [],
       });
+    });
+  });
+
+  describe('dispatchDaemonPark reclaim-worktree', () => {
+    it('runs bin/teardown before removal without changing the normal reclaim output', async () => {
+      const slug = 'retained-worktree';
+      const worktreePath = join(root, '.worktrees', slug);
+      await mkdir(join(worktreePath, 'bin'), { recursive: true });
+      const teardownPath = join(worktreePath, 'bin', 'teardown');
+      await writeFile(teardownPath, '#!/bin/sh\nprintf released > teardown-ran\n');
+      await chmod(teardownPath, 0o755);
+      const out: string[] = [];
+      const removeWorktree = vi.fn(async (_repoRoot: string, path: string) => {
+        expect(await readFile(join(path, 'teardown-ran'), 'utf-8')).toBe('released');
+      });
+
+      const code = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug },
+        { cwd: root, out: (line) => out.push(line), removeWorktree },
+      );
+
+      expect({ code, calls: removeWorktree.mock.calls, out }).toEqual({
+        code: 0,
+        calls: [[root, worktreePath]],
+        out: [
+          `Reclaiming retained worktree: ${worktreePath}`,
+          `Removed retained worktree '${slug}': ${worktreePath}`,
+        ],
+      });
+    });
+
+    it.each([
+      [true, ['teardown: first release', 'teardown: second release']],
+      [false, ['teardown: 2 line(s) of output suppressed (set daemon_verbose: true to echo them)']],
+    ])('uses daemon_verbose=%s to control successful teardown output', async (verbose, teardownOutput) => {
+      const slug = `verbose-${verbose}`;
+      const worktreePath = join(root, '.worktrees', slug);
+      await mkdir(join(worktreePath, 'bin'), { recursive: true });
+      await mkdir(join(root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(root, '.ai-conductor', 'config.yml'), `daemon_verbose: ${verbose}\n`);
+      await writeFile(
+        join(worktreePath, 'bin', 'teardown'),
+        '#!/bin/sh\nprintf "first release\\n\\nsecond release\\n"\n',
+      );
+      await chmod(join(worktreePath, 'bin', 'teardown'), 0o755);
+      const out: string[] = [];
+
+      const code = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug },
+        { cwd: root, out: (line) => out.push(line), removeWorktree: vi.fn() },
+      );
+
+      expect({ code, teardownOutput: out.slice(1, -1) }).toEqual({ code: 0, teardownOutput });
+    });
+
+    it('does not run teardown for refused or empty reclaims, and contains a teardown failure', async () => {
+      const refusedSlug = 'in-progress-worktree';
+      const refusedWorktreePath = join(root, '.worktrees', refusedSlug);
+      await mkdir(join(refusedWorktreePath, 'bin'), { recursive: true });
+      const refusedTeardownPath = join(refusedWorktreePath, 'bin', 'teardown');
+      await writeFile(refusedTeardownPath, '#!/bin/sh\nprintf released > teardown-ran\n');
+      await chmod(refusedTeardownPath, 0o755);
+      await mkdir(join(refusedWorktreePath, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(refusedWorktreePath, '.pipeline', 'conduct-state.json'),
+        JSON.stringify({ feature_desc: refusedSlug, last_step: 'explore' }),
+      );
+      const refusedRemove = vi.fn();
+
+      const refusedCode = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug: refusedSlug },
+        { cwd: root, out: () => {}, removeWorktree: refusedRemove },
+      );
+
+      expect(refusedCode).toBe(1);
+      expect(refusedRemove).not.toHaveBeenCalled();
+      await expect(readFile(join(refusedWorktreePath, 'teardown-ran'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+
+      const emptyRemove = vi.fn();
+      const emptyCode = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug: 'missing-worktree' },
+        { cwd: root, out: () => {}, removeWorktree: emptyRemove },
+      );
+
+      expect(emptyCode).toBe(0);
+      expect(emptyRemove).not.toHaveBeenCalled();
+
+      const failingSlug = 'failing-worktree';
+      const failingWorktreePath = join(root, '.worktrees', failingSlug);
+      await mkdir(join(failingWorktreePath, 'bin'), { recursive: true });
+      const failingTeardownPath = join(failingWorktreePath, 'bin', 'teardown');
+      await writeFile(failingTeardownPath, '#!/bin/sh\nexit 1\n');
+      await chmod(failingTeardownPath, 0o755);
+      const failingRemove = vi.fn();
+
+      const failingCode = await dispatchDaemonPark(
+        { kind: 'reclaim-worktree', slug: failingSlug },
+        { cwd: root, out: () => {}, removeWorktree: failingRemove },
+      );
+
+      expect(failingCode).toBe(0);
+      expect(failingRemove).toHaveBeenCalledWith(root, failingWorktreePath);
     });
   });
 

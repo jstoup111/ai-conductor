@@ -25,7 +25,11 @@ import {
   preflightCiFixInvocation,
   defaultCiFixProbe,
 } from './engine/ci-fix.js';
-import { resolveRebaseResolutionAttempts, resolveSelfHostConfig } from './engine/resolved-config.js';
+import {
+  resolveRebaseResolutionAttempts,
+  resolveSelfHostConfig,
+  resolveTeardownTimeoutSeconds,
+} from './engine/resolved-config.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
@@ -1239,6 +1243,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     memoryProvider,
     log,
     verbose: config?.daemon_verbose ?? false,
+    teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
     runSetupTriage,
   });
   const runFeature = makeRunFeature(deps);
@@ -1651,6 +1656,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           // Rendering is observational. The daemon sweep below owns cleanup
           // and is the sole consumer of the startup-resolved toggle.
           autoCleanup: false,
+          verbose: config?.daemon_verbose ?? false,
         });
         const annotations = new Map(
           reconciliation.entries.map(({ slug, classification }) => [
@@ -1753,6 +1759,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
           disposeHaltWatcher,
+          teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
+          verbose: config?.daemon_verbose ?? false,
         });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.

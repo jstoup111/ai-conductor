@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,7 @@ import {
   writeAutoPark,
   writeOperatorPark,
 } from '../../src/engine/park-marker.js';
+import { TEARDOWN_SCRIPT } from '../../src/engine/worktree-prepare.js';
 
 /**
  * A faithful in-memory stand-in for the four git reads the reconciler makes,
@@ -52,6 +53,8 @@ interface GitWorld {
   registeredWorktrees?: readonly string[];
   /** `git worktree list --porcelain` itself fails. */
   worktreeListUnavailable?: boolean;
+  /** Assertion seam for ordering a real project teardown before git removal. */
+  onWorktreeRemove?: () => void | Promise<void>;
 }
 
 function gitFailure(code: number, message: string): Error {
@@ -131,6 +134,7 @@ function makeGit(world: GitWorld = {}): {
             .join('\n'),
         };
       }
+      await world.onWorktreeRemove?.();
       events.push('worktree-removed');
       if (world.worktreeRemoveFails) throw gitFailure(128, world.worktreeRemoveFails);
       return { stdout: '' };
@@ -795,16 +799,24 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'unregistered-leftover';
     const worktree = join(projectRoot, '.worktrees', slug);
+    const observation = join(projectRoot, 'fallback-teardown-runs');
     const { run, deleted } = makeGit({
       shipped: [slug],
       branches: [`feat/${slug}`],
       merged: [`feat/${slug}`],
       worktreeRemoveFails: `fatal: '${worktree}' is not a working tree`,
       registeredWorktrees: [projectRoot],
+      onWorktreeRemove: async () => {
+        expect(await access(observation).then(() => true, () => false)).toBe(true);
+      },
     });
     try {
       await mkdir(worktree, { recursive: true });
       await writeFile(join(worktree, 'leftover.txt'), 'not a git worktree');
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, `#!/usr/bin/env node\nrequire('node:fs').appendFileSync(${JSON.stringify(observation)}, 'ran\\n');\n`);
+      await chmod(teardown, 0o755);
       await writeOperatorPark(projectRoot, slug);
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
@@ -813,13 +825,82 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         outcome,
         deleted,
         stillOnDisk: await access(worktree).then(() => true, () => false),
+        teardownRuns: await access(observation).then(async () => (await readFile(observation, 'utf-8')).trim().split('\n'), () => []),
         parked: await isOperatorParked(projectRoot, slug),
       }).toEqual({
         outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
         deleted: [`feat/${slug}`],
         stillOnDisk: false,
+        teardownRuns: ['ran'],
         parked: false,
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('runs a registered worktree teardown exactly once before reporting removal', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'teardown-before-removal';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const observation = join(projectRoot, 'teardown-ran');
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+      onWorktreeRemove: async () => {
+        await access(observation);
+      },
+    });
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(observation)}, 'ran');\n`);
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
+
+      expect({
+        outcome,
+        teardownRuns: await access(observation).then(() => 1, () => 0),
+      }).toEqual({
+        outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+        teardownRuns: 1,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards verbose reconciliation to successful project teardown output', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'verbose-teardown-output';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, '#!/usr/bin/env bash\necho cache-purge-complete\n');
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      await reconcileMergedPark({
+        projectRoot,
+        slug,
+        runGit: run,
+        log,
+        verbose: true,
+      } as Parameters<typeof reconcileMergedPark>[0]);
+
+      expect(log.mock.calls).toContainEqual(['teardown: cache-purge-complete']);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -920,11 +1001,44 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
 
-      expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+      expect({
+        outcome,
+        deleted,
+        parked: await isOperatorParked(projectRoot, slug),
+      }).toEqual({
         outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
         deleted: [`fix/${slug}`],
         parked: false,
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves worktree-remove-failed when contained teardown and git removal both fail', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'failing-teardown-and-removal';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      worktreeRemoveFails: 'fatal: cannot remove a locked working tree',
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, '#!/usr/bin/env bash\necho teardown failed\nexit 1\n');
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, log });
+
+      expect(outcome).toEqual({ slug, steps: [], refusal: 'worktree-remove-failed' });
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0]?.[0]).toContain(`teardown: failed in ${worktree}`);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -1014,6 +1128,89 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
         ],
         provenance: ['auto', 'operator'],
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards its logger to verbose successful teardown output during cleanup', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-verbose-teardown-output';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, '#!/usr/bin/env bash\necho sweep-cache-purge-complete\n');
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      await reconcileParkedFeatures({ projectRoot, runGit: run, log, verbose: true });
+
+      expect(log.mock.calls).toContainEqual(['teardown: sweep-cache-purge-complete']);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a failing teardown during a non-verbose automatic cleanup and still reconciles the feature', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-quiet-failing-teardown';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, '#!/usr/bin/env bash\necho quiet-sweep-teardown-failure\nexit 1\n');
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, log, autoCleanup: true, verbose: false });
+      const teardownFailures = log.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.startsWith(`teardown: failed in ${worktree}`));
+
+      expect({ teardownFailures, reconciled: result.counts.reconciled }).toEqual({
+        teardownFailures: [expect.stringContaining('quiet-sweep-teardown-failure')],
+        reconciled: 1,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not add per-slug output for a verbose cleanup with no teardown script', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-verbose-no-teardown';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeOperatorPark(projectRoot, slug);
+
+      await reconcileParkedFeatures({ projectRoot, runGit: run, log, verbose: true });
+
+      expect(log.mock.calls).toEqual([[
+        '[parked-reconciliation] reconciled=1 deferred=0 orphaned=0 parked=1 refused=0 skipped=0; next: no action required',
+      ]]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
