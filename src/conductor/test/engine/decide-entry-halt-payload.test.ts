@@ -3,6 +3,25 @@ import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 import type { StepName } from '../../src/types/index.js';
 
 describe('renderDecideEntryHalt', () => {
+  it('renders the canonical body persisted for a build kickback refusal', () => {
+    const halt = {
+      sourceGate: 'build' as const,
+      target: 'custom_decide_target' as StepName,
+      evidence: 'custom gate could not resolve its requested phase',
+      reason: "DECIDE target 'custom_decide_target' could not be resolved from the configured steps.",
+    };
+
+    expect(renderDecideEntryHalt(halt)).toBe([
+      'DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.',
+      '',
+      'Source gate:       build',
+      'Requested target:  custom_decide_target',
+      'Evidence:          custom gate could not resolve its requested phase',
+      "Why refused:       DECIDE target 'custom_decide_target' could not be resolved from the configured steps.",
+      'Operator choices:  direct a return to a named step | correct the routing target | reject the kickback',
+    ].join('\n'));
+  });
+
   it.each([
     {
       name: 'an unresolvable target',
