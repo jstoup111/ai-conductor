@@ -677,8 +677,7 @@ install_md_viewer_tool() {
   esac
 }
 
-# Persist the chosen viewer to ~/.ai-conductor/config.yml. Uses Python+yaml
-# so existing keys (e.g. conductor.*) are preserved.
+# Persist the chosen viewer through conduct-ts so it owns YAML preservation.
 # Install the tool a mermaid preset needs. html/none need no tool. mmdc-* need
 # @mermaid-js/mermaid-cli via npm (only if node is present). Silent best-effort;
 # returns 0 if present/installed or no tool needed, 1 otherwise.
@@ -703,26 +702,7 @@ install_mermaid_tool() {
 
 write_md_viewer_config() {
   local preset=$1 cmd=$2 args=$3 mode=$4
-  mkdir -p "$(dirname "$HARNESS_USER_CONFIG")"
-  CFG_PATH="$HARNESS_USER_CONFIG" PRESET="$preset" CMD="$cmd" ARGS="$args" MODE="$mode" python3 - <<'PY'
-import os, yaml
-from pathlib import Path
-p = Path(os.environ["CFG_PATH"])
-try:
-    cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
-except Exception:
-    cfg = {}
-if cfg is None:
-    cfg = {}
-cfg["markdown_viewer"] = {
-    "preset": os.environ["PRESET"],
-    "command": os.environ["CMD"],
-    "args": os.environ["ARGS"].split(),
-    "mode": os.environ["MODE"],
-}
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False))
-PY
+  conduct-ts config write markdown_viewer "$preset" "$cmd" "$args" "$mode"
 }
 
 # Prompt the user for a markdown viewer preset, probe PATH for availability,
@@ -809,26 +789,7 @@ configure_md_viewer() {
 
 write_mermaid_renderer_config() {
   local preset=$1 cmd=$2 args=$3 mode=$4
-  mkdir -p "$(dirname "$HARNESS_USER_CONFIG")"
-  CFG_PATH="$HARNESS_USER_CONFIG" PRESET="$preset" CMD="$cmd" ARGS="$args" MODE="$mode" python3 - <<'PY'
-import os, yaml
-from pathlib import Path
-p = Path(os.environ["CFG_PATH"])
-try:
-    cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
-except Exception:
-    cfg = {}
-if cfg is None:
-    cfg = {}
-cfg["mermaid_renderer"] = {
-    "preset": os.environ["PRESET"],
-    "command": os.environ["CMD"],
-    "args": os.environ["ARGS"].split(),
-    "mode": os.environ["MODE"],
-}
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False))
-PY
+  conduct-ts config write mermaid_renderer "$preset" "$cmd" "$args" "$mode"
 }
 
 # Prompt the user for a mermaid renderer preset, probe availability, optionally
