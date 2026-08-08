@@ -1,8 +1,29 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
+import { HUMAN_REQUIRED_REASONS } from '../../src/engine/finish-publication.js';
 
 const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
+
+describe('FINISH human-required guidance', () => {
+  it.each([
+    'judgment_refused',
+    'judgment_halt_prose',
+    'ambiguous_pr_identity',
+    'invalid_shipped_record',
+    'interactive_intent_deferred',
+    'interactive_intent_declined',
+    'interactive_intent_destructive_choice',
+    'interactive_intent_unrecognized',
+    'unattended_intent_destructive_choice',
+    'unattended_intent_unauthorized_outcome',
+  ] as const)('provides reader guidance for %s', (reason) => {
+    expect(HUMAN_REQUIRED_REASONS[reason]).toEqual({
+      message: expect.any(String),
+      nextAction: expect.any(String),
+    });
+  });
+});
 
 async function routeFinishPublicationDisposition(disposition: unknown) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;

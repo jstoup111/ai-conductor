@@ -466,6 +466,49 @@ const PUBLICATION_CONDITIONS = {
   },
 } as const;
 
+export const HUMAN_REQUIRED_REASONS = {
+  judgment_refused: {
+    message: 'The PR prose judgment was refused and requires an operator decision.',
+    nextAction: 'Review the refusal and decide how to continue publication.',
+  },
+  judgment_halt_prose: {
+    message: 'The PR contains halt prose that must not be overwritten automatically.',
+    nextAction: 'Review the halt prose and resolve its stated blocker.',
+  },
+  ambiguous_pr_identity: {
+    message: 'More than one pull request matches this feature, so FINISH cannot select one safely.',
+    nextAction: 'Identify the correct pull request and resolve the duplicate matches.',
+  },
+  invalid_shipped_record: {
+    message: 'The existing shipped record is invalid and cannot be replaced automatically.',
+    nextAction: 'Inspect and repair the shipped record before retrying FINISH.',
+  },
+  interactive_intent_deferred: {
+    message: 'Publication was deferred and requires an operator decision before FINISH can continue.',
+    nextAction: 'Choose whether to publish the pull request or keep the work.',
+  },
+  interactive_intent_declined: {
+    message: 'Publication was declined and requires an operator decision before FINISH can continue.',
+    nextAction: 'Choose whether to publish the pull request or keep the work.',
+  },
+  interactive_intent_destructive_choice: {
+    message: 'The requested publication outcome is destructive and requires explicit human action.',
+    nextAction: 'Perform the destructive action manually or choose a safe publication outcome.',
+  },
+  interactive_intent_unrecognized: {
+    message: 'The requested interactive publication outcome is not recognized.',
+    nextAction: 'Choose a supported publication outcome.',
+  },
+  unattended_intent_destructive_choice: {
+    message: 'Unattended publication cannot perform the requested destructive outcome.',
+    nextAction: 'Perform the destructive action manually or choose a safe unattended outcome.',
+  },
+  unattended_intent_unauthorized_outcome: {
+    message: 'The requested publication outcome is not authorized by the unattended policy.',
+    nextAction: 'Choose the outcome allowed by the current unattended policy.',
+  },
+} satisfies Record<HumanRequiredReason, { message: string; nextAction: string }>;
+
 const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]> = {
   establish_pr: [
     'draft_pr_effect_unavailable',
