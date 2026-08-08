@@ -78,7 +78,7 @@ async function initRepo(withOrigin = false): Promise<{
   if (withOrigin) {
     const origin = await mkdtemp(join(tmpdir(), 'project-teardown-origin-'));
     roots.push(origin);
-    await execFile('git', ['init', '--bare', '-q', origin]);
+    await execFile('git', ['init', '--bare', '-q', '-b', 'main', origin]);
     await git('remote', 'add', 'origin', origin);
     await git('push', '-q', '-u', 'origin', 'main');
   }

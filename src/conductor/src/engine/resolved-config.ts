@@ -482,7 +482,7 @@ export function resolveStaleClaimWindowMs(config?: HarnessConfig): number {
 export const DEFAULT_AUTH_PARK_TIMEOUT_MINUTES = 60;
 
 /** Default bounded grace period for a project-supplied daemon teardown hook. */
-export const DEFAULT_TEARDOWN_TIMEOUT_SECONDS = 120;
+const DEFAULT_TEARDOWN_TIMEOUT_SECONDS = 120;
 
 /**
  * Resolve the project teardown hook timeout from HarnessConfig.
