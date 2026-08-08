@@ -146,8 +146,14 @@ export function snapshotReleaseMetadataBlock(body: string): string | null {
 
   let block = match[1]!;
   if (disposition.disposition === 'note' && disposition.migration !== undefined) {
+    // The heading may be separated from its fence by blank lines — that is
+    // what the PR template, the release-disposition skill, and the CHANGELOG
+    // renderer all emit, and `parseMigrationBlock` trims them before matching.
+    // Requiring the fence on the very next line rejected bodies this function
+    // had just parsed. Any separator is captured verbatim so the block stays
+    // byte-exact and re-snapshotting stays idempotent.
     const migration = new RegExp(
-      `^## Migration${lineEnd}(\`\`\`bash migration${lineEnd}[\\s\\S]*?\`\`\`)`,
+      `^## Migration(?:${lineEnd})+(\`\`\`bash migration${lineEnd}[\\s\\S]*?\`\`\`)`,
       'm',
     ).exec(body);
     if (!migration) return null;
