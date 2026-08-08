@@ -397,6 +397,7 @@ PYEOF
   else
     warn "Could not configure permissions automatically"
     info "Manually add harness read permissions to ${settings_file}"
+    return 1
   fi
 }
 
