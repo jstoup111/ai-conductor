@@ -30,16 +30,18 @@ Two forces make the current shape inadequate:
    set — and it never states the `{"kind": ...}` verdict contract. That vocabulary appears only in
    `finish-publication*.ts` and its own tests (verified by repo-wide grep excluding `node_modules`
    and `dist-versions`). A genuinely refusing provider therefore replies in prose,
-   `parseFinishPrProseJudgment` finds no JSON object, and `decodePrProseJudgment` fails closed to
-   `revision_required/structurally_incomplete` → halt reason `judgment_malformed_prose`. The run
-   stops, which is correct, but it names the wrong cause.
+   `parseFinishPrProseJudgment` finds no JSON object, and `decodePrProseJudgment` fails closed —
+   post-#1372, to `malformed_response`, which routes to `publication_retry`. The refusal is not
+   merely misnamed; it is spent as a retry and never reaches the operator at all. (See the
+   Amendment below: before #1372 this degraded to a halt named `judgment_malformed_prose`, which
+   named the wrong cause but at least stopped.)
 
-There are 14 `human_required` construction sites spanning 12 distinct reason tokens: the six in the
-judgment/PR-identity arm (`judgment_refused`, `judgment_placeholder_prose`, `judgment_halt_prose`,
-`judgment_malformed_prose`, `ambiguous_pr_identity`, `invalid_shipped_record`) and six in intent
-resolution (`interactive_intent_deferred`, `interactive_intent_declined`,
-`interactive_intent_destructive_choice`, `interactive_intent_unrecognized`,
-`unattended_intent_destructive_choice`, `unattended_intent_unauthorized_outcome`).
+There are 15 `human_required` construction sites spanning 10 distinct reason tokens: the four in the
+judgment/PR-identity arm (`judgment_refused`, `judgment_halt_prose`, `ambiguous_pr_identity`,
+`invalid_shipped_record`) and six in intent resolution (`interactive_intent_deferred`,
+`interactive_intent_declined`, `interactive_intent_destructive_choice`,
+`interactive_intent_unrecognized`, `unattended_intent_destructive_choice`,
+`unattended_intent_unauthorized_outcome`).
 
 ## Options Considered
 
@@ -53,8 +55,8 @@ resolution (`interactive_intent_deferred`, `interactive_intent_declined`,
   and the tests that assert the exact shape.
 
 ### Option B: Publish the verdict contract only
-- **Pros:** ~1h, zero engine risk; `refused` becomes reachable and stops being misreported as
-  `judgment_malformed_prose`.
+- **Pros:** ~1h, zero engine risk; `refused` becomes reachable and stops being spent as a
+  `judgment_malformed_response` retry.
 - **Cons:** Leaves the halt text an enum token. The operator still reads the blocker out of
   `daemon.log`, which is the complaint that motivated the intake.
 
@@ -74,9 +76,9 @@ new export the conductor is expected to call. `route.reason` therefore arrives a
 keeps the production wiring surface at exactly one caller, which is the caller that exists today.
 
 **Condition 1 — the reason union must be closed.** `PublicationDisposition`'s `human_required.reason`
-is currently typed `string` (`finish-publication.ts:396`) while the inner result union at :926 is
+is currently typed `string` (`finish-publication.ts:408`) while the inner routing union at :1008 is
 closed. A map keyed on `string` gets no exhaustiveness checking from the compiler, so a future
-reason token would silently render nothing. Narrow the field to the closed union of the 12 tokens so
+reason token would silently render nothing. Narrow the field to the closed union of the 10 tokens so
 the map is exhaustive by construction, **and** retain a fail-closed generic rendering for any token
 that still fails to resolve at runtime. Both, not either — the compiler check prevents the omission,
 the runtime fallback prevents a blank halt if one slips through a boundary the compiler does not see
@@ -120,3 +122,41 @@ unsound one. Should a machinery-only route to reachability appear, it supersedes
 - [ ] Publish the PR-prose verdict JSON contract in `skills/finish/SKILL.md`.
 - [ ] Update `docs/runbooks/stalled-or-stuck-feature.md` and `docs/reference/steps.md` for the
       changed operator-visible halt text.
+
+## Amendment — 2026-08-08, post-#1372
+
+**Amended by:** James Stoup (operator), interactive session. **Status is unchanged: the decision
+stands.** Option A, both conditions, and every follow-up above remain in force. This amendment
+corrects premises and an inventory that merged commit `5bbc109e8` (#1372) invalidated after this
+ADR was accepted; it re-decides nothing.
+
+`acceptance_specs` refused to author specs against the un-amended artifacts and wrote a
+`needs-human` HALT naming the conflict. That refusal was correct and is the reason this section
+exists.
+
+**What #1372 changed.** It split the decoder's fail-closed fallback out of the verdict union:
+`malformed_response` is now a distinct kind (`finish-publication.ts:883`), deliberately not
+collapsed into `structurally_incomplete` "because the two need opposite routing". Unparseable
+provider output routes to `publication_retry` (:1075-1083); it no longer halts. `revision_required`
+with `placeholder` or `structurally_incomplete` routes to `author_pr_prose` (:1091-1101). The
+tokens `judgment_placeholder_prose` and `judgment_malformed_prose` no longer exist.
+
+**Corrections applied above.**
+
+| Was | Now | Verified at |
+|---|---|---|
+| unstructured prose → `revision_required`/`structurally_incomplete` → halt `judgment_malformed_prose` | → `malformed_response` → `publication_retry`, no halt | `finish-publication.ts:883`, :1075-1083 |
+| 14 construction sites, 12 tokens | 15 sites, 10 tokens | mechanical grep of `finish-publication.ts` |
+| judgment arm of six tokens | four: `judgment_refused`, `judgment_halt_prose`, `ambiguous_pr_identity`, `invalid_shipped_record` | :1008-1013 |
+| `human_required.reason` at :396, inner union at :926 | :408 and :1008 | line drift only; the `string` typing defect is unchanged and still unfixed |
+
+**The motivation strengthened rather than weakened.** Before #1372 a refusing provider's prose
+produced a halt with the wrong name. It now produces a *retry*, so the refusal is consumed by the
+publication progress allowance and the operator never sees it. Publishing the verdict contract
+(Follow-up 5) is what makes a deliberate refusal expressible at all, and it is now load-bearing
+rather than a nicety.
+
+**Condition 2 is unaffected but its cost is now higher**, because the non-compliant degradation
+path is a retry rather than a halt. It remains sound — the allowance is bounded, so a
+non-converging provider still stops — but it fails *later* and less legibly than when this ADR was
+accepted.

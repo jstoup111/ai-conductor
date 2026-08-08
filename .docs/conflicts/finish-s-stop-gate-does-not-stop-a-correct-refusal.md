@@ -5,6 +5,8 @@
 **Stories checked:** `.docs/stories/finish-s-stop-gate-does-not-stop-a-correct-refusal.md`
 (Stories 1-5) against the full `.docs/stories/` corpus and the APPROVED ADRs in `.docs/decisions/`
 **Result:** PASSED — zero blocking conflicts; one degrading conflict accepted
+**Re-checked:** 2026-08-08 against merged `5bbc109e8` (#1372). No new conflict; one row's cited
+degradation was restated against the post-#1372 decoder. See the ADR's Amendment section.
 
 ## Scope of the Scan
 
@@ -51,7 +53,7 @@ non-obvious:
 | Story 3 vs `a-successful-finish-publication-transition-consume` ("Given a `human_required` disposition, when it is routed, then it still halts and is not consumed as progress") | Both require `human_required` to halt. Story 3 changes only the halt's *text*, never its routing, and its negative path explicitly requires the other four route arms to stay byte-identical. | Reinforcing, not conflicting |
 | Story 1 vs the same spec's widening of `isExactDisposition` for `publication_progress` | Both touch the guard, but on disjoint arms: that work enrolled a new disposition *kind*; Story 1 widens the existing `human_required` arm's key set. The exact-key discipline is preserved by both. | No contradiction |
 | Story 3 vs `finish-step-completion-becomes-engine-machinery-re` (completion is engine-owned, not prompt-owned) | Story 3 moves rendering *into* the engine router and forbids a `conductor.ts` diff, which strengthens the engine-ownership assertion rather than eroding it. | Aligned |
-| Story 5 vs `finish-step-fails-try-1-on-every-daemon-ship-skill` (finish must not fail try 1 spuriously) | Story 5 adds a provider capability and removes no fail-closed behavior; its negative paths pin the existing degradations (`provider_unavailable` → `publication_retry`, unstructured prose → `structurally_incomplete`) in place. A refusal was already terminal, so no run that previously passed now halts. | No regression |
+| Story 5 vs `finish-step-fails-try-1-on-every-daemon-ship-skill` (finish must not fail try 1 spuriously) | Story 5 adds a provider capability and removes no fail-closed behavior; its negative paths pin the existing degradations (`provider_unavailable` → `publication_retry`, unstructured prose → `malformed_response` → `publication_retry`) in place. Re-checked 2026-08-08 against merged `5bbc109e8` (#1372): unstructured prose no longer halts at all, so the story is even further from causing a spurious try-1 failure than when this row was written. | No regression |
 | Story 4 vs `daemon-false-ship-guard` (a ship must be a verified `pr` outcome) | Story 4 touches only the refusal arms' `detail` payload. Its final negative path explicitly forbids reclassifying `timed_out` / `provider_unavailable`, so no disposition changes ship-eligibility. | No state conflict |
 | Stories 1-5 internally | Sequencing runs 1 → 2 → 3 (type, then map, then render) with 4 and 5 independent of each other. No circular dependency: Story 1's guard change does not require the map, and Story 5's documentation does not require Story 4's `detail` plumbing to exist first. | No sequencing conflict |
 

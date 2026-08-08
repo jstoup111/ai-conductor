@@ -20,7 +20,9 @@ such as `judgment_refused`. `routeFinishPublicationDisposition` passes it throug
 `writeHaltMarker(route.reason, 'needs-human')`. The operator reads an identifier. Separately, the
 `refused` verdict is unreachable: `/finish` is dispatched with zero arguments, so `SKILL.md` is the
 provider's entire instruction set and it never states the `{"kind": ...}` contract — a refusing
-provider writes prose, the parser finds no JSON, and it fails closed to `judgment_malformed_prose`.
+provider writes prose, the parser finds no JSON, and post-#1372 it fails closed to
+`malformed_response`, which routes to a judgment retry rather than a halt — so the refusal is
+spent by the progress allowance and never reaches the operator.
 
 **The seam.** Rendering happens **inside** `routeFinishPublicationDisposition`'s `human_required`
 arm, not in a new export the conductor calls. `route.reason` therefore arrives at the existing
@@ -30,7 +32,7 @@ adds no production entry point: every surface terminates at a caller that exists
 **Shape of the data.** Three coordinated changes, in dependency order:
 
 1. **Type layer (Tasks 1-2).** `human_required.reason` narrows from `string` to the closed
-   twelve-token union, so a future token cannot be added without a rendering. `isExactDisposition`'s
+   ten-token union, so a future token cannot be added without a rendering. `isExactDisposition`'s
    `human_required` arm widens from `hasOnly('kind','reason')` to also accept
    `hasOnly('kind','reason','detail')`, requiring `detail` to be a non-empty string when present.
    The guard stays exact-key — this is a widening of one arm, not a relaxation of the discipline.
@@ -79,9 +81,9 @@ disposition travels in the PR body per this repository's Release & Update Gates.
    `{ kind: 'human_required', reason: 'not_a_real_token' }` is not assignable to
    `PublicationDisposition`.
 2. Verify test fails (RED) — currently assignable because `reason` is `string`.
-3. Implement: introduce a `HumanRequiredReason` union of exactly the twelve tokens and change the
+3. Implement: introduce a `HumanRequiredReason` union of exactly the ten tokens and change the
    `human_required` arm at the `PublicationDisposition` declaration to use it. Adjust any of the
-   fourteen construction sites the compiler now rejects.
+   fifteen construction sites the compiler now rejects.
 4. Verify test passes and `npm run typecheck` is clean (GREEN).
 5. Commit with message: "types: close the FINISH human-required reason union"
 
@@ -143,12 +145,12 @@ disposition travels in the PR body per this repository's Release & Update Gates.
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: importing `HUMAN_REQUIRED_REASONS` and reading each of the twelve tokens
+1. Write failing test: importing `HUMAN_REQUIRED_REASONS` and reading each of the ten tokens
    yields an object with `message` and `nextAction`.
 2. Verify test fails (RED) — the map does not exist.
 3. Implement: add `HUMAN_REQUIRED_REASONS` beside `PUBLICATION_CONDITIONS`, annotated `satisfies
    Record<HumanRequiredReason, { message: string; nextAction: string }>` so a missing key is a
-   compile error. Author reader-facing messages and verb-led next actions for all twelve.
+   compile error. Author reader-facing messages and verb-led next actions for all ten.
 4. Verify test passes and typecheck is clean (GREEN).
 5. Commit with message: "feat: map each FINISH human-required reason to guidance"
 
@@ -167,7 +169,7 @@ disposition travels in the PR body per this repository's Release & Update Gates.
 
 **Steps:**
 1. Write failing test: iterate the map asserting each `message` and `nextAction` is non-blank, and
-   that the twelve `message` values are all distinct.
+   that the ten `message` values are all distinct.
 2. Verify test fails (RED) if any authored entry is blank or duplicated.
 3. Implement: correct any offending entry from Task 4.
 4. Verify test passes (GREEN).
@@ -366,7 +368,8 @@ disposition travels in the PR body per this repository's Release & Update Gates.
 **Steps:**
 1. Write failing test: parse the verdict vocabulary out of `skills/finish/SKILL.md` and assert every
    documented `kind` and `revision_required` reason is accepted by `isPrProseJudgmentResult`, and
-   that an unstructured prose reply still decodes to `revision_required`/`structurally_incomplete`.
+   that an unstructured prose reply still decodes to `malformed_response` and routes to
+   `publication_retry`.
 2. Verify test fails (RED) — `SKILL.md` documents no contract.
 3. Implement: add a verdict-contract section to `skills/finish/SKILL.md` giving the exact JSON
    object, all three kinds, the three `revision_required` reasons, and the optional bounded

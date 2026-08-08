@@ -105,7 +105,7 @@ entry point, which is why `conductor.ts` is unmodified.
 
 | Risk | Type | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| Provider does not emit the documented JSON verdict, so `refused` stays unreachable | Integration | Medium | Medium | Already fails closed — `decodePrProseJudgment` degrades to `revision_required/structurally_incomplete` → halt. Worst case is a generic reason, never a false pass. Recorded as an accepted cost (Condition 2). |
+| Provider does not emit the documented JSON verdict, so `refused` stays unreachable | Integration | Medium | Medium | Already fails closed — post-#1372 `decodePrProseJudgment` degrades to `malformed_response` → `publication_retry`, bounded by the publication progress allowance, which still ends the run. Worst case is a late, generic halt, never a false pass. Recorded as an accepted cost (Condition 2); the amendment notes the cost is now higher because non-compliance fails later than it did when this review was written. |
 | Widening `isExactDisposition` admits a malformed disposition | Technical | Low | High | Keep `detail` optional, `string`, and non-empty when present; add a rejection test per malformed shape. The guard is the last line before a halt is trusted. |
 | An unrecognized reason token renders a blank halt | Technical | Low | Medium | Condition 1: closed union for a compile-time guarantee plus a runtime fail-closed generic rendering. |
 | Rebase conflict on `finish-publication.ts` | Knowledge | High | Medium | Advisory `overlap-scan` reports ~29 unmerged spec branches declaring this file. Unavoidable and not caused by this design; noted so the build expects it. Prefer additive edits and keep the diff tight. |
