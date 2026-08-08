@@ -77,6 +77,26 @@ describe('engine/resolved-config', () => {
       expect(resolved.perTaskFloor).toBe(true);
     });
 
+    it('defaults scope containment enforcement to report-only', () => {
+      const resolved = resolveBuildReviewConfig(undefined) as ReturnType<
+        typeof resolveBuildReviewConfig
+      > & { scopeContainmentEnforced?: boolean };
+
+      expect(resolved.scopeContainmentEnforced).toBe(false);
+    });
+
+    it('honors explicit scope containment enforcement', () => {
+      const config = {
+        build_review: { scopeContainmentEnforced: true },
+      } as HarnessConfig;
+
+      const resolved = resolveBuildReviewConfig(config) as ReturnType<
+        typeof resolveBuildReviewConfig
+      > & { scopeContainmentEnforced?: boolean };
+
+      expect(resolved.scopeContainmentEnforced).toBe(true);
+    });
+
     it('honors an explicit perTaskFloor: false opt-out', () => {
       const config: HarnessConfig = {
         build_review: { enabled: true, perTaskFloor: false },

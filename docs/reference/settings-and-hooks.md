@@ -210,15 +210,23 @@ git -C <worktree> config --worktree core.hooksPath <worktree>/.pipeline/git-hook
 | Hook | Trigger | What it does | Can block? |
 | --- | --- | --- | --- |
 | `prepare-commit-msg` | every commit in the worktree | Stamps `Task: <id>` from `<worktree>/.pipeline/current-task` using `git interpret-trailers --if-exists replace`. Fires only when no explicit trailer is already present. Abstains on amend, on rebase replay, and on an empty staged diff. | No |
-| `commit-msg` | every commit in the worktree | Validates a supplied `Task:` trailer, then emits non-blocking warnings for bundling and subject mismatch. | **Yes — exit 1** (git-hook convention) when a supplied trailer uses the `task-N` form, or names an id absent from `.pipeline/task-status.json` |
+| `commit-msg` | every commit in the worktree | Validates a supplied `Task:` trailer, checks its staged paths against the active task's declared files, then emits non-blocking warnings for bundling and subject mismatch. An out-of-scope path is reported with a copy-pasteable `Scope: <path> — <rationale>` widening. Containment defaults to report-only; set `build_review.scopeContainmentEnforced: true` to refuse verified violations. | **Yes — exit 1** (git-hook convention) when a supplied trailer uses the `task-N` form or names an id absent from `.pipeline/task-status.json`, or when enforced scope-check returns exit `2`. |
 
 Both hooks chain to `$(git rev-parse --git-common-dir)/hooks/<name>` when one exists and is executable.
-Both are pure bash plus `git`, `node -e`, and POSIX tools — they never invoke `conduct-ts` and never
-reference `dist/`.
+`prepare-commit-msg` is pure bash plus `git`, `node -e`, and POSIX tools. `commit-msg` additionally invokes
+the installed `conduct-ts scope-check <commit-message>` command; neither hook references `dist/`.
 
 `commit-msg` exits 0 immediately for merge commits (`MERGE_HEAD` present), `--amend`, rebase replay, and
 any commit made with `CONDUCT_ENGINE_COMMIT=1` — the environment the engine sets for its own bookkeeping
 commits (rebase mechanics, quarantine, shipped records, spec landing).
+
+The scope checker has three outcomes. Exit `0` means the commit is allowed: it covers both in-scope commits
+and an out-of-scope commit reported under the report-only default. Exit `2` is a positive refusal reserved
+for a future enforcement flip, which `commit-msg` converts to Git's blocking exit `1`. Any other exit is an
+abstention — for example, missing or malformed task state — and `commit-msg` logs that it allowed the commit.
+Only a task-attributed commit with a usable in-progress task row is checked. Add one `Scope:` trailer per
+out-of-scope staged path when the widening is intentional; the engine records accepted widenings for
+`build_review`, which remains the semantic scope authority.
 
 **No `pre-commit` or `post-commit` git hook is installed by any command in this repo.**
 `hooks/pre-commit-tdd-gate.sh` ships in the tree but is copy-it-yourself only; nothing installs it, and

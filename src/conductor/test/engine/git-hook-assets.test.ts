@@ -88,9 +88,15 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(code).toBe(0);
     });
 
-    it('does not reference src/conductor/dist or conduct-ts', () => {
+    it('does not reference src/conductor/dist and invokes scope-check', () => {
       expect(COMMIT_MSG_HOOK).not.toMatch(/src\/conductor\/dist/);
-      expect(COMMIT_MSG_HOOK).not.toMatch(/conduct-ts/);
+      expect(COMMIT_MSG_HOOK).not.toMatch(/tasksByFile/);
+      expect(COMMIT_MSG_HOOK).toMatch(
+        /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE"/,
+      );
+      expect(COMMIT_MSG_HOOK).toMatch(
+        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "2" \]\]; then\n\s+exit 1\n\s+fi/,
+      );
     });
   });
 
@@ -112,12 +118,11 @@ describe('git-hook-assets — embedding hook scripts', () => {
 
     const FORBIDDEN_PATTERNS = [
       { pattern: /\bdist\//, name: 'dist/ reference' },
-      { pattern: /\bconduct\b/, name: 'conduct CLI invocation' },
       { pattern: /\bnpm\b/, name: 'npm invocation' },
       { pattern: /\bnpx\b/, name: 'npx invocation' },
     ];
 
-    it('PREPARE_COMMIT_MSG_HOOK does not reference dist/, conduct, npm, or npx', () => {
+    it('PREPARE_COMMIT_MSG_HOOK does not reference dist/, npm, or npx', () => {
       for (const { pattern, name } of FORBIDDEN_PATTERNS) {
         expect(
           PREPARE_COMMIT_MSG_HOOK,
@@ -126,7 +131,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
       }
     });
 
-    it('COMMIT_MSG_HOOK does not reference dist/, conduct, npm, or npx', () => {
+    it('COMMIT_MSG_HOOK does not reference dist/, npm, or npx except its scope-check CLI', () => {
       for (const { pattern, name } of FORBIDDEN_PATTERNS) {
         expect(
           COMMIT_MSG_HOOK,
@@ -135,11 +140,10 @@ describe('git-hook-assets — embedding hook scripts', () => {
       }
     });
 
-    it('both hooks do not spawn CLI tools like conduct, npm, or npx', () => {
+    it('both hooks do not spawn package-manager CLI tools', () => {
       /**
        * Check for invocations of forbidden CLI tools.
        * We look for word boundaries to catch:
-       * - `conduct ...` or `$(conduct ...)`
        * - `npm ...` or `$(npm ...)`
        * - `npx ...` or `$(npx ...)`
        *
@@ -148,7 +152,6 @@ describe('git-hook-assets — embedding hook scripts', () => {
        * outside the `node -e` context.
        */
       const forbiddenCliPatterns = [
-        /\bconduct\b/,
         /\bnpm\b/,
         /\bnpx\b/,
       ];
@@ -491,6 +494,131 @@ describe('git-hook-assets — embedding hook scripts', () => {
       const res = await commitFile('unknown.txt', 'unknown', 'feat: bad id\n\nTask: 999');
       expect(res.code).not.toBe(0);
       expect(res.stderr).toMatch(/not found in task-status\.json/);
+    });
+  });
+
+  describe('Plan-scope hook exemptions and fail-open exits (#1074 Task 10)', () => {
+    let repoDir: string;
+    let fakeBinDir: string;
+
+    async function git(
+      args: string[],
+      env?: NodeJS.ProcessEnv,
+    ): Promise<{ stdout: string; stderr: string; code: number }> {
+      try {
+        const { stdout, stderr } = await execFileAsync('git', ['-C', repoDir, ...args], { env });
+        return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
+      } catch (err) {
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
+      }
+    }
+
+    async function writeScopeCheck(exitCode: number): Promise<NodeJS.ProcessEnv> {
+      await writeFile(join(fakeBinDir, 'conduct-ts'), `#!/bin/sh\nexit ${exitCode}\n`, 'utf8');
+      await chmod(join(fakeBinDir, 'conduct-ts'), 0o755);
+      return { ...process.env, PATH: `${fakeBinDir}:${process.env.PATH}` };
+    }
+
+    async function stageOutsideScope(name: string): Promise<void> {
+      await writeFile(join(repoDir, name), 'outside declared scope\n', 'utf8');
+      await git(['add', name]);
+    }
+
+    async function commitOutsideScope(
+      name: string,
+      message: string,
+      env?: NodeJS.ProcessEnv,
+    ): Promise<{ stdout: string; stderr: string; code: number }> {
+      await stageOutsideScope(name);
+      return git(['commit', '-m', message], env);
+    }
+
+    beforeEach(async () => {
+      repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-scope-exits-'));
+      fakeBinDir = join(repoDir, 'fake-bin');
+      await mkdir(fakeBinDir, { recursive: true });
+      await git(['init', '-b', 'main']);
+      await git(['config', 'user.email', 'test@example.com']);
+      await git(['config', 'user.name', 'Test']);
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf8');
+      await git(['add', '.']);
+      await git(['commit', '-m', 'chore: initial commit']);
+      await prepareWorktree(repoDir);
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(repoDir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '1', status: 'in_progress', files: ['declared.ts'] }],
+        }),
+        'utf8',
+      );
+    });
+
+    afterEach(async () => {
+      await rm(repoDir, { recursive: true, force: true });
+    });
+
+    it.each([
+      ['unavailable executable', 127],
+      ['unregistered subcommand', 1],
+      ['throwing command', 70],
+    ])('allows an out-of-scope commit when scope-check is %s', async (_name, exitCode) => {
+      const env = await writeScopeCheck(exitCode);
+      const result = await commitOutsideScope('outside.ts', 'feat: uncertain check\n\nTask: 1', env);
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toContain(`scope-check abstained (exit ${exitCode})`);
+    });
+
+    it('refuses an out-of-scope commit only when scope-check returns 2', async () => {
+      const env = await writeScopeCheck(2);
+      const result = await commitOutsideScope('outside.ts', 'feat: confirmed violation\n\nTask: 1', env);
+
+      expect(result.code).not.toBe(0);
+    });
+
+    it('exempts merge, amend, rebase replay, engine commits, and commits with no Task trailer', async () => {
+      const env = await writeScopeCheck(0);
+
+      const noTask = await commitOutsideScope('no-task.ts', 'feat: no attribution', env);
+      expect(noTask.code).toBe(0);
+
+      const engine = await commitOutsideScope(
+        'engine.ts',
+        'chore: engine bookkeeping\n\nTask: 1',
+        { ...env, CONDUCT_ENGINE_COMMIT: '1' },
+      );
+      expect(engine.code).toBe(0);
+
+      const initial = await commitOutsideScope('amend.ts', 'feat: before amend', env);
+      expect(initial.code).toBe(0);
+      await stageOutsideScope('amend-extra.ts');
+      await writeScopeCheck(2);
+      const amend = await git(['commit', '--amend', '-m', 'feat: amended'], env);
+      expect(amend.code).toBe(0);
+
+      await writeScopeCheck(0);
+      await git(['checkout', '-b', 'feature'], env);
+      const feature = await commitOutsideScope('feature.ts', 'feat: feature\n\nTask: 1', env);
+      expect(feature.code).toBe(0);
+      await git(['checkout', 'main'], env);
+      const main = await commitOutsideScope('main.ts', 'feat: main\n\nTask: 1', env);
+      expect(main.code).toBe(0);
+      await writeScopeCheck(2);
+      const merge = await git(['merge', '--no-ff', 'feature', '-m', 'merge: feature'], env);
+      expect(merge.code).toBe(0);
+
+      await writeScopeCheck(0);
+      await git(['checkout', '-b', 'rebase-feature'], env);
+      const replay = await commitOutsideScope('replay.ts', 'feat: replay\n\nTask: 1', env);
+      expect(replay.code).toBe(0);
+      await git(['checkout', 'main'], env);
+      const advance = await commitOutsideScope('advance.ts', 'feat: advance\n\nTask: 1', env);
+      expect(advance.code).toBe(0);
+      await writeScopeCheck(2);
+      const rebase = await git(['rebase', 'main', 'rebase-feature'], env);
+      expect(rebase.code).toBe(0);
     });
   });
 

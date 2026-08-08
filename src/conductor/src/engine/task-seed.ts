@@ -10,6 +10,7 @@ import {
   resolveOriginRef,
 } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
+import { parsePlanTaskPaths } from './plan-task-parse.js';
 interface TaskStatusRecord {
   id: string;
   name?: string;
@@ -69,6 +70,14 @@ function mergeStatusRows(a: TaskStatusRecord, b: TaskStatusRecord): TaskStatusRe
   if (!merged.commit && loser.commit) merged.commit = loser.commit;
   if (!merged.skip_reason && loser.skip_reason) merged.skip_reason = loser.skip_reason;
   return merged;
+}
+
+/** Add plan-declared paths without discarding paths already recorded on a row. */
+function mergeDeclaredFiles(existingFiles: unknown, declaredFiles: string[]): string[] {
+  const existing = Array.isArray(existingFiles)
+    ? existingFiles.filter((file): file is string => typeof file === 'string')
+    : [];
+  return [...new Set([...existing, ...declaredFiles])];
 }
 
 /**
@@ -214,6 +223,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     }
 
     const planTasks = parsePlanTasks(planText);
+    const planTaskPaths = parsePlanTaskPaths(planText);
 
     // Load existing task-status.json.
     //
@@ -298,12 +308,16 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     for (const [taskId, planTask] of planTasks.entries()) {
       const canonicalId = canonicalTaskId(taskId);
       const existing = taskMap.get(canonicalId);
+      const declaredFiles = planTaskPaths.declaredTaskIds.has(taskId)
+        ? Array.from(planTaskPaths.get(taskId) ?? [])
+        : undefined;
 
       if (existing) {
         // Adopt the plan-header grammar as the canonical stored id (#636), so a
         // surviving phantom bare row ends up keyed `T<N>` to match the plan,
         // trailers, and evidence stamps.
         existing.id = taskId;
+        if (declaredFiles) existing.files = mergeDeclaredFiles(existing.files, declaredFiles);
 
         // Preserve in_progress
         if (existing.status === 'in_progress') {
@@ -357,6 +371,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
               name: planTask.name,
               status: 'pending',
             };
+        if (declaredFiles) newTask.files = declaredFiles;
         if (provenSha) {
           console.warn(
             `[task-seed] restored ${taskId} as completed from Task: trailer on ${provenSha.slice(0, 8)}`,

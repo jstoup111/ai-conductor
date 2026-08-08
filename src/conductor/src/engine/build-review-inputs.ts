@@ -5,6 +5,7 @@ import {
   readTestSuiteRemediations,
   type TestSuiteRemediationRecord,
 } from './test-suite-remediation.js';
+import type { AcceptedScopeWidening } from './per-task-commit-floor.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -42,6 +43,8 @@ export interface BuildReviewInputs {
   /** Engine-recorded aggregate failures exposed after base advances. The
    * grader judges whether diff hunks implement them; they are not exemptions. */
   repairContext?: TestSuiteRemediationRecord[];
+  /** Commit-local scope widenings accepted by the containment evaluator. */
+  acceptedWidenings?: AcceptedScopeWidening[];
 }
 
 /**

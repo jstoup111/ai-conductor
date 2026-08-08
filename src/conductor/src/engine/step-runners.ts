@@ -28,7 +28,13 @@ import { findArtifactFiles, resolveFeaturePlanPath, BUILD_REVIEW_VERDICT } from 
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
-import { runPerTaskCommitFloor, renderPerTaskFloorReport } from './per-task-commit-floor.js';
+import {
+  runContainmentFloor,
+  runPerTaskCommitFloor,
+  renderContainmentFloorReport,
+  renderPerTaskFloorReport,
+  type ContainmentFloorReport,
+} from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { buildGraderPrompt } from './build-review-prompt.js';
 import {
@@ -1679,9 +1685,25 @@ export class DefaultStepRunner implements StepRunner {
       };
     }
 
+    const buildReviewConfig = resolveBuildReviewConfig(this.config);
+    let containmentReport: ContainmentFloorReport | undefined;
+    if (buildReviewConfig.perTaskFloor) {
+      try {
+        containmentReport = await runContainmentFloor({
+          projectRoot: this.projectDir,
+          planPath,
+        });
+      } catch {
+        // Fail-soft: containment telemetry must never fail build_review.
+      }
+    }
+
     let inputs;
     try {
-      inputs = await assembleBuildReviewInputs(this.gitRunner, planPath);
+      inputs = {
+        ...await assembleBuildReviewInputs(this.gitRunner, planPath),
+        acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
+      };
     } catch (err) {
       return {
         success: false,
@@ -1715,7 +1737,6 @@ export class DefaultStepRunner implements StepRunner {
     // Guarded end-to-end: runPerTaskCommitFloor is already fail-soft
     // internally, but the try/catch here ensures literally nothing from this
     // telemetry path can throw and fail the build_review step.
-    const buildReviewConfig = resolveBuildReviewConfig(this.config);
     let floorAdvisoryLines: string[] = [];
     if (buildReviewConfig.perTaskFloor) {
       try {
@@ -1739,8 +1760,20 @@ export class DefaultStepRunner implements StepRunner {
           JSON.stringify(floorReport, null, 2),
           'utf-8',
         );
-        if (floorReport.gaps.length > 0) {
-          floorAdvisoryLines = renderPerTaskFloorReport(floorReport);
+        containmentReport ??= await runContainmentFloor({
+          projectRoot: this.projectDir,
+          planPath,
+        });
+        await writeFile(
+          join(effectivePipelineDir, 'containment-floor.json'),
+          JSON.stringify(containmentReport, null, 2),
+          'utf-8',
+        );
+        floorAdvisoryLines = [
+          ...renderPerTaskFloorReport(floorReport),
+          ...renderContainmentFloorReport(containmentReport),
+        ];
+        if (floorAdvisoryLines.length > 0) {
           for (const line of floorAdvisoryLines) {
             this.log(`WARNING: ${line}`);
           }
@@ -1818,7 +1851,12 @@ export class DefaultStepRunner implements StepRunner {
           : {}),
       });
     const finalize = (r: StepRunResult): StepRunResult =>
-      withBaseFreshness(withProviderMetadata(r));
+      withBaseFreshness(withProviderMetadata({
+        ...r,
+        ...(typeof r.output === 'string'
+          ? { output: prependFloorAdvisory(r.output) }
+          : {}),
+      }));
 
     if (result.authFailure) {
       return finalize({ success: false, output: result.output, authFailure: true });
@@ -1846,7 +1884,7 @@ export class DefaultStepRunner implements StepRunner {
     }
     if (result.success) {
       await this.stampBuildReviewVerdict();
-      return finalize({ success: true, output: prependFloorAdvisory(result.output) });
+      return finalize({ success: true, output: result.output });
     }
 
     // Full-ladder exhaustion: every attempted model reported unavailable.

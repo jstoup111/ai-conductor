@@ -64,6 +64,27 @@ already-applied=<n>`.
 Commands that are advisory by contract always exit 0 regardless of outcome: `overlap-scan`, `kpi`,
 `shipped-record`, `shipment-evidence audit`, and `render-diagrams` in its default (non-`--check`) mode.
 
+## `conduct-ts scope-check`
+
+```bash
+conduct-ts scope-check <commit-message-path>
+```
+
+This hook-only command is invoked by the generated `commit-msg` hook for a task-attributed commit. It reads
+the active in-progress task row from `.pipeline/task-status.json`, compares its declared files with the staged
+paths, and prints every undeclared path with a `Scope: <path> — <rationale>` trailer that can justify an
+intentional widening. It is not an operator workflow; worktree provisioning wires it automatically.
+
+| Exit | Meaning | Hook behavior |
+| --- | --- | --- |
+| 0 | Allowed, including a verified violation in the default report-only mode | Allows the commit; a reported violation remains visible in containment-floor step output and warnings |
+| 2 | Positive scope refusal when `build_review.scopeContainmentEnforced` is `true` | `commit-msg` converts it to exit 1 and blocks the commit without changing the working tree or index |
+| other | Abstention: no Task trailer, unusable/missing task state, or a checker failure | Logs the abstention and allows the commit |
+
+The report-only default is deliberate. Set `build_review.scopeContainmentEnforced: true` to enable refusal.
+A `Scope:` trailer documents a widening; its path, rationale, task id, and commit SHA are supplied directly to
+`build_review`, and it never bypasses the grader's semantic scope judgment.
+
 ## `conduct-ts inline`
 
 Runs the SDLC pipeline in the foreground.

@@ -825,13 +825,14 @@ is written back (`config.ts:898-927`).
 | --- | --- | --- | --- |
 | `build_review.enabled` | boolean | `true` | Works |
 | `build_review.perTaskFloor` | boolean | `true` | Works |
+| `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 
 Normalization contract:
 
 | Input | Result |
 | --- | --- |
 | Absent or `null` | `{ enabled: true }`, no warning |
-| Valid `enabled` and/or `perTaskFloor` keys | Preserved; omitted `enabled` defaults to `true` |
+| Valid `enabled`, `perTaskFloor`, and/or `scopeContainmentEnforced` keys | Preserved; omitted `enabled` defaults to `true` |
 | Non-object | `{ enabled: true }` plus one warning |
 | Unknown or invalid inner key | That key is omitted and warned by name; valid sibling keys are preserved |
 
@@ -845,6 +846,12 @@ is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved o
 
 `perTaskFloor` reaches the build-review resolver (`resolved-config.ts:633-636`) and controls its
 per-task floor telemetry (`step-runners.ts:1569-1584`).
+
+`scopeContainmentEnforced` is resolved through the same block and read by the real
+`conduct-ts scope-check` command. It defaults to `false`, so verified violations are reported while
+the commit proceeds. Set it to `true` to make a verified violation return exit `2`; the generated
+`commit-msg` hook converts that result to Git exit `1` and refuses the commit without changing the
+working tree or index.
 
 ## ci_watch
 
