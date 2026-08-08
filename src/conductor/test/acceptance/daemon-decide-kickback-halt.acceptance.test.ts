@@ -44,19 +44,19 @@ import {
 // tmp project root — across 2+ dispatches, because the defect class this
 // feature closes lives in the WIRING between `scanKickbackVerdicts`, the halt
 // emit pair, and the HALT-class sidecar the daemon's re-kick sweep reads. A
-// unit test of `decideKickbackDisposition` in isolation passes while the loop
-// still calls `navigateBack` — exactly the orphaned-primitive failure §3b
-// names. The two enforcement call sites of the predicate are therefore driven
+// unit test of `decideEntryDisposition` in isolation can pass while the loop
+// still calls `navigateBack` — exactly the shared-policy wiring failure §3b
+// names. The two enforcement call sites of that policy are therefore driven
 // separately here (§3d — every call site, real input):
 //
 //   • tail scan        — conductor.ts:6795 (`advanceTail`, `navigate: true`)
 //   • front-half scan  — conductor.ts:6731 (`navigate: false`)
 //
 // DELIBERATELY NOT HERE (single-unit or already-covered, per §2/§3a):
-//   • The pure `decideKickbackDisposition` table over ALL_STEPS (S2 Done-When),
-//     unknown-target/empty-table fail-open (S1 negative path 3), and the
-//     `daemon: false` conjunct — single-function behavior; belongs to
-//     `test/engine/kickback-policy.test.ts`, written under plan Tasks 1-2.
+//   • The pure `decideEntryDisposition` table over ALL_STEPS (S2 Done-When),
+//     unknown-target/empty-table fail-closed and `daemon: false` interactive
+//     entry — single-function policy behavior; belongs to
+//     `test/engine/decide-entry-policy.test.ts`, written under plan Tasks 1-2.
 //   • `rekickSweep`'s needs-human skip in the abstract — already asserted with
 //     injected deps at `test/engine/daemon-rekick.test.ts:157` and `:176`. What
 //     is NOT covered there, and IS covered here, is the composition: the class
