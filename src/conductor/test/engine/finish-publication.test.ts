@@ -316,6 +316,11 @@ describe('finish-publication domain types', () => {
     };
     const transition: PublicationTransition = 'establish_pr';
     const disposition: PublicationDisposition = { kind: 'complete' };
+    const invalidHumanRequiredDisposition: PublicationDisposition = {
+      kind: 'human_required',
+      // @ts-expect-error Human-required reasons must be a closed token union.
+      reason: 'not_a_real_token',
+    };
 
     const destructiveIntent: PublicationIntent = {
       // @ts-expect-error Unattended authority cannot choose an operator-only destructive outcome.
@@ -323,7 +328,7 @@ describe('finish-publication domain types', () => {
       authority: { kind: 'unattended_policy', mode: 'daemon' },
     };
 
-    void [mismatchedSnapshot, transition, disposition, destructiveIntent];
+    void [mismatchedSnapshot, transition, disposition, invalidHumanRequiredDisposition, destructiveIntent];
 
     await expect(import('../../src/engine/finish-publication.js')).resolves.toBeTypeOf('object');
   });

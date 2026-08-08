@@ -399,13 +399,25 @@ export function nextFinishPublicationTransition(
   return 'record_outcome';
 }
 
+export type HumanRequiredReason =
+  | 'judgment_refused'
+  | 'judgment_halt_prose'
+  | 'ambiguous_pr_identity'
+  | 'invalid_shipped_record'
+  | 'interactive_intent_deferred'
+  | 'interactive_intent_declined'
+  | 'interactive_intent_destructive_choice'
+  | 'interactive_intent_unrecognized'
+  | 'unattended_intent_destructive_choice'
+  | 'unattended_intent_unauthorized_outcome';
+
 export type PublicationDisposition =
   | { kind: 'complete' }
   | { kind: 'publication_progress'; transition: PublicationTransition }
   | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | { kind: 'implementation_invalid'; evidence: string }
-  | { kind: 'human_required'; reason: string };
+  | { kind: 'human_required'; reason: HumanRequiredReason };
 
 /** The only actions the conductor may take for a typed FINISH result. */
 export type FinishPublicationRoute =
