@@ -130,6 +130,32 @@ assert "configured dependencies: reads viewer and renderer fields through conduc
 [ "$rc" -eq 0 ] && r=0 || r=1
 assert "configured dependencies: overall --check remains successful" "$r"
 
+# ─── Case 1c: configured and unreadable states remain distinguishable ─────────
+
+out=$(run_check "" 2>&1) && rc=0 || rc=$?
+printf '%s\n' "$out" | grep -q 'markdown viewer configured but could not be read — conduct-ts not on PATH' && r=0 || r=1
+assert "configured viewer without conduct-ts: names the unavailable reader" "$r"
+printf '%s\n' "$out" | grep -q 'markdown viewer not configured' && r=1 || r=0
+assert "configured viewer without conduct-ts: never claims it is unconfigured" "$r"
+
+MALFORMED_BIN="${TMP_ROOT}/malformed-bin"
+mkdir -p "$MALFORMED_BIN"
+printf '%s\n' 'markdown_viewer: [' > "$FAKE_HOME/.ai-conductor/config.yml"
+cat > "${MALFORMED_BIN}/conduct-ts" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  build-auth-status) echo 'build-auth-status: mode=daemon-token state=valid'; exit 0 ;;
+  config\ read\ *) exit 1 ;;
+esac
+EOF
+chmod +x "${MALFORMED_BIN}/conduct-ts"
+
+out=$(run_check "$MALFORMED_BIN" 2>&1) && rc=0 || rc=$?
+printf '%s\n' "$out" | grep -q 'markdown viewer configuration unreadable' && r=0 || r=1
+assert "malformed viewer config: names the configuration as unreadable" "$r"
+printf '%s\n' "$out" | grep -q "markdown viewer 'unset'" && r=1 || r=0
+assert "malformed viewer config: never degrades to an unset value" "$r"
+
 # ─── Case 2: conduct-ts reports a non-clean state (exit 1) → fail line, fail counter increments ──
 
 FAIL_BIN="${TMP_ROOT}/fail-bin"
