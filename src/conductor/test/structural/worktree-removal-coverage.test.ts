@@ -12,6 +12,13 @@ const PROCESS_INVOKING_CALLEES = new Set([
   'exec', 'execFile', 'execFileSync', 'execSync', 'spawn', 'spawnSync',
   'execa', 'execaCommand', 'git', 'runGit', 'removeWorktree',
 ]);
+const ROUTED_MODULES = new Set([
+  'engine/daemon-deps.ts',
+  'engine/daemon-park-cli.ts',
+  'engine/park-reconciliation.ts',
+]);
+const GUARD_MODULE = 'test/structural/worktree-removal-coverage.test.ts';
+const COVERAGE_GUARD_ADR = 'docs/decisions/adr-2026-08-07-worktree-removal-coverage-guard.md';
 
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -96,6 +103,32 @@ function findsWorktreeRemoval(source: ts.SourceFile): boolean {
   return found;
 }
 
+function callsProjectTeardown(source: ts.SourceFile): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && calleeName(node.expression) === 'runProjectTeardown') found = true;
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(source, visit);
+  return found;
+}
+
+function assertWorktreeRemovalCoverage(modules: readonly { module: string; source: ts.SourceFile }[]): void {
+  for (const { module, source } of modules) {
+    if (module === GUARD_MODULE || !findsWorktreeRemoval(source)) continue;
+    if (ROUTED_MODULES.has(module)) {
+      if (!callsProjectTeardown(source)) {
+        throw new Error(`worktree-removal coverage: ${module} is routed but does not call runProjectTeardown`);
+      }
+      continue;
+    }
+    throw new Error(
+      `worktree-removal coverage: ${module} is unclassified; route it through runProjectTeardown ` +
+        `or add it to the exemption registry (${COVERAGE_GUARD_ADR})`,
+    );
+  }
+}
+
 async function worktreeRemovalModules(root: string): Promise<string[]> {
   const modules = await Promise.all((await sourceFiles(root)).map(async (path) => {
     const text = await readFile(path, 'utf8');
@@ -138,5 +171,44 @@ describe('structural: worktree-removal coverage', () => {
     ].map((text, index) => ts.createSourceFile(`fixture-${index}.ts`, text, ts.ScriptTarget.Latest, true));
 
     expect(fixtures.map(findsWorktreeRemoval)).toEqual([true, true, true]);
+  });
+
+  it('rejects an unclassified removal module with its classification options and ADR', () => {
+    const fixture = ts.createSourceFile(
+      'engine/unclassified-removal.ts',
+      "execa('git', ['worktree', 'remove', '--force']);",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(() => assertWorktreeRemovalCoverage([
+      { module: 'engine/unclassified-removal.ts', source: fixture },
+    ])).toThrow(/engine\/unclassified-removal\.ts.*runProjectTeardown.*exemption registry.*adr-2026-08-07-worktree-removal-coverage-guard/s);
+  });
+
+  it('rejects a routed removal module whose teardown invitation was deleted', () => {
+    const fixture = ts.createSourceFile(
+      'engine/daemon-deps.ts',
+      "execa('git', ['worktree', 'remove', '--force']);",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(() => assertWorktreeRemovalCoverage([
+      { module: 'engine/daemon-deps.ts', source: fixture },
+    ])).toThrow(/engine\/daemon-deps\.ts.*runProjectTeardown/s);
+  });
+
+  it('does not classify the guard source itself', () => {
+    const fixture = ts.createSourceFile(
+      'test/structural/worktree-removal-coverage.test.ts',
+      "execa('git', ['worktree', 'remove', '--force']);",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+
+    expect(() => assertWorktreeRemovalCoverage([
+      { module: 'test/structural/worktree-removal-coverage.test.ts', source: fixture },
+    ])).not.toThrow();
   });
 });
