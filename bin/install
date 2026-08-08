@@ -259,8 +259,11 @@ check_installation() {
   echo ""
   if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^markdown_viewer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
     local mv_cmd
-    mv_cmd=$(conduct-ts config read markdown_viewer.command 2>/dev/null || true)
-    if [ -n "$mv_cmd" ] && command -v "$mv_cmd" &>/dev/null; then
+    if ! command -v conduct-ts &>/dev/null; then
+      warn "markdown viewer configured but could not be read — conduct-ts not on PATH"
+    elif ! mv_cmd=$(conduct-ts config read markdown_viewer.command 2>/dev/null); then
+      warn "markdown viewer configuration unreadable"
+    elif [ -n "$mv_cmd" ] && command -v "$mv_cmd" &>/dev/null; then
       ok "markdown viewer: ${mv_cmd} (artifact review)"
     else
       warn "markdown viewer '${mv_cmd:-unset}' configured but not on PATH — will fall back to cat"
@@ -270,9 +273,12 @@ check_installation() {
   fi
   if [ -f "$HARNESS_USER_CONFIG" ] && grep -q "^mermaid_renderer:" "$HARNESS_USER_CONFIG" 2>/dev/null; then
     local mr_preset mr_cmd
-    mr_preset=$(conduct-ts config read mermaid_renderer.preset 2>/dev/null || true)
-    mr_cmd=$(conduct-ts config read mermaid_renderer.command 2>/dev/null || true)
-    if [ -z "$mr_cmd" ] || command -v "$mr_cmd" &>/dev/null; then
+    if ! command -v conduct-ts &>/dev/null; then
+      warn "mermaid renderer configured but could not be read — conduct-ts not on PATH"
+    elif ! mr_preset=$(conduct-ts config read mermaid_renderer.preset 2>/dev/null) || \
+      ! mr_cmd=$(conduct-ts config read mermaid_renderer.command 2>/dev/null); then
+      warn "mermaid renderer configuration unreadable"
+    elif [ -z "$mr_cmd" ] || command -v "$mr_cmd" &>/dev/null; then
       ok "mermaid renderer: ${mr_preset:-unset} (diagram approval gates)"
     else
       warn "mermaid renderer '${mr_preset}' configured but '${mr_cmd}' not on PATH — diagrams fall back to raw Markdown"
