@@ -23,7 +23,10 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
     root = undefined;
   });
 
-  async function runRemediation(targetCompletion: () => Promise<{ done: boolean; reason?: string }>) {
+  async function runRemediation(
+    targetCompletion: () => Promise<{ done: boolean; reason?: string }>,
+    options: { grant?: boolean; stopAfterPlan?: boolean } = {},
+  ) {
     root = await mkdtemp(join(tmpdir(), 'decide-entry-remediation-'));
     const statePath = join(root, 'conduct-state.json');
     await mkdir(join(root, '.pipeline'), { recursive: true });
@@ -35,6 +38,13 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
     for (const step of ALL_STEPS) state[step.name] = 'done';
     await writeState(statePath, state as ConductState);
     CUSTOM_COMPLETION_PREDICATES.plan = targetCompletion;
+    if (options.grant) {
+      await writeFile(
+        join(root, '.pipeline/decide-grant.json'),
+        JSON.stringify({ step: 'plan', grantedBy: 'operator' }),
+        'utf8',
+      );
+    }
 
     const calls: StepName[] = [];
     const runner: StepRunner = {
@@ -68,6 +78,9 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
             'utf8',
           );
         }
+        if (step === 'plan' && options.stopAfterPlan) {
+          return { success: false, output: 'stop after observing plan dispatch' };
+        }
         return { success: true };
       },
     };
@@ -88,6 +101,9 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
       calls,
       halt: await readFile(join(root, '.pipeline/HALT'), 'utf8'),
       haltClass: await readFile(join(root, '.pipeline/HALT.class'), 'utf8'),
+      grantConsumed: await readFile(join(root, '.pipeline/decide-grant.json'), 'utf8')
+        .then(() => false)
+        .catch(() => true),
     };
   }
 
@@ -114,5 +130,15 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
     expect(result.halt).toContain('DECIDE entry refused — autonomous run may not enter DECIDE');
     expect(result.halt).toContain('Source gate:       remediate');
     expect(result.halt).toContain(refusal);
+  });
+
+  it('enters and consumes a matching grant when remediation reopens a satisfied DECIDE artifact', async () => {
+    const result = await runRemediation(
+      async () => ({ done: true, reason: 'plan is current' }),
+      { grant: true, stopAfterPlan: true },
+    );
+
+    expect(result.calls).toContain('plan');
+    expect(result.grantConsumed).toBe(true);
   });
 });
