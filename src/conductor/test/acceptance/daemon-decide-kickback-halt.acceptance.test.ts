@@ -380,8 +380,53 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
 
       expect(kicks).not.toContainEqual({ from: 'build', to: 'plan' });
       expect(halted).toBe(true);
+      // This is deliberately the selector's ordinary forward-walk halt, not
+      // the matching `wiring_check` scan. Keep it as the negative proof that
+      // build did not misattribute another gate's verdict to itself.
       const body = await readHaltBody();
       expect(body).toMatch(/gate 'plan' selected .* without satisfying/);
+    });
+
+    it('the later matching wiring_check verdict fails closed as a DECIDE entry', async () => {
+      await seedStoriesAndPlan();
+      await writeState(statePath, { ...FRONT_DONE, build: 'done' } as ConductState);
+      await writeVerdict(dir, 'plan', {
+        satisfied: false,
+        checkedAt: 1,
+        kickback: { from: 'wiring_check', evidence: KICKBACK_EVIDENCE },
+      });
+
+      const ran: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          ran.push(step);
+          return satisfy(step);
+        },
+      };
+
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        // Default mode keeps this deterministic verifier gate on the serial
+        // path, making the matching wiring_check scan itself observable.
+        mode: 'default',
+        daemon: true,
+        fromStep: 'wiring_check',
+        maxRetries: 1,
+        git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
+      }).run();
+
+      expect(ran).toEqual(['wiring_check']);
+      expect(await readHaltClass(dir)).toBe('needs-human');
+      const body = await readHaltBody();
+      expect(body).toMatch(/Source gate:\s*wiring_check/i);
+      expect(body).toMatch(/Requested target:\s*plan/i);
+      expect(body).toContain(KICKBACK_EVIDENCE);
+      expect(body).toMatch(/DECIDE entry refused/i);
     });
   });
 
@@ -565,8 +610,12 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(body).not.toBeNull();
       expect(body).toContain('architecture_review');
       expect(body).toMatch(/DECIDE/);
-      // The refused DECIDE step is never re-authored from the front half.
-      expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(0);
+      expect(body).toMatch(/Source gate:\s*conflict_check/i);
+      // The exact conflict_check grant was consumed to dispatch its named
+      // step. It cannot authorize the separate architecture_review entry:
+      // that entry is refused before its runner dispatches.
+      expect(ran).toEqual(['conflict_check']);
+      expect(await exists('.pipeline/decide-grant.json')).toBe(false);
     });
   });
 
