@@ -91,7 +91,7 @@ disposition travels in the PR body per this repository's Release & Update Gates.
 - src/conductor/src/engine/finish-publication.ts — `HumanRequiredReason` union; `human_required` arm
 - src/conductor/test/engine/finish-publication.test.ts — type-level assertion
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/engine/finish-publication.ts#routeFinishPublicationDisposition — shared module ownership includes the Task 4 guidance-map export, composed by this existing router.
 **Dependencies:** none
 
 ---
@@ -113,7 +113,7 @@ disposition travels in the PR body per this repository's Release & Update Gates.
 - src/conductor/src/engine/finish-publication.ts — `isExactDisposition` `human_required` arm
 - src/conductor/test/engine/finish-publication.test.ts
 
-**Wired-into:** same as Task 1
+**Wired-into:** src/conductor/src/engine/finish-publication.ts#routeFinishPublicationDisposition — shared module ownership includes the Task 4 guidance-map export, composed by this existing router.
 **Dependencies:** Task 1
 
 ---
@@ -135,7 +135,7 @@ disposition travels in the PR body per this repository's Release & Update Gates.
 - src/conductor/src/engine/finish-publication.ts — `isExactDisposition`
 - src/conductor/test/engine/finish-publication.test.ts
 
-**Wired-into:** same as Task 1
+**Wired-into:** src/conductor/src/engine/finish-publication.ts#routeFinishPublicationDisposition — shared module ownership includes the Task 4 guidance-map export, composed by this existing router.
 **Dependencies:** Task 2
 
 ---
@@ -268,7 +268,7 @@ disposition travels in the PR body per this repository's Release & Update Gates.
 - src/conductor/test/engine/finish-publication.test.ts
 - src/conductor/src/engine/finish-publication.ts — corrections only
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/engine/finish-publication.ts#routeFinishPublicationDisposition — shared module ownership includes the Task 4 guidance-map export, composed by this existing router.
 **Dependencies:** Task 8
 
 ---
