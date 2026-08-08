@@ -1,5 +1,10 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import type { PrProseJudgmentResult } from '../../src/engine/finish-publication.js';
+import {
+  advanceFinishPublication,
+  type PrProseJudgmentResult,
+  type PublicationSnapshot,
+} from '../../src/engine/finish-publication.js';
 import {
   decodePrProseJudgment,
   MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH,
@@ -7,6 +12,59 @@ import {
 } from '../../src/engine/finish-pr-prose-judgment.js';
 
 describe('FINISH PR-prose judgment adapter', () => {
+  it('accepts every provider verdict documented by the finish skill', async () => {
+    const skill = await readFile(new URL('../../../../skills/finish/SKILL.md', import.meta.url), 'utf8');
+    const documentedVerdicts = [...skill.matchAll(/`(\{[^`]+\})`/g)]
+      .map(([, json]) => JSON.parse(json) as Record<string, unknown>)
+      .filter((verdict) => typeof verdict.kind === 'string');
+
+    expect(documentedVerdicts).toHaveLength(5);
+    expect(new Set(documentedVerdicts.map(({ kind }) => kind))).toEqual(
+      new Set(['accepted', 'revision_required', 'refused']),
+    );
+    expect(documentedVerdicts
+      .filter(({ kind }) => kind === 'revision_required')
+      .map(({ reason }) => reason)
+      .sort()).toEqual(['halt', 'placeholder', 'structurally_incomplete']);
+
+    for (const publicationDisposition of documentedVerdicts) {
+      expect(decodePrProseJudgment({ success: true, publicationDisposition })).not.toEqual({
+        kind: 'malformed_response',
+      });
+    }
+  });
+
+  it('keeps unstructured prose malformed and retries its publication judgment', async () => {
+    const judgment = decodePrProseJudgment({ success: true, output: 'The prose looks good.' });
+    expect(judgment).toEqual({ kind: 'malformed_response' });
+
+    const snapshot: PublicationSnapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      pr: {
+        identity: 'one',
+        url: 'https://github.com/acme/widget/pull/1172',
+        prose: 'stale',
+        ready: false,
+      },
+      shippedRecord: 'valid',
+      outcomeRecord: 'missing',
+    };
+
+    await expect(advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: { dispatchJudgment: async () => judgment },
+    })).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'judge_pr_prose',
+      reason: 'judgment_malformed_response',
+    });
+  });
+
   it('rejects an accepted-looking response after provider failure', () => {
     expect(decodePrProseJudgment({
       success: false,

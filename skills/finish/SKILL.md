@@ -99,6 +99,27 @@ first. If one somehow arrives here, report `revision_required` with reason
 `placeholder` and stop: the coordinator owns the authoring pass, so this pass is
 never the place to write missing prose.
 
+### Verdict Contract
+
+For the bounded PR-prose judgment, return exactly one JSON object and no
+unstructured substitute. The provider-facing verdict vocabulary is:
+
+- `{"kind":"accepted"}` when the retained title and body are acceptable.
+- `{"kind":"revision_required","reason":"placeholder","detail":"optional concrete observation"}`
+  when the retained prose is placeholder text.
+- `{"kind":"revision_required","reason":"halt","detail":"optional concrete observation"}`
+  when the retained prose contains halt text.
+- `{"kind":"revision_required","reason":"structurally_incomplete","detail":"optional concrete observation"}`
+  when the retained prose is missing required reader-facing structure.
+- `{"kind":"refused","detail":"optional concrete blocker"}` when the provider cannot make
+  the bounded judgment.
+
+`detail` is optional for `revision_required` and `refused`. When supplied, it
+must be a non-blank string describing the concrete observation or blocker. The
+coordinator trims it and bounds it to 1,000 characters; overlong detail is
+truncated with a visible marker. The coordinator, not the provider, owns all
+routing and publication transitions.
+
 Accepted prose authorizes the coordinator to continue with its deterministic
 transitions. It does not itself authorize any publication effect.
 
