@@ -472,7 +472,7 @@ export async function reconcileParkedFeatures(
         ...opts,
         slug,
         log: undefined,
-        teardownLog: opts.verbose ? opts.log : undefined,
+        teardownLog: opts.log,
         // Named explicitly (not merely carried by the spread) so the two
         // production hand-off seams stay visible at the only call site that
         // supplies them.

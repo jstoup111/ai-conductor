@@ -1159,6 +1159,38 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
+  it('reports a failing teardown during a non-verbose automatic cleanup and still reconciles the feature', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-quiet-failing-teardown';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      registeredWorktrees: [projectRoot, worktree],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      const teardown = join(worktree, TEARDOWN_SCRIPT);
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(teardown, '#!/usr/bin/env bash\necho quiet-sweep-teardown-failure\nexit 1\n');
+      await chmod(teardown, 0o755);
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, log, autoCleanup: true, verbose: false });
+      const teardownFailures = log.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.startsWith(`teardown: failed in ${worktree}`));
+
+      expect({ teardownFailures, reconciled: result.counts.reconciled }).toEqual({
+        teardownFailures: [expect.stringContaining('quiet-sweep-teardown-failure')],
+        reconciled: 1,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('does not add per-slug output for a verbose cleanup with no teardown script', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'sweep-verbose-no-teardown';
