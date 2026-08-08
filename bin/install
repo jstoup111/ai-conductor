@@ -1541,12 +1541,13 @@ case "${1:-}" in
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)
-    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--allow-worktree-root]"
+    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--providers claude[,codex]] [--allow-worktree-root]"
     echo ""
     echo "  (no args)     Install/update harness skills and conduct script"
     echo "  --check       Check installation status"
     echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
     echo "  --uninstall   Remove all symlinks"
+    echo "  --providers   Comma-separated selection of Claude and/or Codex"
     echo "  --allow-worktree-root"
     echo "                Bypass the refusal to install from a .worktrees/ checkout"
     echo "                (installs from a worktree normally repoint global symlinks"

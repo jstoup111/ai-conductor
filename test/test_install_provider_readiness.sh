@@ -28,6 +28,21 @@ done
 PY3="$(python3 -c 'import sys; print(sys.executable)')"
 ln -s "$PY3" "$STUBS/python3"
 
+# Help documents the explicit provider-selection syntax, and both help aliases
+# remain interchangeable.
+HELP_LONG=$(HOME="$FAKE_HOME" "$CHECKOUT/bin/install" --help)
+HELP_SHORT=$(HOME="$FAKE_HOME" "$CHECKOUT/bin/install" -h)
+
+if [ "$HELP_LONG" = "$HELP_SHORT" ] \
+  && printf '%s' "$HELP_LONG" | grep -Fq -- '--providers' \
+  && printf '%s' "$HELP_LONG" | grep -Fqi 'comma-separated selection of Claude and/or Codex'; then
+  echo 'PASS install help documents the Claude/Codex provider selection'
+else
+  echo 'FAIL install help documents the Claude/Codex provider selection'
+  printf '%s\n' "$HELP_LONG"
+  exit 1
+fi
+
 # `script` supplies a true TTY; the answer is intentionally harmless until
 # provider selection is implemented, at which point it chooses Claude.
 set +e
