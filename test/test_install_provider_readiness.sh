@@ -43,6 +43,23 @@ else
   exit 1
 fi
 
+# The help edit must not weaken the existing missing-value validation.
+set +e
+MISSING_PROVIDERS_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers 2>&1)
+MISSING_PROVIDERS_CODE=$?
+set -e
+
+if [ "$MISSING_PROVIDERS_CODE" -ne 0 ] \
+  && [ "$MISSING_PROVIDERS_CODE" -ne 124 ] \
+  && printf '%s' "$MISSING_PROVIDERS_OUT" | grep -Fq -- '--providers requires a comma-separated selection of Claude and/or Codex'; then
+  echo 'PASS missing --providers value retains its specific validation error'
+else
+  echo 'FAIL missing --providers value retains its specific validation error'
+  printf 'exit code: %s\n' "$MISSING_PROVIDERS_CODE"
+  printf '%s\n' "$MISSING_PROVIDERS_OUT"
+  exit 1
+fi
+
 # `script` supplies a true TTY; the answer is intentionally harmless until
 # provider selection is implemented, at which point it chooses Claude.
 set +e
