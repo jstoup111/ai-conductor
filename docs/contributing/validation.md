@@ -48,10 +48,11 @@ Check 5b additionally needs `jq` on `PATH`; without it you get
 
 ## The checks
 
-In file order. Sections 1, 5, and 9 carry lettered sub-checks, and two checks are unnumbered in the script.
+In file order. Sections 1, 5, and 9 carry lettered sub-checks, and three checks are unnumbered in the script.
 
 | # | Verifies | Fails when | Fix |
 | --- | --- | --- | --- |
+| — | The repository root has no `package-lock.json`. The Node project lives under `src/conductor/`; a root lockfile would describe no installable package and mislead dependency tooling about that boundary. | `package-lock.json` exists at the repository root. | Remove the stray root lockfile; run `npm ci` inside `src/conductor/` instead. |
 | 1 | `bash -n` over `bin/*` (only files whose first line matches `bash`), `hooks/claude/*.sh`, `test/*.sh`, and `.github/scripts/*.sh`. | Any of those scripts has a syntax error. | Fix the syntax. A `bin/` file with a non-bash shebang is skipped entirely, not checked. |
 | 1b | ShellCheck at `--severity=error` over the script set enumerated by `test/lint_shell.sh` (`bin/*` by shebang, plus `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh`). Where check 1 proves a script *parses*, this catches shell bugs that parse fine and misbehave at runtime. | Any finding at `error` severity (exit 1), or the enumeration returns zero scripts (exit 2 — the gate refuses to report success on an empty set). | Run `test/lint_shell.sh` and fix what it names. Threshold and deferred warning/info/style counts are documented in that script's header. |
 | 2 | Every `skills/*/SKILL.md` opens with `---` and its frontmatter contains `name:`, `description:`, `enforcement:`, `phase:`. | The delimiter or any required field is missing. | Add the field. See [skills](../reference/skills.md). |
@@ -84,7 +85,7 @@ In file order. Sections 1, 5, and 9 carry lettered sub-checks, and two checks ar
 | 20 | The `/stories` skill's heading template parses under the engine's own grammar: `splitStoryBlocks` (`src/conductor/src/engine/artifacts.ts`) still declares `/^##\s+Story\s+([A-Za-z0-9.\-]+)/i`; every `## Story` heading in `skills/stories/SKILL.md` carries an id; and the skill states the id requirement in prose. | The engine regex changes without the template, a template heading omits its id (`## Story: Title`), or the prose requirement is dropped. | Update `skills/stories/SKILL.md` and this check together. An id-less heading does not match, so a stories file collapses into one unnamed block: the per-story happy/negative gate then runs once over the whole file, per-story plan coverage falls back to a filename-derived id, and `story-<id>` coherence citations are rejected as fabricated at land. |
 
 Note the ordering: the release-artifact sub-checks run `9a, 9b, 9d, 9e, 9f, 9c` — `9c` is last, not
-third. Two checks carry no number at all.
+third. Three checks carry no number at all.
 
 `AGENT_INSTRUCTIONS.md` (and therefore `CLAUDE.md` and `AGENTS.md`, which symlink to it) spells out only
 the first seven checks in detail and names this page as the canonical enumeration.
