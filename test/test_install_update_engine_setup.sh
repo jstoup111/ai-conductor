@@ -123,7 +123,7 @@ printf '%s\n' '{"permissions":{"allow":[]}}' > "$PERMISSIONS_SETTINGS"
 # dispatch; append one direct call to the function under test.
 awk '/# ─── Main ─────────────────────────────────────────────────────────────────────/{exit} {print}' \
   "$CHECKOUT/bin/install" > "$PERMISSIONS_FRAGMENT"
-printf '%s\n' 'configure_permissions "$1"' >> "$PERMISSIONS_FRAGMENT"
+printf '%s\n' 'configure_permissions "$1" || exit $?' >> "$PERMISSIONS_FRAGMENT"
 chmod +x "$PERMISSIONS_FRAGMENT"
 
 set +e
@@ -150,6 +150,41 @@ else
   echo 'FAIL configure_permissions reports and persists a successful permission write' >&2
   echo "exit code: $permissions_code" >&2
   cat "$TMP_ROOT/permissions.out" >&2
+  exit 1
+fi
+
+# A malformed settings file must surface the Python write failure, clean its
+# temporary permission list, and let install's caller guard report the failure.
+PERMISSIONS_BAD_SETTINGS="$TMP_ROOT/permissions-bad-settings.json"
+PERMISSIONS_BAD_TMP="$TMP_ROOT/permissions-bad-tmp"
+mkdir -p "$PERMISSIONS_BAD_TMP"
+printf '%s\n' '{ malformed json' > "$PERMISSIONS_BAD_SETTINGS"
+
+set +e
+TMPDIR="$PERMISSIONS_BAD_TMP" PATH="$STUBS_DIR:$PATH" \
+  "$PERMISSIONS_FRAGMENT" "$PERMISSIONS_BAD_SETTINGS" > "$TMP_ROOT/permissions-bad.out" 2>&1
+permissions_bad_code=$?
+set -e
+
+PERMISSIONS_BAD_HOME="$TMP_ROOT/permissions-bad-home"
+mkdir -p "$PERMISSIONS_BAD_HOME/.claude"
+cp "$PERMISSIONS_BAD_SETTINGS" "$PERMISSIONS_BAD_HOME/.claude/settings.json"
+set +e
+HOME="$PERMISSIONS_BAD_HOME" PATH="$STUBS_DIR:$PATH" NPM_CALLS="$NPM_CALLS" \
+  "$CHECKOUT/bin/install" --update < /dev/null > "$TMP_ROOT/permissions-caller.out" 2>&1
+permissions_caller_code=$?
+set -e
+
+if [ "$permissions_bad_code" -ne 0 ] && \
+  rg -q 'Could not configure permissions automatically' "$TMP_ROOT/permissions-bad.out" && \
+  rg -q "Manually add harness read permissions to ${PERMISSIONS_BAD_SETTINGS}" "$TMP_ROOT/permissions-bad.out" && \
+  [ -z "$(find "$PERMISSIONS_BAD_TMP" -mindepth 1 -print -quit)" ] && \
+  rg -q 'Permissions configuration incomplete — continuing' "$TMP_ROOT/permissions-caller.out"; then
+  echo 'PASS configure_permissions surfaces failures to its caller and cleans up'
+else
+  echo 'FAIL configure_permissions surfaces failures to its caller and cleans up' >&2
+  echo "direct exit code: $permissions_bad_code; caller exit code: $permissions_caller_code" >&2
+  cat "$TMP_ROOT/permissions-bad.out" "$TMP_ROOT/permissions-caller.out" >&2
   exit 1
 fi
 
