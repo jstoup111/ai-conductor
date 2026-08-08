@@ -37,6 +37,18 @@ assert() {
   fi
 }
 
+# The Node project lives under src/conductor/. A root lockfile would describe
+# no installable package and mislead dependency tooling about that boundary.
+echo ""
+echo -e "${BOLD}Root package-lock boundary${NC}"
+
+if [ -e "${HARNESS_DIR}/package-lock.json" ]; then
+  root_lockfile_absent=1
+else
+  root_lockfile_absent=0
+fi
+assert "repository root has no package-lock.json" "$root_lockfile_absent"
+
 warn_check() {
   local desc=$1
   local result=$2
