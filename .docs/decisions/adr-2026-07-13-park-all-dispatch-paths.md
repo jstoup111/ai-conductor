@@ -1,6 +1,6 @@
 # ADR 2026-07-13: Operator park blocks every dispatch entry point (immediate-before-dispatch predicate)
 
-Status: Proposed
+Status: APPROVED (operator-approved 2026-08-08, retroactive — shipped work, see #662)
 Feature: park-all-dispatch-paths
 Issue: jstoup111/ai-conductor#651
 

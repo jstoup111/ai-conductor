@@ -1,6 +1,6 @@
 # ADR 2026-07-13: Kickback→build no-op guard + zero-progress/unchanged-verdict escalation
 
-Status: Proposed
+Status: APPROVED (operator-approved 2026-08-08, retroactive — shipped work, see #662)
 Feature: kickback-to-build-no-op-when-target-evidence-stamped
 Issue: jstoup111/ai-conductor#647
 
