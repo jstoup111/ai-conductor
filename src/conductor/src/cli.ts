@@ -2,9 +2,13 @@ import { Command } from 'commander';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { ViewMode } from './ui/types.js';
-import type { EffortLevel } from './types/config.js';
+import type {
+  EffortLevel,
+  MarkdownViewerConfig,
+  MermaidRendererConfig,
+} from './types/config.js';
 import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
-import { readUserConfig } from './engine/user-config.js';
+import { readUserConfig, writeUserConfig } from './engine/user-config.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -116,10 +120,43 @@ export interface UserConfigReadDispatch {
   path: string;
 }
 
+export interface UserConfigWriteDispatch {
+  kind: 'user-config-write';
+  section: 'markdown_viewer' | 'mermaid_renderer';
+  preset: string;
+  command: string;
+  args: string[];
+  mode: MarkdownViewerConfig['mode'] | MermaidRendererConfig['mode'];
+}
+
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
 export function detectUserConfigReadCommand(argv: string[]): UserConfigReadDispatch | null {
   if (argv[2] !== 'config' || argv[3] !== 'read' || !argv[4]) return null;
   return { kind: 'user-config-read', path: argv[4] };
+}
+
+/** Detect `conduct config write <section> <preset> <command> <args> <mode>`. */
+export function detectUserConfigWriteCommand(argv: string[]): UserConfigWriteDispatch | null {
+  const [section, preset, command, args, mode] = argv.slice(4);
+  if (
+    argv[2] !== 'config' ||
+    argv[3] !== 'write' ||
+    (section !== 'markdown_viewer' && section !== 'mermaid_renderer') ||
+    !preset ||
+    command === undefined ||
+    args === undefined ||
+    (mode !== 'inline' && mode !== 'blocking' && mode !== 'external')
+  ) {
+    return null;
+  }
+  return {
+    kind: 'user-config-write',
+    section,
+    preset,
+    command,
+    args: args.split(/\s+/).filter(Boolean),
+    mode,
+  };
 }
 
 /** Print a scalar user-config value for shell callers. */
@@ -137,6 +174,19 @@ export async function userConfigReadCommand(
     value = (value as Record<string, unknown>)[segment];
   }
   write(`${Array.isArray(value) ? value.join(' ') : value ?? ''}\n`);
+  return 0;
+}
+
+/** Set one user-scoped viewer or renderer section without replacing other config. */
+export async function userConfigWriteCommand(cmd: UserConfigWriteDispatch): Promise<number> {
+  const { config } = await readUserConfig();
+  config[cmd.section] = {
+    preset: cmd.preset,
+    command: cmd.command,
+    args: cmd.args,
+    mode: cmd.mode,
+  };
+  await writeUserConfig(config);
   return 0;
 }
 
@@ -212,6 +262,9 @@ export function createProgram(): Command {
   config
     .command('read <path>')
     .description('Print a value from user-scoped ~/.ai-conductor/config.yml');
+  config
+    .command('write <section> <preset> <command> <args> <mode>')
+    .description('Write a viewer or renderer section to user-scoped ~/.ai-conductor/config.yml');
 
   // Engineer subcommands (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
   // (detectEngineerCommand) before the pipeline boots. Bare `engineer` launches the
