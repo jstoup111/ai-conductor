@@ -466,7 +466,7 @@ const PUBLICATION_CONDITIONS = {
   },
 } as const;
 
-const HUMAN_REQUIRED_REASONS = {
+export const HUMAN_REQUIRED_REASONS = {
   judgment_refused: {
     message: 'The PR prose judgment was refused and requires an operator decision.',
     nextAction: 'Review the refusal and decide how to continue publication.',

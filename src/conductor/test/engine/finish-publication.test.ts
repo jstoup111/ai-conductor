@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from '../../src/engine/pr-labels.js';
 import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import { HUMAN_REQUIRED_REASONS } from '../../src/engine/finish-publication.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { Conductor } from '../test-conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -25,15 +26,14 @@ describe('FINISH human-required guidance', () => {
     'unattended_intent_destructive_choice',
     'unattended_intent_unauthorized_outcome',
   ] as const)('provides reader guidance for %s', (reason) => {
-    return expect(routeFinishPublicationDisposition({ kind: 'human_required', reason }))
-      .resolves.toEqual({
-        kind: 'halt',
-        reason: expect.any(String),
-      });
+    expect(HUMAN_REQUIRED_REASONS[reason]).toEqual({
+      message: expect.any(String),
+      nextAction: expect.any(String),
+    });
   });
 
-  it('renders distinct non-blank guidance for every human-required reason', async () => {
-    const messages = await Promise.all([
+  it('defines distinct non-blank message and next-action guidance for every human-required reason', () => {
+    const reasons = [
       'judgment_refused',
       'judgment_halt_prose',
       'ambiguous_pr_identity',
@@ -44,13 +44,13 @@ describe('FINISH human-required guidance', () => {
       'interactive_intent_unrecognized',
       'unattended_intent_destructive_choice',
       'unattended_intent_unauthorized_outcome',
-    ].map(async (reason) => {
-      const route = await routeFinishPublicationDisposition({ kind: 'human_required', reason });
-      expect(route.kind).toBe('halt');
-      if (route.kind !== 'halt') throw new Error('expected a human-required halt');
-      expect(route.reason.trim()).not.toBe('');
-      return route.reason;
-    }));
+    ] as const;
+    const messages = reasons.map((reason) => {
+      const guidance = HUMAN_REQUIRED_REASONS[reason];
+      expect(guidance.message.trim(), `${reason} message`).not.toBe('');
+      expect(guidance.nextAction.trim(), `${reason} nextAction`).not.toBe('');
+      return guidance.message;
+    });
 
     expect(messages).toHaveLength(10);
     expect(new Set(messages)).toHaveLength(messages.length);
@@ -603,9 +603,11 @@ describe('FINISH publication disposition routing', () => {
       kind: 'human_required',
       reason: 'judgment_refused',
     });
-    expect(route).toEqual({ kind: 'halt', reason: expect.any(String) });
     if (route.kind !== 'halt') throw new Error('expected a human-required halt');
-    expect(route.reason).not.toContain('Detail:');
+    const guidance = HUMAN_REQUIRED_REASONS.judgment_refused;
+    expect(route.reason).toContain(guidance.message);
+    expect(route.reason).toContain(guidance.nextAction);
+    expect(route.reason).not.toContain(' Detail:');
     expect(route.reason).not.toContain('undefined');
   });
 
