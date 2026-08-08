@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { StepName } from '../../src/types/index.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
+import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import {
   MAX_KICKBACKS_PER_GATE,
@@ -48,7 +49,7 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
     );
   }
 
-  it('detects an unknown target outside gate topology and halts with its name verbatim', async () => {
+  it('persists the shared refusal payload for an unknown target outside gate topology', async () => {
     await seedPlanTask();
     await writeFixtureState(fixture, resolvedState({ build: 'pending' }));
     const unknownTarget = 'custom_decide_target' as StepName;
@@ -68,14 +69,23 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
       },
     };
 
+    let emittedReason: string | undefined;
+    fixture.events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') emittedReason = event.reason;
+    });
+
     await conductorFor(fixture, runner, { fromStep: 'build' }).run();
 
     expect(await readOptional(fixture.root, '.pipeline/HALT.class')).toBe('needs-human');
     const halt = await readOptional(fixture.root, '.pipeline/HALT');
-    expect(halt).toMatch(/Source gate:\s*build/i);
-    expect(halt).toMatch(/Requested target:\s*custom_decide_target/i);
-    expect(halt).toMatch(/Evidence:.*custom gate could not resolve/is);
-    expect(halt).toMatch(/Why refused:.*could not be resolved from the configured steps/is);
+    const expected = renderDecideEntryHalt({
+      sourceGate: 'build',
+      target: unknownTarget,
+      evidence: 'custom gate could not resolve its requested phase',
+      reason: "DECIDE target 'custom_decide_target' could not be resolved from the configured steps.",
+    });
+    expect(halt).toBe(expected + '\n');
+    expect(emittedReason).toBe(expected);
   });
 
   it('still rewinds to a configured BUILD target', async () => {

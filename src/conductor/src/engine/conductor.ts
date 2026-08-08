@@ -8187,16 +8187,7 @@ export class Conductor {
           evidence: v.kickback?.evidence,
         });
         if (disposition.kind === 'halt') {
-          const { halt } = disposition;
-          const reason = [
-            `DECIDE entry refused — target '${halt.target}' is a DECIDE step and operator-only in daemon mode.`,
-            '',
-            `Source gate:       ${halt.sourceGate}`,
-            `Requested target:  ${halt.target}`,
-            `Evidence:          ${halt.evidence ?? 'none provided'}`,
-            `Why refused:       ${halt.reason}`,
-            'Operator choices:  direct a return to a named step | correct the routing target | reject the kickback',
-          ].join('\n');
+          const reason = renderDecideEntryHalt(disposition.halt);
           await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
