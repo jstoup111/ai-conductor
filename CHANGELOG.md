@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - `conduct-ts validate-wired-into <plan>` resolves a plan's **Wired-into:** anchors at DECIDE time through the same machinery BUILD-time completion verification uses, and exits 1 on any anchor that cannot resolve. ([implementation PR #1190](https://github.com/jstoup111/ai-conductor/pull/1190)).
 - conflict-check detects oscillating requirements — pairs that are individually satisfiable but mutually exclusive, which send work round a non-terminating kickback loop. coherence-check gains a `fail` verdict and a consistency pass for cross-layer contradictions that coverage alone cannot express. ([implementation PR #1394](https://github.com/jstoup111/ai-conductor/pull/1394)).
 - The release-metadata check now labels each PR with the semver impact it declares (semver:major/minor/patch), so merge order is readable from the PR list. ([implementation PR #1405](https://github.com/jstoup111/ai-conductor/pull/1405)).
+- Worktrees now get a preventive pre-commit hook that blocks commits touching another feature's sealed DECIDE artifacts (`.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, `.docs/stories`) during BUILD/SHIP, and remediation gaps that target a sealed artifact are now redirected to the owning DECIDE step. ([implementation PR #1396](https://github.com/jstoup111/ai-conductor/pull/1396)).
 
 ### Fixed
 
@@ -25,6 +26,25 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A pull request whose `## Migration` section is its last section no longer fails its own release gate at finish; the release metadata block below it is parsed correctly instead of being swallowed into the migration content. ([implementation PR #1404](https://github.com/jstoup111/ai-conductor/pull/1404)).
 - A pull request whose `## Migration` section sits above its release metadata block, or is followed by a trailer, no longer fails the finish-time release gate as non-canonical, and the merged body no longer duplicates the Migration section. ([implementation PR #1406](https://github.com/jstoup111/ai-conductor/pull/1406)).
 - `conduct-ts shipped-record` reports success on stdout, so a successful ship no longer appears in the daemon log tagged `[error]`. ([implementation PR #1407](https://github.com/jstoup111/ai-conductor/pull/1407)).
+
+## Migration
+
+```bash migration
+# The engine now installs a third, fail-closed worktree git hook (pre-commit)
+# that rejects staged commits under protected .docs/ artifact directories
+# during BUILD/SHIP. It is generated fresh into <worktree>/.pipeline/git-hooks/
+# only when a worktree is (re)prepared, so already-prepared, in-flight
+# worktrees do not pick it up automatically. Recreate each affected worktree
+# from its branch (the branch is the source of truth) so the daemon
+# re-provisions it with the new hook:
+
+conduct-ts daemon park <slug>
+rm -rf .worktrees/<slug>
+conduct-ts daemon unpark <slug>
+# The daemon recreates the worktree on its next dispatch, running
+# prepareWorktree and installing pre-commit/prepare-commit-msg/commit-msg
+# together. No action is needed for worktrees created after this change ships.
+```
 
 ## [0.100.0] - 2026-08-07
 
