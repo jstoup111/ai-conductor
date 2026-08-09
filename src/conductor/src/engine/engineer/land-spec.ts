@@ -352,14 +352,20 @@ export async function landSpec(
 
   // 4e. ADR hard gate — no spec lands with an unapproved ADR (mirrors the
   //     conduct architecture-review gate). Scan every `.docs/decisions/adr-*.md`.
+  const unapprovedAdrs: Array<{ path: string; found: string | null }> = [];
   for (const adrFile of await listAdrFiles(decisionsDir)) {
     const adrContent = await readFile(adrFile, 'utf-8');
-    if (!adrApprovalStatus(adrContent).approved) {
-      throw new Error(
-        `landSpec: ADR "${adrFile}" is not approved. All ADRs must be ` +
-          'APPROVED before landing. Approve the ADRs via /architecture-review, then land.',
-      );
-    }
+    const approval = adrApprovalStatus(adrContent);
+    if (!approval.approved) unapprovedAdrs.push({ path: adrFile, found: approval.found });
+  }
+  if (unapprovedAdrs.length > 0) {
+    const offenders = unapprovedAdrs
+      .map(({ path, found }) => `${path} (${found === null ? 'no status declaration' : `status "${found}"`})`)
+      .join('; ');
+    throw new Error(
+      `landSpec: ADRs are not approved: ${offenders}. All ADRs must be ` +
+        'APPROVED before landing. Approve the ADRs via /architecture-review, then land.',
+    );
   }
 
   // 4e2. Coherence gate (DECIDE artifact coherence check): the traceability
