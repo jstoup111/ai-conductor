@@ -128,3 +128,71 @@ unchanged at **APPROVED**.
 ## Re-check
 
 Re-run after applying all amendments: **zero blocking conflicts, zero degrading conflicts.**
+
+---
+
+## Second sweep (post-land, operator-requested) — 2 oscillations found and resolved
+
+The first sweep ran **before** `adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag`
+and the Story 1 / Story 5 amendments existed — those were authored *during and after* it. The
+"Re-check" line above was recorded without actually re-sweeping the new material, which is the
+same "an unexamined pair is not a verified clean pass" failure this skill warns about. An
+operator-requested oscillation check over that gap found two, both in the amendments themselves.
+
+### Oscillation 2: Story 1's base scenarios versus its own first amendment — RESOLVED
+
+**Parties:** Story 1 base acceptance criteria vs the first amendment to Story 1
+**Type:** oscillating · **Severity:** blocking · **Confidence:** ~90%, grounded in both quoted texts
+
+Base happy path: *"Given a feature whose `.docs/decisions/` **holds** an approved ADR … then it
+reports a blocking conflict."*
+First amendment: *"the corpus scope … defaults to this spec's own change-set ADRs … **The scenarios
+above hold at both scopes.**"*
+
+Both directions fail:
+
+- Fully satisfy the amendment at `change_set`: an ADR the directory *holds* but which is not in the
+  change set raises no conflict. The base scenario says it must. **No.**
+- Fully satisfy the base scenario as literally written (any ADR on disk): that **is** `repo_wide`,
+  so the stated default breaks. **No.**
+
+Two "no" answers. The damage is the classic shape: implement broadly and contradict the ADR;
+implement the default and fail the story's test; each fix trips the other gate.
+
+**A second contradiction inside the same amendment:** it asserted the base scenarios (which include
+the superseded-exclusion negative path) "hold at both scopes" while also stating "at the default
+scope neither a narrowing step nor superseded parsing is needed". Both cannot be true.
+
+**Resolution applied (second amendment to Story 1, additive — the original text and the first
+amendment are both preserved, with the false sentence struck rather than deleted):**
+
+1. The base happy and negative paths are scoped explicitly to **the ADRs in the spec's own change
+   set**. The #1391 failure remains covered at that scope, because its contradicting ADR was
+   authored in the same spec.
+2. Superseded parsing is declared **`repo_wide`-only**, with a new scenario for unambiguous full
+   supersession added there.
+3. A new `repo_wide` happy path covers the **inherited** contradicting ADR — the coverage the
+   change-set default does not provide, and the reason the mode exists.
+
+### Oscillation 3: Story 7 versus the staging ADR — RESOLVED
+
+**Parties:** Story 7 happy path vs `adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag`
+**Type:** oscillating · **Severity:** degrading (missing qualifier, not a design defect)
+**Confidence:** ~85%, grounded
+
+Story 7 asserted unconditionally: *"the operator receives no additional prompt beyond what they
+received before this change."* The ADR names operator fatigue from false positives under
+`repo_wide` as *"the dominant risk"* and accepts it knowingly. Satisfy the story strictly and
+`repo_wide` may never false-positive, which the ADR does not promise; satisfy the ADR and the
+story's absolute claim fails in this repository.
+
+**Resolution applied:** the guarantee is scoped to the **shipped default**, which is what consumers
+receive; added prompts under the opt-in `repo_wide` mode are an accepted, measured cost with a
+stated exit condition. The coherence artifact had already carried this qualification in prose; the
+story text had not.
+
+### Second re-check
+
+Both resolutions are additive amendments to Story 1 and Story 7. No ADR required amendment — in
+both cases the ADR was correct and the story text was the side that overreached. Re-swept after
+applying: **zero blocking conflicts, zero unresolved oscillations.**

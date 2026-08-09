@@ -44,19 +44,47 @@ surfacing mid-BUILD as a needs-human halt.
   report files alongside ADRs, when conflict-check builds its corpus, then only the ADRs are
   treated as decision statements and the review reports raise no conflicts.
 
-> **Amended 2026-08-09 by #1391:** the corpus **scope** is configurable and defaults to this spec's
-> own change-set ADRs, with the repo-wide sweep over all approved ADRs gated behind
-> `conflict_check.adr_corpus: repo_wide` (default-off, enabled in this repository only) — see
-> `adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag`. The scenarios above hold at
-> both scopes. The two scenarios below apply to `repo_wide` **only**, where the corpus is 177
+> **Amended 2026-08-09 by #1391 (first amendment — superseded 2026-08-09, see below):** the corpus
+> **scope** is configurable and defaults to this spec's own change-set ADRs, with the repo-wide
+> sweep over all approved ADRs gated behind `conflict_check.adr_corpus: repo_wide` (default-off,
+> enabled in this repository only) — see
+> `adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag`. ~~The scenarios above hold at
+> both scopes.~~ The two scenarios below apply to `repo_wide` **only**, where the corpus is 177
 > approved ADRs and the risks of narrowing and superseded-status ambiguity actually arise; at the
 > default scope neither a narrowing step nor superseded parsing is needed.
+
+> **Amended 2026-08-09 by #1391 (second amendment — oscillation fix):** the struck sentence above
+> asserted that the base scenarios "hold at both scopes", and that was **false in two ways**. An
+> oscillation check found both, and this amendment replaces the claim rather than restating it.
+>
+> **(a) Which ADRs the base happy path covers.** It reads "a feature whose `.docs/decisions/`
+> *holds* an approved ADR". At `change_set` scope an ADR the directory holds but which is **not in
+> this spec's change set** raises no conflict, so the base scenario as literally written is only
+> satisfiable at `repo_wide`. Implementing it broadly contradicts the default; implementing the
+> default fails the scenario — each fix trips the other gate, which is the non-terminating shape.
+> **Resolution:** the base happy and negative paths above are hereby scoped to **the ADRs in the
+> spec's own change set**, which is the default. Read every base "`.docs/decisions/` holds …" as
+> "the change set carries …". The #1391 failure this spec was filed for is covered at that scope,
+> because its contradicting ADR was authored in the same spec.
+>
+> **(b) Superseded parsing.** The struck sentence claimed the base scenarios — which include the
+> superseded-exclusion negative path — hold at both scopes, while the same amendment said "at the
+> default scope neither a narrowing step nor superseded parsing is needed". Both cannot be true.
+> **Resolution:** superseded-exclusion is a **`repo_wide`-only** concern and is restated below with
+> the conservative rule. At `change_set` scope a spec's own freshly-approved ADRs are never
+> superseded, so no status parsing is required.
+>
+> The `repo_wide` scenarios below are additive on top of the change-set base, not a replacement.
 
 #### Happy Path (`repo_wide` only)
 - Given `adr_corpus: repo_wide` and a corpus of 177 approved ADRs, when conflict-check runs, then it
   first narrows to the ADRs whose subject overlaps this spec's stories, runs the two-directional
   heuristic on that subset, and **records both the examined set and the narrowed-out set** in the
   conflict report — so a sweep that examined nothing is distinguishable from one that found nothing.
+- Given `adr_corpus: repo_wide` and an **inherited** approved ADR that is not in this spec's change
+  set but contradicts one of its stories, when conflict-check runs, then that contradiction is
+  reported as a blocking conflict. This is the coverage the change-set default does not provide,
+  and the reason the repo-wide mode exists.
 
 #### Negative Paths (`repo_wide` only)
 - Given an ADR whose status reads as a *partial* supersession — for example
@@ -64,6 +92,9 @@ surfacing mid-BUILD as a needs-human halt.
   amended by <x>` — when the corpus is built, then that ADR is **retained** for comparison, because
   only an unambiguous full supersession excludes an ADR: a false conflict costs one adjudication
   while a false clean costs a mid-BUILD halt.
+- Given an ADR whose status is an unambiguous **full** supersession, when the `repo_wide` corpus is
+  built, then that ADR is excluded — this is the sole scope at which superseded-status parsing runs
+  at all, per amendment (b) above.
 - Given `adr_corpus` is unset in a consumer repository, when conflict-check runs, then it uses the
   change-set scope and performs no narrowing and no superseded parsing.
 
@@ -304,9 +335,22 @@ that agree, so that the gate stays quiet unless it has something real to say.
 #### Happy Path
 - Given a coherence artifact authored before this change, containing no `adr` rows, in a change
   set carrying no ADRs, when the gate runs, then it passes unchanged.
-- Given a spec whose ADRs, stories, and tasks genuinely agree, when the full DECIDE sequence runs,
-  then conflict-check reports zero conflicts, the coherence gate passes, and the operator receives
-  no additional prompt beyond what they received before this change.
+- Given a spec whose ADRs, stories, and tasks genuinely agree, when the full DECIDE sequence runs
+  **at the shipped default `adr_corpus: change_set`**, then conflict-check reports zero conflicts,
+  the coherence gate passes, and the operator receives no additional prompt beyond what they
+  received before this change.
+
+> **Amended 2026-08-09 by #1391 (oscillation fix):** the scenario above originally asserted "no
+> additional prompt" **unconditionally**, which contradicted
+> `adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag`. That ADR names operator
+> fatigue from false positives under `repo_wide` as "the dominant risk" and accepts it knowingly.
+> Satisfying this story strictly would require `repo_wide` to never produce a false positive, which
+> the ADR does not promise; satisfying the ADR breaks the story's absolute claim. The scope
+> qualifier resolves it: the no-added-prompt guarantee is a property of the **shipped default**,
+> which is what consumers get. Under the opt-in `repo_wide` mode — enabled in this repository only —
+> added prompts are an accepted, measured cost with a stated exit condition, not a regression.
+> The coherence artifact already recorded this qualification in prose ("consistent at the shipped
+> default"); the story text had not carried it.
 - Given the repository's existing coherence artifacts, when the gate is run against each, then
   none begins failing solely because it lacks `adr` rows.
 
