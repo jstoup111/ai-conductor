@@ -77,6 +77,66 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       .toThrow('Invalid release disposition: Migration');
   });
 
+  describe('snapshot accepts the Migration section on either side of the metadata', () => {
+    // The two parsers disagreed about ordering and neither was checked at
+    // authoring time. `parseReleaseDisposition` (after #1404) accepts Migration
+    // ABOVE the Release-* block; `snapshotReleaseMetadataBlock` sliced from the
+    // end of that block to the Migration heading, so it only ever worked when
+    // Migration came BELOW it. A body satisfying one failed the other, and the
+    // author only learned at the finish-time release gate, as a needs-human HALT
+    // ("pre-finish snapshot unavailable: release metadata is malformed or
+    // non-canonical"). Observed on #1396.
+    const fence = '```bash migration\n./bin/install --update\n```';
+    const fields = [
+      'Release-Disposition: note',
+      'Release-Category: Added',
+      'Release-Semver: minor',
+      'Release-Note: Adds a thing.',
+    ].join('\n');
+    const canonical = `${fields}\n\n## Migration\n\n${fence}`;
+
+    it('snapshots a body whose Migration section sits ABOVE the metadata block', () => {
+      const body = `## Why\n\nBecause.\n\n## Migration\n\n${fence}\n\n${fields}\n`;
+      expect(snapshotReleaseMetadataBlock(body)).toBe(canonical);
+    });
+
+    it('still snapshots the canonical below-the-metadata ordering', () => {
+      expect(snapshotReleaseMetadataBlock(`## Why\n\nBecause.\n\n${canonical}\n`)).toBe(
+        canonical,
+      );
+    });
+
+    it('stays idempotent for the above-the-metadata ordering', () => {
+      const body = `## Migration\n\n${fence}\n\n${fields}\n`;
+      const snapshot = snapshotReleaseMetadataBlock(body)!;
+      expect(snapshotReleaseMetadataBlock(snapshot)).toBe(snapshot);
+    });
+
+    it('merges a body whose Migration section sits ABOVE the metadata block', () => {
+      const body = `## Why\n\nBecause.\n\n## Migration\n\n${fence}\n\n${fields}\n`;
+      const snapshot = snapshotReleaseMetadataBlock(body)!;
+      expect(mergeReleaseMetadataBlock(body, snapshot)).toBe(`## Why\n\nBecause.\n\n${canonical}`);
+    });
+
+    it('merges without duplicating the section when a Closes trailer follows it', () => {
+      // The exact shape of the SHIP draft body that halted #1396: Migration above
+      // the metadata, and a `Closes` trailer below both.
+      const body =
+        `## Why\n\nBecause.\n\n## Migration\n\n${fence}\n\n${fields}\n\nCloses owner/repo#1254\n`;
+      const snapshot = snapshotReleaseMetadataBlock(body)!;
+      const merged = mergeReleaseMetadataBlock(body, snapshot)!;
+      expect(merged.match(/## Migration/g)).toHaveLength(1);
+      expect(merged.match(/Release-Disposition:/g)).toHaveLength(1);
+      expect(merged).toContain('Closes owner/repo#1254');
+    });
+
+    it('returns null when the declared migration fence is absent entirely', () => {
+      expect(
+        snapshotReleaseMetadataBlock(`## Migration\n\nnone\n\n${fields}\n`),
+      ).toBe(fields);
+    });
+  });
+
   describe('Migration section followed by the release metadata block (#1396)', () => {
     // Observed on PR #1396: the authored body puts `## Migration` LAST, with the
     // Release-* block below it and no `---` in between. The section terminator

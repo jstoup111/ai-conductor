@@ -31,7 +31,14 @@ const fenceDelimiterRe = /^```/;
 const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(?:\r?\n|$)/gm;
 /** A single release-metadata line, non-global — ends the Migration section (#1396). */
 const migrationSectionTerminatorRe = /^Release-(?:Disposition|Category|Semver|Note):/;
-const migrationBlockRe = /(?:\r?\n)?## Migration\s*\r?\n```bash migration\s*\r?\n[\s\S]*?```(?=\r?\n##\s|$)/g;
+// No trailing lookahead. The non-greedy body already ends the match at the
+// section's own closing fence, so requiring "next `##` heading or end-of-string"
+// added no precision — it only made the strip position-dependent. A Migration
+// section followed by anything else (the SHIP draft's `Closes` trailer, say, or
+// the blank lines left behind once `mergeReleaseMetadataBlock` removes the
+// Release-* lines above it) survived the strip, and the merged body carried the
+// section twice (#1396).
+const migrationBlockRe = /(?:\r?\n)?## Migration\s*\r?\n```bash migration\s*\r?\n[\s\S]*?```/g;
 
 function invalidReleaseDisposition(field: string): never {
   throw new Error(`Invalid release disposition: ${field}`);
@@ -167,9 +174,28 @@ export function snapshotReleaseMetadataBlock(body: string): string | null {
       'm',
     ).exec(body);
     if (!migration) return null;
-    const between = body.slice(match.index + block.length, migration.index);
-    if (!/^\r?\n(?:\r?\n)?$/.test(between)) return null;
-    block += `${between}${migration[0]}`;
+    const blockEnd = match.index + block.length;
+    if (migration.index >= blockEnd) {
+      // Migration BELOW the metadata: the two are contiguous in the body, so the
+      // separator is captured verbatim and the snapshot stays byte-exact.
+      const between = body.slice(blockEnd, migration.index);
+      if (!/^\r?\n(?:\r?\n)?$/.test(between)) return null;
+      block += `${between}${migration[0]}`;
+    } else {
+      // Migration ABOVE the metadata (#1396). The two halves are not contiguous,
+      // so no substring of the body is the metadata block — the snapshot is
+      // rendered in canonical order instead. `mergeReleaseMetadataBlock` already
+      // strips both halves from the body before appending this, so the merged
+      // result is the same either way, and re-snapshotting the canonical form
+      // takes the contiguous branch above and returns it unchanged (idempotent).
+      //
+      // Without this the two parsers contradicted each other: after #1404
+      // `parseReleaseDisposition` accepts this ordering while the snapshot
+      // rejected it, so a well-formed body failed the finish-time release gate
+      // with "release metadata is malformed or non-canonical" and halted the
+      // feature needing a human.
+      block += `\n\n${migration[0]}`;
+    }
   }
   return block;
 }
