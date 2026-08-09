@@ -44,6 +44,8 @@ const execFile = promisify(execFileCb);
  * `listShippedFiles()` → the `.md` basenames under `.docs/shipped` on the base
  *   branch, using the identical base-branch-only semantics as `listPlanFiles`
  *   (see `listShippedRecords` in `shipped-record.ts`, Story 3/4).
+ * `listAdrFiles()` → the `adr-*.md` basenames under `.docs/decisions` on the
+ *   base branch.
  * `readFile(relPath)` → the content of a repo-relative path on the base branch,
  *   or `null` when the path is absent from that tree.
  */
@@ -90,6 +92,22 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
           .map((l) => basename(l));
       } catch {
         return []; // no such tree (no `.docs/shipped` on base branch) → nothing to do
+      }
+    },
+    async listAdrFiles() {
+      try {
+        const { stdout } = await execFile(
+          'git',
+          ['ls-tree', '--name-only', `${baseBranch}:.docs/decisions`],
+          { cwd: projectRoot },
+        );
+        return stdout
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => /^adr-.*\.md$/i.test(l))
+          .map((l) => basename(l));
+      } catch {
+        return []; // no such tree (no `.docs/decisions` on base branch) → nothing to do
       }
     },
     async readFile(relPath) {

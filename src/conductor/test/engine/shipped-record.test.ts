@@ -35,6 +35,9 @@ function fakeTreeSource(files: Record<string, string>): BacklogTreeSource & {
       state.listShippedFilesCallCount += 1;
       return Object.keys(files);
     },
+    async listAdrFiles() {
+      return [];
+    },
     async readFile(relPath: string) {
       const basename = relPath.replace(/^\.docs\/shipped\//, '');
       return Object.prototype.hasOwnProperty.call(files, basename)

@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import {
   discoverBacklog,
   fastForwardRoot,
+  gitTreeSource,
   resolveStoriesRef,
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
@@ -38,6 +39,13 @@ function fsTreeSource(root: string): BacklogTreeSource {
     async listShippedFiles() {
       try {
         return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listAdrFiles() {
+      try {
+        return (await readdir(join(root, '.docs/decisions'))).filter((f) => /^adr-.*\.md$/i.test(f));
       } catch {
         return [];
       }
@@ -85,6 +93,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       const tree = {
         listPlanFiles: async () => [],
         listShippedFiles: async () => [],
+        listAdrFiles: async () => [],
         readFile: vi.fn(async () => null),
       } satisfies BacklogTreeSource;
 
@@ -97,6 +106,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       const tree = {
         listPlanFiles: async () => [],
         listShippedFiles: async () => [],
+        listAdrFiles: async () => [],
         readFile: vi.fn(async () => null),
       } satisfies BacklogTreeSource;
 
@@ -1076,6 +1086,9 @@ describe('engine/daemon-backlog — land-authored intake marker keyed by plan st
         return [];
       }
     },
+    async listAdrFiles() {
+      return [];
+    },
     async readFile(relPath) {
       try {
         return await fsReadFile(join(root, relPath), 'utf-8');
@@ -1213,6 +1226,9 @@ describe('discoverBacklog — un-owned arrival default-builds with a loud escala
       } catch {
         return [];
       }
+    },
+    async listAdrFiles() {
+      return [];
     },
     async readFile(relPath) {
       try {
@@ -1359,6 +1375,17 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await rm(dir, { recursive: true, force: true });
   });
 
+  it('lists only ADR files from decisions on the base branch', async () => {
+    await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs/decisions/adr-kept.md'), '# ADR\n');
+    await writeFile(join(dir, '.docs/decisions/architecture-review-ignored.md'), '# Review\n');
+    await writeFile(join(dir, '.docs/decisions/notes.md'), '# Notes\n');
+    await git(['add', '.docs/decisions']);
+    await git(['commit', '-q', '-m', 'add decisions']);
+
+    await expect(gitTreeSource(dir, baseBranch).listAdrFiles()).resolves.toEqual(['adr-kept.md']);
+  });
+
   it('MERGED spec (committed on base branch) → build-ready', async () => {
     await writeSpec('csv-export');
     await git(['add', '.docs']);
@@ -1451,6 +1478,9 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
       } catch {
         return [];
       }
+    },
+    async listAdrFiles() {
+      return [];
     },
     async readFile(relPath) {
       try {
@@ -2001,6 +2031,9 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
         return [];
       }
     },
+    async listAdrFiles() {
+      return [];
+    },
     async readFile(relPath) {
       try {
         return await fsReadFile(join(root, relPath), 'utf-8');
@@ -2280,6 +2313,9 @@ describe('engine/daemon-backlog — content-hash match dedups renamed specs (Sto
       } catch {
         return [];
       }
+    },
+    async listAdrFiles() {
+      return [];
     },
     async readFile(relPath) {
       try {
