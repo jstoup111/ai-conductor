@@ -17,16 +17,29 @@ export interface BuildTailWindowRollup {
     ts: number;
     classification: 'remediation' | 'closeout';
   }[];
-  closeout: {
-    durationMs: number;
-    obligations: Readonly<Record<string, number>>;
-  };
+  closeout:
+    | { state: 'unrecorded' }
+    | {
+      state: 'recorded';
+      durationMs: number;
+      obligations: Readonly<Record<string, number>>;
+    };
 }
 
 export interface MeasuredBuildTailRollup {
   state: 'measured';
   windows: readonly BuildTailWindowRollup[];
 }
+
+export type BuildTailRollup =
+  | MeasuredBuildTailRollup
+  | { state: 'partial' }
+  | { state: 'unavailable' };
+
+export type BuildWindowsResult =
+  | { state: 'measured'; windows: readonly BuildWindow[] }
+  | { state: 'partial' }
+  | { state: 'unavailable' };
 
 interface BuildProgressTick {
   ts: number;
@@ -50,21 +63,28 @@ function buildProgressTicks(events: readonly BuildTailEvent[]): BuildProgressTic
   ));
 }
 
-function closeoutDurations(events: readonly BuildTailEvent[]): BuildTailWindowRollup['closeout'] {
+function closeoutDurations(
+  events: readonly BuildTailEvent[],
+): BuildTailWindowRollup['closeout'] | undefined {
   const obligations: Record<string, number> = {};
   let durationMs = 0;
+  let recorded = false;
   for (const event of events) {
+    if (event.type !== 'pipeline_closeout') continue;
     if (
-      event.type !== 'pipeline_closeout'
-      || typeof event.obligation !== 'string'
+      typeof event.obligation !== 'string'
       || typeof event.startedAt !== 'number'
       || typeof event.endedAt !== 'number'
-    ) continue;
+      || event.endedAt < event.startedAt
+    ) return undefined;
     const duration = event.endedAt - event.startedAt;
     durationMs += duration;
     obligations[event.obligation] = (obligations[event.obligation] ?? 0) + duration;
+    recorded = true;
   }
-  return { durationMs, obligations };
+  return recorded
+    ? { state: 'recorded', durationMs, obligations }
+    : { state: 'unrecorded' };
 }
 
 /**
@@ -73,46 +93,65 @@ function closeoutDurations(events: readonly BuildTailEvent[]): BuildTailWindowRo
  */
 export function computeBuildTailRollup(
   windows: readonly BuildWindow[],
-): MeasuredBuildTailRollup {
+): BuildTailRollup {
+  if (windows.length === 0) return { state: 'unavailable' };
+  const rollups: BuildTailWindowRollup[] = [];
+  for (const window of windows) {
+    if (window.endedAt < window.startedAt) return { state: 'partial' };
+    const ticks = buildProgressTicks(window.events);
+    if (ticks.length === 0) return { state: 'partial' };
+    const closeout = closeoutDurations(window.events);
+    if (closeout === undefined) return { state: 'partial' };
+    const firstTick = ticks[0];
+    const firstPass = firstTick.resolved < firstTick.total;
+    const resolutionIndex = firstPass
+      ? ticks.findIndex((tick) => tick.resolved === tick.total)
+      : -1;
+    const resolutionTick = resolutionIndex >= 0 ? ticks[resolutionIndex] : undefined;
+
+    rollups.push({
+      classification: firstPass ? 'first-pass' : 're-entry',
+      taskExecution: resolutionTick === undefined
+        ? undefined
+        : {
+          startedAt: window.startedAt,
+          endedAt: resolutionTick.ts,
+          durationMs: resolutionTick.ts - window.startedAt,
+        },
+      postResolutionTicks: (resolutionIndex >= 0 ? ticks.slice(resolutionIndex + 1) : ticks.slice(1))
+        .map((tick) => ({
+          ts: tick.ts,
+          classification: tick.headMoved ? 'remediation' as const : 'closeout' as const,
+        })),
+      closeout,
+    });
+  }
   return {
     state: 'measured',
-    windows: windows.map((window) => {
-      const ticks = buildProgressTicks(window.events);
-      const firstTick = ticks[0];
-      const firstPass = firstTick !== undefined && firstTick.resolved < firstTick.total;
-      const resolutionIndex = firstPass
-        ? ticks.findIndex((tick) => tick.resolved === tick.total)
-        : -1;
-      const resolutionTick = resolutionIndex >= 0 ? ticks[resolutionIndex] : undefined;
-
-      return {
-        classification: firstPass ? 'first-pass' : 're-entry',
-        taskExecution: resolutionTick === undefined
-          ? undefined
-          : {
-            startedAt: window.startedAt,
-            endedAt: resolutionTick.ts,
-            durationMs: resolutionTick.ts - window.startedAt,
-          },
-        postResolutionTicks: (resolutionIndex >= 0 ? ticks.slice(resolutionIndex + 1) : ticks.slice(1))
-          .map((tick) => ({
-            ts: tick.ts,
-            classification: tick.headMoved ? 'remediation' as const : 'closeout' as const,
-          })),
-        closeout: closeoutDurations(window.events),
-      };
-    }),
+    windows: rollups,
   };
 }
 
-function parseLedger(raw: string): BuildTailEvent[] {
-  return raw
-    .split('\n')
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as BuildTailEvent);
+function parseLedger(raw: string): BuildTailEvent[] | undefined {
+  const events: BuildTailEvent[] = [];
+  for (const line of raw.split('\n')) {
+    if (line.trim().length === 0) continue;
+    try {
+      const event = JSON.parse(line) as unknown;
+      if (
+        typeof event !== 'object'
+        || event === null
+        || typeof (event as Record<string, unknown>).ts !== 'number'
+      ) return undefined;
+      events.push(event as BuildTailEvent);
+    } catch {
+      return undefined;
+    }
+  }
+  return events;
 }
 
-async function readOptionalLedger(path: string): Promise<BuildTailEvent[]> {
+async function readOptionalLedger(path: string): Promise<BuildTailEvent[] | undefined> {
   try {
     return parseLedger(await readFile(path, 'utf8'));
   } catch (error: unknown) {
@@ -126,14 +165,15 @@ async function readOptionalLedger(path: string): Promise<BuildTailEvent[]> {
  * order, and return each completed build window.  Classification and degraded
  * result states are intentionally owned by later build-tail-rollup tasks.
  */
-export async function readBuildWindows(worktreeDir: string): Promise<BuildWindow[]> {
+export async function readBuildWindows(worktreeDir: string): Promise<BuildWindowsResult> {
   const pipelineDir = join(worktreeDir, '.pipeline');
-  const engineEvents = parseLedger(
-    await readFile(join(pipelineDir, 'events.jsonl'), 'utf8'),
+  const engineEvents = await readOptionalLedger(
+    join(pipelineDir, 'events.jsonl'),
   );
   const pipelineEvents = await readOptionalLedger(
     join(pipelineDir, 'pipeline-events.jsonl'),
   );
+  if (engineEvents === undefined || pipelineEvents === undefined) return { state: 'partial' };
   const events = [...engineEvents, ...pipelineEvents]
     .map((event, ordinal) => ({ event, ordinal }))
     .sort((left, right) => left.event.ts - right.event.ts || left.ordinal - right.ordinal)
@@ -150,6 +190,7 @@ export async function readBuildWindows(worktreeDir: string): Promise<BuildWindow
 
     current.events.push(event);
     if (event.type === 'step_completed' && event.step === 'build') {
+      if (event.ts < current.startedAt) return { state: 'partial' };
       windows.push({
         startedAt: current.startedAt,
         endedAt: event.ts,
@@ -158,5 +199,8 @@ export async function readBuildWindows(worktreeDir: string): Promise<BuildWindow
       current = undefined;
     }
   }
-  return windows;
+  if (current !== undefined) return { state: 'partial' };
+  return windows.length === 0
+    ? { state: 'unavailable' }
+    : { state: 'measured', windows };
 }
