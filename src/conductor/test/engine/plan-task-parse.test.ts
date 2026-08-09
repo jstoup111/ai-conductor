@@ -38,4 +38,20 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
     expect(Array.from(result.get('2') ?? [])).toEqual(['src/one.ts', 'src/two.ts']);
     expect(result.declaredTaskIds).toEqual(new Set(['1', '2']));
   });
+
+  it('reports whether each task carried a Files line', () => {
+    const result = parsePlanTaskPaths(`### Task 1: Declared
+**Files:** src/one.ts
+
+### Task 2: Undeclared
+- \`src/two.ts\`
+`);
+
+    expect(result.hasFilesLineByTaskId).toEqual(
+      new Map([
+        ['1', true],
+        ['2', false],
+      ]),
+    );
+  });
 });

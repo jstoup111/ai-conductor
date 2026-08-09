@@ -37,6 +37,7 @@ const BACKTICK_TOKEN = /`([^`\s]+)`/g;
  */
 export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
   declaredTaskIds: ReadonlySet<string>;
+  hasFilesLineByTaskId: ReadonlyMap<string, boolean>;
 }
 
 // A task's **Files:** line is the authoritative declaration of which paths
@@ -215,6 +216,7 @@ export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
   // resolves empty — trailer-alone corroboration, same as `none`.
   const result = new Map<string, Set<string>>() as ParsedPlanTaskPaths;
   const declaredTaskIds = new Set<string>();
+  const hasFilesLineByTaskId = new Map<string, boolean>();
   const resolvedBySection: Set<string>[] = [];
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i];
@@ -241,6 +243,7 @@ export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
     resolvedBySection.push(resolved);
     for (const id of s.ids) {
       if (s.hasFilesLine) declaredTaskIds.add(id);
+      hasFilesLineByTaskId.set(id, s.hasFilesLine);
       const existing = result.get(id);
       if (existing) {
         for (const p of resolved) existing.add(p);
@@ -251,6 +254,7 @@ export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
   }
 
   result.declaredTaskIds = declaredTaskIds;
+  result.hasFilesLineByTaskId = hasFilesLineByTaskId;
 
   return result;
 }
