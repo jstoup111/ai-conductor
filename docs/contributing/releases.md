@@ -275,4 +275,16 @@ replaces it with `Release-Disposition: note` plus `Release-Category`, `Release-S
 - `test/test_harness_integrity.sh` passes
 - Manually verified affected skill, hook, or CLI
 
+### The `semver:` band
+
+The same check stamps the impact it just validated onto the PR as a `semver:major`,
+`semver:minor`, or `semver:patch` label, so an operator can read merge order straight off
+the PR list instead of opening each body. `no-note` PRs carry no band — they never move
+`VERSION`, and a fourth "none" band would read as a release decision they did not make.
+
+The stamp is a REPLACE: editing a body from `minor` to `patch` retracts the stale band, so a
+PR never shows two contradictory ones. It is also strictly downstream of validation — an
+invalid disposition fails the check and leaves labels untouched, and a label-apply failure
+(auth, rate limit, network) is logged but never fails the required check.
+
 All work happens on a feature branch; never commit directly to `main`.
