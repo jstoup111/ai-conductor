@@ -11,6 +11,13 @@
 // fs error, git error — prints a single canonical warn and exits 0. A missing
 // record only means dedup falls back to the local `.daemon/processed/` cache;
 // it must never fail an otherwise successful ship.
+//
+// Stream discipline: success and progress go to STDOUT; only genuine failures
+// (usage, degraded rollups, the write-failed warn) go to STDERR. The daemon
+// calls `dispatchShippedRecord` IN-PROCESS (finish-publication-production.ts),
+// and `daemon-cli.ts` tees `console.error` into `.daemon/daemon.log` stamped
+// `[error]` — so a success line written to stderr makes every completed ship
+// read as a failure in the operator's log.
 
 import { readFile, readdir } from 'node:fs/promises';
 import { join, isAbsolute, dirname } from 'node:path';
@@ -175,9 +182,9 @@ export async function dispatchShippedRecord(
         cwd,
         env: withEngineCommitEnv(),
       });
-      console.error(`  ✓ shipped record committed: ${relPath}`);
+      console.log(`  ✓ shipped record committed: ${relPath}`);
     } else {
-      console.error(`  ✓ shipped record already committed: ${relPath}`);
+      console.log(`  ✓ shipped record already committed: ${relPath}`);
     }
     return 0;
   } catch (err) {

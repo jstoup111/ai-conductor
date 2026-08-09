@@ -633,6 +633,12 @@ before this field existed simply omit the line, and `conduct-ts kpi` reports tho
 
 Either flag missing prints the usage guide to stderr and exits 1.
 
+Success is reported on **stdout** (`✓ shipped record committed: <path>`, or
+`✓ shipped record already committed: <path>` on an idempotent re-run); only failures — the usage
+guide, a degraded cost or timing rollup, and the write-failed warning — go to stderr. The daemon
+calls this command in-process and tees `console.error` into `.daemon/daemon.log` tagged `[error]`,
+so a success line on stderr would make every completed ship read as a failure.
+
 Every other failure exits **0** with one warning and no record written, so the exit code cannot be
 used to detect success. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
