@@ -25,13 +25,17 @@ describe('EventPersister: build progress/stall events', () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
 
-    await emitter.emit({
+    const event: ConductorEvent = {
       type: 'build_progress',
       step: 'build',
       resolved: 3,
       total: 10,
       currentTaskId: 'T5',
-    } as ConductorEvent);
+      tickReason: 'heartbeat',
+      headMoved: false,
+    };
+
+    await emitter.emit(event);
 
     persister.stop();
 
@@ -40,11 +44,15 @@ describe('EventPersister: build progress/stall events', () => {
     expect(lines).toHaveLength(1);
 
     const parsed = JSON.parse(lines[0]);
-    expect(parsed.type).toBe('build_progress');
-    expect(parsed.step).toBe('build');
-    expect(parsed.resolved).toBe(3);
-    expect(parsed.total).toBe(10);
-    expect(typeof parsed.ts).toBe('string');
+    expect(parsed).toMatchObject({
+      type: 'build_progress',
+      step: 'build',
+      resolved: 3,
+      total: 10,
+      tickReason: 'heartbeat',
+      headMoved: false,
+      ts: expect.any(String),
+    });
     expect(() => new Date(parsed.ts).toISOString()).not.toThrow();
   });
 

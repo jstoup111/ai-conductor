@@ -344,6 +344,8 @@ export type ConductorEvent =
       /** Consecutive gate-verdict misses with no supporting evidence, if tracked. */
       noEvidenceAttempts?: number;
       featureSlug?: string;
+      tickReason?: 'task-delta' | 'head-moved' | 'heartbeat';
+      headMoved?: boolean;
     }
   | {
       /**
