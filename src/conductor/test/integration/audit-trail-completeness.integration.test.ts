@@ -88,6 +88,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_stall: 'not-audited-by-design',
   build_progress: 'not-audited-by-design',
   build_no_progress: 'not-audited-by-design',
+  pipeline_closeout: 'not-audited-by-design',
   renderer_error: 'not-audited-by-design',
   when_skip: 'not-audited-by-design', // skipped steps must have zero records
   parallel_started: 'not-audited-by-design',
@@ -241,6 +242,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3 },
   build_no_progress: { type: 'build_no_progress', step: 'build', quietMinutes: 5, resolved: 1, total: 3 },
+  pipeline_closeout: {
+    type: 'pipeline_closeout',
+    obligation: 'evaluator',
+    startedAt: 100,
+    endedAt: 140,
+    ts: 140,
+  },
   renderer_error: { type: 'renderer_error', rendererName: 'console', error: 'oops' },
   when_skip: { type: 'when_skip', step: 'build', expression: '${foo}' },
   parallel_started: { type: 'parallel_started', step: 'build', branches: ['a', 'b'] },

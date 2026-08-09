@@ -366,6 +366,23 @@ export type ConductorEvent =
       featureSlug?: string;
     }
   | {
+      /** A pipeline-owned closeout obligation completed during a build. */
+      type: 'pipeline_closeout';
+      obligation:
+        | 'evaluator'
+        | 'simplify'
+        | 'architecture-diagram'
+        | 'micro-retro'
+        | 'memory'
+        | 'summary';
+      /** Epoch milliseconds when the obligation began. */
+      startedAt: number;
+      /** Epoch milliseconds when the obligation completed. */
+      endedAt: number;
+      /** Epoch milliseconds when the pipeline recorded this event. */
+      ts: number;
+    }
+  | {
       type: 'renderer_error';
       rendererName: string;
       error: string;
