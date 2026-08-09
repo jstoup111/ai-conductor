@@ -173,7 +173,51 @@ the filer's first idea and skips the divergent half of DECIDE. Labeled hypothese
 
 Keep it specific and under ~72 characters.
 
-### 7. GATE — Pre-File Checklist
+### 7. Scrub Before It Leaves the Machine
+
+Filing publishes the issue to a tracker that may be public and is in any case off your
+machine. The evidence that makes an intake useful — pasted logs, config excerpts, stack
+traces, command output — is exactly the material that carries secrets. Scrub before you
+file, not after: an issue edit does not remove what was published, and a leaked credential
+is compromised the moment it lands, not when someone notices.
+
+**The filer already runs a mechanical net.** The configured intake filer redacts
+high-confidence credential shapes and operator-identifying paths from the title and body
+before the issue is created — provider and cloud tokens, PEM private-key blocks, JWTs, auth
+headers, URL-embedded credentials, values assigned to secret-named keys, absolute home
+directories, and email addresses. When it replaces anything it says so on stderr:
+
+```text
+[intake-file] redacted before filing: github-token x1, home-path x4 — review the filed issue
+and restore any evidence the scrub clipped
+```
+
+Read that line when it appears. Redaction is deliberately blunt, so check the filed issue and
+restore anything it clipped that the engineer actually needs.
+
+**The net cannot recognize what only you know.** It matches shapes, not meaning, so these
+remain your judgement and MUST be handled in the draft:
+
+- **Identifiable third parties** — customer, client, or partner names; account ids; anything
+  naming who was affected. Replace with a role (`a customer on the enterprise plan`).
+- **Internal-only systems** — hostnames, service names, and internal URLs that disclose
+  private topology. Keep the shape, drop the identity (`the internal billing service`).
+- **Proprietary or unreleased material** — source from a private dependency, unannounced
+  product or feature names, contract and pricing terms, roadmap dates.
+- **Personal data** — real names, addresses, and identifiers appearing in sample rows, test
+  fixtures, or database output. Substitute obviously-fake values.
+- **Anything whose disclosure is governed** — regulated records, or material an NDA covers.
+
+Trim the artifact to the lines that carry the finding. A twelve-line excerpt that proves the
+point is both better evidence and less exposure than a whole log file.
+
+**When scrubbing would gut the evidence, say so instead of filing it.** Write what the
+artifact showed in prose, note that the raw material is withheld and where it lives
+(`full trace in the incident channel`), and let the engineer request it through a channel
+that is allowed to carry it. An intake issue is not the right container for material that
+cannot be published — that is a reason to reference it, never a reason to paste it.
+
+### 8. GATE — Pre-File Checklist
 
 **Do not file until every applicable check passes.** Fix the draft, not the checklist.
 
@@ -187,12 +231,16 @@ Keep it specific and under ~72 characters.
    as fact.
 5. **Impact is stated honestly** — required, one line minimum; never omitted.
 6. **Size/priority are ready to hand to the filer**: either you've picked
-   `S`/`M`/`L` and (optionally) a priority tier to pass as flags in §8, or you're
+   `S`/`M`/`L` and (optionally) a priority tier to pass as flags in §9, or you're
    content to let the configured intake filer infer/prompt/default them. Never hand-write a
    size or priority as prose in the body — that discipline is now enforced by the
    script, not the checklist.
+7. **The draft is scrubbed** — §7 run over every artifact: no third-party identities, internal
+   hostnames, proprietary material, or personal data, and every excerpt trimmed to the lines
+   that carry the finding. The filer's mechanical redaction is the net under this check, not a
+   substitute for it.
 
-### 8. File It
+### 9. File It
 
 Filing is not prose discipline — it is one atomic, deterministic operation run by
 the repository's configured intake filer. It creates the issue, applies the
@@ -286,5 +334,7 @@ filer's design. DECIDE has nothing to weigh and everything to anchor on.
 - [ ] Every outcome is observable without knowledge of the implementation
 - [ ] No fix directions, design sketches, or prescribed seams outside Hypotheses
 - [ ] Title states the symptom or outcome, not a solution
+- [ ] Draft scrubbed per §7; any `[intake-file] redacted before filing:` line was read and the
+      filed issue checked for over-redaction
 - [ ] Filed via `bin/intake-file`; `size=` reported in its output; `priority=` applied if warranted; `--depends-on` given or an explicit `dependencies: none` accepted
 - [ ] Issue URL reported to the operator

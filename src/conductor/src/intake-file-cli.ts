@@ -16,6 +16,7 @@ import { createInterface } from 'node:readline/promises';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { createGithubTrackerClient } from './engine/tracker-client.js';
 import { fileIntakeIssue, type FileIntakeIssueOpts } from './engine/engineer/intake/file-issue.js';
+import { describeRedactions } from './engine/engineer/intake/sanitize.js';
 
 function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
   const opts: Partial<FileIntakeIssueOpts> & { dependsOn: string[] } = { dependsOn: [] };
@@ -91,6 +92,12 @@ async function main(): Promise<void> {
       console.log(`[intake-file] depends-on: ${result.linked.join(', ') || '(none linked)'}`);
     } else {
       console.log('[intake-file] dependencies: none');
+    }
+    if (result.redactions.length > 0) {
+      console.error(
+        `[intake-file] redacted before filing: ${describeRedactions(result.redactions)} ` +
+          '— review the filed issue and restore any evidence the scrub clipped',
+      );
     }
     for (const w of result.warnings) console.error(`[intake-file] warning: ${w}`);
     for (const bad of result.badRefs) console.error(`[intake-file] warning: bad --depends-on ref "${bad}"`);

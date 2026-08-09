@@ -236,6 +236,37 @@ You should see `[intake-file] filed: <url>`. A label-apply or dependency-link fa
 is created surfaces as `[intake-file] warning: …` and does **not** fail the filing; only a failure to
 create the issue itself is a hard error. Report the URL and any warnings to the operator.
 
+## Redaction before publication
+
+Filing publishes the title and body to a tracker that may be public. The filer scrubs both before
+the issue is created, at the one choke point every route through `bin/intake-file` passes:
+
+| Redacted | Recognized by |
+| --- | --- |
+| Provider and cloud credentials | GitHub (`ghp_`, `github_pat_`), Anthropic (`sk-ant-`), generic `sk-`, AWS access key ids, Slack, Google API keys |
+| Key material and sessions | PEM `PRIVATE KEY` blocks, JWTs, `Bearer`/`Basic`/`Token` auth headers |
+| Credentials in context | `user:pass@host` inside a URL; any value assigned to a key named `*SECRET*`, `*TOKEN*`, `*PASSWORD*`, `*API_KEY*`, `*ACCESS_KEY*`, `*PRIVATE_KEY*`, `*CREDENTIAL*` |
+| Operator identity | Absolute `/home/<user>` and `/Users/<user>` paths (rewritten to `~`), email addresses other than `noreply@` and `example.com` |
+
+Each replacement becomes `[redacted:<category>]`; a key name is kept and only its value replaced, so
+the reader still learns *what* leaked. Matching is by shape, not by keyword — naming
+`CLAUDE_CODE_OAUTH_TOKEN` in prose is not an assignment and is left alone, and ordinary evidence
+(paths, log lines, `file:line` references, PR numbers) passes through untouched.
+
+When anything is replaced the command reports it on stderr and still exits 0:
+
+```text
+[intake-file] redacted before filing: github-token x1, home-path x4 — review the filed issue and restore any evidence the scrub clipped
+```
+
+Size and priority inference reads the **original** body, so a redaction can never change how the
+issue is labelled.
+
+This is a mechanical net for credential *shapes*, not a confidentiality review. Customer names,
+internal hostnames, proprietary source, and personal data are matched by nothing here and remain the
+author's responsibility — `skills/intake/SKILL.md` §7 carries that half, including what to do when
+scrubbing would gut the evidence.
+
 ## From issue to backlog
 
 An intake issue does not reach the daemon by itself. The path is:

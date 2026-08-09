@@ -14,6 +14,7 @@
 import { parseSizeLabel, parsePriorityLabels } from '../../backlog-priority.js';
 import { restAddLabelArgs } from '../../pr-labels.js';
 import { parseSourceRef } from '../issue-ref.js';
+import { sanitizeIntakeText, type Redaction } from './sanitize.js';
 import type { TrackerClient } from '../../tracker-client.js';
 
 export interface FileIntakeIssueOpts {
@@ -44,6 +45,13 @@ export interface FileIntakeIssueResult {
   linked: string[];
   badRefs: string[];
   warnings: string[];
+  /**
+   * What the pre-publication scrub replaced in the title/body. Empty on a clean
+   * filing. Reported to the operator so a redaction is never silent — the issue
+   * is already public by then, and a clipped piece of evidence has to be
+   * noticed to be restored.
+   */
+  redactions: Redaction[];
 }
 
 const SIZE_WORDS: Record<'S' | 'M' | 'L', RegExp> = {
@@ -128,9 +136,19 @@ export async function fileIntakeIssue(
     }
   }
 
+  // ── Sanitize before publication ──────────────────────────────────────────
+  // Filing publishes this text to a tracker that may be public and is in any
+  // case off the operator's machine, so the scrub runs HERE — at the single
+  // choke point every caller passes through — rather than as a rule the filer
+  // is asked to remember. Size/priority inference above deliberately reads the
+  // ORIGINAL body: a redaction must never change how the issue is labelled.
+  const cleanTitle = sanitizeIntakeText(opts.title);
+  const cleanBody = sanitizeIntakeText(opts.body);
+  const redactions = [...cleanTitle.redactions, ...cleanBody.redactions];
+
   // ── Create the issue ─────────────────────────────────────────────────────
   const issueUrl = await deps.tracker.createIssue(
-    { title: opts.title, body: opts.body, repo: opts.repo },
+    { title: cleanTitle.text, body: cleanBody.text, repo: opts.repo },
     deps.cwd,
   );
   const ref = issueUrlToRef(issueUrl);
@@ -146,6 +164,7 @@ export async function fileIntakeIssue(
     linked: [],
     badRefs: [],
     warnings,
+    redactions,
   };
 
   // ── Apply labels (best-effort; failure is a warning, never a hard fail) ──
