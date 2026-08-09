@@ -2321,6 +2321,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'remediation_sealed_artifact_redirect': {
+      log(
+        `${dot} ${chalk.yellow(
+          `↩ remediation gap ${event.gapId} → plan — sealed artifact ${event.artifact}`,
+        )}`,
+      );
+      break;
+    }
     case 'build_progress': {
       // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
       // step, N/total, current task, feature slug. No warning coloring —
