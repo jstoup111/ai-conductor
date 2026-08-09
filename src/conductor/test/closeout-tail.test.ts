@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConductorEventEmitter } from '../src/ui/events.js';
-import { CloseoutEventTail, CloseoutTailReader } from '../src/engine/closeout-tail.js';
+import { CloseoutEventTail } from '../src/engine/closeout-tail.js';
 
 const directories: string[] = [];
 
@@ -23,11 +23,18 @@ async function createProjectRoot(): Promise<string> {
   return projectRoot;
 }
 
-describe('CloseoutTailReader', () => {
+describe('CloseoutEventTail', () => {
   it('treats an absent sibling ledger as no new events', async () => {
-    const reader = new CloseoutTailReader(await createProjectRoot());
+    const events = new ConductorEventEmitter();
+    const received: unknown[] = [];
+    events.on('pipeline_closeout', (event) => {
+      received.push(event);
+    });
+    const tail = new CloseoutEventTail({ projectRoot: await createProjectRoot(), events });
 
-    await expect(reader.read()).resolves.toEqual([]);
+    await tail.poll();
+
+    expect(received).toEqual([]);
   });
 
   it('emits complete lines once and retains a partial trailing record until it ends in a newline', async () => {
@@ -53,19 +60,28 @@ describe('CloseoutTailReader', () => {
       `${JSON.stringify(completed)}\n${JSON.stringify(partial)}`,
       { encoding: 'utf8', flush: true },
     );
-    const reader = new CloseoutTailReader(projectRoot);
+    const events = new ConductorEventEmitter();
+    const received: unknown[] = [];
+    events.on('pipeline_closeout', (event) => {
+      received.push(event);
+    });
+    const tail = new CloseoutEventTail({ projectRoot, events });
 
-    await expect(reader.read()).resolves.toEqual([completed]);
-    await expect(reader.read()).resolves.toEqual([]);
+    await tail.poll();
+    await tail.poll();
+
+    expect(received).toEqual([completed]);
 
     await appendFile(ledger, '\n', 'utf8');
 
-    await expect(reader.read()).resolves.toEqual([partial]);
-    await expect(reader.read()).resolves.toEqual([]);
+    await tail.poll();
+    await tail.poll();
+
+    expect(received).toEqual([completed, partial]);
   });
 });
 
-describe('CloseoutEventTail', () => {
+describe('CloseoutEventTail lifecycle', () => {
   it('polls at its configured interval after it starts', async () => {
     vi.useFakeTimers();
     try {

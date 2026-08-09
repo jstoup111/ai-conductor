@@ -11,7 +11,7 @@ const PIPELINE_CLOSEOUT_LEDGER = '.pipeline/pipeline-events.jsonl';
  * record that is still being appended.  The offset is measured in bytes so it
  * remains valid for UTF-8 JSON records.
  */
-export class CloseoutTailReader {
+class CloseoutTailReader {
   private offset = 0;
 
   constructor(private readonly projectRoot: string) {}
