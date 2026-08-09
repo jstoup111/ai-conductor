@@ -77,6 +77,65 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       .toThrow('Invalid release disposition: Migration');
   });
 
+  describe('Migration section followed by the release metadata block (#1396)', () => {
+    // Observed on PR #1396: the authored body puts `## Migration` LAST, with the
+    // Release-* block below it and no `---` in between. The section terminator
+    // recognised only a heading or a thematic break, so it swallowed the whole
+    // metadata block into the migration content, and a correctly-formed PR was
+    // rejected at the finish-time release gate with
+    // "Invalid release disposition: Migration". Nothing about that body is wrong;
+    // the parser required a separator the template never promised.
+    const fence = '```bash migration\n./bin/install --update\n```';
+    const fields = [
+      'Release-Disposition: note',
+      'Release-Category: Added',
+      'Release-Semver: minor',
+      'Release-Note: Adds a thing.',
+    ].join('\n');
+
+    it('ends the section at the release metadata block with no thematic break', () => {
+      expect(
+        parseReleaseDisposition(`## Migration\n\n${fence}\n\n${fields}\n`),
+      ).toEqual({
+        disposition: 'note',
+        category: 'Added',
+        semver: 'minor',
+        note: 'Adds a thing.',
+        migration: fence,
+      });
+    });
+
+    it('ends a "none" section at the release metadata block', () => {
+      expect(parseReleaseDisposition(`## Migration\n\nnone\n\n${fields}\n`)).toEqual({
+        disposition: 'note',
+        category: 'Added',
+        semver: 'minor',
+        note: 'Adds a thing.',
+      });
+    });
+
+    it('tolerates a trailing Closes line after the metadata block', () => {
+      expect(
+        parseReleaseDisposition(
+          `## Migration\n\n${fence}\n\n${fields}\n\nCloses owner/repo#1254\n`,
+        ),
+      ).toMatchObject({ migration: fence });
+    });
+
+    it('does not end the section at a Release- line inside the runnable fence', () => {
+      const tricky = '```bash migration\necho "Release-Semver: major"\n```';
+      expect(
+        parseReleaseDisposition(`## Migration\n\n${tricky}\n\n${fields}\n`),
+      ).toMatchObject({ migration: tricky });
+    });
+
+    it('still rejects genuine prose that precedes the metadata block', () => {
+      expect(() =>
+        parseReleaseDisposition(`## Migration\n\nRun the installer.\n\n${fields}\n`),
+      ).toThrow(/Invalid release disposition: Migration/);
+    });
+  });
+
   describe('Migration section terminated by a thematic break', () => {
     // The SHIP-entry draft body (`shipDraftPrBody`) always ends with a `---`
     // rule, the placeholder note, and the injected `Closes` line. When the

@@ -29,6 +29,8 @@ const runnableMigrationFenceRe = /^```bash migration\s*\n[\s\S]*?```$/;
 const thematicBreakRe = /^(?:-{3,}|\*{3,}|_{3,})$/;
 const fenceDelimiterRe = /^```/;
 const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(?:\r?\n|$)/gm;
+/** A single release-metadata line, non-global — ends the Migration section (#1396). */
+const migrationSectionTerminatorRe = /^Release-(?:Disposition|Category|Semver|Note):/;
 const migrationBlockRe = /(?:\r?\n)?## Migration\s*\r?\n```bash migration\s*\r?\n[\s\S]*?```(?=\r?\n##\s|$)/g;
 
 function invalidReleaseDisposition(field: string): never {
@@ -62,6 +64,14 @@ function migrationSectionContent(raw: string): string {
     const trimmed = line.trim();
     if (fenceDelimiterRe.test(trimmed)) inFence = !inFence;
     else if (!inFence && thematicBreakRe.test(trimmed)) break;
+    // The release metadata block also ends the section (#1396). An authored body
+    // may put `## Migration` LAST, with the Release-* block directly below it and
+    // no `---` between them — the PR template promises no such separator. Without
+    // this the whole block is swallowed into the migration content and a
+    // correctly-formed PR is rejected at the finish-time release gate. Fence
+    // tracking keeps a `Release-…` line INSIDE a runnable block (an echoed string,
+    // say) from truncating a real migration.
+    else if (!inFence && migrationSectionTerminatorRe.test(trimmed)) break;
     kept.push(line);
   }
   return kept.join('\n').trim();
