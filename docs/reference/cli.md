@@ -794,6 +794,11 @@ with a usage line when the plan positional is missing, and 1 with `validate-wire
 plan <path> (<msg>)` when the plan file is unreadable. `skills/plan/SKILL.md` §5c requires running it
 before a plan is presented as complete. Reads files only; writes nothing.
 
+Running it is no longer the only enforcement. Land runs the same `validateWiredIntoPlan` check against
+the plan being landed, at every tier, and refuses the spec naming each failing task and anchor — so a
+plan cannot reach BUILD with an unresolvable anchor by skipping this command. Use the command while
+authoring to see the failures early; the gate is what makes them unavoidable.
+
 ## `conduct-ts evidence`
 
 ```bash

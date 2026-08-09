@@ -103,7 +103,10 @@ function renderPlan(slug: string, files: string, inherited = false): string {
     '',
     `**Files:** ${files}`,
     '',
-    '**Wired-into:** none (test fixture)',
+    // Must be a canonical waiver form: land's wiring-anchor gate runs the same
+    // `extractWiredIntoContracts` parser BUILD does, and an invented `none (...)`
+    // parenthetical is malformed there, not a fixture nicety.
+    '**Wired-into:** none (no new production surface)',
     inheritedTask,
     '',
     '## Task Dependency Graph',

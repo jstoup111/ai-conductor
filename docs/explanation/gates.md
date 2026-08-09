@@ -142,20 +142,42 @@ from specs that would waste a build.
 | stories approval | stories without the explicit acceptance marker — not being draft is not enough |
 | ADR status | any architecture decision record still in draft |
 | tier agreement | a declared complexity tier that disagrees with the artifacts present |
-| coherence | a traceability record that does not connect outcomes, requirements, stories, and tasks |
+| coherence | a traceability record that does not connect outcomes, requirements, stories, and tasks, or stories that do not tie out to the PRD |
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
+| plan wiring anchor | a task whose `**Wired-into:**` anchor does not resolve to a real, existing call site |
 
 Before land, plan authoring runs `conduct-ts plan-protected-targets <plan-path>`. It is a blocking,
 read-only check that reports every offending task/path pair. Land repeats the same judgment against
 the plan being landed, so a plan cannot bypass the rule by skipping the authoring command. Both gates
 apply at every tier and judge only the current plan, not historical plans already merged.
 
+The plan wiring-anchor gate is the same shape. `conduct-ts validate-wired-into` has always been able
+to resolve a plan's `**Wired-into:**` anchors at DECIDE time, through the same
+`extractWiredIntoContracts` + `verifyDeclaredSites` machinery BUILD runs — but as an optional command
+nothing invoked, so an anchor naming a symbol that does not exist could be approved and only surface
+mid-build, where the only way forward was rewriting the approved plan. Land now runs that same
+validation as a blocking check: every declared anchor must name a file that exists and carries a
+non-test reference to the declared symbol, or the task must declare a `none (...)` waiver form. It
+applies at every tier — an anchor either resolves or it does not, and tier has no bearing on that.
+An anchor naming a symbol in a file the same task creates fails here because the file does not exist
+yet; once such a file does exist, the reference check is a text search and cannot by itself tell a
+definition from a call, so a self-referential anchor into an already-existing file is not caught.
+
 The coherence gate is itself layered. It disengages entirely at tier S, and it does not apply retroactively:
 a change set with no coherence artifact path in it is treated as a legacy change, not a violation. Once
 engaged, the story, orphan-task, and coverage-table layers are always required; the functional-requirement
 layer only on the product track; the outcome layer only when outcomes exist. It aggregates every gap rather
 than stopping at the first, and reports them as one error. See [engineer loop](../guides/engineer-loop.md).
+
+The functional-requirement layer checks both directions, because coverage alone is only half of a tie-out.
+Forward, a PRD requirement no story cites — or whose only citing stories no task covers — is a gap.
+Reverse, a story that cites an `FR-N` the PRD never declares, or that cites no requirement at all, is a gap
+against that story's id. The reverse direction runs on the product track only: a technical-track spec has no
+PRD, so it has no requirement layer to tie out against. What the gate does not judge is whether a story
+*semantically* delivers the requirement it cites — a story whose scenarios contradict its own FR is a
+`fail` verdict the `/coherence-check` skill records, not a set comparison. Story-versus-story contradictions
+belong to `conflict-check` earlier in DECIDE; this gate compares each story against the PRD only.
 
 ### Self-host gates
 

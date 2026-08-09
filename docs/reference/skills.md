@@ -319,6 +319,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   a terminal catch-all task that re-proves the completed feature; scoped tests stay with their
   behavior-owning implementation task, while writing-system-tests and later BUILD/SHIP gates own
   whole-feature validation.
+- **Wiring anchors are gated, not advised** — `conduct-ts validate-wired-into <plan file>` remains the
+  authoring-time command, but land now runs the same validation against the plan being landed, at every
+  tier. A `**Wired-into:**` anchor that names a file that does not exist, or a symbol with no non-test
+  reference in its declared file, refuses the spec naming the task and the anchor. Fix the anchor during
+  DECIDE or declare a `none (...)` form — BUILD must never rewrite an approved plan to make it resolve.
 
 ### coherence-check
 
@@ -331,6 +336,13 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `.docs/specs/<plan-stem>.md` for FRs; `.docs/stories/<plan-stem>.md`; `.docs/plans/<plan-stem>.md`.
 - **Outputs** — `.docs/coherence/<plan-stem>.md`. The stem must match the plan filename stem exactly or
   the land validator rejects it as a missing coherence artifact.
+- **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
+  §4e). Forward: no PRD `FR-N` without a citing story that a task covers. Reverse: no story citing an
+  `FR-N` the PRD never declares, and no story citing no FR at all. Both directions are re-derived
+  mechanically by the land-time gate from the real PRD and stories files, so the skill spends its judgement
+  on whether a cited FR is actually *delivered* by that story's scenarios — a correct citation the
+  acceptance criteria contradict is `fail`, not `covered`. Story-versus-story contradictions stay with
+  `conflict-check`; this skill compares each story against the PRD.
 - **Gate role** — blocking. It authors the artifact the land-time coherence gate validates. Verdicts are
   exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it,
   which coverage alone cannot express. Any other string is treated as affirmative by the validator and

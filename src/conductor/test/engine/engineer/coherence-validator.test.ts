@@ -13,6 +13,7 @@ import {
   crossCheckIds,
   checkOutcomeCoverage,
   checkFrCoverage,
+  checkStoryFrTieOut,
   checkStoryCoverage,
   checkOrphanTasks,
   checkCoverageTableConsistency,
@@ -507,6 +508,121 @@ describe('checkFrCoverage', () => {
   });
 });
 
+describe('checkStoryFrTieOut (PRD <-> stories tie-out, reverse direction)', () => {
+  const PRD_TEXT = `# PRD
+
+## Functional Requirements
+
+- FR-1: Widgets can be shipped.
+- FR-2: Widgets can be returned.
+`;
+
+  it('passes when every story Requirement line cites only FRs the PRD actually declares', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1
+
+## Story 2: Widget returns
+**Requirement:** FR-2
+`;
+    expect(checkStoryFrTieOut(PRD_TEXT, storiesText)).toEqual({ ok: true });
+  });
+
+  it('reports a phantom-FR gap for a story citing an FR the PRD never declares', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1
+
+## Story 2: Widget teleportation
+**Requirement:** FR-9
+`;
+    const result = checkStoryFrTieOut(PRD_TEXT, storiesText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('story-fr-gap');
+    // FR-2 has no story — that is checkFrCoverage's job, not this layer's.
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]).toEqual({
+      gapId: 'story-2',
+      kind: 'phantom-fr',
+      storyId: '2',
+      title: 'Widget teleportation',
+      frIds: ['FR-9'],
+    });
+  });
+
+  it('reports an untraced-story gap for a story with no FR citation while a PRD declares FRs', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1, FR-2
+
+## Story 2: Widget polishing
+**Requirement:** none
+`;
+    const result = checkStoryFrTieOut(PRD_TEXT, storiesText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('story-fr-gap');
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('story-2');
+    expect(result.gaps[0].kind).toBe('untraced-story');
+    expect(result.gaps[0].frIds).toEqual([]);
+  });
+
+  it('reports every offending story, not just the first', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget teleportation
+**Requirement:** FR-9
+
+## Story 2: Widget polishing
+
+## Story 3: Widget shipping
+**Requirement:** FR-1, FR-2
+`;
+    const result = checkStoryFrTieOut(PRD_TEXT, storiesText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((g) => g.gapId)).toEqual(['story-1', 'story-2']);
+    expect(result.gaps.map((g) => g.kind)).toEqual(['phantom-fr', 'untraced-story']);
+  });
+
+  it('reports a story citing both a real and a phantom FR as a phantom-fr gap naming only the phantom', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1, FR-7, FR-2, FR-8
+`;
+    const result = checkStoryFrTieOut(PRD_TEXT, storiesText);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].kind).toBe('phantom-fr');
+    expect(result.gaps[0].frIds).toEqual(['FR-7', 'FR-8']);
+  });
+
+  it('passes trivially on the technical track (prdText null) — no phantom requirement layer', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+`;
+    expect(checkStoryFrTieOut(null, storiesText)).toEqual({ ok: true });
+  });
+
+  it('passes trivially when the PRD declares no FRs at all', () => {
+    const storiesText = `# Stories
+
+## Story 1: Widget shipping
+`;
+    expect(checkStoryFrTieOut('# PRD\n\n## Overview\n\nProse only.\n', storiesText)).toEqual({
+      ok: true,
+    });
+  });
+});
+
 describe('checkStoryCoverage', () => {
   it('passes when every story id is cited by ≥1 task **Story:** line', () => {
     const storiesText = `# Stories
@@ -842,6 +958,91 @@ No tasks yet.
     expect(result.report).toContain('Reduce checkout latency');
     // Not generic-only: the specific bullet text and id must both appear.
     expect(result.report).not.toMatch(/^# Coherence gaps\n\n- \*\*outcome-\d+\*\* \(intake outcomes\): ""\n$/);
+  });
+
+  it('surfaces a story citing a phantom FR as a story-fr layer gap in the aggregated report', () => {
+    const inputs: ValidateCoherenceInputs = {
+      rows: [],
+      outcomeBullets: [],
+      prdText: '## Functional Requirements\n\n- FR-1: widgets ship\n',
+      storiesText: `# Stories
+
+## Story 1: Ship the widget
+**Requirement:** FR-1, FR-4
+`,
+      planText: `# Plan
+
+### Task 1: Build the widget
+**Story:** Story 1
+**Type:** happy-path
+`,
+    };
+
+    const result = validateCoherence(inputs);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    // Coverage is complete in every existing layer — the only defect is the
+    // reverse direction (a story asserting an FR the PRD never declares).
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].layer).toBe('story-fr');
+    expect(result.gaps[0].gapId).toBe('story-1');
+    expect(result.gaps[0].artifact).toBe('stories');
+    expect(result.gaps[0].item).toContain('FR-4');
+    expect(result.report).toContain('story-1');
+    expect(result.report).toContain('FR-4');
+  });
+
+  it('surfaces a story with no FR citation as an untraced-story gap when the PRD declares FRs', () => {
+    const inputs: ValidateCoherenceInputs = {
+      rows: [],
+      outcomeBullets: [],
+      prdText: '## Functional Requirements\n\n- FR-1: widgets ship\n',
+      storiesText: `# Stories
+
+## Story 1: Ship the widget
+**Requirement:** FR-1
+
+## Story 2: Polish the widget
+`,
+      planText: `# Plan
+
+### Task 1: Build the widget
+**Story:** Story 1
+**Type:** happy-path
+
+### Task 2: Polish the widget
+**Story:** Story 2
+**Type:** happy-path
+`,
+    };
+
+    const result = validateCoherence(inputs);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].layer).toBe('story-fr');
+    expect(result.gaps[0].gapId).toBe('story-2');
+    expect(result.gaps[0].item).toMatch(/no.*Requirement/i);
+  });
+
+  it('does not run the tie-out layer on the technical track (prdText nulled by the caller)', () => {
+    const inputs: ValidateCoherenceInputs = {
+      rows: [],
+      outcomeBullets: [],
+      prdText: null,
+      storiesText: `# Stories
+
+## Story 1: Ship the widget
+`,
+      planText: `# Plan
+
+### Task 1: Build the widget
+**Story:** Story 1
+**Type:** happy-path
+`,
+    };
+    expect(validateCoherence(inputs)).toEqual({ ok: true });
   });
 
   it('produces byte-identical reports for identical gap input, twice', () => {
