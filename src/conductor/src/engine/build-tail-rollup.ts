@@ -132,18 +132,26 @@ export function computeBuildTailRollup(
   };
 }
 
+function normalizeTimestamp(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (
+    typeof value !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+  ) return undefined;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
 function parseLedger(raw: string): BuildTailEvent[] | undefined {
   const events: BuildTailEvent[] = [];
   for (const line of raw.split('\n')) {
     if (line.trim().length === 0) continue;
     try {
       const event = JSON.parse(line) as unknown;
-      if (
-        typeof event !== 'object'
-        || event === null
-        || typeof (event as Record<string, unknown>).ts !== 'number'
-      ) return undefined;
-      events.push(event as BuildTailEvent);
+      if (typeof event !== 'object' || event === null) return undefined;
+      const timestamp = normalizeTimestamp((event as Record<string, unknown>).ts);
+      if (timestamp === undefined) return undefined;
+      events.push({ ...(event as Record<string, unknown>), ts: timestamp });
     } catch {
       return undefined;
     }

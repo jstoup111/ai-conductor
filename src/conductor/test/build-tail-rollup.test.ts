@@ -53,6 +53,35 @@ async function writeRawLedgers(args: {
 }
 
 describe('readBuildWindows', () => {
+  it('normalizes ISO ledger timestamps while retaining numeric timestamp compatibility', async () => {
+    const directory = await writeLedgers({
+      engine: [
+        { type: 'step_started', step: 'build', index: 0, ts: '1970-01-01T00:00:00.010Z' },
+        { type: 'build_progress', step: 'build', resolved: 1, total: 1, ts: '1970-01-01T00:00:00.030Z' },
+        { type: 'step_completed', step: 'build', status: 'done', ts: '1970-01-01T00:00:00.050Z' },
+      ],
+      pipeline: [
+        { type: 'pipeline_closeout', obligation: 'summary', startedAt: 15, endedAt: 20, ts: 20 },
+      ],
+    });
+
+    await expect(readBuildWindows(directory)).resolves.toEqual({
+      state: 'measured',
+      windows: [
+        {
+          startedAt: 10,
+          endedAt: 50,
+          events: [
+            { type: 'step_started', step: 'build', index: 0, ts: 10 },
+            { type: 'pipeline_closeout', obligation: 'summary', startedAt: 15, endedAt: 20, ts: 20 },
+            { type: 'build_progress', step: 'build', resolved: 1, total: 1, ts: 30 },
+            { type: 'step_completed', step: 'build', status: 'done', ts: 50 },
+          ],
+        },
+      ],
+    });
+  });
+
   it('stably merges both ledgers by ts and retains closeout events within a build window', async () => {
     const directory = await writeLedgers({
       engine: [
