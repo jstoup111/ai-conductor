@@ -142,6 +142,17 @@ before clearing the HALT. If the refusal occurs during REKICK before git starts,
 `protected-artifact seal error`; it is not a rebase conflict and must not be sent through
 `git rebase --continue`.
 
+A related but distinct line covers remediation, not the seal itself:
+
+```text
+↩ remediation gap <gapId> → plan — sealed artifact <artifact>
+```
+
+This fires when a remediation gap's target — its task scope or, absent a `**Files:**` declaration, a
+directed reference in its rationale prose — names another feature's sealed DECIDE artifact. The gap is
+redirected to the owning DECIDE step instead of routing to `build`; see
+[gates](../explanation/gates.md#kickback-and-remediation-routing).
+
 ### Provider attribution and result summaries
 
 Three line kinds tell you what a step actually did, which provider ran it, and what the feature

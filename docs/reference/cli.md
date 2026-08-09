@@ -730,14 +730,18 @@ conduct-ts plan-protected-targets .docs/plans/<feature>.md
 ```
 
 Blocking plan-authoring check for tasks that name another feature's artifact under
-`.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`. It reads exactly the
-named plan, resolves each task's `**Files:**` set (including `same` inheritance), and writes nothing.
-Own-feature paths and unsealed `.docs/` paths pass.
+`.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`. It reads
+the named plan, resolves each task's `**Files:**` set (including `same` inheritance), and writes
+nothing. Own-feature paths and unsealed `.docs/` paths pass.
+
+A task with no `**Files:**` line is also scanned: a protected artifact cited in its prose (a backtick
+path, e.g. `` `.docs/specs/other-feature.md` ``) is reported too, since there is no declared scope to
+prove the reference is context rather than a target.
 
 | Outcome | Output | Exit |
 | --- | --- | --- |
 | No violations | `No protected-target violations found.` | 0 |
-| Violation | One `Task <id>: <path>` line per offending path | 1 |
+| Violation | One line per offending path: `Task <id>: <path> — ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the task's targets.` | 1 |
 
 Run it before committing a plan. Correct the accepted artifact during DECIDE and re-author the task;
 do not hand the amendment to BUILD. The land gate repeats this check when a spec is landed.

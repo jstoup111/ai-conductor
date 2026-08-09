@@ -198,7 +198,7 @@ from previously prepared worktrees.
 
 ## Git hooks
 
-The engine generates two git hooks per worktree, into `<worktree>/.pipeline/git-hooks/` (mode 0755), and
+The engine generates three git hooks per worktree, into `<worktree>/.pipeline/git-hooks/` (mode 0755), and
 points the worktree at them:
 
 ```bash
@@ -209,16 +209,19 @@ git -C <worktree> config --worktree core.hooksPath <worktree>/.pipeline/git-hook
 
 | Hook | Trigger | What it does | Can block? |
 | --- | --- | --- | --- |
+| `pre-commit` | every commit in the worktree | While `.pipeline/phase-active` exists and its phase is `BUILD` or `SHIP`, rejects any staged path under a protected artifact directory (`PROTECTED_ARTIFACT_DIRECTORIES` in `protected-artifact-seal.ts` — `.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, `.docs/stories`) unless an `allow:` prefix in the marker matches it or its stem names the worktree's own feature (from `.pipeline/task-status.json`'s `plan_ref`, date prefix ignored). A malformed or escaping staged path (empty, absolute, or containing `..`/`.`) is always rejected. Provider-agnostic — it fires for any commit in the worktree, regardless of which host or CLI created it, unlike the Claude-only `docs-guard.sh` PreToolUse hook. | **Yes — exit 1** naming every offender and directing the amendment to DECIDE. |
 | `prepare-commit-msg` | every commit in the worktree | Stamps `Task: <id>` from `<worktree>/.pipeline/current-task` using `git interpret-trailers --if-exists replace`. Fires only when no explicit trailer is already present. Abstains on amend, on rebase replay, and on an empty staged diff. | No |
 | `commit-msg` | every commit in the worktree | Validates a supplied `Task:` trailer, checks its staged paths against the active task's declared files, then emits non-blocking warnings for bundling and subject mismatch. An out-of-scope path is reported with a copy-pasteable `Scope: <path> — <rationale>` widening. Containment defaults to report-only; set `build_review.scopeContainmentEnforced: true` to refuse verified violations. | **Yes — exit 1** (git-hook convention) when a supplied trailer uses the `task-N` form or names an id absent from `.pipeline/task-status.json`, or when enforced scope-check returns exit `2`. |
 
-Both hooks chain to `$(git rev-parse --git-common-dir)/hooks/<name>` when one exists and is executable.
-`prepare-commit-msg` is pure bash plus `git`, `node -e`, and POSIX tools. `commit-msg` additionally invokes
-the installed `conduct-ts scope-check <commit-message>` command; neither hook references `dist/`.
+All three hooks chain to `$(git rev-parse --git-common-dir)/hooks/<name>` when one exists and is
+executable. `pre-commit` and `prepare-commit-msg` are pure bash plus `git` and POSIX tools (`pre-commit`
+also uses `sed`; `prepare-commit-msg` uses `node -e`). `commit-msg` additionally invokes the installed
+`conduct-ts scope-check <commit-message>` command; none of the three hooks references `dist/`.
 
-`commit-msg` exits 0 immediately for merge commits (`MERGE_HEAD` present), `--amend`, rebase replay, and
-any commit made with `CONDUCT_ENGINE_COMMIT=1` — the environment the engine sets for its own bookkeeping
-commits (rebase mechanics, quarantine, shipped records, spec landing).
+`pre-commit` and `commit-msg` both exit 0 immediately for any commit made with `CONDUCT_ENGINE_COMMIT=1`
+— the environment the engine sets for its own bookkeeping commits (rebase mechanics, quarantine, shipped
+records, spec landing). `commit-msg` additionally exits 0 for merge commits (`MERGE_HEAD` present),
+`--amend`, and rebase replay.
 
 The scope checker has three outcomes. Exit `0` means the commit is allowed: it covers both in-scope commits
 and an out-of-scope commit reported under the report-only default. Exit `2` is a positive refusal reserved
@@ -228,9 +231,17 @@ Only a task-attributed commit with a usable in-progress task row is checked. Add
 out-of-scope staged path when the widening is intentional; the engine records accepted widenings for
 `build_review`, which remains the semantic scope authority.
 
-**No `pre-commit` or `post-commit` git hook is installed by any command in this repo.**
 `hooks/pre-commit-tdd-gate.sh` ships in the tree but is copy-it-yourself only; nothing installs it, and
-it is subject to the dormant-`tdd-phase` limitation above.
+it is subject to the dormant-`tdd-phase` limitation above. It is unrelated to the engine-installed
+`pre-commit` hook above, which is generated fresh per worktree from `PRE_COMMIT_HOOK` in
+`git-hook-assets.ts` rather than copied from that file.
+
+Hook installation itself is fail-closed for `pre-commit`/`prepare-commit-msg`/`commit-msg`: a worktree
+with a `.git` present but not writable, or any other failure while writing or wiring the three scripts,
+raises rather than silently continuing, so a worktree can never enter BUILD/SHIP without the preventive
+gate installed. A worktree with no `.git` at all (a plain temporary directory, as some unit-level setup
+tests use) has no commit surface to protect and is skipped as a no-op, not an error. This is a change
+from the historical behavior, where every git-hook failure was swallowed and logged.
 
 Trailer semantics — which trailers are gates and which are telemetry — are documented in
 [artifacts](artifacts.md).
