@@ -59,6 +59,14 @@ flowchart TD
     style disp fill:#bfdbfe,stroke:#1d4ed8,color:#111
 ```
 
+> **Amended 2026-08-09 by #1390:** the containment check no longer refuses a commit. The
+> `exit 2 — commit refused` edge above is retired and the exit code reserved; a violation now exits
+> 0 with an advisory and is recorded as an accepted widening for `build_review`. The refusal edge
+> was never enabled in production — enforcement shipped `false` — and is withdrawn because the
+> floor it would have enforced rejects adjacent test files and same-directory neighbors. The floor
+> is correspondingly widened (test siblings, same-directory neighbors, docs/generated artifacts).
+> See `adr-2026-08-09-non-blocking-plan-scope-containment`.
+
 ## Sequence — the #1074 shape, after this change
 
 ```mermaid
