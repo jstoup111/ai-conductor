@@ -752,6 +752,7 @@ export async function discoverBacklog(
   // unset (tests, legacy), each notice still logs at most once per pass (never
   // per-spec), preserving prior behavior.
   const IDENTITY_UNRESOLVED_WARN_KEY = '__owner-gate-identity-unresolved__';
+  const ADR_CORPUS_NOT_APPROVED_WARN_KEY = '__adr-corpus-not-approved__';
 
   // Fail-CLOSED notice (D3 / Story 3): when a `daemonOwner` is supplied but
   // UNRESOLVED (no user-config spec_owner and no gh login), the daemon builds
@@ -987,7 +988,8 @@ export async function discoverBacklog(
       const remedy = `Approve ${unapprovedAdr.path} (${status}) on the default branch.`;
       blockedItems.push({ slug, reason: 'adr-not-approved', remedy });
       if (!adrCorpusWarningLogged) {
-        log(
+        await warnOnce(
+          ADR_CORPUS_NOT_APPROVED_WARN_KEY,
           `skip ${slug}: merged specs cannot build — ADR ${unapprovedAdr.path} is not approved ` +
             `(${status}). ${remedy} logged once this pass.`,
         );
