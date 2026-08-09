@@ -383,6 +383,45 @@ run_legacy_seed() {
   set -e
 }
 
+# Run both public accessors in one shell so the migration guard's lifetime is
+# observable.  A setter can be the first configuration access during startup;
+# it must not let a later getter replay legacy JSON over that explicit write.
+run_conductor_cfg_set_then_get() {
+  local repo=$1 home=$2
+  set +e
+  ACCESSOR_OUT=$(HOME="$home" PATH="$repo/bin:$TEST_PATH" \
+    bash -c 'source "$1"; conductor_cfg_set currentVersion v0.101.0; conductor_cfg_get currentVersion ""' \
+    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+  ACCESSOR_CODE=$?
+  set -e
+}
+
+# The python shim observes the real seed body's legacy-JSON parse while still
+# delegating to the system interpreter.  It does not replace any helper.
+run_conductor_cfg_seed_sequence() {
+  local home=$1 count_file=$2
+  local python_stubs="$TMP_ROOT/conductor-cfg-python-stubs"
+  mkdir -p "$python_stubs"
+  cat > "$python_stubs/python3" <<EOF
+#!/usr/bin/env bash
+printf 'parsed\\n' >> "$count_file"
+exec "$PY3" "\$@"
+EOF
+  chmod +x "$python_stubs/python3"
+  set +e
+  ACCESSOR_OUT=$(CONDUCTOR_CFG_CALLS="$home/conductor-cfg-calls" \
+    CONDUCTOR_CFG_READ_VALUE='' \
+    HOME="$home" PATH="$CONDUCTOR_CFG_STUBS:$python_stubs:$TEST_PATH" \
+    bash -c '
+      source "$1"
+      conductor_cfg_get currentVersion "" >/dev/null
+      conductor_cfg_set updateChannel tagged
+      conductor_cfg_get updateChannel tagged >/dev/null
+    ' _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+  ACCESSOR_CODE=$?
+  set -e
+}
+
 run_legacy_seed "$REPO" "$HOME_DIR"
 assert "legacy seed function is available" "$([ "$SEED_CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "legacy JSON overwrites stale update_channel" "$( [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && echo 0 || echo 1 )"
@@ -491,6 +530,36 @@ assert "legacy seed: failed rename reports the failure" \
   "$(case "$SEED_OUT" in *"rename"*) echo 0;; *) echo 1;; esac)"
 assert "legacy seed: failed rename leaves original file in place" \
   "$( [ -f "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
+
+# Public accessors own the one-time seed.  In particular, an explicit write
+# must first migrate legacy values, then win over them for the rest of that
+# shell invocation.
+REPO=$(make_repo "legacy-json-set-before-get")
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "currentVersion": "v0.100.0"
+}
+EOF
+run_conductor_cfg_set_then_get "$REPO" "$HOME_DIR"
+assert "setter-first access seeds legacy JSON before preserving the explicit write" \
+  "$( [ "$ACCESSOR_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.101.0" ] && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
+
+# A single shell can invoke both accessors repeatedly.  The one-time guard is
+# at that shared boundary, not a convention each caller must remember.
+HOME_DIR=$(make_isolated_home)
+SEED_COUNT_FILE="$HOME_DIR/seed-calls"
+: > "$SEED_COUNT_FILE"
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "currentVersion": "v0.100.0"
+}
+EOF
+run_conductor_cfg_seed_sequence "$HOME_DIR" "$SEED_COUNT_FILE"
+assert "accessors parse legacy JSON at most once per shell" \
+  "$( [ "$ACCESSOR_CODE" -eq 0 ] && [ "$(wc -l < "$SEED_COUNT_FILE" 2>/dev/null || true)" -eq 1 ] && echo 0 || echo 1 )"
 
 # ─── Story 2: set the update channel ───────────────────────────────────────
 

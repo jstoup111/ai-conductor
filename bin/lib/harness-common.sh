@@ -47,6 +47,9 @@ conductor_cfg_key() {
 # update decisions must decline rather than pretend configuration was read.
 # Usage: conductor_cfg_get <field> [default]
 conductor_cfg_get() {
+  if ! seed_conductor_config_from_legacy; then
+    return 1
+  fi
   local field=$1
   if ! command -v conduct-ts &>/dev/null; then
     warn "conduct-ts is required to read conductor configuration; install or restore it, then re-run bin/install"
@@ -61,6 +64,9 @@ conductor_cfg_get() {
 # Write a scalar field to the schema-owned conductor block.
 # Usage: conductor_cfg_set <field> <value>
 conductor_cfg_set() {
+  if ! seed_conductor_config_from_legacy; then
+    return 1
+  fi
   local field=$1 value=$2
   if ! command -v conduct-ts &>/dev/null; then
     warn "conduct-ts is required to save conductor configuration; install or restore it, then re-run bin/install"
@@ -75,6 +81,11 @@ conductor_cfg_set() {
 # Usage: seed_conductor_config_from_legacy
 seed_conductor_config_from_legacy() {
   local legacy_values field value
+
+  if [ "${CONDUCTOR_LEGACY_SEED_ATTEMPTED:-}" = "1" ]; then
+    return 0
+  fi
+  CONDUCTOR_LEGACY_SEED_ATTEMPTED=1
 
   [ -e "$CONDUCTOR_CONFIG" ] || return 0
 
