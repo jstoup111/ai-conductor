@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readBuildWindows } from '../src/engine/build-tail-rollup.js';
+import { computeBuildTailRollup, readBuildWindows } from '../src/engine/build-tail-rollup.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -94,5 +94,54 @@ describe('readBuildWindows', () => {
         ],
       },
     ]);
+  });
+});
+
+describe('computeBuildTailRollup', () => {
+  it('classifies first-pass task execution, re-entry, remediation, and closeout obligations', () => {
+    expect(computeBuildTailRollup([
+      {
+        startedAt: 100,
+        endedAt: 200,
+        events: [
+          { type: 'step_started', step: 'build', ts: 100 },
+          { type: 'build_progress', step: 'build', resolved: 1, total: 2, ts: 120 },
+          { type: 'build_progress', step: 'build', resolved: 2, total: 2, ts: 140 },
+          { type: 'build_progress', step: 'build', resolved: 2, total: 2, headMoved: true, ts: 160 },
+          { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 165, endedAt: 180, ts: 180 },
+          { type: 'step_completed', step: 'build', ts: 200 },
+        ],
+      },
+      {
+        startedAt: 300,
+        endedAt: 400,
+        events: [
+          { type: 'step_started', step: 'build', ts: 300 },
+          { type: 'build_progress', step: 'build', resolved: 2, total: 2, ts: 320 },
+          { type: 'step_completed', step: 'build', ts: 400 },
+        ],
+      },
+    ])).toEqual({
+      state: 'measured',
+      windows: [
+        {
+          classification: 'first-pass',
+          taskExecution: { startedAt: 100, endedAt: 140, durationMs: 40 },
+          postResolutionTicks: [
+            { ts: 160, classification: 'remediation' },
+          ],
+          closeout: {
+            durationMs: 15,
+            obligations: { evaluator: 15 },
+          },
+        },
+        {
+          classification: 're-entry',
+          taskExecution: undefined,
+          postResolutionTicks: [],
+          closeout: { durationMs: 0, obligations: {} },
+        },
+      ],
+    });
   });
 });

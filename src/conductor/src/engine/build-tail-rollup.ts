@@ -10,6 +10,101 @@ export interface BuildWindow {
   events: readonly BuildTailEvent[];
 }
 
+export interface BuildTailWindowRollup {
+  classification: 'first-pass' | 're-entry';
+  taskExecution: { startedAt: number; endedAt: number; durationMs: number } | undefined;
+  postResolutionTicks: readonly {
+    ts: number;
+    classification: 'remediation' | 'closeout';
+  }[];
+  closeout: {
+    durationMs: number;
+    obligations: Readonly<Record<string, number>>;
+  };
+}
+
+export interface MeasuredBuildTailRollup {
+  state: 'measured';
+  windows: readonly BuildTailWindowRollup[];
+}
+
+interface BuildProgressTick {
+  ts: number;
+  resolved: number;
+  total: number;
+  headMoved: boolean;
+}
+
+function buildProgressTicks(events: readonly BuildTailEvent[]): BuildProgressTick[] {
+  return events.flatMap((event) => (
+    event.type === 'build_progress'
+      && typeof event.resolved === 'number'
+      && typeof event.total === 'number'
+      ? [{
+        ts: event.ts,
+        resolved: event.resolved,
+        total: event.total,
+        headMoved: event.headMoved === true,
+      }]
+      : []
+  ));
+}
+
+function closeoutDurations(events: readonly BuildTailEvent[]): BuildTailWindowRollup['closeout'] {
+  const obligations: Record<string, number> = {};
+  let durationMs = 0;
+  for (const event of events) {
+    if (
+      event.type !== 'pipeline_closeout'
+      || typeof event.obligation !== 'string'
+      || typeof event.startedAt !== 'number'
+      || typeof event.endedAt !== 'number'
+    ) continue;
+    const duration = event.endedAt - event.startedAt;
+    durationMs += duration;
+    obligations[event.obligation] = (obligations[event.obligation] ?? 0) + duration;
+  }
+  return { durationMs, obligations };
+}
+
+/**
+ * Attribute each completed build window without inferring a first-pass task
+ * segment from a re-entry that was already fully resolved at its first tick.
+ */
+export function computeBuildTailRollup(
+  windows: readonly BuildWindow[],
+): MeasuredBuildTailRollup {
+  return {
+    state: 'measured',
+    windows: windows.map((window) => {
+      const ticks = buildProgressTicks(window.events);
+      const firstTick = ticks[0];
+      const firstPass = firstTick !== undefined && firstTick.resolved < firstTick.total;
+      const resolutionIndex = firstPass
+        ? ticks.findIndex((tick) => tick.resolved === tick.total)
+        : -1;
+      const resolutionTick = resolutionIndex >= 0 ? ticks[resolutionIndex] : undefined;
+
+      return {
+        classification: firstPass ? 'first-pass' : 're-entry',
+        taskExecution: resolutionTick === undefined
+          ? undefined
+          : {
+            startedAt: window.startedAt,
+            endedAt: resolutionTick.ts,
+            durationMs: resolutionTick.ts - window.startedAt,
+          },
+        postResolutionTicks: (resolutionIndex >= 0 ? ticks.slice(resolutionIndex + 1) : ticks.slice(1))
+          .map((tick) => ({
+            ts: tick.ts,
+            classification: tick.headMoved ? 'remediation' as const : 'closeout' as const,
+          })),
+        closeout: closeoutDurations(window.events),
+      };
+    }),
+  };
+}
+
 function parseLedger(raw: string): BuildTailEvent[] {
   return raw
     .split('\n')
