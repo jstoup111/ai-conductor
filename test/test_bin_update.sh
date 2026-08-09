@@ -350,6 +350,49 @@ assert "missing conduct-ts: --auto remains advisory" "$([ "$CODE" -eq 0 ] && ech
 assert "missing conduct-ts: --auto states the declined reason" "$(case "$OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
 assert "update config path does not import PyYAML" "$(rg -q 'import yaml|from yaml import' "$HARNESS_DIR/bin/update" && echo 1 || echo 0)"
 
+# ─── ST-1400-2: one-time legacy JSON seed ─────────────────────────────────
+
+echo ""
+echo -e "${BOLD}ST-1400-2 — legacy JSON seed${NC}"
+
+# The legacy JSON was live configuration before the conductor block existed.
+# Its values must therefore replace stale YAML during the one-time migration.
+REPO=$(make_repo "legacy-json-seed")
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "updateChannel": "main",
+  "currentVersion": "v0.100.0"
+}
+EOF
+set_conductor_cfg "$HOME_DIR" updateChannel tagged
+set_conductor_cfg "$HOME_DIR" currentVersion v0.99.12
+
+run_legacy_seed() {
+  local repo=$1 home=$2
+  set +e
+  SEED_OUT=$(HOME="$home" PATH="$repo/bin:$TEST_PATH" \
+    bash -c 'source "$1"; seed_conductor_config_from_legacy' \
+    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+  SEED_CODE=$?
+  set -e
+}
+
+run_legacy_seed "$REPO" "$HOME_DIR"
+assert "legacy seed function is available" "$([ "$SEED_CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "legacy JSON overwrites stale update_channel" "$( [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && echo 0 || echo 1 )"
+assert "legacy JSON overwrites stale current_version" "$( [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.100.0" ] && echo 0 || echo 1 )"
+assert "legacy JSON is renamed to its migration marker" \
+  "$( [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
+
+# Once the migration marker exists, a second seed must succeed without
+# changing the conductor block or recreating the legacy file.
+EXPECTED_SEED_CONFIG=$(cat "$HOME_DIR/.ai-conductor/config.yml")
+run_legacy_seed "$REPO" "$HOME_DIR"
+assert "second legacy seed is a no-op after migration" \
+  "$( [ "$SEED_CODE" -eq 0 ] && [ "$(cat "$HOME_DIR/.ai-conductor/config.yml")" = "$EXPECTED_SEED_CONFIG" ] && [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
+
 # ─── Story 2: set the update channel ───────────────────────────────────────
 
 echo ""
