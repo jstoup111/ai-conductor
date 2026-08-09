@@ -151,12 +151,23 @@ the interim guard until that machinery exists.
 
 Before authoring any change to this repository, and before creating any new skill, the active host
 agent MUST read and follow [`.agents/skills/scope-check/SKILL.md`](.agents/skills/scope-check/SKILL.md).
-It settles three questions deterministically: whether the change is harness-repo-only or
+It runs three questions through a deterministic procedure: whether the change is harness-repo-only or
 consumer-facing (`AGENT_INSTRUCTIONS.md` versus `HARNESS.md`), whether a new skill belongs in the
 shipped `skills/` catalog or this repository's local `.agents/skills/` one, and whether the change is
 provider-agnostic. This is repository-local authoring guidance. For consumer projects, which have a
 single skill catalog and no consumers of their own, the global harness authoring convention remains
 unchanged.
+
+**Its verdict is an input, not the decision.** Running it stays mandatory; treating its answer as
+authoritative is not. On repo-only versus consumer-facing, the deciding test is whether **the
+mechanism the change describes exists outside this repository** — if it does not, the change is
+repo-only no matter how broadly its lesson generalizes. When the verdict and the plain reading of the
+operator's request disagree, surface the conflict before landing and follow the request; never take
+the tool's answer silently. (Worked example: a rule about this repo's event bus —
+`ConductorEventEmitter`, the `ConductorEvent` union, `.pipeline/events.jsonl` — is repo-only, because
+a consumer project has no such bus. Scope-check returned "consumer-facing" on its general-benefit
+reading, and the rule was misplaced into `HARNESS.md` and the shipped `skills/` catalog over a
+correct contrary steer before the operator caught it.)
 
 ## Validation Rules (This Repo)
 
