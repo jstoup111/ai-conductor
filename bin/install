@@ -15,6 +15,12 @@ LOCAL_BIN="${HOME}/.local/bin"
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
 
+# The shared accessors own the schema-backed conductor configuration and the
+# one-time legacy JSON migration. Keep installer writes on that boundary so
+# the installer cannot recreate the former Claude-only state file.
+# shellcheck source=bin/lib/harness-common.sh
+source "${HARNESS_DIR}/bin/lib/harness-common.sh"
+
 # UPDATE_MODE=true skips first-run-only work (dependency bootstrap, channel
 # prompt). Set via the --update flag; used by bin/migrate after an accepted
 # harness update.
@@ -901,19 +907,24 @@ detect_current_version() {
   echo "main@$sha"
 }
 
-# Create or refresh ~/.claude/ai-conductor.config.json.
-# First run: prompt for channel (tagged vs main), write a new config with the
-# current version. Update mode: refresh currentVersion only; preserve channel,
-# autoCheck, and any other fields the user has set.
+# Create or refresh the schema-owned conductor block in ~/.ai-conductor/config.yml.
+# First run: prompt for channel (tagged vs main). Update mode: refresh the
+# current version and check timestamp while preserving user preferences.
 configure_conductor() {
   local detected
   detected=$(detect_current_version)
   local now
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-  mkdir -p "$(dirname "$CONDUCTOR_CONFIG")"
+  # Seed before deciding whether this is a first run. A legacy-only install
+  # becomes a populated conductor block, whose user preferences must win over
+  # first-run defaults.
+  if ! seed_conductor_config_from_legacy; then
+    warn "Could not seed legacy conductor configuration"
+    return 1
+  fi
 
-  if [ ! -f "$CONDUCTOR_CONFIG" ]; then
+  if [ ! -f "$HARNESS_USER_CONFIG" ]; then
     # First run — pick a channel.
     local channel="tagged"
     if [ "$UPDATE_MODE" != true ] && [ -t 0 ]; then
@@ -927,40 +938,23 @@ configure_conductor() {
         *) channel="tagged" ;;
       esac
     fi
-    if CFG_PATH="$CONDUCTOR_CONFIG" DETECTED="$detected" CHANNEL="$channel" NOW="$now" python3 -c '
-import json, os
-from pathlib import Path
-cfg = {
-    "updateChannel": os.environ["CHANNEL"],
-    "autoCheck": True,
-    "currentVersion": os.environ["DETECTED"],
-    "lastCheckedAt": os.environ["NOW"],
-}
-Path(os.environ["CFG_PATH"]).write_text(json.dumps(cfg, indent=2) + "\n")
-' 2>/dev/null; then
-      ok "Created ${CONDUCTOR_CONFIG} (channel: ${channel}, version: ${detected})"
+    if conductor_cfg_set updateChannel "$channel" && \
+      conductor_cfg_set autoCheck true && \
+      conductor_cfg_set currentVersion "$detected" && \
+      conductor_cfg_set lastCheckedAt "$now"; then
+      ok "Created conductor configuration (channel: ${channel}, version: ${detected})"
     else
-      warn "python3 unavailable — ${CONDUCTOR_CONFIG} not created (update checks off until bin/install re-runs with python3)"
+      warn "Could not create conductor configuration (update checks off until bin/install re-runs)"
+      return 1
     fi
   else
     # Update — refresh currentVersion + lastCheckedAt, preserve everything else.
-    if CFG_PATH="$CONDUCTOR_CONFIG" DETECTED="$detected" NOW="$now" python3 -c '
-import json, os
-from pathlib import Path
-p = Path(os.environ["CFG_PATH"])
-try:
-    cfg = json.loads(p.read_text())
-except Exception:
-    cfg = {}
-cfg.setdefault("updateChannel", "tagged")
-cfg.setdefault("autoCheck", True)
-cfg["currentVersion"] = os.environ["DETECTED"]
-cfg["lastCheckedAt"] = os.environ["NOW"]
-p.write_text(json.dumps(cfg, indent=2) + "\n")
-' 2>/dev/null; then
-      ok "Refreshed ${CONDUCTOR_CONFIG} (version: ${detected})"
+    if conductor_cfg_set currentVersion "$detected" && \
+      conductor_cfg_set lastCheckedAt "$now"; then
+      ok "Refreshed conductor configuration (version: ${detected})"
     else
-      warn "python3 unavailable — ${CONDUCTOR_CONFIG} not refreshed"
+      warn "Could not refresh conductor configuration"
+      return 1
     fi
   fi
 }

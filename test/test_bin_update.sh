@@ -239,6 +239,69 @@ run_conductor_cfg_accessors() {
       _ "$HARNESS_DIR/bin/lib/harness-common.sh" "$field" "$value" "$default"
 }
 
+# run_install_configure_conductor <home> <update_mode>
+# Loads the installer through its public configuration boundary, with the real
+# shared accessor library available beside the copied script.  The conduct-ts
+# fake persists the same scalar YAML fields that the production CLI owns.
+run_install_configure_conductor() {
+  local home=$1 update_mode=$2 installer_dir fragment stubs
+  installer_dir="$TMP_ROOT/install-configure-${RANDOM}"
+  fragment="$installer_dir/bin/install-configure-test"
+  stubs="$installer_dir/stubs"
+  mkdir -p "$installer_dir/bin/lib"
+  ln -s "$HARNESS_DIR/skills" "$installer_dir/skills"
+  ln -s "$HARNESS_DIR/HARNESS.md" "$installer_dir/HARNESS.md"
+  cp "$HARNESS_DIR/VERSION" "$installer_dir/VERSION"
+  cp "$HARNESS_DIR/bin/install" "$installer_dir/bin/install"
+  cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$installer_dir/bin/lib/harness-common.sh"
+  mkdir -p "$stubs"
+  cat > "$stubs/conduct-ts" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "$INSTALL_CONFIG_CALLS"
+[ "$1" = "config" ] || exit 2
+config="${HOME}/.ai-conductor/config.yml"
+key="${3#conductor.}"
+case "$2" in
+  set)
+    value=$4
+    mkdir -p "$(dirname "$config")"
+    if [ ! -f "$config" ]; then
+      printf 'conductor:\n  %s: %s\n' "$key" "$value" > "$config"
+      exit 0
+    fi
+    tmp=$(mktemp "${config}.XXXXXX")
+    awk -v key="$key" -v value="$value" '
+      $0 == "  " key ":" || index($0, "  " key ": ") == 1 {
+        print "  " key ": " value
+        found = 1
+        next
+      }
+      { print }
+      END { if (!found) print "  " key ": " value }
+    ' "$config" > "$tmp"
+    mv "$tmp" "$config"
+    ;;
+  read)
+    awk -F ': *' -v key="$key" '$1 == "  " key { print $2; exit }' "$config" 2>/dev/null || true
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$stubs/conduct-ts"
+  awk '/^# ─── Main /{exit} {print}' "$installer_dir/bin/install" > "$fragment"
+  printf '%s\n' "UPDATE_MODE=$update_mode" 'configure_conductor' >> "$fragment"
+  chmod +x "$fragment"
+  : > "$home/install-config-calls"
+
+  set +e
+  INSTALL_CONFIG_OUT=$(INSTALL_CONFIG_CALLS="$home/install-config-calls" \
+    HOME="$home" PATH="$stubs:$TEST_PATH" "$fragment" 2>&1)
+  INSTALL_CONFIG_CODE=$?
+  set -e
+}
+
 # run_update <repo> <home> [args...] — no TTY on stdin.
 run_update() {
   local repo=$1 home=$2
@@ -349,6 +412,50 @@ run_update_without_conduct "$REPO" "$HOME_DIR" --auto
 assert "missing conduct-ts: --auto remains advisory" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "missing conduct-ts: --auto states the declined reason" "$(case "$OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
 assert "update config path does not import PyYAML" "$(rg -q 'import yaml|from yaml import' "$HARNESS_DIR/bin/update" && echo 1 || echo 0)"
+
+# ─── Installer update config: shared conductor YAML ownership ─────────────
+
+echo ""
+echo -e "${BOLD}Installer update config — conductor YAML${NC}"
+
+# Fresh installs must create the canonical conductor block through the shared
+# accessors; no legacy Claude-only JSON file may be recreated.
+HOME_DIR=$(make_isolated_home)
+run_install_configure_conductor "$HOME_DIR" false
+assert "installer first run writes conductor YAML through shared accessors" \
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "tagged" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "true" ] && [ -n "$(cfg_get "$HOME_DIR" currentVersion)" ] && [ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
+assert "installer first run calls shared conductor accessors" \
+  "$( grep -qx 'config set conductor.update_channel tagged' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.auto_check true' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 4 ] && echo 0 || echo 1)"
+assert "installer first run creates no legacy JSON config" \
+  "$( [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json" ] && echo 0 || echo 1)"
+
+# A legacy-only installation must seed before first-run detection. Otherwise,
+# the initial default writes would overwrite its channel and auto-check choice.
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "updateChannel": "main",
+  "autoCheck": false,
+  "currentVersion": "v0.100.0"
+}
+EOF
+run_install_configure_conductor "$HOME_DIR" false
+assert "installer preserves seeded legacy preferences before first-run setup" \
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.100.0" ] && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1)"
+
+# Update mode owns only the current version and check timestamp; it must retain
+# a user's selected channel and auto-check preference in the same YAML block.
+HOME_DIR=$(make_isolated_home)
+set_conductor_cfg "$HOME_DIR" updateChannel main
+set_conductor_cfg "$HOME_DIR" autoCheck false
+set_conductor_cfg "$HOME_DIR" currentVersion stale-version
+set_conductor_cfg "$HOME_DIR" lastCheckedAt stale-time
+run_install_configure_conductor "$HOME_DIR" true
+assert "installer update refreshes version and timestamp while preserving preferences" \
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" != "stale-version" ] && [ "$(cfg_get "$HOME_DIR" lastCheckedAt)" != "stale-time" ] && echo 0 || echo 1)"
+assert "installer update calls only refresh accessors" \
+  "$( grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 2 ] && echo 0 || echo 1)"
 
 # ─── ST-1400-2: one-time legacy JSON seed ─────────────────────────────────
 
