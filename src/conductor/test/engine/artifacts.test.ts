@@ -3243,6 +3243,34 @@ describe('engine/artifacts', () => {
         found: null,
       });
     });
+
+    it('ignores a mid-sentence status mention in an otherwise approved ADR', () => {
+      expect(
+        adrApprovalStatus('# ADR\n\nStatus: APPROVED\n\nThis requires `Status: Accepted`, no DRAFT.\n'),
+      ).toEqual({ approved: true, found: 'APPROVED' });
+    });
+
+    it('honors the first line-anchored status declaration', () => {
+      expect(adrApprovalStatus('# ADR\n\nStatus: APPROVED\n\nStatus: Proposed\n')).toEqual({
+        approved: true,
+        found: 'APPROVED',
+      });
+    });
+
+    it('fails closed when an ADR has no status declaration, including zero-byte content', () => {
+      expect(adrApprovalStatus('# ADR\n\nNo declared decision status.\n')).toEqual({
+        approved: false,
+        found: null,
+      });
+      expect(adrApprovalStatus('')).toEqual({ approved: false, found: null });
+    });
+
+    it.each(['Accepted', 'Proposed'])('rejects a %s declaration while preserving its text', (status) => {
+      expect(adrApprovalStatus(`# ADR\n\nStatus: ${status}\n`)).toEqual({
+        approved: false,
+        found: status,
+      });
+    });
   });
 
   describe('classifyPrdAuditGaps', () => {
