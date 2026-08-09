@@ -69,6 +69,69 @@ conductor_cfg_set() {
   conduct-ts config set "conductor.$(conductor_cfg_key "$field")" "$value"
 }
 
+# Copy supported values from the former Claude-only JSON config into the
+# schema-owned conductor block exactly once.  Renaming the source is the
+# migration marker, so invalid JSON remains available for a later repair.
+# Usage: seed_conductor_config_from_legacy
+seed_conductor_config_from_legacy() {
+  local legacy_values field value
+
+  [ -e "$CONDUCTOR_CONFIG" ] || return 0
+
+  if ! legacy_values=$(CONDUCTOR_CONFIG="$CONDUCTOR_CONFIG" python3 - <<'PY'
+import json
+import os
+import sys
+
+path = os.environ["CONDUCTOR_CONFIG"]
+try:
+    with open(path, encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, json.JSONDecodeError) as error:
+    print(error, file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(config, dict):
+    print("expected a JSON object", file=sys.stderr)
+    sys.exit(1)
+
+channel = config.get("updateChannel")
+if "updateChannel" in config:
+    if isinstance(channel, str) and channel in {"tagged", "main"}:
+        print(f"updateChannel\t{channel}")
+    else:
+        print("invalid-updateChannel")
+
+if type(config.get("autoCheck")) is bool:
+    print(f"autoCheck\t{'true' if config['autoCheck'] else 'false'}")
+
+for field in ("currentVersion", "lastCheckedAt"):
+    if isinstance(config.get(field), str):
+        print(f"{field}\t{config[field]}")
+PY
+); then
+    warn "legacy JSON configuration is empty or malformed; leaving it unchanged"
+    return 1
+  fi
+
+  while IFS=$'\t' read -r field value; do
+    [ -n "$field" ] || continue
+    if [ "$field" = "invalid-updateChannel" ]; then
+      warn "legacy JSON updateChannel is invalid; expected tagged or main"
+      continue
+    fi
+    if ! conductor_cfg_set "$field" "$value"; then
+      warn "could not seed conductor configuration from legacy JSON"
+      return 1
+    fi
+  done <<< "$legacy_values"
+
+  if ! mv "$CONDUCTOR_CONFIG" "${CONDUCTOR_CONFIG}.migrated"; then
+    warn "could not rename legacy JSON configuration after seeding"
+    return 1
+  fi
+}
+
 # Read a scalar or array from ~/.ai-conductor/config.yml using dotted paths
 # (e.g. "markdown_viewer.command"). Arrays come back space-joined. Falls back
 # to the default if the file or path is missing.
