@@ -680,6 +680,28 @@ assert "invalid updateChannel: reports a warning" \
 assert "invalid updateChannel: is not written" \
   "$( [ -z "$(cfg_get "$HOME_DIR" updateChannel)" ] && echo 0 || echo 1 )"
 
+# A warning emitted while the accessor seeds legacy JSON must remain a
+# diagnostic.  In particular, callers capture the accessor's stdout as the
+# setting value, so a skipped updateChannel cannot become part of that value.
+REPO=$(make_repo "legacy-json-invalid-channel-accessor")
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "updateChannel": "nightly",
+  "currentVersion": "v0.100.0"
+}
+EOF
+set +e
+ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
+  bash -c 'source "$1"; value=$(conductor_cfg_get currentVersion ""); status=$?; printf "%s\\n" "$value"; exit "$status"' \
+    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+ACCESSOR_CODE=$?
+set -e
+ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
+assert "invalid updateChannel: accessor captures only the requested value and warns on stderr" \
+  "$(if [ "$ACCESSOR_CODE" -eq 0 ] && [ "$ACCESSOR_VALUE" = "v0.100.0" ] && [[ "$ACCESSOR_STDERR" = *"updateChannel"* ]]; then echo 0; else echo 1; fi)"
+
 # The rename is the idempotence marker. A rename failure must be visible and
 # leave the original source in place, never masquerading as a successful seed.
 REPO=$(make_repo "legacy-json-rename-failure")

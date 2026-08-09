@@ -123,24 +123,24 @@ for field in ("currentVersion", "lastCheckedAt"):
         print(f"{field}\t{config[field]}")
 PY
 ); then
-    warn "legacy JSON configuration is empty or malformed; leaving it unchanged"
+    warn "legacy JSON configuration is empty or malformed; leaving it unchanged" >&2
     return 1
   fi
 
   while IFS=$'\t' read -r field value; do
     [ -n "$field" ] || continue
     if [ "$field" = "invalid-updateChannel" ]; then
-      warn "legacy JSON updateChannel is invalid; expected tagged or main"
+      warn "legacy JSON updateChannel is invalid; expected tagged or main" >&2
       continue
     fi
     if ! conductor_cfg_set "$field" "$value"; then
-      warn "could not seed conductor configuration from legacy JSON"
+      warn "could not seed conductor configuration from legacy JSON" >&2
       return 1
     fi
   done <<< "$legacy_values"
 
   if ! mv "$CONDUCTOR_CONFIG" "${CONDUCTOR_CONFIG}.migrated"; then
-    warn "could not rename legacy JSON configuration after seeding"
+    warn "could not rename legacy JSON configuration after seeding" >&2
     return 1
   fi
 }
