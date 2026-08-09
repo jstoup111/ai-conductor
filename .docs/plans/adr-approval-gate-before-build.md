@@ -69,7 +69,7 @@ step, not by plan tasks.
 - src/conductor/src/engine/artifacts.ts — new exported function beside `isStoriesApproved`
 - src/conductor/test/engine/artifacts.test.ts — grammar fixture matrix
 
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/land-spec.ts#landSpec, src/conductor/src/engine/engineer/authoring.ts#runAuthoring, src/conductor/src/engine/daemon-backlog.ts#discoverBacklog
 
 **Dependencies:** none
 
@@ -89,7 +89,7 @@ step, not by plan tasks.
 - src/conductor/src/engine/artifacts.ts — fence-stripping pre-pass
 - src/conductor/test/engine/artifacts.test.ts — fenced-example cases
 
-**Wired-into:** same as Task 1
+**Wired-into:** src/conductor/src/engine/engineer/land-spec.ts#landSpec, src/conductor/src/engine/engineer/authoring.ts#runAuthoring, src/conductor/src/engine/daemon-backlog.ts#discoverBacklog
 
 **Dependencies:** Task 1
 
@@ -108,7 +108,7 @@ step, not by plan tasks.
 - src/conductor/src/engine/artifacts.ts — anchoring and fail-closed branch
 - src/conductor/test/engine/artifacts.test.ts — mention/first-wins/empty cases
 
-**Wired-into:** same as Task 1
+**Wired-into:** src/conductor/src/engine/engineer/land-spec.ts#landSpec, src/conductor/src/engine/engineer/authoring.ts#runAuthoring, src/conductor/src/engine/daemon-backlog.ts#discoverBacklog
 
 **Dependencies:** Task 2
 

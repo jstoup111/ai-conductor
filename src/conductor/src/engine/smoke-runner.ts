@@ -161,9 +161,16 @@ function defaultHasCommand(command: string): boolean {
 async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSmokeFile[]> {
   const parentRunTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
   const parentTmpdir = process.env.TMPDIR;
+  const discoveryTmpRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-smoke-discovery-'));
   let vitest: Awaited<ReturnType<typeof createVitest>> | undefined;
 
   try {
+    // Vitest allocates its own workspace tmpdir while constructing the project,
+    // before it evaluates the smoke config's tmpdir redirect. Isolate discovery
+    // first, then restore the caller environment before dispatching each child:
+    // every child must create and tear down its own run root.
+    delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    process.env.TMPDIR = discoveryTmpRoot;
     vitest = await createVitest('test', {
       config: resolve(config),
       root: process.cwd(),
@@ -183,6 +190,7 @@ async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSm
       else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = parentRunTmpRoot;
       if (parentTmpdir === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = parentTmpdir;
+      await rm(discoveryTmpRoot, { recursive: true, force: true });
     }
   }
 }
