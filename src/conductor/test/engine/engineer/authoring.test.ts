@@ -454,13 +454,33 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
 
 const ACCEPTED_STORIES_FULL = ACCEPTED_STORIES_UNIT;
 const PLAN_WITH_DEPS_FULL = PLAN_WITH_DEPS_UNIT;
-const APPROVED_ADR = [
+const ARCHITECTURE_REVIEW_ARTIFACT = [
   '# Architecture Review: CSV export',
   '',
-  '## ADR-001: Use a streaming writer',
-  '**Status:** APPROVED',
+  '**Date:** 2026-08-08',
+  '**Stories reviewed:** Export rows to CSV',
+  '**Verdict:** APPROVED',
   '',
-  'Decision rationale.',
+  '## Feasibility',
+  'Feasible with the existing streaming writer seam.',
+  '',
+  '## Complexity',
+  'Medium.',
+  '',
+  '## Alignment',
+  'Aligned with the export boundary.',
+  '',
+  '## Domain Integrity',
+  'No integrity concerns.',
+  '',
+  '## Wiring Surface',
+  'The writer is invoked from the export command.',
+  '',
+  '## Risks',
+  'No blocking risks.',
+  '',
+  '## ADRs Created',
+  'None.',
   '',
 ].join('\n');
 const MINIMAL_COHERENCE_TABLE = [
@@ -471,7 +491,7 @@ const MINIMAL_COHERENCE_TABLE = [
 ].join('\n');
 
 /** A decide seam that approves every DECIDE step with realistic artifacts. */
-function fullDecide(reviewArtifact: string = APPROVED_ADR) {
+function fullDecide(reviewArtifact: string = ARCHITECTURE_REVIEW_ARTIFACT) {
   return async (step: string) => {
     switch (step) {
       case 'explore':
@@ -662,9 +682,9 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
     expect(tracked).not.toMatch(/\.docs\/decisions\//);
   });
 
-  it('a DRAFT ADR in architecture-review throws and creates no spec branch', async () => {
+  it('rejects an architecture-review artifact with an explicit non-allowlisted Status', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
-    const draftReview = APPROVED_ADR.replace('**Status:** APPROVED', '**Status:** DRAFT');
+    const draftReview = `${ARCHITECTURE_REVIEW_ARTIFACT}\n**Status:** DRAFT\n`;
     await expect(
       runAuthoring(target, 'CSV export', {
         decide: fullDecide(draftReview),
@@ -674,6 +694,13 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
 
     const branchList = await git(['branch', '--list', 'spec/*'], repoPath);
     expect(branchList).toBe('');
+  });
+
+  it('accepts a status-less architecture-review artifact for a Medium-tier run', async () => {
+    await expect(runAuthoring({ name: 'alpha', canonicalPath: repoPath }, 'CSV export', {
+      decide: fullDecide(),
+      assessComplexity: approveTier('M'),
+    })).resolves.toBeDefined();
   });
 
   it('an unapproved complexity assessment throws before any write', async () => {

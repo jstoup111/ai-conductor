@@ -467,9 +467,11 @@ export async function runAuthoring(
   if (tier !== 'S') {
     architectureDiagramResult = await gate('architecture_diagram');
     architectureReviewResult = await gate('architecture_review');
-    // ADR hard gate: no spec lands with an unapproved ADR (mirrors the conduct
-    // architecture-review gate). The review artifact embeds the ADRs.
-    if (!adrApprovalStatus(architectureReviewResult.artifact).approved) {
+    // An architecture-review report is not itself an ADR and does not declare a
+    // Status by contract. If it does explicitly declare one, however, preserve
+    // the ADR gate's fail-closed behavior for a non-allowlisted status.
+    const reviewStatus = adrApprovalStatus(architectureReviewResult.artifact);
+    if (reviewStatus.found !== null && !reviewStatus.approved) {
       throw new Error(
         'runAuthoring: architecture-review artifact contains an ADR that is not approved — all ADRs must be ' +
           'APPROVED before landing. Approve the ADRs and re-run architecture-review.',
