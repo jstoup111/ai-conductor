@@ -39,7 +39,7 @@ import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { slugify } from './authoring.js';
-import { isStoriesApproved, hasDraftAdr, parseComplexityTier, parseTrack, planStem } from '../artifacts.js';
+import { adrApprovalStatus, isStoriesApproved, parseComplexityTier, parseTrack, planStem } from '../artifacts.js';
 import { deriveDefaultBranch } from './authoring.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 import { writeIntakeMarker } from './intake-marker.js';
@@ -350,13 +350,13 @@ export async function landSpec(
     }
   }
 
-  // 4e. ADR hard gate — no spec lands with a DRAFT ADR (mirrors the conduct
-  //     architecture-review gate). Scan every `.docs/decisions/adr-*.md`.
+  // 4e. ADR hard gate — no spec lands with an unapproved ADR (mirrors the
+  //     conduct architecture-review gate). Scan every `.docs/decisions/adr-*.md`.
   for (const adrFile of await listAdrFiles(decisionsDir)) {
     const adrContent = await readFile(adrFile, 'utf-8');
-    if (hasDraftAdr(adrContent)) {
+    if (!adrApprovalStatus(adrContent).approved) {
       throw new Error(
-        `landSpec: ADR "${adrFile}" still carries "Status: DRAFT". All ADRs must be ` +
+        `landSpec: ADR "${adrFile}" is not approved. All ADRs must be ` +
           'APPROVED before landing. Approve the ADRs via /architecture-review, then land.',
       );
     }

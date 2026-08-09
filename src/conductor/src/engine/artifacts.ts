@@ -3110,21 +3110,6 @@ export function adrApprovalStatus(content: string): { approved: boolean; found: 
 }
 
 /**
- * True when an ADR (or any architecture-review artifact) still carries a DRAFT
- * status. Mirrors the DRAFT regex used by the land gate (land-spec.ts) and the
- * conduct architecture-review gate: matches "status" followed on the same line
- * by "draft", tolerating YAML (`status: draft`), markdown bold (`**Status:**
- * DRAFT`), and arbitrary punctuation/whitespace between them.
- *
- * Shared so the engineer authoring seam, the land-time gate, and any future
- * caller agree on the single ADR-approval signal — no DRAFT ADR may reach a
- * daemon that has already pre-seeded architecture_review as done.
- */
-export function hasDraftAdr(content: string): boolean {
-  return /status[^:\n]*:\s*[\*_]*\s*draft/i.test(content);
-}
-
-/**
  * Parse a complexity-tier marker file (`.docs/complexity/<slug>.md`) into its
  * `ComplexityTier`. The marker carries a `Tier: <S|M|L>` line (case-insensitive);
  * the rest of the file is free-form rationale. Returns `undefined` when the

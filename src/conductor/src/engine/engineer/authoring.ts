@@ -39,7 +39,7 @@ import { promisify } from 'node:util';
 import type { LessonDigest, RetrievedLesson } from './lesson-store.js';
 import { AuthoringGuard } from './authoring-guard.js';
 import { TargetPathMissingError } from './target.js';
-import { isStoriesApproved, hasDraftAdr } from '../artifacts.js';
+import { adrApprovalStatus, isStoriesApproved } from '../artifacts.js';
 import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
@@ -359,7 +359,7 @@ export type RunAuthoringResult = SpecAuthoringResult | DocumentationAuthoringRes
  *     decide('conflict_check') → decide('architecture_diagram') →
  *     decide('architecture_review') → decide('plan') → decide('coherence_check').
  *     If ANY gate returns
- *     { approved: false } (or a DRAFT ADR is detected) → throws; nothing is written.
+ *     { approved: false } (or an unapproved ADR is detected) → throws; nothing is written.
  *  3. On all-approved: creates spec/<slug> branch, writes artifacts via AuthoringGuard
  *     (always specs/stories/plans + `.docs/complexity/<slug>.md`; non-Small also
  *     conflicts/architecture/decisions), commits on that branch, returns { branch, project }.
@@ -467,11 +467,11 @@ export async function runAuthoring(
   if (tier !== 'S') {
     architectureDiagramResult = await gate('architecture_diagram');
     architectureReviewResult = await gate('architecture_review');
-    // ADR hard gate: no spec lands with a DRAFT ADR (mirrors the conduct
+    // ADR hard gate: no spec lands with an unapproved ADR (mirrors the conduct
     // architecture-review gate). The review artifact embeds the ADRs.
-    if (hasDraftAdr(architectureReviewResult.artifact)) {
+    if (!adrApprovalStatus(architectureReviewResult.artifact).approved) {
       throw new Error(
-        'runAuthoring: architecture-review artifact contains a DRAFT ADR — all ADRs must be ' +
+        'runAuthoring: architecture-review artifact contains an ADR that is not approved — all ADRs must be ' +
           'APPROVED before landing. Approve the ADRs and re-run architecture-review.',
       );
     }
