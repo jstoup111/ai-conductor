@@ -324,6 +324,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   tier. A `**Wired-into:**` anchor that names a file that does not exist, or a symbol with no non-test
   reference in its declared file, refuses the spec naming the task and the anchor. Fix the anchor during
   DECIDE or declare a `none (...)` form — BUILD must never rewrite an approved plan to make it resolve.
+- **Judged wiring pass (§5c)** — after the mechanical validation is green, the skill judges the residue a
+  text search cannot decide: a self-referential anchor (a symbol defined in a file the same task creates)
+  and a decorative one (the match is an import, re-export, comment, type annotation, or string, not a
+  call). Blocking, DECIDE-only, and strictly subordinate — a judged finding never overturns a mechanical
+  `FAIL`, is never resolved by downgrading to a `none (...)` waiver, and every judged edit must re-pass
+  `validate-wired-into`. Integrity check 21 pins this prose to the wired engine gate.
 
 ### coherence-check
 

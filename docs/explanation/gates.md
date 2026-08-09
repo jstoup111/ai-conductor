@@ -160,9 +160,24 @@ mid-build, where the only way forward was rewriting the approved plan. Land now 
 validation as a blocking check: every declared anchor must name a file that exists and carries a
 non-test reference to the declared symbol, or the task must declare a `none (...)` waiver form. It
 applies at every tier — an anchor either resolves or it does not, and tier has no bearing on that.
-An anchor naming a symbol in a file the same task creates fails here because the file does not exist
-yet; once such a file does exist, the reference check is a text search and cannot by itself tell a
-definition from a call, so a self-referential anchor into an already-existing file is not caught.
+
+The check is a literal text search, so it proves a symbol *appears* in the declared file, not that the
+appearance is a call. That residue is covered by a judged pass in `skills/plan/SKILL.md` §5c, which runs
+at DECIDE only after the mechanical validation is green, and looks for the two shapes the matcher cannot
+see: an anchor naming a symbol defined in a file the same task creates (self-referential — it points at
+the new surface's own definition), and an anchor whose match is an import, re-export, comment, type
+annotation, or string literal rather than a call (decorative). The split is deliberate and one-directional:
+the mechanical verdict is authoritative and a judged finding can never overturn a `FAIL`, while every
+judged resolution must be re-validated mechanically before the plan is complete. The judged pass is
+confined to DECIDE for the reason [#1399](https://github.com/jstoup111/ai-conductor/issues/1399) records —
+a gate that instructs a mid-build plan-contract rewrite makes `build_review` report the compliance as an
+unauthorized scope violation, and the remediation re-triggers the original gate, a loop that costs a
+needs-human HALT.
+
+What still is not caught: a plan authored without the judged pass, or one whose author judged wrongly.
+The judged half is prose, and prose is not enforcement — the durable fix would be a probe that
+distinguishes a definition from a call in the declared file, which needs language-aware analysis rather
+than a text search. Until then the mechanical half stays the only blocking authority on resolvability.
 
 The coherence gate is itself layered. It disengages entirely at tier S, and it does not apply retroactively:
 a change set with no coherence artifact path in it is treated as a legacy change, not a violation. Once
