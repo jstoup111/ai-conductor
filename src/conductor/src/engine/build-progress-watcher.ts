@@ -385,11 +385,14 @@ export class BuildProgressWatcher {
       return;
     }
 
+    const previousHead = previous?.head;
+    const headMoved = Boolean(head && previousHead && head !== previousHead);
+    const taskDelta = previous === null || snapshot.resolved !== previous.resolved;
     let commitCount: number | undefined;
-    if (head && previous?.head && head !== previous.head) {
+    if (headMoved) {
       try {
         const git = makeGitRunner(this.projectRoot);
-        const result = await git(['rev-list', '--count', `${previous.head}..${head}`]);
+        const result = await git(['rev-list', '--count', `${previousHead}..${head}`]);
         const parsed = Number(result.stdout.trim());
         if (result.exitCode === 0 && Number.isFinite(parsed)) {
           commitCount = parsed;
@@ -426,6 +429,8 @@ export class BuildProgressWatcher {
       currentTaskId: snapshot.currentTaskId,
       currentTaskName: snapshot.currentTaskName,
       commitCount,
+      tickReason: taskDelta ? 'task-delta' : 'head-moved',
+      headMoved: headMoved || undefined,
       noEvidenceAttempts,
       featureSlug: this.featureSlug,
     });

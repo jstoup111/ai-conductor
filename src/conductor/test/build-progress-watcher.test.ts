@@ -194,6 +194,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.resolved).toBe(6);
     expect(last.total).toBe(21);
     expect(last.featureSlug).toBe('my-feature');
+    expect(last.tickReason).toBe('task-delta');
   });
 
   it('emits build_progress with commitCount when a new HEAD commit lands with no task delta', async () => {
@@ -231,6 +232,36 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.resolved).toBe(5);
     expect(last.total).toBe(21);
     expect(last.commitCount).toBe(1);
+    expect(last.tickReason).toBe('head-moved');
+    expect(last.headMoved).toBe(true);
+  });
+
+  it('keeps task-delta provenance when HEAD and the resolved count advance together', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await writeTasks(6, 21);
+    await writeFile(join(dir, 'note.txt'), 'more');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'second'], { cwd: dir });
+
+    await tick(watcher);
+    watcher.stop();
+
+    const events = buildProgressEvents();
+    const last = events[events.length - 1];
+    expect(last.tickReason).toBe('task-delta');
+    expect(last.headMoved).toBe(true);
   });
 
   it('emits nothing on a tick where nothing changed', async () => {
