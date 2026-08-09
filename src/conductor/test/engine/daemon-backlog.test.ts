@@ -164,6 +164,52 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.blocked).toEqual([]);
   });
 
+  it('blocks every otherwise eligible spec when an ADR is not approved', async () => {
+    const slugs = ['alpha', 'beta', 'gamma'];
+    await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs/decisions/adr-gate.md'), '# ADR\n\nStatus: Proposed\n');
+    await Promise.all(
+      slugs.flatMap((slug) => [
+        writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`)),
+        writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES),
+        writeCoherence(slug),
+      ]),
+    );
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.items).toEqual([]);
+    expect(result.blocked).toEqual(
+      slugs.map((slug) =>
+        expect.objectContaining({
+          slug,
+          reason: 'adr-not-approved',
+          remedy: expect.stringMatching(/adr-gate\.md.*Proposed/i),
+        }),
+      ),
+    );
+  });
+
+  it('dispatches otherwise eligible specs when every ADR is approved', async () => {
+    await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs/decisions/adr-gate.md'), '# ADR\n\nStatus: APPROVED\n');
+    await writeFile(
+      join(dir, '.docs/plans/approved-adr.md'),
+      planWithDeps('.docs/stories/approved-adr.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/approved-adr.md'), APPROVED_STORIES);
+    await writeCoherence('approved-adr');
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.items.map((item) => item.slug)).toEqual(['approved-adr']);
+    expect(result.blocked).toEqual([]);
+  });
+
   it('does not classify an unresolvable Stories reference as blocked after a processed-marker dedup', async () => {
     await writeFile(
       join(dir, '.docs/plans/processed-unresolvable.md'),

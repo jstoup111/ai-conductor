@@ -5,6 +5,7 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import type { BacklogItem } from './daemon.js';
 import {
+  adrApprovalStatus,
   planHasDependencyTree,
   isStoriesApproved,
   parseComplexityTier,
@@ -601,6 +602,7 @@ export interface BlockedSpecItem {
     | 'unresolvable-stories-ref'
     | 'stories-missing'
     | 'stories-not-approved'
+    | 'adr-not-approved'
     | 'no-dependency-tree'
     | 'missing-coherence';
   remedy: string;
@@ -969,6 +971,23 @@ export async function discoverBacklog(
       );
       continue;
     }
+    let blockedByAdr = false;
+    for (const adrFile of await tree.listAdrFiles()) {
+      const adrRel = `.docs/decisions/${adrFile}`;
+      const approval = adrApprovalStatus((await tree.readFile(adrRel)) ?? '');
+      if (approval.approved) continue;
+
+      const status = approval.found === null ? 'no status declaration' : `status "${approval.found}"`;
+      const remedy = `Approve ${adrRel} (${status}) on the default branch.`;
+      await block(
+        { slug, reason: 'adr-not-approved', remedy },
+        `skip ${slug}: merged spec cannot build — ADR ${adrRel} is not approved (${status}). ` +
+          `${remedy} logged once.`,
+      );
+      blockedByAdr = true;
+      break;
+    }
+    if (blockedByAdr) continue;
     if (!planHasDependencyTree(planContent)) {
       blockedItems.push({
         slug,
