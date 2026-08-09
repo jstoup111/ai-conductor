@@ -702,6 +702,26 @@ ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
 assert "invalid updateChannel: accessor captures only the requested value and warns on stderr" \
   "$(if [ "$ACCESSOR_CODE" -eq 0 ] && [ "$ACCESSOR_VALUE" = "v0.100.0" ] && [[ "$ACCESSOR_STDERR" = *"updateChannel"* ]]; then echo 0; else echo 1; fi)"
 
+# A failed seed may invoke the setter before the getter reads its requested
+# value. Setter diagnostics must still stay out of the getter's captured
+# stdout, otherwise callers can mistake the warning for configuration.
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "currentVersion": "v0.100.0"
+}
+EOF
+set +e
+ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" \
+  bash -c 'source "$1"; value=$(conductor_cfg_get currentVersion ""); status=$?; printf "%s\\n" "$value"; exit "$status"' \
+    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+ACCESSOR_CODE=$?
+set -e
+ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
+assert "missing conduct-ts during legacy seed: getter fails with stderr-only setter diagnostic" \
+  "$(if [ "$ACCESSOR_CODE" -ne 0 ] && [ -z "$ACCESSOR_VALUE" ] && [[ "$ACCESSOR_STDERR" = *"conduct-ts is required to save conductor configuration"* ]]; then echo 0; else echo 1; fi)"
+
 # The rename is the idempotence marker. A rename failure must be visible and
 # leave the original source in place, never masquerading as a successful seed.
 REPO=$(make_repo "legacy-json-rename-failure")

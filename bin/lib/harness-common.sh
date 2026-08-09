@@ -71,7 +71,7 @@ conductor_cfg_set() {
   fi
   local field=$1 value=$2
   if ! command -v conduct-ts &>/dev/null; then
-    warn "conduct-ts is required to save conductor configuration; install or restore it, then re-run bin/install"
+    warn "conduct-ts is required to save conductor configuration; install or restore it, then re-run bin/install" >&2
     return 1
   fi
   conduct-ts config set "conductor.$(conductor_cfg_key "$field")" "$value"
