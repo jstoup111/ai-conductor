@@ -165,6 +165,50 @@ describe('conduct config set', () => {
     });
   });
 
+  it('persists a valid update channel without replacing unrelated top-level keys', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    await mkdir(configDir);
+    await writeFile(
+      configPath,
+      'markdown_viewer:\n  command: glow\nconductor:\n  update_channel: tagged\n',
+      'utf8',
+    );
+    process.env.HOME = home;
+
+    const code = await userConfigSetCommand({
+      kind: 'user-config-set',
+      path: 'conductor.update_channel',
+      value: 'main',
+    });
+
+    expect({ code, config: loadYaml(await readFile(configPath, 'utf8')) }).toEqual({
+      code: 0,
+      config: {
+        markdown_viewer: { command: 'glow' },
+        conductor: { update_channel: 'main' },
+      },
+    });
+  });
+
+  it('coerces auto check strings to YAML booleans and creates a missing conductor block', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configPath = join(home, '.ai-conductor', 'config.yml');
+    process.env.HOME = home;
+
+    const code = await userConfigSetCommand({
+      kind: 'user-config-set',
+      path: 'conductor.auto_check',
+      value: 'true',
+    });
+
+    expect({ code, config: loadYaml(await readFile(configPath, 'utf8')) }).toEqual({
+      code: 0,
+      config: { conductor: { auto_check: true } },
+    });
+  });
+
   it('rejects an invalid update channel without modifying user config', async () => {
     home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
     const configDir = join(home, '.ai-conductor');
