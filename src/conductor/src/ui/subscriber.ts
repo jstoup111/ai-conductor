@@ -40,6 +40,7 @@ export class TerminalSubscriber implements UISubscriber {
       'build_progress',
       'unattributed_progress',
       'build_no_progress',
+      'pipeline_closeout',
       'build_stall',
       'provider_fallback',
       'session_policy',

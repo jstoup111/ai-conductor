@@ -101,6 +101,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'unattributed_progress',
   'build_no_progress',
   'build_stall',
+  'pipeline_closeout',
   'provider_attempt',
   'feature_usage_total',
   'provider_fallback',
@@ -243,6 +244,18 @@ describe('event sink subscriptions', () => {
     expect({ progress, sinks: EVENT_SINKS.credentials_park_progress }).toEqual({
       progress,
       sinks: { render: true, persist: true, audit: false },
+    });
+  });
+
+  it('renders pipeline closeouts without persisting the pipeline-owned ledger event', () => {
+    expect({
+      sinks: EVENT_SINKS.pipeline_closeout,
+      rendered: renderedEventTypes().includes('pipeline_closeout'),
+      persisted: persistedEventTypes().includes('pipeline_closeout'),
+    }).toEqual({
+      sinks: { render: true, persist: false, audit: false },
+      rendered: true,
+      persisted: false,
     });
   });
 

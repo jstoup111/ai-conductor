@@ -23,6 +23,7 @@ import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
+import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -96,6 +97,22 @@ describe('daemon state-store command boundary (Task 17)', () => {
       { complexity_tier: 'M' },
       new RecordingConductStateStore({ kind: 'lease', message: 'lease held by another daemon' }),
     )).rejects.toThrow('Daemon base-state update failed (lease): lease held by another daemon');
+  });
+});
+
+describe('daemon closeout rendering', () => {
+  it('logs the closeout obligation and elapsed milliseconds', () => {
+    const lines: string[] = [];
+
+    renderDaemonEvent({
+      type: 'pipeline_closeout',
+      obligation: 'evaluator',
+      startedAt: 100,
+      endedAt: 140,
+      ts: 140,
+    }, (line) => lines.push(line));
+
+    expect(lines).toEqual(['· ✓ closeout evaluator (40ms)']);
   });
 });
 

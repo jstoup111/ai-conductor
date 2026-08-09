@@ -66,4 +66,19 @@ describe('TerminalSubscriber', () => {
     await emitter.emit({ type: 'dashboard_refresh' });
     expect(renderCallback).toHaveBeenCalledWith({ type: 'dashboard_refresh' });
   });
+
+  it('forwards pipeline closeout events to the renderer', async () => {
+    subscriber.start();
+    const event: ConductorEvent = {
+      type: 'pipeline_closeout',
+      obligation: 'evaluator',
+      startedAt: 100,
+      endedAt: 140,
+      ts: 140,
+    };
+
+    await emitter.emit(event);
+
+    expect(renderCallback).toHaveBeenCalledWith(event);
+  });
 });
