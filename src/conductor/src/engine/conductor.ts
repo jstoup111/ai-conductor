@@ -9414,8 +9414,19 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
     )
     .join('\n\n');
   if (scanPlanProtectedTargets(taskScopes, activePlanStem).length > 0) return true;
-  if (gap.tasks.length > 0) return false;
-  const rationaleScope = `### Task ${gap.id}: remediation\n\n${gap.rationale}`;
+
+  // Rationale is prose rather than a plan Files declaration. Treat it as a
+  // target only when it both names a resolvable protected artifact and directs
+  // an edit; a context-only citation must not re-route source work.
+  if (!/\b(?:amend|change|delete|edit|remove|rewrite|update)\b/i.test(gap.rationale)) return false;
+  const rationalePaths = Array.from(
+    gap.rationale.matchAll(
+      /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g,
+    ),
+    ([, path]) => path,
+  );
+  if (rationalePaths.length === 0) return false;
+  const rationaleScope = `### Task ${gap.id}: remediation\n\n**Files:** ${rationalePaths.join(', ')}`;
   return scanPlanProtectedTargets(rationaleScope, activePlanStem).length > 0;
 }
 

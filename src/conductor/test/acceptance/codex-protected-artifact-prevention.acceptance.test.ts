@@ -158,7 +158,10 @@ describe('Stories 1-3: the prepared-worktree commit boundary prevents protected 
 
     const commit = await git(repo, 'commit', '-m', 'test: chained repository hook');
 
-    expect(commit.code).toBe(23);
+    // Git reports hook rejection with its own non-zero status rather than
+    // preserving the chained hook's exit code; the repository hook's output
+    // proves that the chain itself ran.
+    expect(commit.code).not.toBe(0);
     expect(commit.stderr).toContain('repository-hook-refusal');
   });
 });
