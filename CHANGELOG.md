@@ -19,6 +19,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - conflict-check detects oscillating requirements — pairs that are individually satisfiable but mutually exclusive, which send work round a non-terminating kickback loop. coherence-check gains a `fail` verdict and a consistency pass for cross-layer contradictions that coverage alone cannot express. ([implementation PR #1394](https://github.com/jstoup111/ai-conductor/pull/1394)).
 - The release-metadata check now labels each PR with the semver impact it declares (semver:major/minor/patch), so merge order is readable from the PR list. ([implementation PR #1405](https://github.com/jstoup111/ai-conductor/pull/1405)).
 - Worktrees now get a preventive pre-commit hook that blocks commits touching another feature's sealed DECIDE artifacts (`.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, `.docs/stories`) during BUILD/SHIP, and remediation gaps that target a sealed artifact are now redirected to the owning DECIDE step. ([implementation PR #1396](https://github.com/jstoup111/ai-conductor/pull/1396)).
+- The daemon, spec authoring, and spec landing now refuse to dispatch or land work whose ADRs are not declared APPROVED or SUPERSEDED, closing the gap where a merged spec with an unapproved architecture decision could still reach build. ([implementation PR #1384](https://github.com/jstoup111/ai-conductor/pull/1384)).
 
 ### Fixed
 
