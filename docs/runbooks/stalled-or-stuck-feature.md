@@ -249,7 +249,7 @@ procedure](#clear-a-halt-and-let-the-feature-resume).
 
 #### FINISH publication halts
 
-A FINISH publication failure or non-converging progress halts one of three ways, and the marker says which:
+A FINISH publication failure or non-converging progress halts one of four ways, and the marker says which:
 
 - `FINISH publication retry exhausted: <reason>` — the reason was transient (transport, GitHub,
   filesystem, provider judgment, or a re-observation), so every attempt in the budget was spent
@@ -266,6 +266,14 @@ A FINISH publication failure or non-converging progress halts one of three ways,
   budget was spent. The separate progress allowance reached its 14-transition bound (two passes over
   each of the seven publication transitions) before the publication state converged, and this is a
   `needs-human` halt.
+- A plain-prose sentence with no `FINISH publication …` prefix, e.g. `The PR prose judgment was
+  refused and requires an operator decision. Next action: Review the refusal and decide how to
+  continue publication.` and, when the provider supplied one, a trailing `Detail: <provider text>`.
+  This is a `human_required` disposition — a condition only an operator can resolve, distinct from
+  the three retryable/non-retryable shapes above. Its reasons cover judgment refusal or halt prose
+  (`judgment_refused`, `judgment_halt_prose`), an unresolvable PR match or shipped record
+  (`ambiguous_pr_identity`, `invalid_shipped_record`), and destructive or unrecognized publication
+  intent (`interactive_intent_*`, `unattended_intent_*`). It is always a `needs-human` halt.
 
 **Diagnosis:** inspect the named last transition and the preceding FINISH publication events in the
 daemon log. Fourteen verified transitions without convergence means the publication state machine is
