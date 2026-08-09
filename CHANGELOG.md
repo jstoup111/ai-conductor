@@ -24,6 +24,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The land-time coherence gate now checks that stories tie out to the PRD in both directions — a story citing a requirement the PRD never declares, or citing none at all, is reported as a gap. Plan `Wired-into:` anchors are now validated as a blocking gate at every tier instead of by an optional command, and the plan skill judges the residue the matcher cannot decide: an anchor into a file the same task creates, or one whose match is an import, comment, or re-export rather than a call. ([implementation PR #1401](https://github.com/jstoup111/ai-conductor/pull/1401)).
 - A pull request whose `## Migration` section is its last section no longer fails its own release gate at finish; the release metadata block below it is parsed correctly instead of being swallowed into the migration content. ([implementation PR #1404](https://github.com/jstoup111/ai-conductor/pull/1404)).
 - A pull request whose `## Migration` section sits above its release metadata block, or is followed by a trailer, no longer fails the finish-time release gate as non-canonical, and the merged body no longer duplicates the Migration section. ([implementation PR #1406](https://github.com/jstoup111/ai-conductor/pull/1406)).
+- `conduct-ts shipped-record` reports success on stdout, so a successful ship no longer appears in the daemon log tagged `[error]`. ([implementation PR #1407](https://github.com/jstoup111/ai-conductor/pull/1407)).
 
 ## [0.100.0] - 2026-08-07
 
