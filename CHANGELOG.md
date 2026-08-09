@@ -11,6 +11,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.101.0] - 2026-08-09
+
+### Added
+
+- `conduct-ts validate-wired-into <plan>` resolves a plan's **Wired-into:** anchors at DECIDE time through the same machinery BUILD-time completion verification uses, and exits 1 on any anchor that cannot resolve. ([implementation PR #1190](https://github.com/jstoup111/ai-conductor/pull/1190)).
+
 ## [0.100.0] - 2026-08-07
 
 ### Added
