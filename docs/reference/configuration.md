@@ -17,7 +17,7 @@ code that consumes it, and what a bad value does. Sections follow the loader's o
 | Project config | `<project>/.ai-conductor/config.yml` | `PROJECT_CONFIG_DIR` / `PROJECT_CONFIG_FILE`, `src/conductor/src/engine/config.ts:94-95` |
 | User config | `~/.ai-conductor/config.yml` | `src/conductor/src/engine/user-config.ts:13-19` |
 | Legacy project dir | `<project>/.harness/config.yml` | `LEGACY_PROJECT_CONFIG_DIR`, `config.ts:96` |
-| Legacy user JSON | `~/.claude/ai-conductor.config.json` (flat camelCase) | `user-config.ts:15,87-106` |
+| Legacy user JSON seed | `~/.claude/ai-conductor.config.json` (flat camelCase) | One-time migration input; after a successful seed it is renamed to `ai-conductor.config.json.migrated` |
 
 Both files use the same schema. Keep per-user state (`conductor:` and `markdown_viewer:`) in the
 user file. Keep self-host settings such as `harness_self_host`, `owner_gate_cutover`, and
@@ -435,18 +435,25 @@ For what does resolve a tier, see
 
 ## conductor
 
-Update-channel state. Validated by `validateConductorBlock` (`config.ts:1059-1093`); an unknown key
-inside the block is a hard error.
+The sole update-check configuration surface. `bin/install` and the update flow read and write the
+user-level `conductor:` block in `~/.ai-conductor/config.yml`; it is validated by
+`validateConductorBlock` (`config.ts:1059-1093`), and an unknown key inside the block is a hard
+error.
 
 | Key | Type | Allowed | Written by |
 | --- | --- | --- | --- |
-| `conductor.update_channel` | string | `tagged` or `main` only; anything else is a hard error (`config.ts:1073-1082`) | `bin/install` |
-| `conductor.auto_check` | boolean | — | `bin/install` |
-| `conductor.current_version` | string | — | `bin/install` (machine state) |
-| `conductor.last_checked_at` | string | ISO-8601 UTC | update check (machine state) |
+| `conductor.update_channel` | string | `tagged` or `main` only; anything else is a hard error (`config.ts:1073-1082`) | `bin/install` and the update flow |
+| `conductor.auto_check` | boolean | — | `bin/install` and the update flow |
+| `conductor.current_version` | string | — | `bin/install` and the update flow (machine state) |
+| `conductor.last_checked_at` | string | ISO-8601 UTC | `bin/install` and the update flow (machine state) |
 
-Legacy `~/.claude/ai-conductor.config.json` is translated camelCase to snake_case at
-`user-config.ts:87-106`; an unknown or unparseable legacy file returns `null` silently.
+For an existing installation, `~/.claude/ai-conductor.config.json` is a one-time seed, not a
+second live configuration source. Before the first access to `conductor:`, its recognized values
+are translated from camelCase and take precedence over any stale values already in the block. A
+successful seed renames the file to `ai-conductor.config.json.migrated`, making later accesses a
+no-op. A missing source is a no-op; malformed or non-object JSON is left in place so it can be
+repaired and retried. Invalid or absent individual legacy fields are skipped, while valid fields
+still seed the block before the source is renamed.
 
 > **Known limitation.** `src/conductor/src/types/config.ts:198-201` states "Project configs should not
 > override this block — it's per-user, not per-repo," but nothing enforces it. Unlike `spec_owner`, a
