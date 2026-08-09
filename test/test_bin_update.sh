@@ -370,9 +370,13 @@ set_conductor_cfg "$HOME_DIR" updateChannel tagged
 set_conductor_cfg "$HOME_DIR" currentVersion v0.99.12
 
 run_legacy_seed() {
-  local repo=$1 home=$2
+  local repo=$1 home=$2 path
+  path="$repo/bin:$TEST_PATH"
+  if [ -n "${SEED_PATH_PREFIX:-}" ]; then
+    path="$SEED_PATH_PREFIX:$path"
+  fi
   set +e
-  SEED_OUT=$(HOME="$home" PATH="$repo/bin:$TEST_PATH" \
+  SEED_OUT=$(HOME="$home" PATH="$path" \
     bash -c 'source "$1"; seed_conductor_config_from_legacy' \
     _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
   SEED_CODE=$?
@@ -392,6 +396,101 @@ EXPECTED_SEED_CONFIG=$(cat "$HOME_DIR/.ai-conductor/config.yml")
 run_legacy_seed "$REPO" "$HOME_DIR"
 assert "second legacy seed is a no-op after migration" \
   "$( [ "$SEED_CODE" -eq 0 ] && [ "$(cat "$HOME_DIR/.ai-conductor/config.yml")" = "$EXPECTED_SEED_CONFIG" ] && [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
+
+# A missing legacy file is an ordinary no-op: it must neither modify the
+# schema-owned config nor create a migration marker.
+REPO=$(make_repo "legacy-json-absent")
+HOME_DIR=$(make_isolated_home)
+set_conductor_cfg "$HOME_DIR" currentVersion v0.99.12
+ABSENT_CONFIG=$(cat "$HOME_DIR/.ai-conductor/config.yml")
+run_legacy_seed "$REPO" "$HOME_DIR"
+assert "absent legacy JSON: seed is a successful no-op" "$([ "$SEED_CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "absent legacy JSON: leaves conductor block untouched" \
+  "$( [ "$(cat "$HOME_DIR/.ai-conductor/config.yml")" = "$ABSENT_CONFIG" ] && echo 0 || echo 1 )"
+assert "absent legacy JSON: creates no migration marker" \
+  "$( [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
+
+# Empty and malformed JSON are not a seed. They must preserve the existing
+# block and the source file so a repaired legacy config can be retried.
+for LEGACY_CASE in empty malformed; do
+  REPO=$(make_repo "legacy-json-${LEGACY_CASE}")
+  HOME_DIR=$(make_isolated_home)
+  mkdir -p "$HOME_DIR/.claude"
+  if [ "$LEGACY_CASE" = empty ]; then
+    : > "$HOME_DIR/.claude/ai-conductor.config.json"
+  else
+    printf '{ not valid json\n' > "$HOME_DIR/.claude/ai-conductor.config.json"
+  fi
+  set_conductor_cfg "$HOME_DIR" currentVersion v0.99.12
+  INVALID_CONFIG=$(cat "$HOME_DIR/.ai-conductor/config.yml")
+  run_legacy_seed "$REPO" "$HOME_DIR"
+  assert "${LEGACY_CASE} legacy JSON: seed refuses invalid input" "$([ "$SEED_CODE" -ne 0 ] && echo 0 || echo 1)"
+  assert "${LEGACY_CASE} legacy JSON: reports the invalid legacy JSON" \
+    "$(case "$SEED_OUT" in *"legacy JSON"*) echo 0;; *) echo 1;; esac)"
+  assert "${LEGACY_CASE} legacy JSON: leaves conductor block untouched" \
+    "$( [ "$(cat "$HOME_DIR/.ai-conductor/config.yml")" = "$INVALID_CONFIG" ] && echo 0 || echo 1 )"
+  assert "${LEGACY_CASE} legacy JSON: keeps source and creates no marker" \
+    "$( [ -f "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
+done
+
+# A partial valid legacy config must not invent the auto-check preference.
+REPO=$(make_repo "legacy-json-missing-auto-check")
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "currentVersion": "v0.100.0"
+}
+EOF
+run_legacy_seed "$REPO" "$HOME_DIR"
+assert "missing autoCheck: seed succeeds" "$([ "$SEED_CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "missing autoCheck: leaves conductor.auto_check unset" \
+  "$( [ -z "$(cfg_get "$HOME_DIR" autoCheck)" ] && echo 0 || echo 1 )"
+assert "missing autoCheck: carries forward supplied currentVersion" \
+  "$( [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.100.0" ] && echo 0 || echo 1 )"
+
+# Invalid channel data is individually dropped, with a warning, rather than
+# poisoning the validated conductor block.
+REPO=$(make_repo "legacy-json-invalid-channel")
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "updateChannel": "nightly",
+  "currentVersion": "v0.100.0"
+}
+EOF
+run_legacy_seed "$REPO" "$HOME_DIR"
+assert "invalid updateChannel: seed succeeds after dropping the key" "$([ "$SEED_CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "invalid updateChannel: reports a warning" \
+  "$(case "$SEED_OUT" in *"updateChannel"*) echo 0;; *) echo 1;; esac)"
+assert "invalid updateChannel: is not written" \
+  "$( [ -z "$(cfg_get "$HOME_DIR" updateChannel)" ] && echo 0 || echo 1 )"
+
+# The rename is the idempotence marker. A rename failure must be visible and
+# leave the original source in place, never masquerading as a successful seed.
+REPO=$(make_repo "legacy-json-rename-failure")
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "currentVersion": "v0.100.0"
+}
+EOF
+SEED_RENAME_STUBS="$TMP_ROOT/seed-rename-stubs"
+mkdir -p "$SEED_RENAME_STUBS"
+cat > "$SEED_RENAME_STUBS/mv" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+chmod +x "$SEED_RENAME_STUBS/mv"
+SEED_PATH_PREFIX="$SEED_RENAME_STUBS" run_legacy_seed "$REPO" "$HOME_DIR"
+unset SEED_PATH_PREFIX
+assert "legacy seed: failed rename returns failure" "$([ "$SEED_CODE" -ne 0 ] && echo 0 || echo 1)"
+assert "legacy seed: failed rename reports the failure" \
+  "$(case "$SEED_OUT" in *"rename"*) echo 0;; *) echo 1;; esac)"
+assert "legacy seed: failed rename leaves original file in place" \
+  "$( [ -f "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
 
 # ─── Story 2: set the update channel ───────────────────────────────────────
 
