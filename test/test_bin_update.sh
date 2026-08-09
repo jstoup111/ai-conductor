@@ -8,7 +8,7 @@ set -euo pipefail
 #
 # Runs the ACTUAL bin/update (no mocks of the script under test) against a
 # throwaway git repo standing in for the harness checkout, with HOME pointed
-# at a disposable dir so the real ~/.claude/ai-conductor.config.json is never
+# at a disposable dir so the real ~/.ai-conductor/config.yml is never
 # touched. bin/migrate is stubbed (its own behavior is out of scope for this
 # feature) so tests assert *that* it was invoked, not what it does.
 #
@@ -53,6 +53,9 @@ mkdir -p "$STUBS_DIR"
 PY3="$(python3 -c 'import sys; print(sys.executable)')"
 ln -s "$PY3" "$STUBS_DIR/python3"
 TEST_PATH="$STUBS_DIR:$PATH"
+# A deliberately minimal PATH for missing-command scenarios. Do not inherit
+# the operator PATH: it may contain a real ~/.local/bin/conduct-ts.
+MISSING_CONDUCT_PATH="$STUBS_DIR:/usr/bin:/bin"
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -88,6 +91,42 @@ make_repo() {
   if [ -d "$HARNESS_DIR/bin/lib" ]; then
     cp -r "$HARNESS_DIR/bin/lib" "$dir/bin/lib"
   fi
+  # Normal update scenarios exercise the real script through this local
+  # conduct-ts seam. It persists the scalar conductor fields in config.yml.
+  cat > "$dir/bin/conduct-ts" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+[ "$1" = "config" ] || exit 2
+config="${HOME}/.ai-conductor/config.yml"
+key="${3#conductor.}"
+case "$2" in
+  read)
+    awk -F ': *' -v key="$key" '$1 == "  " key { print $2; exit }' "$config" 2>/dev/null || true
+    ;;
+  set)
+    value=$4
+    mkdir -p "$(dirname "$config")"
+    if [ ! -f "$config" ]; then
+      printf 'conductor:\n  %s: %s\n' "$key" "$value" > "$config"
+      exit 0
+    fi
+    tmp=$(mktemp "${config}.XXXXXX")
+    awk -v key="$key" -v value="$value" '
+      $0 == "  " key ":" || index($0, "  " key ": ") == 1 {
+        print "  " key ": " value
+        found = 1
+        next
+      }
+      { print }
+      END { if (!found) print "  " key ": " value }
+    ' "$config" > "$tmp"
+    mv "$tmp" "$config"
+    ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$dir/bin/conduct-ts"
   stub_migrate "$dir" 0
 
   cat > "$dir/CHANGELOG.md" << 'EOF'
@@ -124,36 +163,55 @@ EOF
 
 # make_isolated_home
 # A throwaway HOME so tests never read/write the operator's real
-# ~/.claude/ai-conductor.config.json.
+# ~/.ai-conductor/config.yml.
 make_isolated_home() {
   local home="$TMP_ROOT/home-$$-${RANDOM}"
   mkdir -p "$home"
   echo "$home"
 }
 
+# conductor_cfg_key <legacyField>
+conductor_cfg_key() {
+  case "$1" in
+    updateChannel) echo "update_channel" ;;
+    autoCheck) echo "auto_check" ;;
+    currentVersion) echo "current_version" ;;
+    lastCheckedAt) echo "last_checked_at" ;;
+  esac
+}
+
 # set_current_version <home> <version>
 set_current_version() {
   local home=$1 version=$2
-  mkdir -p "$home/.claude"
-  python3 -c "
-import json
-from pathlib import Path
-p = Path('$home/.claude/ai-conductor.config.json')
-cfg = json.loads(p.read_text()) if p.exists() else {}
-cfg['currentVersion'] = '$version'
-p.write_text(json.dumps(cfg))
-"
+  set_conductor_cfg "$home" currentVersion "$version"
 }
 
 cfg_get() {
   local home=$1 field=$2
-  python3 -c "
-import json
-from pathlib import Path
-p = Path('$home/.claude/ai-conductor.config.json')
-cfg = json.loads(p.read_text()) if p.exists() else {}
-print(cfg.get('$field', ''))
-"
+  awk -F ': *' -v key="$(conductor_cfg_key "$field")" '$1 == "  " key { print $2; exit }' \
+    "$home/.ai-conductor/config.yml" 2>/dev/null || true
+}
+
+set_conductor_cfg() {
+  local home=$1 field=$2 value=$3 key config tmp
+  key=$(conductor_cfg_key "$field")
+  config="$home/.ai-conductor/config.yml"
+  mkdir -p "$(dirname "$config")"
+  if [ ! -f "$config" ]; then
+    printf 'conductor:\n  %s: %s\n' "$key" "$value" > "$config"
+    return
+  fi
+  tmp=$(mktemp "$TMP_ROOT/config.XXXXXX")
+  awk -v key="$key" -v value="$value" '
+    $0 == "  " key ":" || index($0, "  " key ": ") == 1 {
+      print "  " key ": " value
+      found = 1
+      next
+    }
+    { print }
+    END { if (!found) print "  " key ": " value }
+  ' "$config" > "$tmp"
+  mv "$tmp" "$config"
 }
 
 # run_conductor_cfg_accessors <home> <field> <value> <default>
@@ -186,7 +244,18 @@ run_update() {
   local repo=$1 home=$2
   shift 2
   set +e
-  OUT=$(cd "$repo" && HOME="$home" PATH="$TEST_PATH" "$repo/bin/update" "$@" < /dev/null 2>&1)
+  OUT=$(cd "$repo" && HOME="$home" PATH="$repo/bin:$TEST_PATH" "$repo/bin/update" "$@" < /dev/null 2>&1)
+  CODE=$?
+  set -e
+}
+
+# run_update_without_conduct <repo> <home> [args...]
+# Deliberately leaves the repo's local conduct-ts seam off PATH.
+run_update_without_conduct() {
+  local repo=$1 home=$2
+  shift 2
+  set +e
+  OUT=$(cd "$repo" && HOME="$home" PATH="$MISSING_CONDUCT_PATH" "$repo/bin/update" "$@" < /dev/null 2>&1)
   CODE=$?
   set -e
 }
@@ -199,7 +268,7 @@ run_update_tty() {
   shift 3
   local log="$TMP_ROOT/tty-$$-${RANDOM}.log"
   set +e
-  OUT=$(cd "$repo" && printf '%s\n' "$answer" | HOME="$home" PATH="$TEST_PATH" script -qec "$repo/bin/update $*" "$log" 2>&1)
+  OUT=$(cd "$repo" && printf '%s\n' "$answer" | HOME="$home" PATH="$repo/bin:$TEST_PATH" script -qec "$repo/bin/update $*" "$log" 2>&1)
   CODE=$?
   set -e
 }
@@ -256,6 +325,30 @@ do
   assert "${FIELD}: get returns conduct-ts config read output" \
     "$( [ "$ACCESSOR_OUT" = "$VALUE" ] && echo 0 || echo 1 )"
 done
+
+# A config read is authoritative: a missing conduct-ts must not turn into the
+# caller's default. The update command names its declined reason, while its
+# automatic entry remains advisory for startup callers.
+HOME_DIR=$(make_isolated_home)
+set +e
+ACCESSOR_OUT=$(HOME="$HOME_DIR" PATH="$MISSING_CONDUCT_PATH" bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
+  _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+ACCESSOR_CODE=$?
+set -e
+assert "missing conduct-ts: config read returns non-zero" "$([ "$ACCESSOR_CODE" -ne 0 ] && echo 0 || echo 1)"
+assert "missing conduct-ts: config read names the prerequisite" "$(case "$ACCESSOR_OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
+assert "missing conduct-ts: config read never echoes caller default" "$(case "$ACCESSOR_OUT" in *"tagged"*) echo 1;; *) echo 0;; esac)"
+
+REPO=$(make_repo "missing-conduct-ts")
+HOME_DIR=$(make_isolated_home)
+run_update_without_conduct "$REPO" "$HOME_DIR"
+assert "missing conduct-ts: forced update check declines" "$([ "$CODE" -ne 0 ] && echo 0 || echo 1)"
+assert "missing conduct-ts: forced update check states the reason" "$(case "$OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
+
+run_update_without_conduct "$REPO" "$HOME_DIR" --auto
+assert "missing conduct-ts: --auto remains advisory" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "missing conduct-ts: --auto states the declined reason" "$(case "$OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
+assert "update config path does not import PyYAML" "$(rg -q 'import yaml|from yaml import' "$HARNESS_DIR/bin/update" && echo 1 || echo 0)"
 
 # ─── Story 2: set the update channel ───────────────────────────────────────
 
@@ -315,16 +408,8 @@ REPO=$(make_repo "s7-auto-disabled")
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" v0.3.0
 git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
-mkdir -p "$HOME_DIR/.claude"
-python3 -c "
-import json
-from pathlib import Path
-p = Path('$HOME_DIR/.claude/ai-conductor.config.json')
-cfg = json.loads(p.read_text()) if p.exists() else {}
-cfg['autoCheck'] = False
-cfg['currentVersion'] = 'v0.3.0'
-p.write_text(json.dumps(cfg))
-"
+set_conductor_cfg "$HOME_DIR" autoCheck false
+set_conductor_cfg "$HOME_DIR" currentVersion v0.3.0
 
 run_update "$REPO" "$HOME_DIR" --auto
 assert "--auto with autoCheck=false: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"

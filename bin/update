@@ -235,7 +235,10 @@ check_harness_update_main() {
 # by the forced (no-args) and auto (--auto, gated) entry points below.
 dispatch_update_channel() {
   local channel
-  channel=$(conductor_cfg_get updateChannel tagged)
+  if ! channel=$(conductor_cfg_get updateChannel tagged); then
+    warn "Update check declined: conduct-ts is required to read conductor configuration."
+    return 1
+  fi
   case "$channel" in
     main)   check_harness_update_main ;;
     tagged|*) check_harness_update_tagged ;;
@@ -256,7 +259,10 @@ check_harness_update_auto() {
   [ -d "${HARNESS_DIR}/.git" ] || return 0
 
   local auto_check
-  auto_check=$(conductor_cfg_get autoCheck true)
+  if ! auto_check=$(conductor_cfg_get autoCheck true); then
+    warn "Automatic update check declined: conduct-ts is required to read conductor configuration."
+    return 1
+  fi
   [ "$auto_check" = "false" ] && return 0
 
   dispatch_update_channel
@@ -268,7 +274,7 @@ set_update_channel() {
     tagged|main) ;;
     *) fail "Invalid channel: ${new_channel} (expected: tagged, main)"; exit 2 ;;
   esac
-  conductor_cfg_set updateChannel "$new_channel"
+  conductor_cfg_set updateChannel "$new_channel" || exit 1
   ok "Update channel set to: ${new_channel}"
   exit 0
 }
@@ -288,12 +294,14 @@ EOF
 
 if [ "$#" -eq 0 ]; then
   check_harness_update
-  exit 0
+  exit $?
 fi
 
 case "${1:-}" in
   --auto)
-    check_harness_update_auto
+    # Automatic checks are advisory: report an unavailable prerequisite but
+    # never make the embedding startup path fail.
+    check_harness_update_auto || true
     exit 0
     ;;
   --set-channel)

@@ -41,16 +41,31 @@ conductor_cfg_key() {
 }
 
 # Read a scalar field from the schema-owned conductor block.
+#
+# The optional default is retained for callers migrating from the legacy
+# accessor signature, but intentionally never substitutes for a failed read:
+# update decisions must decline rather than pretend configuration was read.
 # Usage: conductor_cfg_get <field> [default]
 conductor_cfg_get() {
-  local field=$1 default=${2:-}
-  conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>/dev/null || echo "$default"
+  local field=$1
+  if ! command -v conduct-ts &>/dev/null; then
+    warn "conduct-ts is required to read conductor configuration; install or restore it, then re-run bin/install"
+    return 1
+  fi
+  if ! conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>/dev/null; then
+    warn "conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install"
+    return 1
+  fi
 }
 
 # Write a scalar field to the schema-owned conductor block.
 # Usage: conductor_cfg_set <field> <value>
 conductor_cfg_set() {
   local field=$1 value=$2
+  if ! command -v conduct-ts &>/dev/null; then
+    warn "conduct-ts is required to save conductor configuration; install or restore it, then re-run bin/install"
+    return 1
+  fi
   conduct-ts config set "conductor.$(conductor_cfg_key "$field")" "$value"
 }
 
