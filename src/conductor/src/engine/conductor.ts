@@ -5516,12 +5516,14 @@ export class Conductor {
                 })
               : null;
           buildWatcher?.start();
-          if (step.name === 'build') {
-            new CloseoutEventTail({
-              projectRoot: this.projectRoot,
-              events: this.events,
-            }).start();
-          }
+          const closeoutTail: CloseoutEventTail | null =
+            step.name === 'build'
+              ? new CloseoutEventTail({
+                  projectRoot: this.projectRoot,
+                  events: this.events,
+                })
+              : null;
+          closeoutTail?.start();
 
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a
@@ -5584,6 +5586,7 @@ export class Conductor {
           let result: StepRunResult;
           if (protectedArtifactIssue) {
             buildWatcher?.stop();
+            closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
             result = { success: false, output: dispatchIssue };
             // Write the HALT marker directly rather than relying solely on
@@ -5677,6 +5680,7 @@ export class Conductor {
                           }));
           } finally {
             buildWatcher?.stop();
+            closeoutTail?.stop();
             // Task 4 (#788): the phase-active marker is written for any
             // BUILD/SHIP step, not gated on step.name === 'build'.
             removePhaseMarker(this.projectRoot);

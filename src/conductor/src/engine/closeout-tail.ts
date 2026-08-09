@@ -47,6 +47,7 @@ export class CloseoutTailReader {
 export class CloseoutEventTail {
   private readonly reader: CloseoutTailReader;
   private readonly events: ConductorEventEmitter;
+  private interval: ReturnType<typeof setInterval> | null = null;
 
   constructor({
     projectRoot,
@@ -67,9 +68,18 @@ export class CloseoutEventTail {
 
   /** Start background polling; lifecycle ownership stays with the conductor. */
   start(): void {
-    const interval = setInterval(() => {
+    if (this.interval) return;
+
+    this.interval = setInterval(() => {
       void this.poll();
     }, 1_000);
-    interval.unref();
+    this.interval.unref();
+  }
+
+  /** Stop background polling once the owning build attempt has settled. */
+  stop(): void {
+    if (!this.interval) return;
+    clearInterval(this.interval);
+    this.interval = null;
   }
 }

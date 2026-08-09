@@ -78,6 +78,11 @@ describe('CloseoutEventTail', () => {
       await vi.advanceTimersByTimeAsync(1_000);
 
       expect(poll).toHaveBeenCalledOnce();
+
+      tail.stop();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(poll).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
