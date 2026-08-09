@@ -50,6 +50,11 @@ other side.
 - **YES** → **consumer-facing.**
 - **NO** → **harness-repo-only.**
 
+This question is a general-benefit heuristic and over-generalizes a change whose subject is a
+mechanism that exists only here — ask first whether that mechanism exists outside this repository.
+See the caveat under `AGENT_INSTRUCTIONS.md` → **Scope Decisions**: this skill's verdict is an input,
+not the decision, and a conflict with the operator's plain request is surfaced before landing.
+
 **Step 3 — mixed changes are split, never averaged.** A change that fires both a repo-only signal
 and the consumer question is two changes. Land the consumer-facing behavior in the shared surface
 and the repo-only behavior in the repo-local surface, and say so in the diff. Do not ship a shared

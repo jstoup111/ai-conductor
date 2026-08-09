@@ -1,0 +1,4 @@
+interface:
+  display_name: "Event Spine"
+  short_description: "Extend the existing event bus instead of adding a parallel channel"
+  default_prompt: "Use $event-spine before designing any new watcher, poller, sidecar file, ad-hoc log, or artifact-stamped timestamp, to decide whether the existing ConductorEvent spine already carries the concern and must be extended instead."

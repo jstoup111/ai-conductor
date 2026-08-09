@@ -28,6 +28,15 @@ self-reports or commit-trailer stamps — `Task:` trailers are telemetry only (#
 fixed path matching engine-side; #433 replaces trailer discipline with engine-stamped
 task ids and commit hooks.)
 
+**Extend the existing event spine; never add a parallel channel.** This repository has one
+telemetry spine — `ConductorEventEmitter` → the `ConductorEvent` union → `EventPersister` →
+`.pipeline/events.jsonl` — and every consumer reads it, so a second channel for a concern the
+spine already carries is invisible to all of them. Before designing any new way to observe,
+report, or coordinate something — a watcher, a poller, a sidecar file, an ad-hoc log, a
+timestamp stamped into an artifact — the active host agent MUST read and follow
+[`.agents/skills/event-spine/SKILL.md`](.agents/skills/event-spine/SKILL.md), which carries the
+decision procedure, the schema-not-file test, and the only three exceptions.
+
 **Third-party calls are smoke-only in tests.** Unit tests inject mocked adapters. Acceptance,
 integration, and end-to-end tests run the real internal flow with faithful fakes at every
 third-party boundary. Only explicitly named, opt-in smoke tests may call real LLMs or other
@@ -126,12 +135,22 @@ the interim guard until that machinery exists.
 
 Before authoring any change to this repository, and before creating any new skill, the active host
 agent MUST read and follow [`.agents/skills/scope-check/SKILL.md`](.agents/skills/scope-check/SKILL.md).
-It settles three questions deterministically: whether the change is harness-repo-only or
+It runs three questions through a deterministic procedure: whether the change is harness-repo-only or
 consumer-facing (`AGENT_INSTRUCTIONS.md` versus `HARNESS.md`), whether a new skill belongs in the
 shipped `skills/` catalog or this repository's local `.agents/skills/` one, and whether the change is
 provider-agnostic. This is repository-local authoring guidance. For consumer projects, which have a
 single skill catalog and no consumers of their own, the global harness authoring convention remains
 unchanged.
+
+**Its verdict is an input, not the decision.** Running it stays mandatory; treating its answer as
+authoritative is not. On repo-only versus consumer-facing, the deciding test is whether **the
+mechanism the change describes exists outside this repository** — if it does not, the change is
+repo-only no matter how broadly its lesson generalizes. When the verdict and the plain reading of the
+operator's request disagree, surface the conflict before landing and follow the request; never take
+the tool's answer silently. (Precedent: the event-spine principle above is repo-only because no
+consumer project has that bus, yet scope-check's general-benefit reading returned "consumer-facing"
+and the rule was landed in `HARNESS.md` and the shipped `skills/` catalog over a correct contrary
+steer.)
 
 ## Validation Rules (This Repo)
 
