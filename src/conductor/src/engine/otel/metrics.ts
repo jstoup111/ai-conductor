@@ -12,11 +12,13 @@
  */
 import type { Meter, Counter, Histogram } from '@opentelemetry/api';
 import type { TokenUsage } from '../../execution/llm-provider.js';
+import type { ConductorEvent } from '../../types/events.js';
 
 export class MetricsRecorder {
   private readonly durationHistogram: Histogram;
   private readonly retriesCounter: Counter;
   private readonly tokensCounter: Counter;
+  private readonly closeoutDurationHistogram: Histogram;
 
   constructor(meter: Meter) {
     this.durationHistogram = meter.createHistogram('conductor.step.duration', {
@@ -28,6 +30,10 @@ export class MetricsRecorder {
     });
     this.tokensCounter = meter.createCounter('conductor.step.tokens', {
       description: 'Token usage per conductor step',
+    });
+    this.closeoutDurationHistogram = meter.createHistogram('conductor.pipeline.closeout.duration', {
+      description: 'Duration of pipeline closeout obligations in milliseconds',
+      unit: 'ms',
     });
   }
 
@@ -61,6 +67,13 @@ export class MetricsRecorder {
       this.recordTokens(step, tokenUsage, model);
     }
     // tokenUsage absent → no token points (no NaN / zero-fill).
+  }
+
+  /** Record a pipeline-owned closeout obligation as it is re-emitted on the bus. */
+  onPipelineCloseout(event: Extract<ConductorEvent, { type: 'pipeline_closeout' }>): void {
+    this.closeoutDurationHistogram.record(event.endedAt - event.startedAt, {
+      obligation: event.obligation,
+    });
   }
 
   /**

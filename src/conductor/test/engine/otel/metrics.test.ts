@@ -319,3 +319,30 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     expect(outputPoint?.value).toBe(456);
   });
 });
+
+// ── Task 19: closeout duration histogram ────────────────────────────────────
+
+describe('Task 19: closeout duration histogram', () => {
+  it('records the closeout duration with its obligation attribute', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'pipeline_closeout',
+      obligation: 'simplify',
+      startedAt: 1_000,
+      endedAt: 1_125,
+      ts: 1_130,
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const metric = findMetric(metricExporter, 'conductor.pipeline.closeout.duration')!;
+    const point = metric.dataPoints.find(
+      (dataPoint) => dataPoint.attributes['obligation'] === 'simplify',
+    );
+    expect(point?.value).toMatchObject({ count: 1, sum: 125 });
+  });
+});

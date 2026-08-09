@@ -219,6 +219,23 @@ export class SpanManager {
     targetSpan.addEvent('build_stall', attrs);
   }
 
+  onPipelineCloseout(event: Extract<ConductorEvent, { type: 'pipeline_closeout' }>): void {
+    this.ensureRunSpan();
+    // Closeout belongs to the build lifecycle. It is emitted out-of-band, so
+    // prefer an active build step and otherwise preserve it on the run span.
+    const targetSpan = this.openSteps.get('build')?.span ?? this.runSpan;
+    if (!targetSpan) {
+      this.warn('pipeline_closeout received but no span available — dropping');
+      return;
+    }
+    targetSpan.addEvent('pipeline_closeout', {
+      obligation: event.obligation,
+      startedAt: event.startedAt,
+      endedAt: event.endedAt,
+      durationMs: event.endedAt - event.startedAt,
+    });
+  }
+
   // ── Run completion ─────────────────────────────────────────────────────────
 
   onFeatureComplete(_event: Extract<ConductorEvent, { type: 'feature_complete' }>): void {

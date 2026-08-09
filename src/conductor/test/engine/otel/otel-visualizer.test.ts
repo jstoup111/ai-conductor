@@ -272,6 +272,71 @@ describe('T19: bounded export timeout — stop() resolves within exportTimeoutMi
   }, 10_000 /* test timeout: must complete well before 10 s */);
 });
 
+// ── Task 19: pipeline closeout live-bus export ──────────────────────────────
+
+describe('Task 19: pipeline_closeout export', () => {
+  let closeoutTempDir: string;
+  let closeoutPipelineDir: string;
+  let closeoutSpanExporter: InMemorySpanExporter;
+  let closeoutMetricExporter: InMemoryMetricExporter;
+  let closeoutEmitter: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    closeoutTempDir = await mkdtemp(join(tmpdir(), 'otel-vis-closeout-'));
+    closeoutPipelineDir = join(closeoutTempDir, '.pipeline');
+    closeoutSpanExporter = new InMemorySpanExporter();
+    closeoutMetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    closeoutEmitter = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(closeoutTempDir, { recursive: true, force: true });
+  });
+
+  it('subscribes synchronously and adds obligation timing to the active build span', async () => {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      closeoutPipelineDir,
+    );
+    const vis = new OtelVisualizer(resolved, {
+      runId: 'test-closeout-span',
+      feature: 'test-feature',
+      project: 'test-project',
+      spanExporter: closeoutSpanExporter,
+      metricExporter: closeoutMetricExporter,
+    });
+    const onSpy = vi.spyOn(closeoutEmitter, 'on');
+    vis.start(closeoutEmitter);
+
+    await closeoutEmitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    const closeoutEvent = {
+      type: 'pipeline_closeout',
+      obligation: 'evaluator',
+      startedAt: 100,
+      endedAt: 140,
+      ts: 150,
+    } as const;
+    const closeoutHandler = onSpy.mock.calls.find(([type]) => type === 'pipeline_closeout')?.[1];
+    expect(closeoutHandler).toBeDefined();
+    expect(closeoutHandler!({ ...closeoutEvent, obligation: 'summary' })).toBeUndefined();
+    await closeoutEmitter.emit(closeoutEvent);
+    await closeoutEmitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await closeoutEmitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const buildSpan = closeoutSpanExporter.getFinishedSpans().find((span) => span.name === 'build')!;
+    const closeout = buildSpan.events.find(
+      (event) => event.name === 'pipeline_closeout' && event.attributes?.['obligation'] === 'evaluator',
+    );
+    expect(closeout?.attributes).toMatchObject({
+      obligation: 'evaluator',
+      startedAt: 100,
+      endedAt: 140,
+      durationMs: 40,
+    });
+  });
+});
+
 // ── T21: flush on exit — SIGINT/SIGTERM handlers ──────────────────────────────
 
 describe('T21: flush on exit — idempotent stop() and signal handlers', () => {

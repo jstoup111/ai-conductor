@@ -307,6 +307,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       'unattributed_progress',
       'build_no_progress',
       'build_stall',
+      'pipeline_closeout',
     ];
     for (const type of eventTypes) {
       emitter.on(type, (event) => {
@@ -436,6 +437,10 @@ export class OtelVisualizer implements VisualizerPlugin {
         break;
       case 'build_stall':
         this.spanManager.onBuildStall(event);
+        break;
+      case 'pipeline_closeout':
+        this.spanManager.onPipelineCloseout(event);
+        this.metricsRecorder.onPipelineCloseout(event);
         break;
     }
   }
