@@ -156,6 +156,31 @@ print(cfg.get('$field', ''))
 "
 }
 
+# run_conductor_cfg_accessors <home> <field> <value> <default>
+# Sources the shared accessors directly so this contract stays focused on the
+# update configuration boundary, rather than depending on an update scenario
+# to happen to reach each field. The conduct-ts stub is the CLI boundary:
+# tests inspect its argv log instead of parsing the YAML configuration file.
+CONDUCTOR_CFG_STUBS="$TMP_ROOT/conductor-cfg-stubs"
+mkdir -p "$CONDUCTOR_CFG_STUBS"
+cat > "$CONDUCTOR_CFG_STUBS/conduct-ts" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CONDUCTOR_CFG_CALLS"
+if [ "$1" = "config" ] && [ "$2" = "read" ]; then
+  printf '%s\n' "$CONDUCTOR_CFG_READ_VALUE"
+fi
+EOF
+chmod +x "$CONDUCTOR_CFG_STUBS/conduct-ts"
+
+run_conductor_cfg_accessors() {
+  local home=$1 field=$2 value=$3 default=$4
+  CONDUCTOR_CFG_CALLS="$home/conductor-cfg-calls" \
+    CONDUCTOR_CFG_READ_VALUE="$value" \
+    HOME="$home" PATH="$CONDUCTOR_CFG_STUBS:$TEST_PATH" \
+    bash -c 'source "$1"; conductor_cfg_set "$2" "$3"; conductor_cfg_get "$2" "$4"' \
+      _ "$HARNESS_DIR/bin/lib/harness-common.sh" "$field" "$value" "$default"
+}
+
 # run_update <repo> <home> [args...] — no TTY on stdin.
 run_update() {
   local repo=$1 home=$2
@@ -204,6 +229,33 @@ if [ ! -f "$UPDATE_SRC" ]; then
   echo -e "${BOLD}Summary: ${PASS}/${TOTAL} passed${NC}"
   exit 1
 fi
+
+# ─── Update config accessors: canonical conductor YAML ownership ───────────
+
+echo ""
+echo -e "${BOLD}Update config accessors — conductor YAML${NC}"
+
+# The legacy accessor names remain the update flow's two-argument interface,
+# but every field must translate its camelCase name to the schema-owned
+# conductor.<snake_case_key> path at the conduct-ts boundary.
+for ACCESSOR_CASE in \
+  'updateChannel|main|tagged|update_channel' \
+  'autoCheck|false|true|auto_check' \
+  'currentVersion|v0.4.0||current_version' \
+  'lastCheckedAt|2026-08-09T12:00:00Z||last_checked_at'
+do
+  IFS='|' read -r FIELD VALUE DEFAULT SCHEMA_KEY <<< "$ACCESSOR_CASE"
+  HOME_DIR=$(make_isolated_home)
+  ACCESSOR_OUT=$(run_conductor_cfg_accessors "$HOME_DIR" "$FIELD" "$VALUE" "$DEFAULT")
+  ACCESSOR_CALLS=$(cat "$HOME_DIR/conductor-cfg-calls" 2>/dev/null || true)
+
+  assert "${FIELD}: two-argument set resolves conductor.${SCHEMA_KEY}" \
+    "$(printf '%s\n' "$ACCESSOR_CALLS" | grep -qx "config set conductor.${SCHEMA_KEY} ${VALUE}" && echo 0 || echo 1)"
+  assert "${FIELD}: two-argument get resolves conductor.${SCHEMA_KEY}" \
+    "$(printf '%s\n' "$ACCESSOR_CALLS" | grep -qx "config read conductor.${SCHEMA_KEY}" && echo 0 || echo 1)"
+  assert "${FIELD}: get returns conduct-ts config read output" \
+    "$( [ "$ACCESSOR_OUT" = "$VALUE" ] && echo 0 || echo 1 )"
+done
 
 # ─── Story 2: set the update channel ───────────────────────────────────────
 
