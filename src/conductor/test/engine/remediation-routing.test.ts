@@ -44,7 +44,9 @@ describe('sealed-artifact remediation routing', () => {
     };
     const events = new ConductorEventEmitter();
     const redirects: unknown[] = [];
-    events.on('remediation_sealed_artifact_redirect', (event) => redirects.push(event));
+    events.on('remediation_sealed_artifact_redirect', (event) => {
+      redirects.push(event);
+    });
     const conductor = new Conductor({
       stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
       stepRunner: runner,
