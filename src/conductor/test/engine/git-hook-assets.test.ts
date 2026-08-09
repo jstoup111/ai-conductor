@@ -149,6 +149,73 @@ describe('git-hook-assets — embedding hook scripts', () => {
     }
   });
 
+  it('runs the real pre-commit gate across phase, own-artifact, allowlist, and stable-refusal paths', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-pre-commit-matrix-'));
+    const git = async (...args: string[]) => execFileAsync('git', ['-C', repoDir, ...args]);
+    const commit = async (message: string) => {
+      try {
+        await git('commit', '-m', message);
+        return { code: 0, stderr: '' };
+      } catch (error) {
+        const result = error as { code?: number; stderr?: string };
+        return { code: result.code ?? 1, stderr: result.stderr ?? '' };
+      }
+    };
+    try {
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n');
+      await git('add', 'README.md');
+      await git('commit', '-m', 'initial');
+      const hooks = join(repoDir, '.git-hooks');
+      await mkdir(hooks, { recursive: true });
+      await writeFile(join(hooks, 'pre-commit'), PRE_COMMIT_HOOK);
+      await chmod(join(hooks, 'pre-commit'), 0o755);
+      await git('config', 'core.hooksPath', hooks);
+      await mkdir(join(repoDir, '.docs/decisions'), { recursive: true });
+      await mkdir(join(repoDir, '.docs/specs'), { recursive: true });
+      await mkdir(join(repoDir, '.docs/retros'), { recursive: true });
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+
+      await writeFile(join(repoDir, '.docs/decisions/no-marker.md'), '# ADR');
+      await git('add', '.docs/decisions/no-marker.md');
+      expect((await commit('no marker')).code).toBe(0);
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: DECIDE\n');
+      await writeFile(join(repoDir, '.docs/decisions/decide.md'), '# ADR');
+      await git('add', '.docs/decisions/decide.md');
+      expect((await commit('decide marker')).code).toBe(0);
+
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: BUILD\n');
+      await writeFile(join(repoDir, '.docs/decisions/build.md'), '# ADR');
+      await git('add', '.docs/decisions/build.md');
+      expect((await commit('build marker')).code).not.toBe(0);
+      await git('reset', 'HEAD', '.docs/decisions/build.md');
+
+      await writeFile(join(repoDir, '.pipeline/task-status.json'), JSON.stringify({ plan_ref: '.docs/plans/my-feature.md' }));
+      await writeFile(join(repoDir, '.docs/specs/my-feature.md'), '# own');
+      await git('add', '.docs/specs/my-feature.md');
+      expect((await commit('own artifact')).code).toBe(0);
+
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: SHIP\nallow: .docs/retros/\n');
+      await writeFile(join(repoDir, '.docs/retros/x.md'), '# retro');
+      await git('add', '.docs/retros/x.md');
+      expect((await commit('allowlisted retro')).code).toBe(0);
+
+      await writeFile(join(repoDir, '.docs/specs/other-feature.md'), '# foreign');
+      await git('add', '.docs/specs/other-feature.md');
+      const first = await commit('foreign artifact');
+      const second = await commit('foreign artifact');
+      expect(first.code).not.toBe(0);
+      expect(second.stderr).toBe(first.stderr);
+      expect(first.stderr).toContain('.docs/specs/other-feature.md');
+      expect(first.stderr).toContain('SHIP');
+      expect(first.stderr).toContain('DECIDE step');
+    } finally {
+      await rm(repoDir, { recursive: true, force: true });
+    }
+  });
+
   describe('Regression lock: no dist/CLI dependencies (#403 class)', () => {
     /**
      * Task 17: No-dist-dependency regression lock

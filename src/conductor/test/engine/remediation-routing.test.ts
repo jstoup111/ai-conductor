@@ -8,6 +8,7 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 
 describe('sealed-artifact remediation routing', () => {
   let projectRoot: string;
@@ -41,10 +42,11 @@ describe('sealed-artifact remediation routing', () => {
         return { success: true };
       },
     };
+    const events = new ConductorEventEmitter();
     const conductor = new Conductor({
       stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
       stepRunner: runner,
-      events: new ConductorEventEmitter(),
+      events,
       projectRoot,
       mode: 'auto',
       daemon: true,
@@ -65,7 +67,7 @@ describe('sealed-artifact remediation routing', () => {
       { source, evidenceFile: '.pipeline/prd-audit.md' },
     );
 
-    return { dispatched, outcome };
+    return { dispatched, outcome, events };
   }
 
   it('routes another feature\'s sealed-artifact amendment to DECIDE, never BUILD', async () => {
@@ -168,6 +170,61 @@ describe('sealed-artifact remediation routing', () => {
     await expect(readFile(join(projectRoot, '.docs/plans/feature.md'), 'utf8')).resolves.toContain(
       '### Task rem-own-plan: Amend .docs/stories/feature.md with the corrected assertion',
     );
+  });
+
+  it.each(['build', 'acceptance_specs'])('redirects a rationale-only foreign artifact from %s without appending it', async (disposition) => {
+    const { outcome } = await remediate([{
+      id: `rationale-${disposition}`,
+      disposition,
+      category: null,
+      rationale: 'Amend .docs/stories/another-feature.md to correct the accepted assertion.',
+      tasks: [{ id: 'foreign-only', title: 'Repair source behavior' }],
+    }]);
+    expect(outcome).toMatchObject({ kind: 'halt' });
+    await expect(readFile(join(projectRoot, '.docs/plans/feature.md'), 'utf8')).resolves.not.toContain('foreign-only');
+  });
+
+  it('does not redirect incidental, own-feature, or rationale-free gaps', async () => {
+    const cases = [
+      { id: 'incidental', rationale: 'Update source; .docs/stories/another-feature.md is context only.', tasks: [{ id: 'source', title: 'src/x.ts' }] },
+      { id: 'own', rationale: 'Amend .docs/stories/feature.md.', tasks: [{ id: 'own-task', title: 'src/x.ts' }] },
+      { id: 'absent', rationale: '', tasks: [{ id: 'none', title: 'src/x.ts' }] },
+    ];
+    for (const gap of cases) {
+      await writeFile(join(projectRoot, '.docs/plans/feature.md'), '# Implementation plan\n', 'utf8');
+      const { outcome } = await remediate([{ ...gap, disposition: 'build', category: null }]);
+      expect(outcome.target).not.toBe('plan');
+    }
+  });
+
+  it('emits the foreign artifact and gap id when redirecting a sealed rationale target', async () => {
+    const seen: unknown[] = [];
+    const dispositions = [{
+      id: 'event-gap', disposition: 'build', category: null,
+      rationale: 'Amend .docs/specs/another-feature.md.', tasks: [{ id: 'source', title: 'src/x.ts' }],
+    }];
+    const dispatched: StepName[] = [];
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline/events.jsonl'), events);
+    persister.start();
+    events.on('remediation_sealed_artifact_redirect', (event) => {
+      seen.push(event);
+    });
+    const conductor = new Conductor({ stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'), projectRoot,
+      stepRunner: { run: async (step) => { dispatched.push(step); await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({ dispositions })); return { success: true }; } },
+      events, mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1 });
+    await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string,
+        hintSource: { source: string; evidenceFile: string },
+      ) => Promise<unknown>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1000, feature_desc: 'feature' }, ALL_STEPS, 'blocked', { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' });
+    expect(seen).toEqual([{ type: 'remediation_sealed_artifact_redirect', gapId: 'event-gap', artifact: '.docs/specs/another-feature.md' }]);
+    expect(await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8')).toContain(
+      '"type":"remediation_sealed_artifact_redirect","gapId":"event-gap","artifact":".docs/specs/another-feature.md"',
+    );
+    persister.stop();
   });
 
   it('writes no request, ledger, or record artifact while redirecting a sealed cross-feature gap', async () => {

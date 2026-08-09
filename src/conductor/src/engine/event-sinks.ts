@@ -35,6 +35,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   protected_artifact_rebaseline: { render: true, persist: true, audit: false },
   protected_artifact_rebaseline_refused: { render: true, persist: true, audit: false },
   auto_heal: { render: false, persist: true, audit: false },
+  remediation_sealed_artifact_redirect: { render: true, persist: true, audit: true },
   verdict_freshness: { render: true, persist: true, audit: true },
   build_review_base: { render: true, persist: false, audit: false },
   build_review_stale_mirage_regrade: { render: true, persist: false, audit: false },
