@@ -118,7 +118,7 @@ and release and must be last.
 - `src/conductor/src/cli.ts` — new detect + command functions
 - `src/conductor/test/cli-config-user.test.ts` — happy-path specs
 
-**Wired-into:** src/conductor/src/index.ts#main
+**Wired-into:** none (inert until src/conductor/src/index.ts)
 **Dependencies:** Task 1
 
 ### Task 3: Wire `config set` into dispatch
