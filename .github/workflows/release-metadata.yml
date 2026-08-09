@@ -6,7 +6,9 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  # write: the check also stamps the `semver:<impact>` band it just validated
+  # onto the PR, so an operator can read merge order off the PR list.
+  pull-requests: write
 
 jobs:
   release-metadata:
