@@ -70,7 +70,7 @@ function renderMeasuredRollup(rollup: Extract<BuildTailRollup, { state: 'measure
   return lines.join('\n');
 }
 
-export function renderBuildTailRollup(rollup: BuildTailRollup): string {
+function renderBuildTailRollup(rollup: BuildTailRollup): string {
   if (rollup.state !== 'measured') return `Build tail rollup: ${rollup.state}`;
   return renderMeasuredRollup(rollup);
 }
