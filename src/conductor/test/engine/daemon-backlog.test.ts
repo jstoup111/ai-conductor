@@ -1386,6 +1386,25 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await expect(gitTreeSource(dir, baseBranch).listAdrFiles()).resolves.toEqual(['adr-kept.md']);
   });
 
+  it('treats an absent decisions directory on the base branch as an empty ADR corpus', async () => {
+    await expect(gitTreeSource(dir, baseBranch).listAdrFiles()).resolves.toEqual([]);
+  });
+
+  it('treats a failed ADR tree read as an empty ADR corpus', async () => {
+    await expect(gitTreeSource(dir, 'missing-base-branch').listAdrFiles()).resolves.toEqual([]);
+  });
+
+  it('allows a merged spec when the base branch has an empty ADR corpus', async () => {
+    await writeSpec('empty-adr-corpus');
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', 'merge spec with no decisions']);
+
+    const result = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+
+    expect(result.items.map((item) => item.slug)).toEqual(['empty-adr-corpus']);
+    expect(result.blocked).toEqual([]);
+  });
+
   it('MERGED spec (committed on base branch) → build-ready', async () => {
     await writeSpec('csv-export');
     await git(['add', '.docs']);
