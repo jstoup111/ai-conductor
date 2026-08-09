@@ -28,30 +28,25 @@ self-reports or commit-trailer stamps — `Task:` trailers are telemetry only (#
 fixed path matching engine-side; #433 replaces trailer discipline with engine-stamped
 task ids and commit hooks.)
 
-**Extend the existing event spine; never add a parallel channel.** This repository already
-has one telemetry spine: `ConductorEventEmitter` → the `ConductorEvent` union in
-`src/conductor/src/types/events.ts` → `EventPersister` → `.pipeline/events.jsonl`, read by
-`daemon.ts`, `daemon-cli.ts`, `ui/create-renderer.ts`, `ui/subscriber.ts`,
-`engine/otel/otel-visualizer.ts`, and `engine/event-sinks.ts`. Before designing any new way to
-observe, report, or coordinate something — a watcher, a poller, a sidecar file, an ad-hoc log,
-a timestamp stamped into an artifact for later reading — ask one question first: **does the bus
-already carry this concern?** If it does, extend it: add a variant to the union and emit it. A
-second channel is invisible to every consumer of the first, so the repo quietly acquires two
-partial views of one truth and no reader ever sees both. The test is **schema, not file**: a
-sibling ledger written in the *same* `ConductorEvent` schema and merged by the same reader is
-still one spine and is fine; a bespoke sidecar with its own format is the violation. Three
-reasons legitimately move the *write*, and none of them change the schema — the writer is a
-separate OS process with no bus access (`adr-2026-07-10-intra-step-build-progress-events`
-rejected runner-push for exactly this reason); an
-atomicity limit forces one writer per file (`appendFileSync` is atomic only under `PIPE_BUF`,
-and `parseLedger` nulls the whole rollup on one malformed line); or the concern is durable
-**state** (gate evidence, a committed design doc), not an occurrence in time. "Faster to bolt
-on" is not one of them, and a design that genuinely needs a new channel needs an ADR saying why
-the bus could not carry it. (Worked example: DECIDE for #1176 drafted an engine-side
-artifact-path watcher, then completion timestamps stamped into five existing artifacts; both
-were rejected because the second would have been a telemetry channel none of the consumers
-above could see. The accepted design emits real `ConductorEvent`s to a single-writer sibling
-ledger in the same union.)
+**Extend the existing event spine; never add a parallel channel.** Before designing any new
+way to observe, report, or coordinate something — a watcher, a poller, a sidecar file, an
+ad-hoc log, a timestamp stamped into an artifact — ask first: **does the event bus already
+carry this concern?** If it does, extend it. Every consumer reads one spine —
+`ConductorEventEmitter` → the `ConductorEvent` union → `EventPersister` →
+`.pipeline/events.jsonl` — so a second channel is invisible to all of them. The test is
+**schema, not file**: a sibling ledger in the *same* `ConductorEvent` schema, merged by the
+same reader, is one spine and is fine; a bespoke sidecar with its own format is the violation.
+Only three things move the *write*, and none move the schema:
+
+- a separate OS process with no bus access
+  (`adr-2026-07-10-intra-step-build-progress-events` rejected runner-push on this ground);
+- an atomicity limit forcing one writer per file (`appendFileSync` is atomic only under
+  `PIPE_BUF`; `parseLedger` nulls the whole rollup on one malformed line);
+- durable **state** — gate evidence, a committed design doc — not an occurrence in time.
+
+"Faster to bolt on" is not one. A new channel needs an ADR saying why the bus could not carry
+the concern — as when closeout timestamps stamped into five existing artifacts were rejected
+for being invisible to every bus consumer (#1176).
 
 **Third-party calls are smoke-only in tests.** Unit tests inject mocked adapters. Acceptance,
 integration, and end-to-end tests run the real internal flow with faithful fakes at every
@@ -163,11 +158,10 @@ authoritative is not. On repo-only versus consumer-facing, the deciding test is 
 mechanism the change describes exists outside this repository** — if it does not, the change is
 repo-only no matter how broadly its lesson generalizes. When the verdict and the plain reading of the
 operator's request disagree, surface the conflict before landing and follow the request; never take
-the tool's answer silently. (Worked example: a rule about this repo's event bus —
-`ConductorEventEmitter`, the `ConductorEvent` union, `.pipeline/events.jsonl` — is repo-only, because
-a consumer project has no such bus. Scope-check returned "consumer-facing" on its general-benefit
-reading, and the rule was misplaced into `HARNESS.md` and the shipped `skills/` catalog over a
-correct contrary steer before the operator caught it.)
+the tool's answer silently. (Precedent: the event-spine principle above is repo-only because no
+consumer project has that bus, yet scope-check's general-benefit reading returned "consumer-facing"
+and the rule was landed in `HARNESS.md` and the shipped `skills/` catalog over a correct contrary
+steer.)
 
 ## Validation Rules (This Repo)
 
