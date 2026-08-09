@@ -344,8 +344,7 @@ atomically before advancing one single token further:
 4. Record the completed `evaluator` closeout obligation with
    `conduct-ts closeout-event evaluator <started-at-ms> <ended-at-ms>`, then verify that
    `.pipeline/pipeline-events.jsonl` contains a parseable `pipeline_closeout` record whose
-   `obligation` is exactly `evaluator`. An event for another obligation does not satisfy
-   this check.
+   `obligation` is exactly `evaluator`. An event for another obligation does not satisfy this check.
 
 A missing or empty `review.json` remains an independent hard gate: the pipeline MUST halt and
 dispatch the evaluator again rather than advancing. A missing, malformed, or non-matching
@@ -355,6 +354,9 @@ before advancing. Do NOT trust "the evaluator ran successfully in the transcript
 only the required files on disk count. Past runs have silently bypassed 4+ evaluator gates
 because the subagent result was summarized back to the orchestrator but the write step was
 skipped; the file checks are the only reliable safeguard.
+
+Evaluate both gates independently: a valid evaluator closeout record cannot cure an empty
+`review.json`, and a non-empty review cannot cure an absent or mismatched evaluator record.
 
 This closeout-event gate applies only to pipeline sessions started after the closeout-event
 emitter is available. A build already in flight when that emitter ships is exempt: do not

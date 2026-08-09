@@ -438,7 +438,11 @@ export class BuildProgressWatcher {
       currentTaskName: snapshot.currentTaskName,
       commitCount,
       tickReason: taskDelta ? 'task-delta' : 'head-moved',
-      headMoved: headProbeFailed ? false : headMoved || undefined,
+      // A new change-driven record must always distinguish a successful,
+      // unchanged HEAD probe from legacy records that predate provenance.
+      // Probe failures are deliberately false as well: the watcher remains
+      // best-effort instead of throwing on a non-Git or unborn repository.
+      headMoved: headProbeFailed ? false : headMoved,
       noEvidenceAttempts,
       featureSlug: this.featureSlug,
     });

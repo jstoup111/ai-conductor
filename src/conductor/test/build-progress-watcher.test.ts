@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
 import { readSnapshot, BuildProgressWatcher } from '../src/engine/build-progress-watcher.js';
+import { EventPersister } from '../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { ConductorEvent } from '../src/types/index.js';
 
@@ -214,6 +215,42 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.total).toBe(21);
     expect(last.featureSlug).toBe('my-feature');
     expect(last.tickReason).toBe('task-delta');
+  });
+
+  it('retains explicit false HEAD provenance in emitted and persisted task-delta records after an unchanged successful probe', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), emitter);
+    persister.start();
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // The task state changes, but no commit lands: `rev-parse HEAD` succeeds
+    // with the same SHA as the baseline snapshot.
+    await writeTasks(6, 21);
+    await tick(watcher);
+    watcher.stop();
+    persister.stop();
+
+    const last = buildProgressEvents().at(-1);
+    expect(last).toMatchObject({ tickReason: 'task-delta', headMoved: false });
+    expect(last).toHaveProperty('headMoved', false);
+
+    const records = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const persisted = records.at(-1);
+    expect(persisted).toMatchObject({ type: 'build_progress', tickReason: 'task-delta', headMoved: false });
+    expect(persisted).toHaveProperty('headMoved', false);
   });
 
   it('emits build_progress with commitCount when a new HEAD commit lands with no task delta', async () => {
