@@ -507,6 +507,13 @@ export function createProgram(): Command {
     .command('evidence')
     .description('Semantic attribution evidence gate (judge command removed — see spot-audit telemetry)');
 
+  // Pipeline-owned closeout telemetry is emitted by the standalone pipeline
+  // process, so this command writes directly to its sibling ledger without
+  // starting a conductor or daemon. Dispatch lives in index.ts.
+  program
+    .command('closeout-event <obligation> <started-at> <ended-at>')
+    .description('Record one pipeline closeout timing event');
+
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
   // pipeline for processing filed halt-monitor issues. Declared here so `--help`
