@@ -4,8 +4,12 @@ import { parseReleaseDisposition, type ReleaseDisposition } from './release-meta
 export const SEMVER_LABEL_PREFIX = 'semver:';
 
 export interface ReleaseMetadataCheckActionInput {
+  // Structurally typed against the real Octokit, which carries far more than
+  // the one endpoint pair used here — the index signature keeps a caller (or a
+  // fixture) free to pass the rest of it.
   github: {
     rest?: {
+      [namespace: string]: unknown;
       issues?: {
         addLabels?(params: {
           owner: string;
