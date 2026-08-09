@@ -5,18 +5,15 @@ import { tmpdir } from 'os';
 import {
   readUserConfig,
   writeUserConfig,
-  readLegacyJson,
 } from '../../src/engine/user-config.js';
 
 describe('user-config', () => {
   let dir: string;
   let cfgPath: string;
-  let legacyPath: string;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'user-config-test-'));
     cfgPath = join(dir, 'config.yml');
-    legacyPath = join(dir, 'legacy.json');
   });
 
   afterEach(async () => {
@@ -93,46 +90,6 @@ describe('user-config', () => {
       const result = await readUserConfig(cfgPath);
       expect(result.config.conductor?.update_channel).toBe('main');
       expect(result.config.conductor?.auto_check).toBe(false);
-    });
-  });
-
-  describe('readLegacyJson', () => {
-    it('returns null when legacy file missing', async () => {
-      expect(await readLegacyJson(legacyPath)).toBeNull();
-    });
-
-    it('translates camelCase JSON fields to snake_case conductor block', async () => {
-      await writeFile(
-        legacyPath,
-        JSON.stringify({
-          updateChannel: 'tagged',
-          autoCheck: true,
-          currentVersion: 'v1.2.3',
-          lastCheckedAt: '2026-04-18T00:00:00Z',
-        }),
-      );
-      const result = await readLegacyJson(legacyPath);
-      expect(result?.update_channel).toBe('tagged');
-      expect(result?.auto_check).toBe(true);
-      expect(result?.current_version).toBe('v1.2.3');
-      expect(result?.last_checked_at).toBe('2026-04-18T00:00:00Z');
-    });
-
-    it('ignores unknown keys and invalid update_channel', async () => {
-      await writeFile(
-        legacyPath,
-        JSON.stringify({
-          updateChannel: 'unknown',
-          random: 42,
-        }),
-      );
-      const result = await readLegacyJson(legacyPath);
-      expect(result?.update_channel).toBeUndefined();
-    });
-
-    it('returns null on invalid JSON', async () => {
-      await writeFile(legacyPath, 'not json');
-      expect(await readLegacyJson(legacyPath)).toBeNull();
     });
   });
 });

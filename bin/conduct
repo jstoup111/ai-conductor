@@ -17,6 +17,8 @@ set -euo pipefail
 #   conduct --from plan
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=bin/lib/harness-common.sh
+source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 ORIGINAL_CWD="$(pwd)"
 ORIGINAL_ARGS=("$@")
 PROJECT_DIR="$(pwd)"
@@ -106,161 +108,7 @@ run_memory_store_setup() {
   }
 }
 
-CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
-HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
-
 # ─── Harness update flow ─────────────────────────────────────────────────────
-
-# Read a scalar field from the legacy ai-conductor.config.json. Kept as a
-# read-only fallback for installs that haven't migrated to YAML yet.
-# Usage: conductor_cfg_get <field> [default]
-conductor_cfg_get() {
-  local field=$1 default=${2:-}
-  [ -f "$CONDUCTOR_CONFIG" ] || { echo "$default"; return 0; }
-  python3 - "$CONDUCTOR_CONFIG" "$field" "$default" <<'PY' 2>/dev/null || echo "$default"
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        cfg = json.load(f)
-    val = cfg.get(sys.argv[2], sys.argv[3])
-    print(val if val is not None else sys.argv[3])
-except Exception:
-    print(sys.argv[3])
-PY
-}
-
-# Write a scalar field to the legacy ai-conductor.config.json, preserving
-# other fields. Kept only so a pre-migration install can still boot; new
-# writes should target the YAML via harness_cfg_set.
-# Usage: conductor_cfg_set <field> <value>
-conductor_cfg_set() {
-  local field=$1 value=$2
-  mkdir -p "$(dirname "$CONDUCTOR_CONFIG")"
-  CFG_PATH="$CONDUCTOR_CONFIG" FIELD="$field" VALUE="$value" python3 -c '
-import json, os
-from pathlib import Path
-p = Path(os.environ["CFG_PATH"])
-try:
-    cfg = json.loads(p.read_text())
-except Exception:
-    cfg = {}
-cfg[os.environ["FIELD"]] = os.environ["VALUE"]
-p.write_text(json.dumps(cfg, indent=2) + "\n")
-'
-}
-
-# Read a scalar or array from ~/.ai-conductor/config.yml using dotted paths
-# (e.g. "markdown_viewer.command"). Arrays come back space-joined. Falls back
-# to the default if the file or path is missing.
-# Usage: harness_cfg_get <dotted.path> [default]
-harness_cfg_get() {
-  local field=$1 default=${2:-}
-  [ -f "$HARNESS_USER_CONFIG" ] || { echo "$default"; return 0; }
-  CFG_PATH="$HARNESS_USER_CONFIG" FIELD="$field" DEFAULT="$default" python3 - <<'PY' 2>/dev/null || echo "$default"
-import os, sys
-try:
-    import yaml
-except Exception:
-    print(os.environ.get("DEFAULT", ""))
-    sys.exit(0)
-path = os.environ["CFG_PATH"]
-field = os.environ["FIELD"]
-default = os.environ.get("DEFAULT", "")
-try:
-    with open(path) as f:
-        cfg = yaml.safe_load(f) or {}
-except Exception:
-    print(default); sys.exit(0)
-node = cfg
-for part in field.split("."):
-    if isinstance(node, dict) and part in node:
-        node = node[part]
-    else:
-        print(default); sys.exit(0)
-if node is None:
-    print(default)
-elif isinstance(node, list):
-    print(" ".join(str(x) for x in node))
-elif isinstance(node, bool):
-    print("true" if node else "false")
-else:
-    print(node)
-PY
-}
-
-# Write a scalar to ~/.ai-conductor/config.yml at a dotted path, preserving
-# surrounding content. Intermediate mappings are created as needed.
-# Usage: harness_cfg_set <dotted.path> <value>
-harness_cfg_set() {
-  local field=$1 value=$2
-  mkdir -p "$(dirname "$HARNESS_USER_CONFIG")"
-  CFG_PATH="$HARNESS_USER_CONFIG" FIELD="$field" VALUE="$value" python3 - <<'PY'
-import os, yaml
-from pathlib import Path
-p = Path(os.environ["CFG_PATH"])
-field = os.environ["FIELD"]
-value = os.environ["VALUE"]
-try:
-    cfg = yaml.safe_load(p.read_text()) if p.exists() else {}
-except Exception:
-    cfg = {}
-if cfg is None:
-    cfg = {}
-node = cfg
-parts = field.split(".")
-for part in parts[:-1]:
-    nxt = node.get(part)
-    if not isinstance(nxt, dict):
-        nxt = {}
-        node[part] = nxt
-    node = nxt
-node[parts[-1]] = value
-p.parent.mkdir(parents=True, exist_ok=True)
-p.write_text(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False))
-PY
-}
-
-# One-shot, idempotent migration of legacy ~/.claude/ai-conductor.config.json
-# fields into ~/.ai-conductor/config.yml under the `conductor:` block. Leaves
-# the legacy JSON untouched as a backup. Safe to call on every invocation.
-migrate_legacy_conductor_config() {
-  [ -f "$CONDUCTOR_CONFIG" ] || return 0
-  # Skip if the new YAML already has a conductor block.
-  if [ -f "$HARNESS_USER_CONFIG" ]; then
-    local existing
-    existing=$(harness_cfg_get conductor.current_version "")
-    [ -n "$existing" ] && return 0
-  fi
-  JSON_PATH="$CONDUCTOR_CONFIG" YAML_PATH="$HARNESS_USER_CONFIG" python3 - <<'PY' 2>/dev/null || return 0
-import json, os, yaml
-from pathlib import Path
-src = Path(os.environ["JSON_PATH"])
-dst = Path(os.environ["YAML_PATH"])
-try:
-    j = json.loads(src.read_text())
-except Exception:
-    raise SystemExit(0)
-try:
-    cfg = yaml.safe_load(dst.read_text()) if dst.exists() else {}
-except Exception:
-    cfg = {}
-if cfg is None:
-    cfg = {}
-conductor = cfg.get("conductor") or {}
-mapping = [
-    ("updateChannel", "update_channel"),
-    ("autoCheck", "auto_check"),
-    ("currentVersion", "current_version"),
-    ("lastCheckedAt", "last_checked_at"),
-]
-for src_k, dst_k in mapping:
-    if src_k in j and j[src_k] is not None:
-        conductor.setdefault(dst_k, j[src_k])
-cfg["conductor"] = conductor
-dst.parent.mkdir(parents=True, exist_ok=True)
-dst.write_text(yaml.safe_dump(cfg, sort_keys=False, default_flow_style=False))
-PY
-}
 
 # Render the CHANGELOG.md blocks strictly between from_ver (exclusive) and
 # to_ver (inclusive) using the user's configured markdown viewer. Writes to
@@ -2840,11 +2688,6 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-
-# Check for harness updates before starting
-# Translate any legacy ~/.claude/ai-conductor.config.json fields into
-# ~/.ai-conductor/config.yml on first run. Idempotent no-op afterwards.
-migrate_legacy_conductor_config
 
 # One-time heads-up about conduct-ts. Shown the first time `conduct` runs on a
 # box where `conduct-ts` is on PATH. Marker in ~/.ai-conductor so it persists

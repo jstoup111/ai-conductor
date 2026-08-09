@@ -10,6 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATE_SRC="$REPO_ROOT/bin/migrate"
+COMMON_SRC="$REPO_ROOT/bin/lib/harness-common.sh"
 
 PASS=0
 FAIL=0
@@ -65,13 +66,14 @@ fi
 exit 0
 EOF
 chmod +x "$STUBS_DIR/npm" "$STUBS_DIR/claude"
-TEST_PATH="$STUBS_DIR:$PATH"
+TEST_PATH="$STUBS_DIR:$REPO_ROOT/bin:$PATH"
 
 make_harness() {
   local name=$1
   local harness="$TMP_ROOT/harness-$name"
-  mkdir -p "$harness/bin"
+  mkdir -p "$harness/bin/lib"
   cp "$MIGRATE_SRC" "$harness/bin/migrate"
+  cp "$COMMON_SRC" "$harness/bin/lib/harness-common.sh"
   chmod +x "$harness/bin/migrate"
   # Installation has its own acceptance suite. Keep this fixture at the
   # migration-command boundary and prevent writes outside the isolated home.
@@ -99,28 +101,24 @@ make_consumer() {
 make_home() {
   local name=$1 version=$2
   local isolated_home="$TMP_ROOT/home-$name"
-  mkdir -p "$isolated_home/.claude"
-  python3 - "$isolated_home/.claude/ai-conductor.config.json" "$version" <<'PY'
-import json
+  mkdir -p "$isolated_home/.ai-conductor"
+  python3 - "$isolated_home/.ai-conductor/config.yml" "$version" <<'PY'
 import sys
 from pathlib import Path
 
-Path(sys.argv[1]).write_text(json.dumps({"currentVersion": sys.argv[2]}))
+Path(sys.argv[1]).write_text(f"conductor:\n  current_version: {sys.argv[2]}\n")
 PY
   printf '%s\n' "$isolated_home"
 }
 
 set_version() {
   local isolated_home=$1 version=$2
-  python3 - "$isolated_home/.claude/ai-conductor.config.json" "$version" <<'PY'
-import json
+  python3 - "$isolated_home/.ai-conductor/config.yml" "$version" <<'PY'
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-data = json.loads(path.read_text())
-data["currentVersion"] = sys.argv[2]
-path.write_text(json.dumps(data))
+path.write_text(f"conductor:\n  current_version: {sys.argv[2]}\n")
 PY
 }
 

@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATE_SRC="$REPO_ROOT/bin/migrate"
+COMMON_SRC="$REPO_ROOT/bin/lib/harness-common.sh"
 
 PASS=0
 FAIL=0
@@ -44,15 +45,16 @@ STUBS_DIR="$TMP_ROOT/stubs"
 mkdir -p "$STUBS_DIR"
 PY3=$(python3 -c 'import sys; print(sys.executable)')
 ln -s "$PY3" "$STUBS_DIR/python3"
-TEST_PATH="$STUBS_DIR:$PATH"
+TEST_PATH="$STUBS_DIR:$REPO_ROOT/bin:$PATH"
 
 make_fixture() {
   local name=$1
   HARNESS="$TMP_ROOT/harness-$name"
   CONSUMER="$TMP_ROOT/consumer-$name"
   HOME_DIR="$TMP_ROOT/home-$name"
-  mkdir -p "$HARNESS/bin" "$CONSUMER" "$HOME_DIR/.claude"
+  mkdir -p "$HARNESS/bin/lib" "$CONSUMER" "$HOME_DIR/.ai-conductor"
   cp "$MIGRATE_SRC" "$HARNESS/bin/migrate"
+  cp "$COMMON_SRC" "$HARNESS/bin/lib/harness-common.sh"
   chmod +x "$HARNESS/bin/migrate"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$HARNESS/bin/install"
   chmod +x "$HARNESS/bin/install"
@@ -72,7 +74,7 @@ printf 'first\n' >> execution.log
 printf 'second\n' >> execution.log
 ```
 EOF
-  printf '{"currentVersion": "v1.1.0"}\n' > "$HOME_DIR/.claude/ai-conductor.config.json"
+  printf 'conductor:\n  current_version: v1.1.0\n' > "$HOME_DIR/.ai-conductor/config.yml"
   git -C "$CONSUMER" init -q -b main
   git -C "$CONSUMER" config user.email test@example.com
   git -C "$CONSUMER" config user.name Test
@@ -240,7 +242,7 @@ assert '--dry-run summary classifies every previewed block without applying or f
 
 make_fixture version-advanced-rerun
 run_no_tty
-printf '{"currentVersion": "v1.2.0"}\n' > "$HOME_DIR/.claude/ai-conductor.config.json"
+printf 'conductor:\n  current_version: v1.2.0\n' > "$HOME_DIR/.ai-conductor/config.yml"
 run_no_tty --yes
 assert 'a version advance after a no-TTY run cannot make pending blocks unreachable' "$(
   [ "$NO_TTY_CODE" -eq 0 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
