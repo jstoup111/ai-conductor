@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -661,6 +661,14 @@ describe('#188 retry-as-escalation — S4 logging', () => {
       stories: 'done',
       conflict_check: 'done',
     } as ConductState);
+    // This acceptance flow intentionally retries the DECIDE-phase plan step.
+    // Its explicit operator grant keeps the test focused on retry escalation,
+    // rather than exercising the separate fail-closed entry boundary.
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/decide-grant.json'),
+      JSON.stringify({ version: 1, step: 'plan', grantedBy: 'operator' }),
+    );
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,

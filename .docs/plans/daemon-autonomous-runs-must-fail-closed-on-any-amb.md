@@ -172,12 +172,21 @@ preseed retirement, the grant CLI, an end-to-end healthy-path proof, and documen
 3. Widen the scan to all persisted verdicts carrying `kickback.from === stepName` rather than
    only `topo.kickbackTargets`, and consult the predicate in #551's established position: counter
    bump, event emit, cap check, predicate, `navigateBack`.
-4. Verify GREEN, with `daemon-decide-kickback-halt.acceptance.test.ts` passing unmodified.
+4. Verify GREEN. `daemon-decide-kickback-halt.acceptance.test.ts` does NOT pass unmodified — its
+   merge-base version fails 2/12 against this task's policy, because S1 negative path 2 asserted
+   that a build→plan kickback does not halt, which the fail-closed policy intentionally reverses,
+   and S3's front-half case now requires an explicit grant. Re-author those two cases as explicit
+   TDD work rather than flipping the existing assertions: keep S1's original guarantee as a
+   build-scan attribution assertion (no build→plan attribution at the build scan), and pin the
+   later matching `wiring_check` verdict's fail-closed outcome as a separate case. For S3, set up
+   a single-use `conflict_check` grant and assert explicitly that it does not authorize
+   `architecture_review`.
 5. Commit with message: `feat(engine): refuse unresolvable kickback targets`.
 
 **Files:**
 - `src/conductor/src/engine/conductor.ts`
 - `src/conductor/test/acceptance/decide-entry-unknown-kickback.acceptance.test.ts`
+- `src/conductor/test/acceptance/daemon-decide-kickback-halt.acceptance.test.ts`
 
 **Wired-into:** `src/conductor/src/engine/conductor.ts#scanKickbackVerdicts`
 
@@ -325,3 +334,9 @@ Tasks 6 and 7 depend only on Task 1 and may run in parallel with the Task 3–5 
 | 5 | 2 |
 | 6 | 8 |
 | 7 | 4, 9 |
+### Task rem-test-001: src/conductor/test/acceptance/builds-stall-when-work-lands-without-task-trailer-.acceptance.test.ts:1 — restore the file to its merge-base version, removing the branch's .gitignore/conduct-state seeding, eight fromStep: 'build' overrides, verifier fakes, writePassingBuildReview helper, and narrowed routedRunner so the original autonomous front-half walk remains covered; rerun all 17 cases against the repaired production diff
+### Task rem-test-003: src/conductor/test/acceptance/daemon-decide-kickback-halt.acceptance.test.ts:358 — implement the replanned scenarios without replacing the original negative-path guarantee: assert no build-to-plan attribution at the build scan, separately assert the matching wiring_check verdict's fail-closed outcome, and assert explicitly that the S3 conflict_check grant does not authorize architecture_review
+### Task rem-test-004: src/conductor/src/engine/conductor.ts:2493 — replace planRemediation's legacy decideKickbackDisposition call with resolveDecideEntryDisposition, supplying state.complexity_tier, the configured completion-contract result with unknown-on-error, sourceGate 'remediate', remediation-gap evidence, and grant recognition without consuming at this navigation seam; render every refusal through renderDecideEntryHalt while preserving halt-gaps-win, unresolved-target, and build no-op ordering
+### Task rem-test-005: src/conductor/test/engine/earliest-remediation-target.test.ts:1 and src/conductor/test/acceptance/decide-entry-remediation.acceptance.test.ts:1 — add regression coverage proving planRemediation writes needs-human and launches no provider for undefined phase plus unsatisfied or unknown DECIDE completion, while tier-skipped, contract-less, satisfied, matching-grant, and BUILD targets retain their specified fast-forward, entry, or route behavior
+### Task rem-test-006: src/conductor/src/engine/conductor.ts:8191-8199 — delete scanKickbackVerdicts' inline refusal-body builder and pass disposition.halt to renderDecideEntryHalt, continuing to write the returned body with halt class needs-human and surface and emit that exact same reason
+### Task rem-test-007: src/conductor/test/acceptance/decide-entry-unknown-kickback.acceptance.test.ts:1 and src/conductor/test/engine/decide-entry-halt-payload.test.ts:1 — assert the kickback seam's persisted HALT body exactly matches renderDecideEntryHalt for the same refusal, including the canonical first line and all five operator-facing fields, preventing a second payload implementation

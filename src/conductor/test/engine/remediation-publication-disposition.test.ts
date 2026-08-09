@@ -88,7 +88,10 @@ describe('remediation `publication` disposition', () => {
 
   it('earliestRemediationTarget routes `publication` to finish, never to build', () => {
     const gap = { ...PUBLICATION_GAP, tasks: [] } as unknown as RemediationGap;
-    expect(earliestRemediationTarget([gap], ALL_STEPS)).toBe('finish');
+    expect(earliestRemediationTarget([gap], ALL_STEPS)).toEqual({
+      target: 'finish',
+      unresolved: [],
+    });
   });
 
   it('buildRemediationHint for a publication-only plan asks for prose, not code', () => {

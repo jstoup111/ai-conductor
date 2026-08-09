@@ -49,6 +49,8 @@ import {
   renderFullHelp,
   renderDaemonHelp,
   detectInline,
+  detectDecideGrantCommand,
+  dispatchDecideGrantCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
   createProgram,
@@ -439,6 +441,12 @@ async function main(): Promise<void> {
       projectRoot: process.cwd(),
     });
     process.exitCode = code;
+    return;
+  }
+
+  const decideGrantCmd = detectDecideGrantCommand(process.argv);
+  if (decideGrantCmd) {
+    process.exitCode = await dispatchDecideGrantCommand(decideGrantCmd);
     return;
   }
 

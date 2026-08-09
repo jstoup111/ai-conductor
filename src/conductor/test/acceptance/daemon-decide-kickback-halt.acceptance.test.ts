@@ -44,19 +44,19 @@ import {
 // tmp project root — across 2+ dispatches, because the defect class this
 // feature closes lives in the WIRING between `scanKickbackVerdicts`, the halt
 // emit pair, and the HALT-class sidecar the daemon's re-kick sweep reads. A
-// unit test of `decideKickbackDisposition` in isolation passes while the loop
-// still calls `navigateBack` — exactly the orphaned-primitive failure §3b
-// names. The two enforcement call sites of the predicate are therefore driven
+// unit test of `decideEntryDisposition` in isolation can pass while the loop
+// still calls `navigateBack` — exactly the shared-policy wiring failure §3b
+// names. The two enforcement call sites of that policy are therefore driven
 // separately here (§3d — every call site, real input):
 //
 //   • tail scan        — conductor.ts:6795 (`advanceTail`, `navigate: true`)
 //   • front-half scan  — conductor.ts:6731 (`navigate: false`)
 //
 // DELIBERATELY NOT HERE (single-unit or already-covered, per §2/§3a):
-//   • The pure `decideKickbackDisposition` table over ALL_STEPS (S2 Done-When),
-//     unknown-target/empty-table fail-open (S1 negative path 3), and the
-//     `daemon: false` conjunct — single-function behavior; belongs to
-//     `test/engine/kickback-policy.test.ts`, written under plan Tasks 1-2.
+//   • The pure `decideEntryDisposition` table over ALL_STEPS (S2 Done-When),
+//     unknown-target/empty-table fail-closed and `daemon: false` interactive
+//     entry — single-function policy behavior; belongs to
+//     `test/engine/decide-entry-policy.test.ts`, written under plan Tasks 1-2.
 //   • `rekickSweep`'s needs-human skip in the abstract — already asserted with
 //     injected deps at `test/engine/daemon-rekick.test.ts:157` and `:176`. What
 //     is NOT covered there, and IS covered here, is the composition: the class
@@ -315,7 +315,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(await exists(HALT_MARKER)).toBe(true);
     });
 
-    it('the HALT marker names the refused target, states DECIDE is operator-only, and carries the verdict evidence (happy path 2)', async () => {
+    it('the HALT marker uses the canonical DECIDE refusal and carries the target and verdict evidence (happy path 2)', async () => {
       await seedStoriesAndPlan();
       await writeState(statePath, { ...FRONT_DONE });
 
@@ -329,10 +329,12 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         .map((l) => l.trim())
         .find((l) => l.length > 0);
       expect(firstLine).toBeDefined();
-      // First non-empty line: the refused target step AND the operator-only rule.
-      expect(firstLine).toContain('plan');
-      expect(firstLine).toMatch(/DECIDE/);
-      expect(firstLine).toMatch(/daemon/i);
+      expect(firstLine).toBe(
+        'DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.',
+      );
+      // The structured body names the requested target separately from the
+      // canonical first-line refusal.
+      expect(body).toMatch(/Requested target:\s*plan/i);
       // Body carries the kickback evidence text from the verdict, so the
       // operator sees WHY the gate was re-opened without reading the verdict.
       expect(body).toContain(KICKBACK_EVIDENCE);
@@ -355,27 +357,78 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(reasons[0]).toMatch(/DECIDE/);
     });
 
-    it('does not fire on a verdict whose kickback.from is another step (negative path 2)', async () => {
+    it('does not attribute a later-step verdict to build (negative path 2)', async () => {
       await seedStoriesAndPlan();
       await writeState(statePath, { ...FRONT_DONE });
 
       const ran: StepName[] = [];
       let halted = false;
+      const kicks: Array<{ from: StepName; to: StepName }> = [];
       events.on('loop_halt', () => {
         halted = true;
       });
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kicks.push({ from: event.from, to: event.to });
+      });
 
-      // `kickback.from` names `wiring_check`, not the completing `build` step —
-      // the verdict belongs to another step's kickback and must not be matched
-      // at all, so neither the guard nor navigateBack may fire on it.
+      // `kickback.from` names `wiring_check`, not the completing `build` step.
+      // The build scan must not attribute it to build. The normal loop later
+      // reaches wiring_check, whose matching verdict re-opens plan until the
+      // existing selection cap halts the unresolved gate.
       await conductorAtBuild(
         buildKicksBackToPlan(ran, 'wiring_check' as StepName),
         { daemon: true },
       ).run();
 
-      expect(halted).toBe(false);
-      expect(await exists(HALT_MARKER)).toBe(false);
-      expect(await exists(HALT_CLASS_MARKER)).toBe(false);
+      expect(kicks).not.toContainEqual({ from: 'build', to: 'plan' });
+      expect(halted).toBe(true);
+      // This is deliberately the selector's ordinary forward-walk halt, not
+      // the matching `wiring_check` scan. Keep it as the negative proof that
+      // build did not misattribute another gate's verdict to itself.
+      const body = await readHaltBody();
+      expect(body).toMatch(/gate 'plan' selected .* without satisfying/);
+    });
+
+    it('the later matching wiring_check verdict fails closed as a DECIDE entry', async () => {
+      await seedStoriesAndPlan();
+      await writeState(statePath, { ...FRONT_DONE, build: 'done' } as ConductState);
+      await writeVerdict(dir, 'plan', {
+        satisfied: false,
+        checkedAt: 1,
+        kickback: { from: 'wiring_check', evidence: KICKBACK_EVIDENCE },
+      });
+
+      const ran: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step: StepName) => {
+          ran.push(step);
+          return satisfy(step);
+        },
+      };
+
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        // Default mode keeps this deterministic verifier gate on the serial
+        // path, making the matching wiring_check scan itself observable.
+        mode: 'default',
+        daemon: true,
+        fromStep: 'wiring_check',
+        maxRetries: 1,
+        git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
+      }).run();
+
+      expect(ran).toEqual(['wiring_check']);
+      expect(await readHaltClass(dir)).toBe('needs-human');
+      const body = await readHaltBody();
+      expect(body).toMatch(/Source gate:\s*wiring_check/i);
+      expect(body).toMatch(/Requested target:\s*plan/i);
+      expect(body).toContain(KICKBACK_EVIDENCE);
+      expect(body).toMatch(/DECIDE entry refused/i);
     });
   });
 
@@ -507,6 +560,13 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         stories: 'done',
         acceptance_specs: 'done',
       } as ConductState);
+      // The test intentionally starts at conflict_check so it can prove the
+      // front-half scan. Authorize that one DECIDE entry; the architecture
+      // amendment it emits remains ungranted and must HALT.
+      await writeFile(
+        join(dir, '.pipeline/decide-grant.json'),
+        JSON.stringify({ version: 1, step: 'conflict_check', grantedBy: 'operator' }),
+      );
 
       const ran: StepName[] = [];
       const runner: StepRunner = {
@@ -552,8 +612,13 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(body).not.toBeNull();
       expect(body).toContain('architecture_review');
       expect(body).toMatch(/DECIDE/);
-      // The refused DECIDE step is never re-authored from the front half.
-      expect(ran.filter((s) => s === 'architecture_review')).toHaveLength(0);
+      expect(body).toMatch(/Source gate:\s*conflict_check/i);
+      // The exact conflict_check grant was consumed to dispatch its named
+      // step. It cannot authorize the separate architecture_review entry:
+      // that entry is refused before its runner dispatches.
+      expect(ran).toEqual(['conflict_check']);
+      expect(ran).not.toContain('architecture_review');
+      expect(await exists('.pipeline/decide-grant.json')).toBe(false);
     });
   });
 
