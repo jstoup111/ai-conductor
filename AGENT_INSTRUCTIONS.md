@@ -28,6 +28,31 @@ self-reports or commit-trailer stamps — `Task:` trailers are telemetry only (#
 fixed path matching engine-side; #433 replaces trailer discipline with engine-stamped
 task ids and commit hooks.)
 
+**Extend the existing event spine; never add a parallel channel.** This repository already
+has one telemetry spine: `ConductorEventEmitter` → the `ConductorEvent` union in
+`src/conductor/src/types/events.ts` → `EventPersister` → `.pipeline/events.jsonl`, read by
+`daemon.ts`, `daemon-cli.ts`, `ui/create-renderer.ts`, `ui/subscriber.ts`,
+`engine/otel/otel-visualizer.ts`, and `engine/event-sinks.ts`. Before designing any new way to
+observe, report, or coordinate something — a watcher, a poller, a sidecar file, an ad-hoc log,
+a timestamp stamped into an artifact for later reading — ask one question first: **does the bus
+already carry this concern?** If it does, extend it: add a variant to the union and emit it. A
+second channel is invisible to every consumer of the first, so the repo quietly acquires two
+partial views of one truth and no reader ever sees both. The test is **schema, not file**: a
+sibling ledger written in the *same* `ConductorEvent` schema and merged by the same reader is
+still one spine and is fine; a bespoke sidecar with its own format is the violation. Three
+reasons legitimately move the *write*, and none of them change the schema — the writer is a
+separate OS process with no bus access (`adr-2026-07-10-intra-step-build-progress-events`
+rejected runner-push for exactly this reason); an
+atomicity limit forces one writer per file (`appendFileSync` is atomic only under `PIPE_BUF`,
+and `parseLedger` nulls the whole rollup on one malformed line); or the concern is durable
+**state** (gate evidence, a committed design doc), not an occurrence in time. "Faster to bolt
+on" is not one of them, and a design that genuinely needs a new channel needs an ADR saying why
+the bus could not carry it. (Worked example: DECIDE for #1176 drafted an engine-side
+artifact-path watcher, then completion timestamps stamped into five existing artifacts; both
+were rejected because the second would have been a telemetry channel none of the consumers
+above could see. The accepted design emits real `ConductorEvent`s to a single-writer sibling
+ledger in the same union.)
+
 **Third-party calls are smoke-only in tests.** Unit tests inject mocked adapters. Acceptance,
 integration, and end-to-end tests run the real internal flow with faithful fakes at every
 third-party boundary. Only explicitly named, opt-in smoke tests may call real LLMs or other

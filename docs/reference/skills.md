@@ -265,12 +265,6 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — `.docs/decisions/architecture-review-<date>-<feature>.md`; ADRs under
   `.docs/decisions/`; `.pipeline/architecture-review-as-built.md`, which must be rewritten on every
   invocation or the engine reads it as stale and halts the SHIP tail.
-- **Alignment checks** — the architectural-alignment pass includes an existing-spine reuse check
-  (HARNESS.md, "Extend the existing spine — never add a parallel channel"): a proposal that adds a
-  watcher, poller, sidecar file, ad-hoc log, or artifact-carried timestamp for a concern an event
-  bus or shared append-only ledger already transports must extend that mechanism instead. The test
-  is schema, not file — a sibling ledger in the same schema is compliant; a bespoke format is not.
-  A genuinely new channel requires an ADR saying why the existing one could not carry the concern.
 - **Gate role** — the as-built half is blocking and fail-closed: only `APPROVED` or `APPROVED WITH
   DRIFT NOTES` passes. The DECIDE half is advisory at the step level; its DRAFT-ADR hard gate is
   enforced by the `conduct` state machine and by the land-time spec gate instead.

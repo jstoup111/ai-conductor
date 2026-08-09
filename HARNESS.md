@@ -611,28 +611,6 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
   every phase: BUILD (don't implement against a superseded design), and SHIP /
   debugging / manual-test (a bug on a condemned path is a removal signal, not a
   fix target).
-- **Extend the existing spine — never add a parallel channel.** Before designing
-  any new way to observe, report, or coordinate something (a watcher, a poller, a
-  sidecar file, an ad-hoc log, a timestamp stamped into an artifact for later
-  reading), ask one question first: **does a mechanism already carry this
-  concern?** If an event bus, message stream, or shared append-only ledger already
-  transports occurrences of this kind, extend it — add a variant to its schema and
-  emit onto it. A second channel is invisible to every consumer of the first (logs,
-  UI, exporters, rollups), so the system quietly acquires two partial views of one
-  truth and no reader ever sees both. The test is **schema, not file**: a sibling
-  ledger written in the *same* schema and merged by the same reader is still one
-  spine and is fine; a bespoke sidecar with its own format is the violation. Three
-  reasons legitimately move the *write*, and none of them change the schema — the
-  writer is a separate process with no bus access; an atomicity or concurrency
-  limit forces one writer per file; or the concern is durable **state** (gate
-  evidence, a committed design doc), not an occurrence in time. "Faster to bolt on"
-  is not one of them. A design that genuinely needs a new channel needs an ADR
-  saying why the existing one could not carry the concern. (Worked example: DECIDE
-  for #1176 drafted an artifact-path watcher, then completion timestamps stamped
-  into five existing artifacts; both were rejected because the second would have
-  been a telemetry channel none of the existing event consumers could see. The
-  accepted design emits real events in the existing union to a single-writer
-  sibling ledger.)
 - Retro runs on both harness AND application after every feature
 - Tech-context is additive — never overrides generic skill behavior
 - **Docs track features.** Every feature that adds or changes user-facing
