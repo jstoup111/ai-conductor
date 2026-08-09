@@ -16,6 +16,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Added
 
 - `conduct-ts validate-wired-into <plan>` resolves a plan's **Wired-into:** anchors at DECIDE time through the same machinery BUILD-time completion verification uses, and exits 1 on any anchor that cannot resolve. ([implementation PR #1190](https://github.com/jstoup111/ai-conductor/pull/1190)).
+- conflict-check detects oscillating requirements — pairs that are individually satisfiable but mutually exclusive, which send work round a non-terminating kickback loop. coherence-check gains a `fail` verdict and a consistency pass for cross-layer contradictions that coverage alone cannot express. ([implementation PR #1394](https://github.com/jstoup111/ai-conductor/pull/1394)).
 
 ## [0.100.0] - 2026-08-07
 
