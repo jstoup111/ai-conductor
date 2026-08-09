@@ -492,8 +492,8 @@ complexity:
       expect(result.error.message).toContain('validation_concurrency');
     });
 
-    it('resolveValidationConcurrency defaults to 2 when absent', () => {
-      expect(resolveValidationConcurrency({})).toBe(2);
+    it('resolveValidationConcurrency defaults to 4 when absent', () => {
+      expect(resolveValidationConcurrency({})).toBe(4);
     });
 
     it('resolveValidationConcurrency returns explicit 3', () => {
@@ -504,25 +504,25 @@ complexity:
       expect(resolveValidationConcurrency({ validation_concurrency: 1 })).toBe(1);
     });
 
-    it('resolveValidationConcurrency clamps 0 to default 2', () => {
-      expect(resolveValidationConcurrency({ validation_concurrency: 0 })).toBe(2);
+    it('resolveValidationConcurrency clamps 0 to default 4', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: 0 })).toBe(4);
     });
 
-    it('resolveValidationConcurrency clamps negative to default 2', () => {
-      expect(resolveValidationConcurrency({ validation_concurrency: -4 })).toBe(2);
+    it('resolveValidationConcurrency clamps negative to default 4', () => {
+      expect(resolveValidationConcurrency({ validation_concurrency: -4 })).toBe(4);
     });
 
-    it('resolveValidationConcurrency clamps NaN/non-numeric to default 2', () => {
+    it('resolveValidationConcurrency clamps NaN/non-numeric to default 4', () => {
       expect(
         resolveValidationConcurrency({
           validation_concurrency: NaN as unknown as number,
         }),
-      ).toBe(2);
+      ).toBe(4);
       expect(
         resolveValidationConcurrency({
           validation_concurrency: 'x' as unknown as number,
         }),
-      ).toBe(2);
+      ).toBe(4);
     });
 
     it('rejects disabling a gating step', () => {

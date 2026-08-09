@@ -114,7 +114,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `owner_gate_cutover` | ISO-8601 string | `null` | [owner_gate_cutover](#owner_gate_cutover) |
 | `attribution_audit_sample_pct` | number | `10` | [attribution telemetry](#attribution-telemetry) |
 | `rebase_resolution_attempts` | number | `3` | [rebase_resolution_attempts](#rebase_resolution_attempts) |
-| `validation_concurrency` | number | `2` | [validation_concurrency](#validation_concurrency) |
+| `validation_concurrency` | number | `4` | [validation_concurrency](#validation_concurrency) |
 | `harness_self_host` | object | see section | [harness_self_host](#harness_self_host) |
 | `model_fallback_ladder` | string[] | provider policy | [model_fallback_ladder](#model_fallback_ladder) |
 | `auto_restart_on_stale_engine` | boolean | `false` | [auto_restart_on_stale_engine](#auto_restart_on_stale_engine) |
@@ -1039,11 +1039,18 @@ Consumed at `src/conductor/src/engine/autoresolve.ts:214`,
 
 ## validation_concurrency
 
-Bounds the validation-phase fan-out. Optional number, default `2`
-(`DEFAULT_VALIDATION_CONCURRENCY`, `config.ts:1899`).
+Bounds the validation-phase fan-out. Optional number, default `4`
+(`DEFAULT_VALIDATION_CONCURRENCY`, `config.ts:1998`).
 
-A non-number is a hard error (`config.ts:720-724`). Zero, negative, and `NaN` pass validation, but
-`resolveValidationConcurrency` (`config.ts:1891-1903`) silently substitutes `2`.
+The default is 4 rather than the built-in group's branch count (3) so the whole SHIP-tail group —
+`manual_test`, `prd_audit`, `architecture_review_as_built` — dispatches in one wave instead of
+leaving its third member queued behind the first two. Because the resolved width is always clamped
+to the branch count, a narrower group never spawns idle slots. Lower it to serialize the fan-out
+(for example on a constrained machine, or to make a run easier to follow); `1` degrades the group to
+the serial path.
+
+A non-number is a hard error (`config.ts:748-752`). Zero, negative, and `NaN` pass validation, but
+`resolveValidationConcurrency` (`config.ts:2009-2021`) silently substitutes `4`.
 
 Consumed at `src/conductor/src/engine/conductor.ts:1263`, then clamped to the branch count at `:6357`.
 

@@ -1994,17 +1994,24 @@ const BUILD_PROGRESS_DEFAULTS: ResolvedBuildProgressConfig = {
 /**
  * Default validation-phase fan-out concurrency (used when
  * `validation_concurrency` is absent, zero, negative, or non-numeric).
+ *
+ * 4 rather than the branch count so the built-in SHIP-tail group
+ * (manual_test, prd_audit, architecture_review_as_built) runs fully
+ * concurrently instead of leaving its third member queued behind the first
+ * two — the group's wall-clock was the sum of two waves for no reason. The
+ * effective width is always clamped to the branch count, so a smaller group
+ * never spawns idle slots.
  */
-export const DEFAULT_VALIDATION_CONCURRENCY = 2;
+export const DEFAULT_VALIDATION_CONCURRENCY = 4;
 
 /**
  * Resolve the validation-phase fan-out concurrency from `config`.
  *
  * Resolution rules:
- *   - undefined / absent     → DEFAULT_VALIDATION_CONCURRENCY (2)
+ *   - undefined / absent     → DEFAULT_VALIDATION_CONCURRENCY (4)
  *   - positive integer       → use the value as-is
  *   - 0, negative, NaN, or
- *     non-numeric             → DEFAULT_VALIDATION_CONCURRENCY (2)
+ *     non-numeric             → DEFAULT_VALIDATION_CONCURRENCY (4)
  */
 export function resolveValidationConcurrency(config: Pick<HarnessConfig, 'validation_concurrency'>): number {
   const override = config?.validation_concurrency;
