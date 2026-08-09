@@ -74,6 +74,7 @@ import {
 import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
+import { CloseoutEventTail } from './closeout-tail.js';
 import {
   resolveBuildProgressConfig,
   BUILD_PROGRESS_HALT_DEFAULTS,
@@ -5515,6 +5516,12 @@ export class Conductor {
                 })
               : null;
           buildWatcher?.start();
+          if (step.name === 'build') {
+            new CloseoutEventTail({
+              projectRoot: this.projectRoot,
+              events: this.events,
+            }).start();
+          }
 
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a

@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { PipelineCloseoutEvent } from './closeout-events.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 const PIPELINE_CLOSEOUT_LEDGER = '.pipeline/pipeline-events.jsonl';
 
@@ -39,5 +40,36 @@ export class CloseoutTailReader {
 
     this.offset += completed.byteLength;
     return events;
+  }
+}
+
+/** Polls the pipeline-owned closeout ledger and re-emits complete records. */
+export class CloseoutEventTail {
+  private readonly reader: CloseoutTailReader;
+  private readonly events: ConductorEventEmitter;
+
+  constructor({
+    projectRoot,
+    events,
+  }: {
+    projectRoot: string;
+    events: ConductorEventEmitter;
+  }) {
+    this.reader = new CloseoutTailReader(projectRoot);
+    this.events = events;
+  }
+
+  async poll(): Promise<void> {
+    for (const event of await this.reader.read()) {
+      await this.events.emit(event);
+    }
+  }
+
+  /** Start background polling; lifecycle ownership stays with the conductor. */
+  start(): void {
+    const interval = setInterval(() => {
+      void this.poll();
+    }, 1_000);
+    interval.unref();
   }
 }
