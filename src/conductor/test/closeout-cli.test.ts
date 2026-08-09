@@ -43,4 +43,31 @@ describe('closeout-event CLI', () => {
         '{"type":"pipeline_closeout","obligation":"evaluator","startedAt":100,"endedAt":140,"ts":140}\n',
       );
   });
+
+  it.each(['not-a-closeout-obligation', ''])(
+    'rejects the %j obligation before either ledger is written',
+    async (obligation) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'closeout-cli-'));
+      directories.push(projectRoot);
+      const errors: string[] = [];
+
+      const result = await dispatchCloseoutEventCommand({
+        kind: 'closeout-event',
+        obligation,
+        startedAt: 100,
+        endedAt: 140,
+      }, projectRoot, () => 140, (message) => errors.push(message));
+
+      expect({ result, errors }).toEqual({
+        result: 1,
+        errors: [
+          'closeout-event: obligation must be one of evaluator, simplify, architecture-diagram, micro-retro, memory, summary',
+        ],
+      });
+      await expect(readFile(join(projectRoot, '.pipeline/pipeline-events.jsonl'), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
 });
