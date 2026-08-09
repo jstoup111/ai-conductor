@@ -646,7 +646,35 @@ if [ -f "$stories_skill" ]; then
   fi
 fi
 
-# 9f. skills/architecture-review/SKILL.md (Medium/Large tier) must run
+# 9f. ADR templates may offer only statuses accepted by the approval parser.
+# Normalize each pipe-delimited offered status to its leading word so terminal
+# annotations such as "SUPERSEDED by <slug>" remain valid.
+adr_template="${HARNESS_DIR}/templates/adr.md.template"
+if [ -f "$adr_template" ]; then
+  invalid_adr_template_statuses=$(awk '
+    /^\*\*Status:\*\*/ {
+      status_line = $0
+      sub(/^\*\*Status:\*\*[[:space:]]*/, "", status_line)
+      count = split(status_line, offered, /[|]/)
+      for (item = 1; item <= count; item++) {
+        value = offered[item]
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        split(value, words, /[[:space:]]+/)
+        normalized = toupper(words[1])
+        if (normalized != "APPROVED" && normalized != "SUPERSEDED") {
+          print value
+        }
+      }
+    }
+  ' "$adr_template")
+  if [ -z "$invalid_adr_template_statuses" ]; then
+    assert "templates/adr.md.template offers only APPROVED or SUPERSEDED statuses" 0
+  else
+    assert "templates/adr.md.template offers only APPROVED or SUPERSEDED statuses" 1
+  fi
+fi
+
+# 9g. skills/architecture-review/SKILL.md (Medium/Large tier) must run
 # `conduct-ts overlap-scan` over the `## Wiring Surface` candidate paths
 # before `/plan`, and must state it is advisory. Without this wiring, the
 # Task 7 overlap-scan subcommand exists but is never invoked at DECIDE

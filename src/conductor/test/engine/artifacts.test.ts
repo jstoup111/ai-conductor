@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, symlink } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -8,6 +8,7 @@ import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 // Import the real readStaleHaltTitle for use in spy implementation
 import {
@@ -64,6 +65,7 @@ import {
   getArtifactStatus,
   checkStepCompletion,
   isStoriesApproved,
+  adrApprovalStatus,
   classifyPrdAuditGaps,
   classifyRetryDecision,
   sweepStaleReviewArtifacts,
@@ -3214,6 +3216,78 @@ describe('engine/artifacts', () => {
 
     it('rejects when DRAFT is present even if Accepted also appears', () => {
       expect(isStoriesApproved('**Status:** Accepted\n... was **Status:** DRAFT')).toBe(false);
+    });
+  });
+
+  describe('adrApprovalStatus (allowlisted declarations)', () => {
+    it.each([
+      ['bare approved status', 'Status: APPROVED', 'APPROVED'],
+      ['case-insensitive approved status', 'Status: aPpRoVeD', 'aPpRoVeD'],
+      ['bold superseded status', '**Status:** SUPERSEDED by `adr-2026-07-30-finish-only-mergeability-gate`', 'SUPERSEDED by `adr-2026-07-30-finish-only-mergeability-gate`'],
+      ['list-marked approved status with trailing prose', '- **Status:** APPROVED (operator-approved 2026-07-29)', 'APPROVED (operator-approved 2026-07-29)'],
+      ['superseded status with trailing prose', 'Status: SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`', 'SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`'],
+      ['bold-wrapped approved value with trailing whitespace', '**Status:** **APPROVED**   ', 'APPROVED'],
+      ['whole bold declaration', '**Status: APPROVED**', 'APPROVED'],
+    ])('approves a %s declaration', (_description, declaration, found) => {
+      expect(adrApprovalStatus(`# ADR\n\n${declaration}\n`)).toEqual({ approved: true, found });
+    });
+
+    it('ignores a disallowed status declaration inside a fenced code block', () => {
+      expect(adrApprovalStatus(`# ADR\n\nStatus: APPROVED\n\n\`\`\`markdown\nStatus: DRAFT\n\`\`\`\n`)).toEqual({
+        approved: true,
+        found: 'APPROVED',
+      });
+    });
+
+    it('does not treat a status declaration inside a fenced code block as an ADR status', () => {
+      expect(adrApprovalStatus(`# ADR\n\n\`\`\`markdown\nStatus: APPROVED\n\`\`\`\n`)).toEqual({
+        approved: false,
+        found: null,
+      });
+    });
+
+    it('ignores a mid-sentence status mention in an otherwise approved ADR', () => {
+      expect(
+        adrApprovalStatus('# ADR\n\nStatus: APPROVED\n\nThis requires `Status: Accepted`, no DRAFT.\n'),
+      ).toEqual({ approved: true, found: 'APPROVED' });
+    });
+
+    it('honors the first line-anchored status declaration', () => {
+      expect(adrApprovalStatus('# ADR\n\nStatus: APPROVED\n\nStatus: Proposed\n')).toEqual({
+        approved: true,
+        found: 'APPROVED',
+      });
+    });
+
+    it('fails closed when an ADR has no status declaration, including zero-byte content', () => {
+      expect(adrApprovalStatus('# ADR\n\nNo declared decision status.\n')).toEqual({
+        approved: false,
+        found: null,
+      });
+      expect(adrApprovalStatus('')).toEqual({ approved: false, found: null });
+    });
+
+    it.each(['Accepted', 'Proposed'])('rejects a %s declaration while preserving its text', (status) => {
+      expect(adrApprovalStatus(`# ADR\n\nStatus: ${status}\n`)).toEqual({
+        approved: false,
+        found: status,
+      });
+    });
+
+    it('accepts every ADR in the repository corpus', async () => {
+      const decisionsDir = join(REPOSITORY_ROOT, '.docs', 'decisions');
+      const adrPaths = (await readdir(decisionsDir))
+        .filter((entry) => /^adr-.*\.md$/.test(entry))
+        .map((entry) => join(decisionsDir, entry));
+      const statuses = await Promise.all(
+        adrPaths.map(async (path) => ({ path, ...(adrApprovalStatus(await readFile(path, 'utf-8'))) })),
+      );
+
+      expect(adrPaths).not.toHaveLength(0);
+      expect({
+        rejected: statuses.filter((status) => !status.approved && status.found !== null),
+        unparseable: statuses.filter((status) => status.found === null),
+      }).toEqual({ rejected: [], unparseable: [] });
     });
   });
 

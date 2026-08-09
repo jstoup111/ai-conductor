@@ -5,6 +5,7 @@ import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import type { BacklogItem } from './daemon.js';
 import {
+  adrApprovalStatus,
   planHasDependencyTree,
   isStoriesApproved,
   parseComplexityTier,
@@ -44,6 +45,8 @@ const execFile = promisify(execFileCb);
  * `listShippedFiles()` → the `.md` basenames under `.docs/shipped` on the base
  *   branch, using the identical base-branch-only semantics as `listPlanFiles`
  *   (see `listShippedRecords` in `shipped-record.ts`, Story 3/4).
+ * `listAdrFiles()` → the `adr-*.md` basenames under `.docs/decisions` on the
+ *   base branch.
  * `readFile(relPath)` → the content of a repo-relative path on the base branch,
  *   or `null` when the path is absent from that tree.
  */
@@ -90,6 +93,22 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
           .map((l) => basename(l));
       } catch {
         return []; // no such tree (no `.docs/shipped` on base branch) → nothing to do
+      }
+    },
+    async listAdrFiles() {
+      try {
+        const { stdout } = await execFile(
+          'git',
+          ['ls-tree', '--name-only', `${baseBranch}:.docs/decisions`],
+          { cwd: projectRoot },
+        );
+        return stdout
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => /^adr-.*\.md$/i.test(l))
+          .map((l) => basename(l));
+      } catch {
+        return []; // no such tree (no `.docs/decisions` on base branch) → nothing to do
       }
     },
     async readFile(relPath) {
@@ -583,6 +602,7 @@ export interface BlockedSpecItem {
     | 'unresolvable-stories-ref'
     | 'stories-missing'
     | 'stories-not-approved'
+    | 'adr-not-approved'
     | 'no-dependency-tree'
     | 'missing-coherence';
   remedy: string;
@@ -732,6 +752,7 @@ export async function discoverBacklog(
   // unset (tests, legacy), each notice still logs at most once per pass (never
   // per-spec), preserving prior behavior.
   const IDENTITY_UNRESOLVED_WARN_KEY = '__owner-gate-identity-unresolved__';
+  const ADR_CORPUS_NOT_APPROVED_WARN_KEY = '__adr-corpus-not-approved__';
 
   // Fail-CLOSED notice (D3 / Story 3): when a `daemonOwner` is supplied but
   // UNRESOLVED (no user-config spec_owner and no gh login), the daemon builds
@@ -828,6 +849,16 @@ export async function discoverBacklog(
     blockedItems.push(item);
     await warnOnce(item.slug, message);
   };
+  let unapprovedAdr: { path: string; found: string | null } | null = null;
+  for (const adrFile of await tree.listAdrFiles()) {
+    const path = `.docs/decisions/${adrFile}`;
+    const approval = adrApprovalStatus((await tree.readFile(path)) ?? '');
+    if (!approval.approved) {
+      unapprovedAdr = { path, found: approval.found };
+      break;
+    }
+  }
+  let adrCorpusWarningLogged = false;
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
   // is present but malformed (see the dependency-gate loop below).
   const malformedSourceRefs = new Map<string, string>();
@@ -949,6 +980,21 @@ export async function discoverBacklog(
         slug,
         `skip ${slug}: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.`,
       );
+      continue;
+    }
+    if (unapprovedAdr !== null) {
+      const status =
+        unapprovedAdr.found === null ? 'no status declaration' : `status "${unapprovedAdr.found}"`;
+      const remedy = `Approve ${unapprovedAdr.path} (${status}) on the default branch.`;
+      blockedItems.push({ slug, reason: 'adr-not-approved', remedy });
+      if (!adrCorpusWarningLogged) {
+        await warnOnce(
+          ADR_CORPUS_NOT_APPROVED_WARN_KEY,
+          `skip ${slug}: merged specs cannot build — ADR ${unapprovedAdr.path} is not approved ` +
+            `(${status}). ${remedy} logged once this pass.`,
+        );
+        adrCorpusWarningLogged = true;
+      }
       continue;
     }
     if (!planHasDependencyTree(planContent)) {

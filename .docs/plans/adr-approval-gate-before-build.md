@@ -52,6 +52,27 @@ step, not by plan tasks.
   stamped APPROVED in this spec change, so the corpus is 240/240 conforming and the gate can go
   live without blocking existing work.
 
+## Accepted scope widening
+
+> **Amended 2026-08-09 by operator (plan decider):** `src/conductor/src/engine/smoke-runner.ts`
+> is accepted into this feature's scope. Commit `728118488` adds a discovery-scoped TMPDIR
+> sandbox to `discoverSmokeFiles` (`smoke-runner.ts:161-195`). No task authored it, and
+> `build_review` correctly flagged it as out-of-plan.
+>
+> It is retained rather than removed because it repairs this feature's OWN blocking gate: the
+> `test_suite` verification failed with `tmpdir-leak-guard: 1 temp entry/entries leaked into
+> the REAL tmpdir (/tmp) during this test run (#1112): tmp.5lTqzxJrkQ`, and that guard's own
+> message directs the fix to the code path that bypassed the redirect — which is this one.
+> Removing the hunk re-breaks the suite for every remaining task. `build_review` itself
+> allowed that the change "may well be a correct standalone fix".
+>
+> A commit-local `Scope:` trailer cannot record this after the fact — `parseScopeTrailers`
+> (`src/conductor/src/engine/scope-trailer.ts:20`) reads trailers per-commit and `728118488`
+> carries neither a `Scope:` nor a `Task:` trailer — so the widening is recorded here instead.
+>
+> Outstanding: `discoverSmokeFiles` is module-private and no smoke-runner test exercises the
+> sandbox. Test coverage for it is BUILD work, tracked with Task 12 below.
+
 ## Tasks
 
 ### Task 1: Parse allowlisted status declarations in every grammar the corpus uses
@@ -69,7 +90,16 @@ step, not by plan tasks.
 - src/conductor/src/engine/artifacts.ts — new exported function beside `isStoriesApproved`
 - src/conductor/test/engine/artifacts.test.ts — grammar fixture matrix
 
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/land-spec.ts#landSpec, src/conductor/src/engine/engineer/authoring.ts#runAuthoring, src/conductor/src/engine/daemon-backlog.ts#discoverBacklog
+
+> **Amended 2026-08-09 by operator (plan decider):** this anchor was authored as
+> `none (inert until src/conductor/src/engine/engineer/land-spec.ts)`. It was changed to the
+> declared call sites during BUILD because the wiring gate required it:
+> `checkInertContractContradiction` (`src/conductor/src/engine/wiring-probe.ts:732-748`)
+> rejects an inert waiver once the diff adds a production reference to the new symbol, and
+> reported `task N: declared inert but diff adds a production reference to «adrApprovalStatus»
+> — contract is stale, switch to a declared call site` for Tasks 1, 2 and 3. Restoring the
+> inert form re-triggers that failure. The original text is retained above this note.
 
 **Dependencies:** none
 
@@ -89,7 +119,16 @@ step, not by plan tasks.
 - src/conductor/src/engine/artifacts.ts — fence-stripping pre-pass
 - src/conductor/test/engine/artifacts.test.ts — fenced-example cases
 
-**Wired-into:** same as Task 1
+**Wired-into:** src/conductor/src/engine/engineer/land-spec.ts#landSpec, src/conductor/src/engine/engineer/authoring.ts#runAuthoring, src/conductor/src/engine/daemon-backlog.ts#discoverBacklog
+
+> **Amended 2026-08-09 by operator (plan decider):** this anchor was authored as
+> `none (inert until src/conductor/src/engine/engineer/land-spec.ts)`. It was changed to the
+> declared call sites during BUILD because the wiring gate required it:
+> `checkInertContractContradiction` (`src/conductor/src/engine/wiring-probe.ts:732-748`)
+> rejects an inert waiver once the diff adds a production reference to the new symbol, and
+> reported `task N: declared inert but diff adds a production reference to «adrApprovalStatus»
+> — contract is stale, switch to a declared call site` for Tasks 1, 2 and 3. Restoring the
+> inert form re-triggers that failure. The original text is retained above this note.
 
 **Dependencies:** Task 1
 
@@ -108,7 +147,16 @@ step, not by plan tasks.
 - src/conductor/src/engine/artifacts.ts — anchoring and fail-closed branch
 - src/conductor/test/engine/artifacts.test.ts — mention/first-wins/empty cases
 
-**Wired-into:** same as Task 1
+**Wired-into:** src/conductor/src/engine/engineer/land-spec.ts#landSpec, src/conductor/src/engine/engineer/authoring.ts#runAuthoring, src/conductor/src/engine/daemon-backlog.ts#discoverBacklog
+
+> **Amended 2026-08-09 by operator (plan decider):** this anchor was authored as
+> `none (inert until src/conductor/src/engine/engineer/land-spec.ts)`. It was changed to the
+> declared call sites during BUILD because the wiring gate required it:
+> `checkInertContractContradiction` (`src/conductor/src/engine/wiring-probe.ts:732-748`)
+> rejects an inert waiver once the diff adds a production reference to the new symbol, and
+> reported `task N: declared inert but diff adds a production reference to «adrApprovalStatus»
+> — contract is stale, switch to a declared call site` for Tasks 1, 2 and 3. Restoring the
+> inert form re-triggers that failure. The original text is retained above this note.
 
 **Dependencies:** Task 2
 

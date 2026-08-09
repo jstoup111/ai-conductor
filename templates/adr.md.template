@@ -1,7 +1,7 @@
 # ADR: {{TITLE}}
 
 **Date:** {{DATE}}
-**Status:** Proposed | Accepted | Superseded by {{superseding-adr-slug}}
+**Status:** APPROVED | SUPERSEDED by {{superseding-adr-slug}}
 **Deciders:** {{who made this decision}}
 
 <!-- Filename convention: adr-{{DATE}}-<kebab-slug>.md (no sequential numbers).

@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import {
   discoverBacklog,
   fastForwardRoot,
+  gitTreeSource,
   resolveStoriesRef,
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
@@ -38,6 +39,13 @@ function fsTreeSource(root: string): BacklogTreeSource {
     async listShippedFiles() {
       try {
         return (await readdir(join(root, '.docs/shipped'))).filter((f) => f.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listAdrFiles() {
+      try {
+        return (await readdir(join(root, '.docs/decisions'))).filter((f) => /^adr-.*\.md$/i.test(f));
       } catch {
         return [];
       }
@@ -85,6 +93,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       const tree = {
         listPlanFiles: async () => [],
         listShippedFiles: async () => [],
+        listAdrFiles: async () => [],
         readFile: vi.fn(async () => null),
       } satisfies BacklogTreeSource;
 
@@ -97,6 +106,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       const tree = {
         listPlanFiles: async () => [],
         listShippedFiles: async () => [],
+        listAdrFiles: async () => [],
         readFile: vi.fn(async () => null),
       } satisfies BacklogTreeSource;
 
@@ -152,6 +162,88 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     });
 
     expect(result.blocked).toEqual([]);
+  });
+
+  it('blocks every otherwise eligible spec when an ADR is not approved', async () => {
+    const slugs = ['alpha', 'beta', 'gamma'];
+    await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs/decisions/adr-gate.md'), '# ADR\n\nStatus: Proposed\n');
+    await Promise.all(
+      slugs.flatMap((slug) => [
+        writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`)),
+        writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES),
+        writeCoherence(slug),
+      ]),
+    );
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.items).toEqual([]);
+    expect(result.blocked).toEqual(
+      slugs.map((slug) =>
+        expect.objectContaining({
+          slug,
+          reason: 'adr-not-approved',
+          remedy: expect.stringMatching(/adr-gate\.md.*Proposed/i),
+        }),
+      ),
+    );
+  });
+
+  it('dispatches otherwise eligible specs when every ADR is approved', async () => {
+    await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs/decisions/adr-gate.md'), '# ADR\n\nStatus: APPROVED\n');
+    await writeFile(
+      join(dir, '.docs/plans/approved-adr.md'),
+      planWithDeps('.docs/stories/approved-adr.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/approved-adr.md'), APPROVED_STORIES);
+    await writeCoherence('approved-adr');
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.items.map((item) => item.slug)).toEqual(['approved-adr']);
+    expect(result.blocked).toEqual([]);
+  });
+
+  it('scans an unapproved ADR corpus once per pass and recovers after correction', async () => {
+    const slugs = ['alpha', 'beta', 'gamma'];
+    const files = new Map<string, string>();
+    for (const slug of slugs) {
+      files.set(`.docs/plans/${slug}.md`, planWithDeps(`.docs/stories/${slug}.md`));
+      files.set(`.docs/stories/${slug}.md`, APPROVED_STORIES);
+      files.set(`.docs/coherence/${slug}.md`, COHERENCE_TABLE);
+    }
+    files.set('.docs/decisions/adr-gate.md', '# ADR\n\nStatus: Proposed\n');
+    const listAdrFiles = vi.fn(async () => ['adr-gate.md']);
+    const readFile = vi.fn(async (path: string) => files.get(path) ?? null);
+    const tree: BacklogTreeSource = {
+      listPlanFiles: async () => slugs.map((slug) => `${slug}.md`),
+      listShippedFiles: async () => [],
+      listAdrFiles,
+      readFile,
+    };
+    const logs: string[] = [];
+
+    const blocked = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: tree,
+    });
+
+    expect(blocked.items).toEqual([]);
+    expect(blocked.blocked).toHaveLength(3);
+    expect(listAdrFiles).toHaveBeenCalledTimes(1);
+    expect(readFile.mock.calls.filter(([path]) => path === '.docs/decisions/adr-gate.md')).toHaveLength(1);
+    expect(logs.filter((message) => /ADR.*not approved/i.test(message))).toHaveLength(1);
+
+    files.set('.docs/decisions/adr-gate.md', '# ADR\n\nStatus: APPROVED\n');
+    const recovered = await discoverBacklog(dir, undefined, undefined, { treeSource: tree });
+
+    expect(recovered.blocked).toEqual([]);
+    expect(recovered.items.map((item) => item.slug)).toEqual(slugs);
   });
 
   it('does not classify an unresolvable Stories reference as blocked after a processed-marker dedup', async () => {
@@ -1076,6 +1168,9 @@ describe('engine/daemon-backlog — land-authored intake marker keyed by plan st
         return [];
       }
     },
+    async listAdrFiles() {
+      return [];
+    },
     async readFile(relPath) {
       try {
         return await fsReadFile(join(root, relPath), 'utf-8');
@@ -1213,6 +1308,9 @@ describe('discoverBacklog — un-owned arrival default-builds with a loud escala
       } catch {
         return [];
       }
+    },
+    async listAdrFiles() {
+      return [];
     },
     async readFile(relPath) {
       try {
@@ -1359,6 +1457,36 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
     await rm(dir, { recursive: true, force: true });
   });
 
+  it('lists only ADR files from decisions on the base branch', async () => {
+    await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs/decisions/adr-kept.md'), '# ADR\n');
+    await writeFile(join(dir, '.docs/decisions/architecture-review-ignored.md'), '# Review\n');
+    await writeFile(join(dir, '.docs/decisions/notes.md'), '# Notes\n');
+    await git(['add', '.docs/decisions']);
+    await git(['commit', '-q', '-m', 'add decisions']);
+
+    await expect(gitTreeSource(dir, baseBranch).listAdrFiles()).resolves.toEqual(['adr-kept.md']);
+  });
+
+  it('treats an absent decisions directory on the base branch as an empty ADR corpus', async () => {
+    await expect(gitTreeSource(dir, baseBranch).listAdrFiles()).resolves.toEqual([]);
+  });
+
+  it('treats a failed ADR tree read as an empty ADR corpus', async () => {
+    await expect(gitTreeSource(dir, 'missing-base-branch').listAdrFiles()).resolves.toEqual([]);
+  });
+
+  it('allows a merged spec when the base branch has an empty ADR corpus', async () => {
+    await writeSpec('empty-adr-corpus');
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', 'merge spec with no decisions']);
+
+    const result = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+
+    expect(result.items.map((item) => item.slug)).toEqual(['empty-adr-corpus']);
+    expect(result.blocked).toEqual([]);
+  });
+
   it('MERGED spec (committed on base branch) → build-ready', async () => {
     await writeSpec('csv-export');
     await git(['add', '.docs']);
@@ -1451,6 +1579,9 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
       } catch {
         return [];
       }
+    },
+    async listAdrFiles() {
+      return [];
     },
     async readFile(relPath) {
       try {
@@ -2001,6 +2132,9 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
         return [];
       }
     },
+    async listAdrFiles() {
+      return [];
+    },
     async readFile(relPath) {
       try {
         return await fsReadFile(join(root, relPath), 'utf-8');
@@ -2280,6 +2414,9 @@ describe('engine/daemon-backlog — content-hash match dedups renamed specs (Sto
       } catch {
         return [];
       }
+    },
+    async listAdrFiles() {
+      return [];
     },
     async readFile(relPath) {
       try {

@@ -158,21 +158,48 @@ function defaultHasCommand(command: string): boolean {
     })();
 }
 
-async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSmokeFile[]> {
+interface SmokeDiscoveryVitest {
+  globTestFiles(): Promise<readonly { moduleId: string }[]>;
+  close(): Promise<void>;
+}
+
+export interface SmokeDiscoveryDependencies {
+  createTempDir?: (prefix: string) => Promise<string>;
+  createVitest?: (mode: 'test', options: { config: string; root: string }) => Promise<SmokeDiscoveryVitest>;
+  readFile?: (path: string) => Promise<string>;
+  remove?: (path: string, options: { recursive: true; force: true }) => Promise<void>;
+}
+
+/** Discovers smoke files in an isolated Vitest workspace. */
+export async function discoverSmokeFiles(
+  config: string,
+  dependencies: SmokeDiscoveryDependencies = {},
+): Promise<readonly DiscoveredSmokeFile[]> {
+  const createTempDir = dependencies.createTempDir ?? (prefix => mkdtemp(prefix));
+  const createDiscoveryVitest = dependencies.createVitest
+    ?? ((mode, options) => createVitest(mode, options));
+  const readDiscoveredFile = dependencies.readFile ?? (path => readFile(path, 'utf8'));
+  const remove = dependencies.remove ?? ((path, options) => rm(path, options));
   const parentRunTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
   const parentTmpdir = process.env.TMPDIR;
-  let vitest: Awaited<ReturnType<typeof createVitest>> | undefined;
+  const discoveryTmpRoot = await createTempDir(join(tmpdir(), 'ai-conductor-smoke-discovery-'));
+  let vitest: SmokeDiscoveryVitest | undefined;
 
   try {
-    vitest = await createVitest('test', {
+    // Vitest allocates its own workspace tmpdir while constructing the project,
+    // before it evaluates the smoke config's tmpdir redirect. Isolate discovery
+    // first, then restore the caller environment before dispatching each child:
+    // every child must create and tear down its own run root.
+    delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    process.env.TMPDIR = discoveryTmpRoot;
+    vitest = await createDiscoveryVitest('test', {
       config: resolve(config),
       root: process.cwd(),
     });
     const files = await vitest.globTestFiles();
-    const { readFile } = await import('node:fs/promises');
     return Promise.all(files.map(async ({ moduleId }) => {
       const file = relative(process.cwd(), moduleId).replaceAll('\\', '/');
-      const source = await readFile(moduleId, 'utf8');
+      const source = await readDiscoveredFile(moduleId);
       return { file, source };
     }));
   } finally {
@@ -183,6 +210,7 @@ async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSm
       else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = parentRunTmpRoot;
       if (parentTmpdir === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = parentTmpdir;
+      await remove(discoveryTmpRoot, { recursive: true, force: true });
     }
   }
 }

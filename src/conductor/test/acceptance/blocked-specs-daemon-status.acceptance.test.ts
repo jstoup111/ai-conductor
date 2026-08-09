@@ -70,6 +70,13 @@ function fsTreeSource(root: string): BacklogTreeSource {
         return [];
       }
     },
+    async listAdrFiles() {
+      try {
+        return (await readdir(join(root, '.docs/decisions'))).filter((file) => /^adr-.*\.md$/i.test(file));
+      } catch {
+        return [];
+      }
+    },
     async readFile(relativePath: string) {
       try {
         return await readFile(join(root, relativePath), 'utf-8');
@@ -88,6 +95,9 @@ function mapTreeSource(files: Map<string, string>): BacklogTreeSource {
         .map((file) => file.slice('.docs/plans/'.length));
     },
     async listShippedFiles() {
+      return [];
+    },
+    async listAdrFiles() {
       return [];
     },
     async readFile(relativePath: string) {

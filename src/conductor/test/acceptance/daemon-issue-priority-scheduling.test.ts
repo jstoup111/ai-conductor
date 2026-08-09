@@ -82,6 +82,13 @@ function fsTreeSource(root: string): BacklogTreeSource {
         return [];
       }
     },
+    async listAdrFiles() {
+      try {
+        return (await readdir(join(root, '.docs/decisions'))).filter((f) => /^adr-.*\.md$/i.test(f));
+      } catch {
+        return [];
+      }
+    },
     async readFile(relPath: string) {
       try {
         return await fsReadFile(join(root, relPath), 'utf-8');

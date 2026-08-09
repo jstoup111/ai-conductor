@@ -242,6 +242,7 @@ incomplete.**
 ### 7b. ADR Approval Lifecycle
 
 ADRs follow a three-phase lifecycle. No ADR becomes authoritative without human approval.
+Terminal ADR declarations use only `Status: APPROVED` or `Status: SUPERSEDED by <adr-filename-stem>`.
 
 **Phase 1: DRAFT**
 - Architecture-review creates the ADR with `Status: DRAFT` in the frontmatter

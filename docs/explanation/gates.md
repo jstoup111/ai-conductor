@@ -140,7 +140,7 @@ from specs that would waste a build.
 | required artifacts | a spec missing its PRD, stories, or plan, or with an empty one |
 | draft/stub reject | any artifact still marked draft, or a known stub string |
 | stories approval | stories without the explicit acceptance marker — not being draft is not enough |
-| ADR status | any architecture decision record still in draft |
+| ADR status | any ADR under `.docs/decisions/` whose first line-anchored `Status:` declaration is not `APPROVED` or `SUPERSEDED`, or that declares no status at all — fenced code-block examples of rejected statuses are excluded from matching |
 | tier agreement | a declared complexity tier that disagrees with the artifacts present |
 | coherence | a traceability record that does not connect outcomes, requirements, stories, and tasks, or stories that do not tie out to the PRD |
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |

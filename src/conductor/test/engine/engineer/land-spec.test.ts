@@ -115,6 +115,43 @@ afterEach(async () => {
   await rm(repoPath, { recursive: true, force: true });
 });
 
+describe('landSpec ADR approval diagnostics (Task 6)', () => {
+  const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+
+  it('names an ADR and its disallowed status', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-proposed.md'), '# ADR\n\nStatus: Proposed\n');
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/adr-proposed\.md.*Proposed/i);
+  });
+
+  it('distinguishes a missing status declaration from a rejected status', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-missing.md'), '# ADR\n\nNo declaration here.\n');
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/adr-missing\.md.*no status declaration/i);
+  });
+
+  it('reports every nonconforming ADR before refusing the land', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await Promise.all([
+      writeFile(join(dir, '.docs', 'decisions', 'adr-proposed.md'), '# ADR\n\nStatus: Proposed\n'),
+      writeFile(join(dir, '.docs', 'decisions', 'adr-accepted.md'), '# ADR\n\nStatus: Accepted\n'),
+    ]);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/adr-proposed\.md[\s\S]*adr-accepted\.md|adr-accepted\.md[\s\S]*adr-proposed\.md/i);
+  });
+});
+
 describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', () => {
   it('Task 5: rejects (throws) when identity is unresolved, in a worktree with valid Accepted artifacts', async () => {
     const worktree = await seedValidWorktree();

@@ -7,5 +7,6 @@
 export interface BacklogTreeSource {
   listPlanFiles(): Promise<string[]>;
   listShippedFiles(): Promise<string[]>;
+  listAdrFiles(): Promise<string[]>;
   readFile(relPath: string): Promise<string | null>;
 }

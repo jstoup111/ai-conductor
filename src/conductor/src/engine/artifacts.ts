@@ -3085,18 +3085,28 @@ export function isStoriesApproved(content: string): boolean {
 }
 
 /**
- * True when an ADR (or any architecture-review artifact) still carries a DRAFT
- * status. Mirrors the DRAFT regex used by the land gate (land-spec.ts) and the
- * conduct architecture-review gate: matches "status" followed on the same line
- * by "draft", tolerating YAML (`status: draft`), markdown bold (`**Status:**
- * DRAFT`), and arbitrary punctuation/whitespace between them.
- *
- * Shared so the engineer authoring seam, the land-time gate, and any future
- * caller agree on the single ADR-approval signal — no DRAFT ADR may reach a
- * daemon that has already pre-seeded architecture_review as done.
+ * Read the declared ADR status. APPROVED and SUPERSEDED ADRs satisfy the
+ * approval gate; other declared statuses are retained for diagnostics.
  */
-export function hasDraftAdr(content: string): boolean {
-  return /status[^:\n]*:\s*[\*_]*\s*draft/i.test(content);
+export function adrApprovalStatus(content: string): { approved: boolean; found: string | null } {
+  const withoutFencedCodeBlocks = content.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
+    '',
+  );
+  const match = withoutFencedCodeBlocks.match(
+    /^\s*(?:[-+*]\s+)?(?:(?:\*\*status\s*:\s*\*\*|\*\*status\*\*\s*:|status\s*:)\s*(.*?)|\*\*status\s*:\s*(.*?)\*\*)\s*$/im,
+  );
+  if (!match) return { approved: false, found: null };
+
+  let found = (match[1] ?? match[2]).trim();
+  if (found.startsWith('**') && found.endsWith('**')) {
+    found = found.slice(2, -2).trim();
+  }
+
+  return {
+    approved: /^(?:approved|superseded)\b/i.test(found),
+    found,
+  };
 }
 
 /**
