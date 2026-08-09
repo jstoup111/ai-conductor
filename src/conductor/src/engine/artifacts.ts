@@ -3085,6 +3085,27 @@ export function isStoriesApproved(content: string): boolean {
 }
 
 /**
+ * Read the declared ADR status. APPROVED and SUPERSEDED ADRs satisfy the
+ * approval gate; other declared statuses are retained for diagnostics.
+ */
+export function adrApprovalStatus(content: string): { approved: boolean; found: string | null } {
+  const match = content.match(
+    /^\s*(?:[-+*]\s+)?(?:\*\*status\s*:\s*\*\*|\*\*status\*\*\s*:|status\s*:)\s*(.*?)\s*$/im,
+  );
+  if (!match) return { approved: false, found: null };
+
+  let found = match[1].trim();
+  if (found.startsWith('**') && found.endsWith('**')) {
+    found = found.slice(2, -2).trim();
+  }
+
+  return {
+    approved: /^(?:approved|superseded)\b/i.test(found),
+    found,
+  };
+}
+
+/**
  * True when an ADR (or any architecture-review artifact) still carries a DRAFT
  * status. Mirrors the DRAFT regex used by the land gate (land-spec.ts) and the
  * conduct architecture-review gate: matches "status" followed on the same line

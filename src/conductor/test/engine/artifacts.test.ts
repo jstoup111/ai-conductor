@@ -64,6 +64,7 @@ import {
   getArtifactStatus,
   checkStepCompletion,
   isStoriesApproved,
+  adrApprovalStatus,
   classifyPrdAuditGaps,
   classifyRetryDecision,
   sweepStaleReviewArtifacts,
@@ -3214,6 +3215,19 @@ describe('engine/artifacts', () => {
 
     it('rejects when DRAFT is present even if Accepted also appears', () => {
       expect(isStoriesApproved('**Status:** Accepted\n... was **Status:** DRAFT')).toBe(false);
+    });
+  });
+
+  describe('adrApprovalStatus (allowlisted declarations)', () => {
+    it.each([
+      ['bare approved status', 'Status: APPROVED', 'APPROVED'],
+      ['case-insensitive approved status', 'Status: aPpRoVeD', 'aPpRoVeD'],
+      ['bold superseded status', '**Status:** SUPERSEDED by `adr-2026-07-30-finish-only-mergeability-gate`', 'SUPERSEDED by `adr-2026-07-30-finish-only-mergeability-gate`'],
+      ['list-marked approved status with trailing prose', '- **Status:** APPROVED (operator-approved 2026-07-29)', 'APPROVED (operator-approved 2026-07-29)'],
+      ['superseded status with trailing prose', 'Status: SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`', 'SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`'],
+      ['bold-wrapped approved value with trailing whitespace', '**Status:** **APPROVED**   ', 'APPROVED'],
+    ])('approves a %s declaration', (_description, declaration, found) => {
+      expect(adrApprovalStatus(`# ADR\n\n${declaration}\n`)).toEqual({ approved: true, found });
     });
   });
 
