@@ -9413,7 +9413,10 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
       (task) => `### Task ${task.id}: remediation\n\n**Files:** ${task.title}`,
     )
     .join('\n\n');
-  return scanPlanProtectedTargets(taskScopes, activePlanStem).length > 0;
+  if (scanPlanProtectedTargets(taskScopes, activePlanStem).length > 0) return true;
+  if (gap.tasks.length > 0) return false;
+  const rationaleScope = `### Task ${gap.id}: remediation\n\n${gap.rationale}`;
+  return scanPlanProtectedTargets(rationaleScope, activePlanStem).length > 0;
 }
 
 /**

@@ -54,4 +54,17 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
       ]),
     );
   });
+
+  it('reports foreign protected artifact citations from an undeclared task body', () => {
+    const result = parsePlanTaskPaths(`### Task 1: Explain the change
+See \`.docs/specs/other-feature.md:42\` before editing.
+
+### Task 2: Explain this feature
+See \`.docs/specs/feature.md\` before editing.
+`, 'feature');
+
+    expect(result.foreignProtectedReferencesByTaskId).toEqual(
+      new Map([['1', new Set(['.docs/specs/other-feature.md'])], ['2', new Set()]]),
+    );
+  });
 });

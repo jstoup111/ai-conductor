@@ -15,6 +15,7 @@
 // parsePlanTaskPaths' function body (never at module top level), so both
 // import orderings remain safe under ESM's circular-import resolution.
 import { WIRED_INTO_LINE } from './wired-into.js';
+import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-artifact-seal.js';
 
 // Task ID pattern: alphanumeric + dots, underscores, hyphens
 // Supports: 1, 1.2, task_1, task-name, rem-adr-001, etc.
@@ -38,6 +39,7 @@ const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
   declaredTaskIds: ReadonlySet<string>;
   hasFilesLineByTaskId: ReadonlyMap<string, boolean>;
+  foreignProtectedReferencesByTaskId: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 // A task's **Files:** line is the authoritative declaration of which paths
@@ -81,13 +83,14 @@ function expandTaskIds(raw: string): string[] {
   return ids;
 }
 
-export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
+export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTaskPaths {
   interface TaskSection {
     ids: string[];
     filesPaths: Set<string>; // declared on **Files:** lines
     sameRef: string | null; // 'prev' or an explicit task id to inherit from
     hasFilesLine: boolean;
     prosePaths: Set<string>; // legacy whole-section backtick scan
+    bodyLines: string[];
   }
   const sections: TaskSection[] = [];
   let current: TaskSection | null = null;
@@ -142,12 +145,15 @@ export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
         sameRef: null,
         hasFilesLine: false,
         prosePaths: new Set(),
+        bodyLines: [],
       };
       sections.push(current);
       inFilesBlock = false;
       continue;
     }
     if (!current) continue;
+
+    current.bodyLines.push(line);
 
     const filesMatch = line.match(FILES_LINE);
     if (filesMatch) {
@@ -217,6 +223,7 @@ export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
   const result = new Map<string, Set<string>>() as ParsedPlanTaskPaths;
   const declaredTaskIds = new Set<string>();
   const hasFilesLineByTaskId = new Map<string, boolean>();
+  const foreignProtectedReferencesByTaskId = new Map<string, ReadonlySet<string>>();
   const resolvedBySection: Set<string>[] = [];
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i];
@@ -244,6 +251,20 @@ export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
     for (const id of s.ids) {
       if (s.hasFilesLine) declaredTaskIds.add(id);
       hasFilesLineByTaskId.set(id, s.hasFilesLine);
+      if (!s.hasFilesLine) {
+        const references = new Set<string>();
+        BACKTICK_TOKEN.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        while ((match = BACKTICK_TOKEN.exec(s.bodyLines.join('\n'))) !== null) {
+          const path = match[1].replace(/:\d+(?:-\d+)?$/, '').replace(/^\.\//, '');
+          if (PROTECTED_ARTIFACT_DIRECTORIES.some((directory) =>
+            path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
+          ) && !namesOwnFeature(path, featureDesc)) {
+            references.add(path);
+          }
+        }
+        foreignProtectedReferencesByTaskId.set(id, references);
+      }
       const existing = result.get(id);
       if (existing) {
         for (const p of resolved) existing.add(p);
@@ -255,6 +276,7 @@ export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
 
   result.declaredTaskIds = declaredTaskIds;
   result.hasFilesLineByTaskId = hasFilesLineByTaskId;
+  result.foreignProtectedReferencesByTaskId = foreignProtectedReferencesByTaskId;
 
   return result;
 }
