@@ -15,8 +15,9 @@ to its counterpart ids with a per-row verdict. This artifact is the auditable
 traceability record the operator (and the land-time coherence validator) reads instead
 of trusting self-reported "everything's covered" prose in a spec PR.
 
-**Correctness gate:** a row's verdict ("covered" vs "gap") is a judgment call, not a
-mechanical grep. Per the `/verify-claims` protocol, ground every verdict in the actual
+**Correctness gate:** a row's verdict (`covered` / `gap` / `fail`) is a judgment call, not
+a mechanical grep. Coverage and consistency are separate questions: a counterpart can
+exist and still contradict what it implements (§4d). Per the `/verify-claims` protocol, ground every verdict in the actual
 cited text — do not mark a row covered on the assumption that a plausible-looking
 counterpart id exists; confirm it against the real artifact file.
 
@@ -90,18 +91,28 @@ The artifact is a Markdown table (or one table per row class) with these columns
 
 ### 4b. Verdict Vocabulary
 
-Use exactly these two verdict values — this is the same vocabulary the land-time
+Use exactly these three verdict values — this is the same vocabulary the land-time
 validator parses and the same vocabulary the coherence-waiver mechanism consumes:
 
 - **covered** — the cited id has ≥1 real counterpart id (confirmed to exist in the
-  counterpart's own artifact file, not merely referenced).
+  counterpart's own artifact file, not merely referenced) **and** nothing in that
+  counterpart contradicts it (§4d).
 - **gap** — the cited id has zero counterparts, or its only counterpart is itself
   transitively uncovered (e.g. a story maps to a task, but that task cites no story
   back, or the coverage table claims a task id that does not exist in the task tree).
+- **fail** — the cited id *has* a real counterpart, but the two **contradict** each
+  other (§4d). Coverage is satisfied here; consistency is not. Recording it as `gap`
+  would misdescribe it and send the reader hunting for a missing artifact that is in
+  fact present and wrong.
 
-Do not invent additional verdict strings (e.g. "partial", "n/a", "pending"). A row
-that is genuinely not applicable (e.g. the FR row class on a technical-track spec) is
-simply omitted, not marked with a placeholder verdict.
+**The exact strings matter more than they look.** The land-time validator treats
+`gap`, `missing`, `uncovered`, and `fail` as blocking, and **every other string as
+affirmative**. An invented verdict — "partial", "contradiction", "n/a", "pending" —
+therefore does not fail loudly; it *silently passes the gate*. That is why a
+contradiction is recorded as `fail` rather than as a new word that reads more
+precisely: `fail` is already in the blocking set and already flows into the gap list a
+waiver can cite. A row that is genuinely not applicable (e.g. the FR row class on a
+technical-track spec) is omitted entirely, never given a placeholder verdict.
 
 ### 4c. Gap-ID Scheme
 
@@ -123,6 +134,51 @@ to emit the ids in the correct form so a later waiver can cite them):
 Gap ids are opaque strings to downstream consumers (the validator, the waiver parser)
 — do not paraphrase or abbreviate them; use the exact forms above so cross-checking
 against the real artifact files (Section 5) is possible.
+
+A **fail** row uses the same id form as its row class (`outcome-<n>`, `fr-<N>`,
+`story-<id>`, `task-<id>`) — the id identifies *which* row, and the verdict says what
+is wrong with it. Prefix its Notes with `CONTRADICTS:` and name the counterpart id and
+the specific opposing text, so a reader can adjudicate without re-deriving the finding.
+
+### 4d. Consistency Pass — Contradiction and Oscillation
+
+Coverage and consistency are different questions, and this artifact is the only place
+both are visible: it is the one view holding outcomes, FRs, stories, and tasks at once.
+A row where the counterpart exists but *opposes* what it implements is **`fail`**, not
+`covered` — the mapping is complete and wrong.
+
+After establishing coverage, re-read each covered row and ask whether the counterpart
+actually delivers the thing, or contradicts it. Two shapes matter:
+
+**Static contradiction** — the two cannot both hold. An FR requires a field be
+immutable after creation while a task adds an edit endpoint for it; an outcome demands
+a gate fail closed while its task adds a bypass flag. Whichever is right, they cannot
+both ship, and one artifact must be amended during DECIDE before BUILD begins.
+
+**Oscillation** — the dangerous one, and the reason this pass exists. Two requirements
+are individually satisfiable but mutually exclusive *in practice*, so satisfying one
+re-breaks the other. Nothing looks wrong at authoring time; the damage appears later as
+a gate kicking work back, the fix tripping a different gate, and that gate kicking it
+back again. The loop does not terminate on its own, and each lap costs a full agent
+session. Prefer catching this here, where the cost is an amended sentence.
+
+Detection heuristic: for each pair of requirements touching the same behavior, entity,
+field, or gate, ask **"if I fully satisfy A, does B still hold?"** Then ask it in the
+other direction. Two "no" answers is an oscillation regardless of how reasonable each
+requirement reads alone. Pairs worth checking first are the ones sharing a subject
+across *different* layers — an outcome and a task, an FR and a story — because same-layer
+contradictions are what `/conflict-check` already sweeps for, and cross-layer ones are
+what nothing else sees.
+
+Ground every `fail` in the specific opposing text from both artifacts, per the
+verify-claims protocol in Section 5. "These feel like they might conflict" is not a
+finding. If a suspected contradiction cannot be grounded in quoted text, surface it as
+an assumption for the operator rather than recording a verdict either way.
+
+When a contradiction is confirmed, amend the artifact during this DECIDE pass — do not
+defer it to BUILD. Follow the accepted-artifact amendment convention the sibling DECIDE
+skills use: add a dated note beside the original assertion, additively, leaving the
+original text in place.
 
 ## 5. Semantic-Judging Instructions (verify-claims protocol)
 
@@ -163,7 +219,12 @@ per row and must never assert "covered" that it has not actually confirmed.
 - [ ] Tier L dispatch is pinned to opus; tier M inherits the session/step default
 - [ ] `.docs/coherence/<plan-stem>.md` filename stem matches the plan's filename stem exactly
 - [ ] All four row classes present where applicable (outcome/fr omitted only when genuinely not required)
-- [ ] Every verdict is exactly `covered` or `gap` — no invented verdict strings
+- [ ] Every verdict is exactly `covered`, `gap`, or `fail` — no invented verdict strings
+      (an invented string is treated as affirmative by the validator and silently passes)
+- [ ] §4d consistency pass run over every covered row; contradictions recorded as `fail`
+      with `CONTRADICTS:` notes quoting the opposing text from both artifacts
+- [ ] Cross-layer pairs (outcome↔task, FR↔story) checked in both directions for
+      oscillation — same-layer pairs are `/conflict-check`'s sweep, cross-layer are this skill's
 - [ ] Every `gap` row's Notes column restates its gap id in the canonical form (Section 4c)
 - [ ] Every `covered` verdict was confirmed against the real counterpart artifact file, not inferred
 - [ ] Ambiguous rows surfaced as assumptions (interactive: wait for confirmation; autonomous: mark `gap`, never silently pass)

@@ -1,6 +1,6 @@
 ---
 name: conflict-check
-description: "Use after writing stories, before creating an implementation plan, or when adding features to an existing system. Detects contradictions, overlaps, state conflicts, and resource contention between stories."
+description: "Use after writing stories, before creating an implementation plan, or when adding features to an existing system. Detects contradictions, overlaps, state conflicts, resource contention, and oscillating requirements that are individually satisfiable but mutually exclusive in practice — the pair that sends work round a kickback loop that never terminates."
 enforcement: gating
 phase: decide
 standalone: true
@@ -77,6 +77,34 @@ Stories that each assume they run first, or create circular dependencies.
 - Story B: "First order creation triggers profile setup"
 - Conflict: Circular dependency on which comes first.
 
+#### Oscillating Conflict
+Two requirements that are each individually satisfiable but **mutually exclusive in
+practice**, so satisfying one re-breaks the other. This is the costliest conflict type
+and the hardest to see, because nothing looks wrong at authoring time — both stories
+read as reasonable, and each is implementable on its own.
+
+- Story A: "Every batch boundary blocks until the evaluator has written a verdict"
+- Story B: "A batch with no code changes skips evaluator dispatch to save tokens"
+- Conflict: a no-change batch must both block on a verdict and never request one. An
+  implementation satisfying A fails B's gate; the fix for B then fails A's gate.
+
+The damage is not a failed build — it is a **loop that does not terminate on its own**.
+Gate A kicks the work back, the fix trips gate B, gate B kicks it back, and each lap
+costs a full agent session. A static contradiction announces itself the first time
+someone tries to write the code; an oscillation only announces itself as unexplained
+rework, several steps downstream, where nobody is looking at the stories any more.
+
+**Detection heuristic:** for each pair of stories touching the same behavior, entity,
+field, or gate, ask **"if I fully satisfy A, does B still hold?"** — then ask it in the
+other direction. Two "no" answers is an oscillation, however sensible each story reads
+alone. One "no" is an ordinary contradiction or overlap; classify it as those instead.
+
+Oscillations are almost always **blocking**, even when each story looks harmless,
+because there is no implementation that satisfies both and no amount of rework will
+find one. Resolving it requires changing what is being asked for, not how it is built —
+which usually means the root lives upstream (see 5c) in the PRD's FRs or in the design,
+not in story phrasing.
+
 ### 3. Generate Conflict Report
 
 For each conflict found:
@@ -86,7 +114,7 @@ For each conflict found:
 
 **Stories involved:** [Story A title] vs [Story B title]
 **Files:** [.docs/stories/file-a.md] vs [.docs/stories/file-b.md]
-**Type:** contradiction | overlap | state-conflict | resource-contention | sequencing
+**Type:** contradiction | overlap | state-conflict | resource-contention | sequencing | oscillating
 **Severity:** blocking | degrading
 
 **Description:**
@@ -205,7 +233,10 @@ echo "blocking conflicts resolved: 2, degrading accepted: 1" > .pipeline/review-
 ## Verification
 
 - [ ] All stories in `.docs/stories/` scanned (not just new ones)
-- [ ] All 5 conflict types checked (contradiction, overlap, state, resource, sequencing)
+- [ ] All 6 conflict types checked (contradiction, overlap, state, resource, sequencing, oscillating)
+- [ ] Every pair sharing a behavior/entity/field/gate was tested in BOTH directions —
+      "if A is fully satisfied, does B still hold?" — since one-directional checking
+      cannot distinguish an oscillation from an ordinary contradiction
 - [ ] Each conflict has severity, description, and resolution options
 - [ ] User selected resolution for each blocking conflict
 - [ ] Affected stories updated to reflect resolutions

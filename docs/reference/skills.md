@@ -287,7 +287,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### conflict-check
 
-> Use after writing stories, before creating an implementation plan, or when adding features to an existing system. Detects contradictions, overlaps, state conflicts, and resource contention between stories.
+> Use after writing stories, before creating an implementation plan, or when adding features to an existing system. Detects contradictions, overlaps, state conflicts, resource contention, and oscillating requirements that are individually satisfiable but mutually exclusive in practice — the pair that sends work round a kickback loop that never terminates.
 
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
@@ -332,7 +332,9 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — `.docs/coherence/<plan-stem>.md`. The stem must match the plan filename stem exactly or
   the land validator rejects it as a missing coherence artifact.
 - **Gate role** — blocking. It authors the artifact the land-time coherence gate validates. Verdicts are
-  exactly `covered` or `gap`. In an autonomous run an ambiguous row is marked `gap` and left for the
+  exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it,
+  which coverage alone cannot express. Any other string is treated as affirmative by the validator and
+  silently passes, so the vocabulary is closed deliberately. In an autonomous run an ambiguous row is marked `gap` and left for the
   fail-closed land gate — never silently passed. At tier S it does not run and must not author a stub.
 
 ### intake
