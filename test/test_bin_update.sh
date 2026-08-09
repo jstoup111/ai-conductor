@@ -411,7 +411,74 @@ assert "missing conduct-ts: forced update check states the reason" "$(case "$OUT
 run_update_without_conduct "$REPO" "$HOME_DIR" --auto
 assert "missing conduct-ts: --auto remains advisory" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "missing conduct-ts: --auto states the declined reason" "$(case "$OUT" in *"conduct-ts"*) echo 0;; *) echo 1;; esac)"
-assert "update config path does not import PyYAML" "$(rg -q 'import yaml|from yaml import' "$HARNESS_DIR/bin/update" && echo 1 || echo 0)"
+
+# ─── Update config access does not depend on PyYAML ────────────────────────
+# The approved ADR keeps the update-specific accessors and entry points off
+# PyYAML, routing every conductor read and write through conduct-ts. It
+# deliberately leaves the generic harness_cfg_get/harness_cfg_set viewer
+# helpers on PyYAML, so those stay out of scope here.
+#
+# This was previously a static "does bin/update contain `import yaml`" scan,
+# which proved nothing: it passes on the base tree, it passes on any tree once
+# the scanner is unavailable, and it never touches the accessors the ADR is
+# actually about. Break the import instead and run the real entry points.
+
+NO_YAML_LIB="$TMP_ROOT/no-yaml-lib"
+mkdir -p "$NO_YAML_LIB"
+cat > "$NO_YAML_LIB/yaml.py" <<'EOF'
+raise ImportError("PyYAML is unavailable in this fixture")
+EOF
+NO_YAML_BIN="$TMP_ROOT/no-yaml-bin"
+mkdir -p "$NO_YAML_BIN"
+cat > "$NO_YAML_BIN/python3" <<EOF
+#!/usr/bin/env bash
+# Shadows PyYAML with a module that always raises, so any code path that
+# reaches \`import yaml\` fails loudly instead of silently succeeding.
+PYTHONPATH="$NO_YAML_LIB\${PYTHONPATH:+:\$PYTHONPATH}" exec "$PY3" "\$@"
+EOF
+chmod +x "$NO_YAML_BIN/python3"
+NO_YAML_PATH="$NO_YAML_BIN:/usr/bin:/bin"
+
+# The fixture is only meaningful if it really breaks the import.
+set +e
+NO_YAML_PROBE=$(PATH="$NO_YAML_PATH" python3 -c 'import yaml' 2>&1)
+NO_YAML_PROBE_CODE=$?
+set -e
+assert "no-PyYAML fixture actually breaks 'import yaml'" \
+  "$( [ "$NO_YAML_PROBE_CODE" -ne 0 ] && case "$NO_YAML_PROBE" in *"unavailable in this fixture"*) echo 0;; *) echo 1;; esac || echo 1)"
+
+# The accessors are the ADR's subject: they must still resolve the conductor
+# block through conduct-ts with PyYAML unimportable.
+HOME_DIR=$(make_isolated_home)
+set +e
+NO_YAML_ACCESSOR_OUT=$(CONDUCTOR_CFG_CALLS="$HOME_DIR/conductor-cfg-calls" \
+  CONDUCTOR_CFG_READ_VALUE="main" \
+  HOME="$HOME_DIR" PATH="$CONDUCTOR_CFG_STUBS:$NO_YAML_PATH" \
+  bash -c 'source "$1"; conductor_cfg_set updateChannel main; conductor_cfg_get updateChannel tagged' \
+    _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>&1)
+NO_YAML_ACCESSOR_CODE=$?
+set -e
+NO_YAML_CALLS=$(cat "$HOME_DIR/conductor-cfg-calls" 2>/dev/null || true)
+assert "without PyYAML: conductor accessors still succeed" \
+  "$([ "$NO_YAML_ACCESSOR_CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "without PyYAML: conductor write delegates to conduct-ts" \
+  "$(printf '%s\n' "$NO_YAML_CALLS" | grep -qx 'config set conductor.update_channel main' && echo 0 || echo 1)"
+assert "without PyYAML: conductor read delegates to conduct-ts" \
+  "$(printf '%s\n' "$NO_YAML_CALLS" | grep -qx 'config read conductor.update_channel' && echo 0 || echo 1)"
+assert "without PyYAML: conductor read returns the conduct-ts value" \
+  "$(case "$NO_YAML_ACCESSOR_OUT" in *"main"*) echo 0;; *) echo 1;; esac)"
+
+# The entry point must reach the same conclusion it reaches with PyYAML present.
+REPO=$(make_repo "no-pyyaml")
+HOME_DIR=$(make_isolated_home)
+set_conductor_cfg "$HOME_DIR" updateChannel tagged
+set +e
+OUT=$(cd "$REPO" && HOME="$HOME_DIR" PATH="$REPO/bin:$NO_YAML_PATH" "$REPO/bin/update" --auto < /dev/null 2>&1)
+CODE=$?
+set -e
+assert "without PyYAML: bin/update --auto completes" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "without PyYAML: bin/update never reports a yaml import failure" \
+  "$(case "$OUT" in *"unavailable in this fixture"*|*"ModuleNotFoundError"*) echo 1;; *) echo 0;; esac)"
 
 # ─── Installer update config: shared conductor YAML ownership ─────────────
 
