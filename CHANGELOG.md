@@ -32,6 +32,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A pull request whose `## Migration` section sits above its release metadata block, or is followed by a trailer, no longer fails the finish-time release gate as non-canonical, and the merged body no longer duplicates the Migration section. ([implementation PR #1406](https://github.com/jstoup111/ai-conductor/pull/1406)).
 - `conduct-ts shipped-record` reports success on stdout, so a successful ship no longer appears in the daemon log tagged `[error]`. ([implementation PR #1407](https://github.com/jstoup111/ai-conductor/pull/1407)).
 
+### Security
+
+- Intake filing now redacts credentials and operator-identifying paths from the issue title and body before publishing, and reports what it replaced. ([implementation PR #1420](https://github.com/jstoup111/ai-conductor/pull/1420)).
+
 ## Migration
 
 ```bash migration
