@@ -514,6 +514,10 @@ export function createProgram(): Command {
     .command('closeout-event <obligation> <started-at> <ended-at>')
     .description('Record one pipeline closeout timing event');
 
+  program
+    .command('build-tail [worktree]')
+    .description('Render a deterministic build task/remediation/closeout timing rollup');
+
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
   // pipeline for processing filed halt-monitor issues. Declared here so `--help`

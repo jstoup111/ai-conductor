@@ -151,6 +151,10 @@ import {
   detectCloseoutEventCommand,
   dispatchCloseoutEventCommand,
 } from './engine/closeout-cli.js';
+import {
+  detectBuildTailCommand,
+  dispatchBuildTailCommand,
+} from './engine/build-tail-cli.js';
 import { detectBuildAuthStatusCommand, dispatchBuildAuthStatus } from './engine/build-auth-cli.js';
 import {
   detectHaltIssuesSweepCommand,
@@ -520,6 +524,12 @@ export async function validateWiredIntoCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  const buildTailCmd = detectBuildTailCommand(process.argv);
+  if (buildTailCmd) {
+    process.exitCode = await dispatchBuildTailCommand(buildTailCmd);
+    return;
+  }
+
   const closeoutEventCmd = detectCloseoutEventCommand(process.argv);
   if (closeoutEventCmd) {
     process.exitCode = await dispatchCloseoutEventCommand(closeoutEventCmd);
