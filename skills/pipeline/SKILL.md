@@ -333,7 +333,7 @@ add a lightweight integration check (full branch stat summary) but do NOT re-rev
 batches line by line — they already passed their own evaluator gate.
 
 **Enforcement — orchestrator writes, not the evaluator.** After the evaluator
-returns, the orchestrator (not the evaluator) MUST perform these three actions
+returns, the orchestrator (not the evaluator) MUST perform these actions
 atomically before advancing one single token further:
 
 1. `mkdir -p .pipeline/audit-trail/batch-N`
@@ -341,13 +341,25 @@ atomically before advancing one single token further:
    `.pipeline/audit-trail/batch-N/review.json`
 3. Stat-check `test -s .pipeline/audit-trail/batch-N/review.json` — non-empty file must
    exist before the next batch starts
+4. Record the completed `evaluator` closeout obligation with
+   `conduct-ts closeout-event evaluator <started-at-ms> <ended-at-ms>`, then verify that
+   `.pipeline/pipeline-events.jsonl` contains a parseable `pipeline_closeout` record whose
+   `obligation` is exactly `evaluator`. An event for another obligation does not satisfy
+   this check.
 
-A missing or empty `review.json` is a hard gate: the pipeline MUST halt and dispatch the
-evaluator again rather than advancing. Do NOT trust "the evaluator ran successfully in
-the transcript" as evidence — only the file on disk counts. Past runs have silently
-bypassed 4+ evaluator gates because the subagent result was summarized back to the
-orchestrator but the write step was skipped; the file check is the only reliable
-safeguard.
+A missing or empty `review.json` remains an independent hard gate: the pipeline MUST halt and
+dispatch the evaluator again rather than advancing. A missing, malformed, or non-matching
+closeout record is a second hard gate: the pipeline MUST halt with
+`Batch N blocked: missing recorded closeout event for evaluator` and record the matching event
+before advancing. Do NOT trust "the evaluator ran successfully in the transcript" as evidence —
+only the required files on disk count. Past runs have silently bypassed 4+ evaluator gates
+because the subagent result was summarized back to the orchestrator but the write step was
+skipped; the file checks are the only reliable safeguard.
+
+This closeout-event gate applies only to pipeline sessions started after the closeout-event
+emitter is available. A build already in flight when that emitter ships is exempt: do not
+retroactively block it for an event that its running session had no way to write. The existing
+`review.json` gate still applies to every session.
 
 The evaluator runs:
 
