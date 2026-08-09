@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 import { BuildProgressWatcher } from '../../src/engine/build-progress-watcher.js';
+import { dispatchCloseoutEventCommand } from '../../src/engine/closeout-cli.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
@@ -144,14 +145,21 @@ describe('BUILD post-task tail telemetry acceptance', () => {
 
   it('rejects an unknown closeout obligation without writing either ledger', async () => {
     vi.useRealTimers();
-    const result = spawnSync(
-      REAL_CONDUCT_TS,
-      ['closeout-event', 'not-a-closeout-obligation', '100', '140'],
-      { cwd: projectRoot, encoding: 'utf8', timeout: 10_000 },
+    const errors: string[] = [];
+    const result = await dispatchCloseoutEventCommand(
+      {
+        kind: 'closeout-event',
+        obligation: 'not-a-closeout-obligation',
+        startedAt: 100,
+        endedAt: 140,
+      },
+      projectRoot,
+      () => 0,
+      (message) => errors.push(message),
     );
 
-    expect(result.status).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toMatch(/accepted|valid|obligation/i);
+    expect(result).not.toBe(0);
+    expect(errors.join('\n')).toMatch(/accepted|valid|obligation/i);
     await expect(
       readFile(join(projectRoot, '.pipeline/pipeline-events.jsonl'), 'utf8'),
     ).rejects.toMatchObject({ code: 'ENOENT' });

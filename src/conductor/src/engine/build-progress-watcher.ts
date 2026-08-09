@@ -307,6 +307,10 @@ export class BuildProgressWatcher {
       const result = await git(['rev-parse', 'HEAD']);
       if (result.exitCode === 0 && result.stdout.trim()) {
         head = result.stdout.trim();
+      } else {
+        // A non-zero git result is a failed HEAD probe just as much as a
+        // thrown runner error. Preserve that fact on the emitted tick.
+        headProbeFailed = true;
       }
     } catch {
       // HEAD probe failed (corrupted worktree, not a repo, etc) — degrade to

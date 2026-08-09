@@ -170,7 +170,7 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-events.ts — new appender module
 - src/conductor/test/closeout-events.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/closeout-cli.ts)
+**Wired-into:** src/conductor/src/engine/closeout-cli.ts#dispatchCloseoutEventCommand
 **Dependencies:** Task 5
 
 ### Task 7: Expose the appender as a `conduct-ts` subcommand
@@ -188,7 +188,7 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-cli.ts — new subcommand
 - src/conductor/src/cli.ts — command-table registration
 
-**Wired-into:** src/conductor/src/cli.ts#commandTable
+**Wired-into:** src/conductor/src/cli.ts#createProgram
 **Dependencies:** Task 6
 
 ### Task 8: Reject an unknown or empty obligation name without writing
@@ -223,7 +223,7 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-tail.ts — new reader
 - src/conductor/test/closeout-tail.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/conductor.ts)
+**Wired-into:** src/conductor/src/engine/closeout-tail.ts#CloseoutEventTail
 **Dependencies:** Task 5
 
 ### Task 10: Re-emit tailed closeout events onto the live bus
@@ -241,7 +241,7 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-tail.ts — polling + emit
 - src/conductor/src/engine/conductor.ts — lifecycle in the build dispatch scope
 
-**Wired-into:** src/conductor/src/engine/conductor.ts#runStep
+**Wired-into:** src/conductor/src/engine/conductor.ts#Conductor.run
 **Dependencies:** Task 9
 
 ### Task 11: Stop the tail when the build step settles or rejects
@@ -294,7 +294,7 @@ goes in the PR body.
 - src/conductor/src/engine/build-tail-rollup.ts — new module
 - src/conductor/test/build-tail-rollup.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/build-tail-cli.ts)
+**Wired-into:** src/conductor/src/engine/build-tail-cli.ts#dispatchBuildTailCommand
 **Dependencies:** Task 5
 
 ### Task 14: Decompose each window and classify first-pass vs re-entry
@@ -346,7 +346,7 @@ goes in the PR body.
 - src/conductor/src/engine/build-tail-cli.ts — new subcommand and renderer
 - src/conductor/src/cli.ts — command-table registration
 
-**Wired-into:** src/conductor/src/cli.ts#commandTable
+**Wired-into:** src/conductor/src/cli.ts#createProgram
 **Dependencies:** Task 15
 
 ### Task 17: Commit the baseline with its coverage stated

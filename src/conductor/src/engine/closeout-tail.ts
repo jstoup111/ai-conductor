@@ -73,7 +73,7 @@ export class CloseoutEventTail {
     this.interval = setInterval(() => {
       void this.poll();
     }, 1_000);
-    this.interval.unref();
+    this.interval.unref(); // portability-ok: detaches the closeout polling interval from process exit
   }
 
   /** Stop background polling once the owning build attempt has settled. */
