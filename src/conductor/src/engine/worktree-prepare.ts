@@ -40,7 +40,7 @@
  * runner silently breaks all three callers at once.
  */
 import { execa } from 'execa';
-import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat, lstat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PRE_COMMIT_HOOK, PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 import {
@@ -434,10 +434,20 @@ async function writeGitHooksAndWire(
   // Some unit-level setup tests exercise the project-script boundary in a
   // plain temporary directory rather than a Git worktree. There is no commit
   // surface to protect in that shape, so leave the historical no-op intact.
+  // A present but inaccessible .git is different: it claims to be a checkout
+  // but cannot receive the preventive hook, so fail closed before BUILD/SHIP.
   try {
-    await access(join(worktreePath, '.git'));
-  } catch {
-    return;
+    await lstat(join(worktreePath, '.git'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`preventive git hook installation failed: unable to inspect .git metadata: ${msg}`);
+  }
+  try {
+    await stat(join(worktreePath, '.git'));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`preventive git hook installation failed: unable to access .git metadata: ${msg}`);
   }
   try {
     await writeGitHooks(worktreePath, log);

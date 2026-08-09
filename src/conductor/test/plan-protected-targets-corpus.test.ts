@@ -10,7 +10,7 @@ const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 const plansDirectory = join(repositoryRoot, '.docs/plans');
 
 describe('plan protected-target corpus regression', () => {
-  it('pins the seven existing ambiguous tasks across five plans without widening to clean tasks', async () => {
+  it('pins the six existing ambiguous tasks across five plans and all 13 raw violation rows', async () => {
     const violations = await Promise.all(
       (await readdir(plansDirectory))
         .filter((name) => name.endsWith('.md'))
@@ -30,6 +30,7 @@ describe('plan protected-target corpus regression', () => {
     expect(new Set(ambiguous.flatMap(({ name, violations }) =>
       violations.map(({ taskId }) => `${name}:${taskId}`),
     ))).toHaveLength(6);
+    expect(ambiguous.flatMap(({ violations }) => violations)).toHaveLength(13);
     // Declared file scopes are deliberately absent: they are already covered
     // by the unit suite and must not become ambiguous prose regressions.
     expect(violations.filter(({ violations }) => violations.length === 0)).not.toHaveLength(0);

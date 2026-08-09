@@ -175,7 +175,6 @@ describe('git-hook-assets — embedding hook scripts', () => {
       await git('config', 'core.hooksPath', hooks);
       await mkdir(join(repoDir, '.docs/decisions'), { recursive: true });
       await mkdir(join(repoDir, '.docs/specs'), { recursive: true });
-      await mkdir(join(repoDir, '.docs/retros'), { recursive: true });
       await mkdir(join(repoDir, '.pipeline'), { recursive: true });
 
       await writeFile(join(repoDir, '.docs/decisions/no-marker.md'), '# ADR');
@@ -197,19 +196,57 @@ describe('git-hook-assets — embedding hook scripts', () => {
       await git('add', '.docs/specs/my-feature.md');
       expect((await commit('own artifact')).code).toBe(0);
 
-      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: SHIP\nallow: .docs/retros/\n');
-      await writeFile(join(repoDir, '.docs/retros/x.md'), '# retro');
-      await git('add', '.docs/retros/x.md');
-      expect((await commit('allowlisted retro')).code).toBe(0);
-
       await writeFile(join(repoDir, '.docs/specs/other-feature.md'), '# foreign');
       await git('add', '.docs/specs/other-feature.md');
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: SHIP\n');
       const first = await commit('foreign artifact');
       const second = await commit('foreign artifact');
       expect(first.code).not.toBe(0);
       expect(second.stderr).toBe(first.stderr);
       expect(first.stderr).toContain('.docs/specs/other-feature.md');
       expect(first.stderr).toContain('SHIP');
+      expect(first.stderr).toContain('DECIDE step');
+
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: SHIP\nallow: .docs/specs/\n');
+      expect((await commit('allowlisted protected artifact')).code).toBe(0);
+    } finally {
+      await rm(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when the real pre-commit asset receives an escaping staged path', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-escaping-path-'));
+    const fakeBin = join(repoDir, 'fake-bin');
+    const hookPath = join(repoDir, 'pre-commit');
+    try {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await mkdir(fakeBin, { recursive: true });
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: BUILD\n');
+      await writeFile(hookPath, PRE_COMMIT_HOOK, { mode: 0o755 });
+      await writeFile(
+        join(fakeBin, 'git'),
+        '#!/bin/bash\nif [[ "$1" == "rev-parse" ]]; then printf "%s\\n" "$HOOK_TEST_ROOT"; exit 0; fi\nif [[ "$1" == "diff" ]]; then printf "../escaping-target.md\\0"; exit 0; fi\nexit 1\n',
+        { mode: 0o755 },
+      );
+      const run = async () => {
+        try {
+          await execFileAsync('bash', [hookPath], {
+            cwd: repoDir,
+            env: { ...process.env, HOOK_TEST_ROOT: repoDir, PATH: `${fakeBin}:${process.env.PATH ?? ''}` },
+          });
+          return { code: 0, stderr: '' };
+        } catch (error) {
+          const result = error as { code?: number; stderr?: string };
+          return { code: result.code ?? 1, stderr: result.stderr ?? '' };
+        }
+      };
+
+      const first = await run();
+      const second = await run();
+      expect(first.code).not.toBe(0);
+      expect(first.stderr).toBe(second.stderr);
+      expect(first.stderr).toContain('../escaping-target.md');
+      expect(first.stderr).toContain('BUILD');
       expect(first.stderr).toContain('DECIDE step');
     } finally {
       await rm(repoDir, { recursive: true, force: true });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -511,6 +511,17 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       await git(repoRoot, 'worktree', 'remove', '--force', worktreeDir).catch(() => undefined);
       await rm(worktreeDir, { recursive: true, force: true });
       await rm(repoRoot, { recursive: true, force: true });
+    });
+
+    it('fails closed when present .git metadata is inaccessible, while a plain setup directory still no-ops', async () => {
+      const plainDir = await mkdtemp(join(tmpdir(), 'wt-prepare-plain-'));
+      try {
+        await expect(prepareWorktree(plainDir)).resolves.toBeUndefined();
+        await symlink(join(plainDir, 'missing-git-metadata'), join(plainDir, '.git'));
+        await expect(prepareWorktree(plainDir)).rejects.toThrow(/preventive git hook installation failed: unable to access .git metadata/i);
+      } finally {
+        await rm(plainDir, { recursive: true, force: true });
+      }
     });
 
     it('writes the two attribution hooks executable under .pipeline/git-hooks/', async () => {

@@ -9427,14 +9427,21 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
     gap.rationale.matchAll(
       /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g,
     ),
-    ([, path]) => path,
   );
   if (rationalePaths.length === 0) return undefined;
   const action = /\b(?:amend|change|delete|edit|remove|rewrite|update)\b/i;
-  const directedPaths = rationalePaths.filter((path) => {
-    const beforePath = gap.rationale.slice(0, gap.rationale.indexOf(path));
-    const lastSentence = beforePath.slice(Math.max(beforePath.lastIndexOf('.'), beforePath.lastIndexOf('\n')) + 1);
-    return action.test(lastSentence);
+  const directedPaths = rationalePaths.flatMap((match) => {
+    const path = match[1];
+    const pathOffset = (match.index ?? 0) + match[0].lastIndexOf(path);
+    // A semicolon separates independent clauses just as a sentence boundary
+    // does. Only an action in this path's own preceding clause can direct it.
+    const beforePath = gap.rationale.slice(0, pathOffset);
+    const clauseStart = Math.max(
+      beforePath.lastIndexOf('.'),
+      beforePath.lastIndexOf(';'),
+      beforePath.lastIndexOf('\n'),
+    );
+    return action.test(beforePath.slice(clauseStart + 1)) ? [path] : [];
   });
   if (directedPaths.length === 0) return undefined;
   const rationaleScope = `### Task ${gap.id}: remediation\n\n**Files:** ${directedPaths.join(', ')}`;

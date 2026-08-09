@@ -126,11 +126,33 @@ describe('Stories 1-3: the prepared-worktree commit boundary prevents protected 
     for (const path of protectedPaths) expect(commit.stderr).toContain(path);
   });
 
+  it('requires an allow prefix before permitting a protected artifact', async () => {
+    const repo = await preparedRepo();
+    const path = '.docs/specs/other.md';
+    await writeRepoFile(repo, path, 'protected control\n');
+    await git(repo, 'add', path);
+
+    const denied = await git(repo, 'commit', '-m', 'test: unallowlisted protected control');
+    expect(denied.code).toBe(1);
+    expect(denied.stderr).toContain(path);
+
+    await writeRepoFile(
+      repo,
+      '.pipeline/phase-active',
+      'step: build\nphase: BUILD\nwritten: 2026-08-09T00:00:00.000Z\nallow: .docs/specs/\n',
+    );
+    expect((await git(repo, 'commit', '-m', 'test: allowlisted protected control')).code).toBe(0);
+  });
+
   it('honors the engine bypass while an ordinary source-only commit remains permitted', async () => {
     const repo = await preparedRepo();
     const protectedPath = '.docs/specs/other-feature.md';
     await writeRepoFile(repo, protectedPath, 'engine-owned change\n');
     await git(repo, 'add', protectedPath);
+
+    const denied = await git(repo, 'commit', '-m', 'test: foreign artifact without engine bypass');
+    expect(denied.code).toBe(1);
+    expect(denied.stderr).toContain(protectedPath);
 
     const engineCommit = await execFile(
       'git',

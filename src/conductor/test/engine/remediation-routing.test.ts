@@ -43,6 +43,8 @@ describe('sealed-artifact remediation routing', () => {
       },
     };
     const events = new ConductorEventEmitter();
+    const redirects: unknown[] = [];
+    events.on('remediation_sealed_artifact_redirect', (event) => redirects.push(event));
     const conductor = new Conductor({
       stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
       stepRunner: runner,
@@ -67,7 +69,7 @@ describe('sealed-artifact remediation routing', () => {
       { source, evidenceFile: '.pipeline/prd-audit.md' },
     );
 
-    return { dispatched, outcome, events };
+    return { dispatched, outcome, redirects };
   }
 
   it('routes another feature\'s sealed-artifact amendment to DECIDE, never BUILD', async () => {
@@ -184,17 +186,15 @@ describe('sealed-artifact remediation routing', () => {
     await expect(readFile(join(projectRoot, '.docs/plans/feature.md'), 'utf8')).resolves.not.toContain('foreign-only');
   });
 
-  it('does not redirect incidental, own-feature, or rationale-free gaps', async () => {
-    const cases = [
-      { id: 'incidental', rationale: 'Update source; .docs/stories/another-feature.md is context only.', tasks: [{ id: 'source', title: 'src/x.ts' }] },
-      { id: 'own', rationale: 'Amend .docs/stories/feature.md.', tasks: [{ id: 'own-task', title: 'src/x.ts' }] },
-      { id: 'absent', rationale: '', tasks: [{ id: 'none', title: 'src/x.ts' }] },
-    ];
-    for (const gap of cases) {
+  it.each([
+    ['incidental rationale context', { id: 'incidental', rationale: 'Update source; .docs/stories/another-feature.md is context only.', tasks: [{ id: 'source', title: 'src/x.ts' }] }],
+    ['own-feature rationale', { id: 'own', rationale: 'Amend .docs/stories/feature.md.', tasks: [{ id: 'own-task', title: 'src/x.ts' }] }],
+    ['rationale-free gap', { id: 'absent', rationale: '', tasks: [{ id: 'none', title: 'src/x.ts' }] }],
+  ])('routes BUILD without redirecting a %s', async (_caseName, gap) => {
       await writeFile(join(projectRoot, '.docs/plans/feature.md'), '# Implementation plan\n', 'utf8');
-      const { outcome } = await remediate([{ ...gap, disposition: 'build', category: null }]);
-      expect(outcome.target).not.toBe('plan');
-    }
+      const { outcome, redirects } = await remediate([{ ...gap, disposition: 'build', category: null }]);
+      expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+      expect(redirects).toEqual([]);
   });
 
   it('emits the foreign artifact and gap id when redirecting a sealed rationale target', async () => {
