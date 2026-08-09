@@ -16,10 +16,15 @@ function undatedStem(stem: string): string {
 
 export const PROTECTED_ARTIFACT_DIRECTORIES = [
   '.docs/architecture',
+  '.docs/decisions',
   '.docs/plans',
   '.docs/specs',
   '.docs/stories',
 ] as const;
+
+export function isProtectedArtifactPath(path: string): boolean {
+  return PROTECTED_ARTIFACT_DIRECTORIES.some((directory) => path === directory || path.startsWith(`${directory}/`));
+}
 
 export const PROTECTED_ARTIFACT_SEAL_PATH = '.pipeline/protected-artifact-seal.json';
 
@@ -202,7 +207,7 @@ export function classifyMutationTarget({
   if (isActiveStepArtifactException({ phase, step, target: canonicalTarget })) {
     return { kind: 'allowed', target: canonicalTarget };
   }
-  if (canonicalTarget === '.docs' || canonicalTarget.startsWith('.docs/')) {
+  if (isProtectedArtifactPath(canonicalTarget)) {
     return { kind: 'protected', target: canonicalTarget };
   }
   return { kind: 'unprotected', target: canonicalTarget };
