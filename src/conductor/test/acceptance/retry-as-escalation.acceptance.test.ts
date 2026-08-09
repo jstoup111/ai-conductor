@@ -661,21 +661,18 @@ describe('#188 retry-as-escalation — S4 logging', () => {
       stories: 'done',
       conflict_check: 'done',
     } as ConductState);
-    // This acceptance flow intentionally retries the DECIDE-phase plan step.
-    // Its explicit operator grant keeps the test focused on retry escalation,
-    // rather than exercising the separate fail-closed entry boundary.
+    // This acceptance flow intentionally retries the DECIDE-phase plan step, so it
+    // runs INTERACTIVELY (daemon: false). DECIDE is human-only under the daemon —
+    // no grant admits it — and this test's subject is retry escalation, not the
+    // entry boundary, which decide-entry-policy covers directly.
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(
-      join(dir, '.pipeline/decide-grant.json'),
-      JSON.stringify({ version: 1, step: 'plan', grantedBy: 'operator' }),
-    );
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
       events,
       projectRoot: dir,
       mode: 'auto',
-      daemon: true,
+      daemon: false,
       resume: true,
       fromStep: 'plan',
       verifyArtifacts: true,

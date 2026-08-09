@@ -132,13 +132,15 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
     expect(result.halt).toContain(refusal);
   });
 
-  it('enters and consumes a matching grant when remediation reopens a satisfied DECIDE artifact', async () => {
+  it('a matching grant still refuses entry when remediation reopens a satisfied DECIDE artifact', async () => {
     const result = await runRemediation(
-      async () => ({ done: true, reason: 'plan is current' }),
+      async () => ({ done: false, reason: 'plan needs a pass' }),
       { grant: true, stopAfterPlan: true },
     );
 
-    expect(result.calls).toContain('plan');
-    expect(result.grantConsumed).toBe(true);
+    // DECIDE is human-only under the daemon: the grant neither admits nor is consumed.
+    expect(result.calls).not.toContain('plan');
+    expect(result.grantConsumed).toBe(false);
+    expect(result.haltClass).toBe('needs-human');
   });
 });
