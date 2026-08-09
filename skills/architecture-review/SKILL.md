@@ -128,6 +128,20 @@ Check stories and plan against documented architecture:
 - Does the implementation approach match existing patterns (service objects, concerns, etc.)?
 - If it introduces a NEW pattern, is there an ADR justifying the departure?
 
+**Existing spine reuse (HARNESS.md — "Extend the existing spine, never add a parallel channel"):**
+- Does the proposal add a way to observe, report, or coordinate something — a watcher, a poller,
+  a sidecar file, an ad-hoc log, a timestamp stamped into an artifact for later reading?
+- If so, does an event bus, message stream, or shared append-only ledger already carry that
+  concern? If yes, the design must extend it — a variant in the existing schema, emitted onto
+  the existing spine — not open a second channel the first channel's consumers cannot see.
+- Judge by **schema, not file**: a sibling ledger in the *same* schema, merged by the same
+  reader, is compliant; a bespoke sidecar with its own format is not.
+- A separate write location is justified only by a separate process with no bus access, an
+  atomicity/concurrency limit forcing one writer per file, or a concern that is durable state
+  rather than an occurrence — and none of those change the schema.
+- **A genuinely new channel requires an ADR** stating why the existing mechanism could not carry
+  the concern. Absent that ADR, the duplication is a finding, not a design.
+
 **State management:**
 - Can invalid states be represented in the proposed data model?
 - Are state transitions explicit (enum/state machine) or implicit (boolean flags)?
