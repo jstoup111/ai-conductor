@@ -34,9 +34,6 @@ Thumbs.db
 
 # Local environment (daemon per-worktree namespace, secrets)
 .env
-.env.local
-.env.local.*
-.env.*.local
 
 # Defense-in-depth: provider skill-discovery warmup bookkeeping must never
 # land in the git-tracked skills catalog (self-host isolation leak, #1042).
