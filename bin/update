@@ -236,7 +236,7 @@ check_harness_update_main() {
 dispatch_update_channel() {
   local channel
   if ! channel=$(conductor_cfg_get updateChannel tagged); then
-    warn "Update check declined: conduct-ts is required to read conductor configuration."
+    warn "Update check declined: conductor configuration could not be read."
     return 1
   fi
   case "$channel" in
@@ -260,7 +260,7 @@ check_harness_update_auto() {
 
   local auto_check
   if ! auto_check=$(conductor_cfg_get autoCheck true); then
-    warn "Automatic update check declined: conduct-ts is required to read conductor configuration."
+    warn "Automatic update check declined: conductor configuration could not be read."
     return 1
   fi
   [ "$auto_check" = "false" ] && return 0

@@ -52,12 +52,12 @@ conductor_cfg_get() {
   fi
   local field=$1
   if ! command -v conduct-ts &>/dev/null; then
-    warn "conduct-ts is required to read conductor configuration; install or restore it, then re-run bin/install"
+    warn "conduct-ts is required to read conductor configuration; install or restore it, then re-run bin/install" >&2
     return 1
   fi
   local value
   if ! value=$(conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>&1); then
-    warn "${value:-conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install}"
+    warn "${value:-conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install}" >&2
     return 1
   fi
   printf '%s\n' "$value"
