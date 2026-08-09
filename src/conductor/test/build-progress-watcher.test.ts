@@ -537,6 +537,9 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
     expect(events).toHaveLength(1);
     expect(events[0].resolved).toBe(5);
     expect(events[0].total).toBe(21);
+    expect(events[0].tickReason).toBe('heartbeat');
+    expect(events[0]).toHaveProperty('headMoved', false);
+    expect(events[0].commitCount).toBeUndefined();
   });
 
   it('resets the heartbeat clock on a change-driven emission (no interleaved duplicates)', async () => {

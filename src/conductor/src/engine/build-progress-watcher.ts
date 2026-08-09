@@ -378,6 +378,8 @@ export class BuildProgressWatcher {
           currentTaskId: snapshot.currentTaskId,
           currentTaskName: snapshot.currentTaskName,
           commitCount: undefined,
+          tickReason: 'heartbeat',
+          headMoved: false,
           noEvidenceAttempts,
           featureSlug: this.featureSlug,
         });
