@@ -1433,6 +1433,15 @@ describe('classifyMutationTarget', () => {
       step: 'build',
     })).toMatchObject({ kind: 'indeterminate' });
   });
+
+  it('fails closed for a glob over a protected directory', () => {
+    expect(classifyMutationTarget({
+      projectRoot,
+      target: '.docs/plans/*.md',
+      phase: 'BUILD',
+      step: 'build',
+    })).toEqual({ kind: 'indeterminate', reason: 'protected-glob-target' });
+  });
 });
 
 describe('verifyProtectedArtifactSeal target containment', () => {
