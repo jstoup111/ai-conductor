@@ -55,10 +55,12 @@ conductor_cfg_get() {
     warn "conduct-ts is required to read conductor configuration; install or restore it, then re-run bin/install"
     return 1
   fi
-  if ! conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>/dev/null; then
-    warn "conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install"
+  local value
+  if ! value=$(conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>&1); then
+    warn "${value:-conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install}"
     return 1
   fi
+  printf '%s\n' "$value"
 }
 
 # Write a scalar field to the schema-owned conductor block.
