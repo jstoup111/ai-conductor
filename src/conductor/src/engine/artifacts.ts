@@ -3094,11 +3094,11 @@ export function adrApprovalStatus(content: string): { approved: boolean; found: 
     '',
   );
   const match = withoutFencedCodeBlocks.match(
-    /^\s*(?:[-+*]\s+)?(?:\*\*status\s*:\s*\*\*|\*\*status\*\*\s*:|status\s*:)\s*(.*?)\s*$/im,
+    /^\s*(?:[-+*]\s+)?(?:(?:\*\*status\s*:\s*\*\*|\*\*status\*\*\s*:|status\s*:)\s*(.*?)|\*\*status\s*:\s*(.*?)\*\*)\s*$/im,
   );
   if (!match) return { approved: false, found: null };
 
-  let found = match[1].trim();
+  let found = (match[1] ?? match[2]).trim();
   if (found.startsWith('**') && found.endsWith('**')) {
     found = found.slice(2, -2).trim();
   }

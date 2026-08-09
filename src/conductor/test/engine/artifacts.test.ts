@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, symlink } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -8,6 +8,7 @@ import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 // Import the real readStaleHaltTitle for use in spy implementation
 import {
@@ -3226,6 +3227,7 @@ describe('engine/artifacts', () => {
       ['list-marked approved status with trailing prose', '- **Status:** APPROVED (operator-approved 2026-07-29)', 'APPROVED (operator-approved 2026-07-29)'],
       ['superseded status with trailing prose', 'Status: SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`', 'SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`'],
       ['bold-wrapped approved value with trailing whitespace', '**Status:** **APPROVED**   ', 'APPROVED'],
+      ['whole bold declaration', '**Status: APPROVED**', 'APPROVED'],
     ])('approves a %s declaration', (_description, declaration, found) => {
       expect(adrApprovalStatus(`# ADR\n\n${declaration}\n`)).toEqual({ approved: true, found });
     });
@@ -3270,6 +3272,22 @@ describe('engine/artifacts', () => {
         approved: false,
         found: status,
       });
+    });
+
+    it('accepts every ADR in the repository corpus', async () => {
+      const decisionsDir = join(REPOSITORY_ROOT, '.docs', 'decisions');
+      const adrPaths = (await readdir(decisionsDir))
+        .filter((entry) => /^adr-.*\.md$/.test(entry))
+        .map((entry) => join(decisionsDir, entry));
+      const statuses = await Promise.all(
+        adrPaths.map(async (path) => ({ path, ...(adrApprovalStatus(await readFile(path, 'utf-8'))) })),
+      );
+
+      expect(adrPaths).not.toHaveLength(0);
+      expect({
+        rejected: statuses.filter((status) => !status.approved && status.found !== null),
+        unparseable: statuses.filter((status) => status.found === null),
+      }).toEqual({ rejected: [], unparseable: [] });
     });
   });
 
