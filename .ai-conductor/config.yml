@@ -10,7 +10,7 @@ reconcile_parked_auto_cleanup: true
 
 # Self-host guardrails: declared version freeze (PR #262).
 #
-# VERSION is frozen at 0.99.19 until the operator declares 1.0 (v1.0 cutover
+# VERSION is frozen at 0.100.0 until the operator declares 1.0 (v1.0 cutover
 # program, issue #228). With the freeze declared here, the daemon's self-host
 # VERSION approval gate self-satisfies when the worktree VERSION still equals
 # the frozen value — no per-feature HALT + manual .pipeline/version-approval
@@ -18,7 +18,7 @@ reconcile_parked_auto_cleanup: true
 # Read at daemon startup; restart the daemon to apply. Update or remove this
 # key when cutting 1.0.
 harness_self_host:
-  version_freeze: "0.99.20"
+  version_freeze: "0.100.0"
 
 # Stale-engine auto-restart (issue #256, PR #307). When the idle daemon detects
 # that dist points at a newer engine than the one it is running (after a local
