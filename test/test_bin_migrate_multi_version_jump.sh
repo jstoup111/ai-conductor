@@ -140,6 +140,16 @@ run_tty_migrate() {
   set -e
 }
 
+fail_current_version_read() {
+  local harness=$1
+  cat >> "$harness/bin/lib/harness-common.sh" <<'EOF'
+
+conductor_cfg_get() {
+  return 1
+}
+EOF
+}
+
 find_ledger() {
   local isolated_home=$1
   if [ ! -d "$isolated_home/.ai-conductor" ]; then
@@ -595,6 +605,19 @@ else
 fi
 
 printf 'Story 6 — queued-block safety contract\n'
+CONFIG_READ_FAILURE_HARNESS=$(make_harness config-read-failure)
+CONFIG_READ_FAILURE_CONSUMER=$(make_consumer config-read-failure)
+CONFIG_READ_FAILURE_HOME=$(make_home config-read-failure v0.99.17)
+cp "$APPROVAL_HARNESS/CHANGELOG.md" "$CONFIG_READ_FAILURE_HARNESS/CHANGELOG.md"
+fail_current_version_read "$CONFIG_READ_FAILURE_HARNESS"
+run_migrate "$CONFIG_READ_FAILURE_HARNESS" "$CONFIG_READ_FAILURE_CONSUMER" "$CONFIG_READ_FAILURE_HOME" --yes
+assert 'a failed installed-version config read fails loudly before selecting migrations' "$(
+  [ "$CODE" -ne 0 ] \
+    && contains "$OUT" 'installed-version config read' \
+    && [ ! -e "$CONFIG_READ_FAILURE_CONSUMER/execution.log" ] \
+    && echo 0 || echo 1
+)"
+
 QUEUED=$(python3 - "$REPO_ROOT/CHANGELOG.md" <<'PY'
 import re
 import sys

@@ -59,8 +59,7 @@ trap print_migration_summary EXIT
 read_from_version() {
   local version
   if ! version=$(conductor_cfg_get currentVersion ""); then
-    printf ''
-    return 0
+    return 1
   fi
   printf '%s' "$version"
 }
@@ -658,7 +657,10 @@ run_project_migrations() {
 # shellcheck source=bin/lib/harness-common.sh
 source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 
-FROM_VERSION=$(read_from_version)
+if ! FROM_VERSION=$(read_from_version); then
+  fail "Cannot continue: installed-version config read failed"
+  exit 1
+fi
 TO_VERSION=$(read_to_version)
 
 info "Migrating harness: ${FROM_VERSION:-<unknown>} → ${TO_VERSION:-<unknown>}"
