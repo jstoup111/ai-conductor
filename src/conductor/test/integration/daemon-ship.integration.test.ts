@@ -164,6 +164,46 @@ describe('conduct shipped-record — record committed on the implementation bran
     expect(await git(['rev-list', '--count', 'HEAD'])).toBe(firstCount);
   });
 
+  // The daemon runs `dispatchShippedRecord` IN-PROCESS (finish-publication-production.ts),
+  // and daemon-cli.ts tees `console.error` into `.daemon/daemon.log` stamped `[error]`.
+  // A successful record write therefore has to leave stderr entirely, or every ship
+  // reads to an operator as a failure. Success/progress → stdout; failures → stderr.
+  it('success is reported on stdout, never stderr, so the daemon log cannot tag a ship [error]', async () => {
+    const outs: string[] = [];
+    const errs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((m: unknown) => {
+      outs.push(String(m));
+    });
+    vi.spyOn(console, 'error').mockImplementation((m: unknown) => {
+      errs.push(String(m));
+    });
+
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
+    expect(outs.filter((l) => l.includes('✓ shipped record committed:'))).toHaveLength(1);
+    expect(errs.filter((l) => l.includes('✓ shipped record'))).toEqual([]);
+
+    // The idempotent re-run reports on the same stream.
+    outs.length = 0;
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
+    expect(outs.filter((l) => l.includes('✓ shipped record already committed:'))).toHaveLength(1);
+    expect(errs.filter((l) => l.includes('✓ shipped record'))).toEqual([]);
+  });
+
+  it('a genuine write failure still goes to stderr', async () => {
+    const outs: string[] = [];
+    const errs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((m: unknown) => {
+      outs.push(String(m));
+    });
+    vi.spyOn(console, 'error').mockImplementation((m: unknown) => {
+      errs.push(String(m));
+    });
+
+    expect(await runShippedRecord('no-such-slug', 'https://github.com/acme/repo/pull/1')).toBe(0);
+    expect(errs.filter((l) => l.includes('shipped-record write failed'))).toHaveLength(1);
+    expect(outs).toEqual([]);
+  });
+
   it('malformed args never fall through to the pipeline launcher: guide + exit 1', async () => {
     const cmd = detectShippedRecordCommand(['node', 'conduct', 'shipped-record', '--slug', SLUG]);
     expect(cmd).toEqual({ kind: 'guide' }); // recognized subcommand, misused — never null
