@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
+import { execa } from 'execa';
 import {
   createProgram,
   userConfigReadCommand,
@@ -112,6 +113,25 @@ describe('conduct config write', () => {
 });
 
 describe('conduct config set', () => {
+  it('dispatches config set through the real argv entry point', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    await mkdir(configDir);
+    await writeFile(configPath, 'conductor:\n  update_channel: tagged\n', 'utf8');
+
+    const result = await execa(
+      'node',
+      ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'config', 'set', 'conductor.update_channel', 'main'],
+      { env: { ...process.env, HOME: home }, reject: false },
+    );
+
+    expect({ exitCode: result.exitCode, config: loadYaml(await readFile(configPath, 'utf8')) }).toEqual({
+      exitCode: 0,
+      config: { conductor: { update_channel: 'main' } },
+    });
+  });
+
   it('detects a dotted scalar config set command', () => {
     expect(
       detectUserConfigSetCommand([
