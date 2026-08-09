@@ -17,7 +17,7 @@ flowchart TD
 
     subgraph Decode["finish-pr-prose-judgment.ts"]
         Parse["parseFinishPrProseJudgment<br/>extracts the first «kind» JSON object"]
-        Decode2["decodePrProseJudgment<br/>fails closed to revision_required/structurally_incomplete"]
+        Decode2["decodePrProseJudgment<br/>fails closed to malformed_response<br/>(routes to publication_retry, not a halt)"]
     end
 
     subgraph Publication["finish-publication.ts"]
@@ -112,8 +112,10 @@ largest reason the feature is tier M rather than S.
 
 **Reachability, not just wording.** Today the `refused` verdict cannot be produced: the vocabulary
 exists only in the engine and its tests, so a refusing provider writes prose, the parser finds no
-JSON, and it fails closed to `judgment_malformed_prose`. Publishing the contract in SKILL.md is what
-makes the refusal path live; the reason map is what makes it legible.
+JSON, and post-#1372 it fails closed to `malformed_response`, which routes to a judgment retry —
+so the refusal is spent by the bounded progress allowance and the operator never sees it.
+Publishing the contract in SKILL.md is what makes the refusal path live; the reason map is what
+makes it legible.
 
 ## Change Log
 

@@ -399,13 +399,25 @@ export function nextFinishPublicationTransition(
   return 'record_outcome';
 }
 
+export type HumanRequiredReason =
+  | 'judgment_refused'
+  | 'judgment_halt_prose'
+  | 'ambiguous_pr_identity'
+  | 'invalid_shipped_record'
+  | 'interactive_intent_deferred'
+  | 'interactive_intent_declined'
+  | 'interactive_intent_destructive_choice'
+  | 'interactive_intent_unrecognized'
+  | 'unattended_intent_destructive_choice'
+  | 'unattended_intent_unauthorized_outcome';
+
 export type PublicationDisposition =
   | { kind: 'complete' }
   | { kind: 'publication_progress'; transition: PublicationTransition }
   | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | { kind: 'implementation_invalid'; evidence: string }
-  | { kind: 'human_required'; reason: string };
+  | { kind: 'human_required'; reason: HumanRequiredReason; detail?: string };
 
 /** The only actions the conductor may take for a typed FINISH result. */
 export type FinishPublicationRoute =
@@ -453,6 +465,49 @@ const PUBLICATION_CONDITIONS = {
     nextAction: 'restore_release_readiness_observation',
   },
 } as const;
+
+export const HUMAN_REQUIRED_REASONS = {
+  judgment_refused: {
+    message: 'The PR prose judgment was refused and requires an operator decision.',
+    nextAction: 'Review the refusal and decide how to continue publication.',
+  },
+  judgment_halt_prose: {
+    message: 'The PR contains halt prose that must not be overwritten automatically.',
+    nextAction: 'Review the halt prose and resolve its stated blocker.',
+  },
+  ambiguous_pr_identity: {
+    message: 'More than one pull request matches this feature, so FINISH cannot select one safely.',
+    nextAction: 'Identify the correct pull request and resolve the duplicate matches.',
+  },
+  invalid_shipped_record: {
+    message: 'The existing shipped record is invalid and cannot be replaced automatically.',
+    nextAction: 'Inspect and repair the shipped record before retrying FINISH.',
+  },
+  interactive_intent_deferred: {
+    message: 'Publication was deferred and requires an operator decision before FINISH can continue.',
+    nextAction: 'Choose whether to publish the pull request or keep the work.',
+  },
+  interactive_intent_declined: {
+    message: 'Publication was declined and requires an operator decision before FINISH can continue.',
+    nextAction: 'Choose whether to publish the pull request or keep the work.',
+  },
+  interactive_intent_destructive_choice: {
+    message: 'The requested publication outcome is destructive and requires explicit human action.',
+    nextAction: 'Perform the destructive action manually or choose a safe publication outcome.',
+  },
+  interactive_intent_unrecognized: {
+    message: 'The requested interactive publication outcome is not recognized.',
+    nextAction: 'Choose a supported publication outcome.',
+  },
+  unattended_intent_destructive_choice: {
+    message: 'Unattended publication cannot perform the requested destructive outcome.',
+    nextAction: 'Perform the destructive action manually or choose a safe unattended outcome.',
+  },
+  unattended_intent_unauthorized_outcome: {
+    message: 'The requested publication outcome is not authorized by the unattended policy.',
+    nextAction: 'Choose the outcome allowed by the current unattended policy.',
+  },
+} satisfies Record<HumanRequiredReason, { message: string; nextAction: string }>;
 
 const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]> = {
   establish_pr: [
@@ -561,6 +616,20 @@ export function nonRetryablePublicationReason(reason: string): string | undefine
     : undefined;
 }
 
+function renderHumanRequiredHaltReason(
+  disposition: Extract<PublicationDisposition, { kind: 'human_required' }>,
+): string {
+  const guidance = HUMAN_REQUIRED_REASONS[disposition.reason] as
+    | { message: string; nextAction: string }
+    | undefined;
+  if (!guidance) {
+    return `Human-required reason ${disposition.reason}: no guidance is registered.`;
+  }
+  const { message, nextAction } = guidance;
+  const detail = disposition.detail ? ` Detail: ${disposition.detail}` : '';
+  return `${message} Next action: ${nextAction}${detail}`;
+}
+
 /**
  * Fail-closed boundary between the publication coordinator and conductor.
  * Publication-only work may retry FINISH, while every other currently-known
@@ -609,7 +678,7 @@ export function routeFinishPublicationDisposition(
         evidence: disposition.evidence,
       };
     case 'human_required':
-      return { kind: 'halt', reason: disposition.reason };
+      return { kind: 'halt', reason: renderHumanRequiredHaltReason(disposition) };
   }
 }
 
@@ -647,9 +716,16 @@ function isExactDisposition(
       );
     case 'human_required':
       return (
-        hasOnly('kind', 'reason') &&
         typeof value.reason === 'string' &&
-        value.reason.length > 0
+        value.reason.length > 0 &&
+        (
+          hasOnly('kind', 'reason') ||
+          (
+            hasOnly('kind', 'reason', 'detail') &&
+            typeof value.detail === 'string' &&
+            value.detail.trim().length > 0
+          )
+        )
       );
     default:
       return false;
@@ -876,10 +952,14 @@ export type PrProseAuthoringRequest = {
  */
 export type PrProseJudgmentResult =
   | { kind: 'accepted' }
-  | { kind: 'revision_required'; reason: 'placeholder' | 'halt' | 'structurally_incomplete' }
+  | {
+    kind: 'revision_required';
+    reason: 'placeholder' | 'halt' | 'structurally_incomplete';
+    detail?: string;
+  }
   | { kind: 'timed_out' }
   | { kind: 'provider_unavailable' }
-  | { kind: 'refused' }
+  | { kind: 'refused'; detail?: string }
   | { kind: 'malformed_response' };
 
 /**
@@ -1006,11 +1086,12 @@ export type AdvanceFinishPublicationResult =
     }
   | {
       kind: 'human_required';
-      reason:
-        | 'ambiguous_pr_identity'
-        | 'invalid_shipped_record'
-        | 'judgment_halt_prose'
-        | 'judgment_refused';
+      reason: 'ambiguous_pr_identity' | 'invalid_shipped_record';
+    }
+  | {
+      kind: 'human_required';
+      reason: 'judgment_halt_prose' | 'judgment_refused';
+      detail?: string;
     };
 
 /**
@@ -1071,7 +1152,9 @@ function mapPrProseJudgmentResult(
         reason: 'judgment_provider_unavailable',
       };
     case 'refused':
-      return { kind: 'human_required', reason: 'judgment_refused' };
+      return result.detail === undefined
+        ? { kind: 'human_required', reason: 'judgment_refused' }
+        : { kind: 'human_required', reason: 'judgment_refused', detail: result.detail };
     case 'malformed_response':
       // The decoder could not parse the reply at all. That is a provider
       // response defect, not a prose verdict, so it earns a fresh judgment
@@ -1087,7 +1170,9 @@ function mapPrProseJudgmentResult(
           // Halt boilerplate on a PR is a genuine operator condition: the
           // remediation narrative must not be silently overwritten by an
           // authoring pass.
-          return { kind: 'human_required', reason: 'judgment_halt_prose' };
+          return result.detail === undefined
+            ? { kind: 'human_required', reason: 'judgment_halt_prose' }
+            : { kind: 'human_required', reason: 'judgment_halt_prose', detail: result.detail };
         case 'placeholder':
         case 'structurally_incomplete':
           // Both verdicts say the same thing — the reader-facing prose is not

@@ -7,12 +7,15 @@ Source of intent: `adr-2026-08-08-finish-human-required-halt-rendering.md` (APPR
 Review: `architecture-review-2026-08-08-finish-s-stop-gate-does-not-stop-a-correct-refusal.md`
 (APPROVED WITH CONDITIONS)
 
-The twelve `human_required` reason tokens in scope: `judgment_refused`,
-`judgment_placeholder_prose`, `judgment_halt_prose`, `judgment_malformed_prose`,
+The ten `human_required` reason tokens in scope: `judgment_refused`, `judgment_halt_prose`,
 `ambiguous_pr_identity`, `invalid_shipped_record`, `interactive_intent_deferred`,
 `interactive_intent_declined`, `interactive_intent_destructive_choice`,
 `interactive_intent_unrecognized`, `unattended_intent_destructive_choice`,
 `unattended_intent_unauthorized_outcome`.
+
+Amended 2026-08-08 against merged `5bbc109e8` (#1372), which removed `judgment_placeholder_prose`
+and `judgment_malformed_prose` — see the Amendment section of the source ADR. Ten tokens across
+fifteen construction sites, verified by grep of `finish-publication.ts`.
 
 Documentation updates required by review Condition 3 (`docs/runbooks/stalled-or-stuck-feature.md`,
 `docs/reference/steps.md`) deliberately carry **no story** — they accompany functional work and are
@@ -24,7 +27,7 @@ tracked as plan tasks, per the stories skill's documentation boundary.
 
 **Requirement:** ADR Follow-up 1 · Review Condition 1 (first half)
 
-As the conductor engine, I want `human_required.reason` typed as the closed twelve-token union and
+As the conductor engine, I want `human_required.reason` typed as the closed ten-token union and
 `isExactDisposition` to admit an optional non-empty `detail`, so that a future reason token cannot
 be added without a rendering and a malformed disposition still cannot reach the halt marker.
 
@@ -36,7 +39,7 @@ be added without a rendering and a malformed disposition still cannot reach the 
 - Given a disposition `{ kind: 'human_required', reason: 'judgment_refused', detail: 'CHANGELOG
   carries an unsubstituted token' }`, when `isExactDisposition` evaluates it, then it returns true.
 - Given source that constructs a `human_required` disposition with a reason token outside the
-  twelve, when the package is type-checked, then compilation fails.
+  ten, when the package is type-checked, then compilation fails.
 
 #### Negative Paths
 - **Invalid input:** Given `{ kind: 'human_required', reason: 'judgment_refused', detail: '' }`,
@@ -57,10 +60,10 @@ be added without a rendering and a malformed disposition still cannot reach the 
 
 ### Done When
 - [ ] `PublicationDisposition`'s `human_required` arm declares `reason` as a union of exactly the
-      twelve tokens and `detail?: string`.
+      ten tokens and `detail?: string`.
 - [ ] `isExactDisposition` accepts `hasOnly('kind','reason')` and `hasOnly('kind','reason','detail')`,
       requires `detail` to be a non-empty string when present, and rejects every other key set.
-- [ ] All fourteen in-repo `human_required` construction sites compile against the narrowed union
+- [ ] All fifteen in-repo `human_required` construction sites compile against the narrowed union
       with no cast or `as` escape.
 - [ ] `npm run typecheck` (or the package's equivalent) passes with zero new errors.
 
@@ -79,12 +82,12 @@ action, so that the halt tells me what went wrong and what to do rather than nam
 - Given the reason `judgment_refused`, when `HUMAN_REQUIRED_REASONS` is consulted, then it yields a
   `{ message, nextAction }` pair whose `message` is a reader-facing sentence and whose `nextAction`
   is a verb-led token, matching the shape `PUBLICATION_CONDITIONS` already uses.
-- Given each of the twelve tokens in turn, when the map is consulted, then every one resolves to a
+- Given each of the ten tokens in turn, when the map is consulted, then every one resolves to a
   distinct, non-empty `message` and `nextAction`.
 
 #### Negative Paths
 - **Data integrity:** Given the map and the reason union, when the package is type-checked, then a
-  map missing any of the twelve keys fails compilation — exhaustiveness is enforced by the compiler,
+  map missing any of the ten keys fails compilation — exhaustiveness is enforced by the compiler,
   not by a test that could drift.
 - **Invalid input:** Given a `message` or `nextAction` that is empty or whitespace-only, when the
   suite runs, then a test fails naming the offending token — a present-but-blank entry is as useless
@@ -93,11 +96,11 @@ action, so that the halt tells me what went wrong and what to do rather than nam
   test fails — indistinguishable halt text would reintroduce the ambiguity this feature removes.
 
 ### Done When
-- [ ] `HUMAN_REQUIRED_REASONS` exists in `finish-publication.ts` as a `Record` keyed by the twelve-
+- [ ] `HUMAN_REQUIRED_REASONS` exists in `finish-publication.ts` as a `Record` keyed by the ten-
       token union, with `{ message, nextAction }` values, mirroring `PUBLICATION_CONDITIONS`.
 - [ ] Removing any key from the map produces a compile error, demonstrated by a type-level test or
       an explicit `satisfies Record<HumanRequiredReason, …>` annotation.
-- [ ] A test asserts all twelve entries are non-empty and all twelve messages are distinct.
+- [ ] A test asserts all ten entries are non-empty and all ten messages are distinct.
 
 ---
 
@@ -166,9 +169,15 @@ author an unreadable marker.
   {{IMPLEMENTATION_PR}} token" }`, when `decodePrProseJudgment` and `mapPrProseJudgmentResult` run,
   then the resulting disposition is `{ kind: 'human_required', reason: 'judgment_refused', detail:
   '<that sentence>' }`.
-- Given a provider verdict `{ "kind": "revision_required", "reason": "placeholder", "detail": "the
-  body still carries the not-yet-authored markers" }`, when the same path runs, then the disposition
-  is `judgment_placeholder_prose` carrying that detail.
+- Given a provider verdict `{ "kind": "revision_required", "reason": "halt", "detail": "the body
+  carries a remediation narrative an authoring pass would overwrite" }`, when the same path runs,
+  then the disposition is `judgment_halt_prose` carrying that detail.
+
+Amended 2026-08-08 (#1372): `revision_required` with `placeholder` or `structurally_incomplete` no
+longer produces a `human_required` disposition at all — it routes to `publication_retry` /
+`author_pr_prose` (`finish-publication.ts:1091-1101`), because authoring is the remedy. `halt` is
+the only `revision_required` reason still reaching a human, so it is the only one that can carry a
+`detail` into a halt marker.
 
 #### Negative Paths
 - **Invalid input:** Given a verdict `{ "kind": "refused" }` with no `detail`, when the path runs,
@@ -192,8 +201,10 @@ author an unreadable marker.
 ### Done When
 - [ ] `PrProseJudgmentResult`'s `refused` and `revision_required` arms accept an optional `detail`.
 - [ ] `isPrProseJudgmentResult` validates `detail` as an optional string and rejects other types.
-- [ ] `mapPrProseJudgmentResult` forwards `detail` into the `human_required` disposition for both
-      arms.
+- [ ] `mapPrProseJudgmentResult` forwards `detail` into the `human_required` disposition for
+      `refused` and for `revision_required` with reason `halt`. A `detail` on the retry-routed
+      `placeholder` / `structurally_incomplete` arms is accepted by the validator and dropped at
+      the mapping, since those no longer reach a halt.
 - [ ] The `detail` character bound is a named constant, and a test proves truncation at that bound.
 - [ ] Tests cover: detail present, detail absent, detail blank, detail non-string, detail
       over-length, and the two retryable verdict kinds still routing to `publication_retry`.
@@ -205,8 +216,8 @@ author an unreadable marker.
 **Requirement:** ADR Follow-up 5 · ADR Condition 2 (accepted cost)
 
 As the FINISH provider session, I want `skills/finish/SKILL.md` to state the PR-prose verdict
-contract, so that a genuine blocker can be reported as `refused` instead of degrading to
-`judgment_malformed_prose`.
+contract, so that a genuine blocker can be reported as `refused` instead of decoding to
+`malformed_response` and being spent as a judgment retry the operator never sees.
 
 ### Acceptance Criteria
 
@@ -221,12 +232,16 @@ contract, so that a genuine blocker can be reported as `refused` instead of degr
 
 #### Negative Paths
 - **Invalid input:** Given a provider that replies in prose with no JSON object, when
-  `decodePrProseJudgment` runs, then it still fails closed to
-  `{ kind: 'revision_required', reason: 'structurally_incomplete' }` — the documented contract adds
-  a capability and removes no existing safety.
+  `decodePrProseJudgment` runs, then it still fails closed to `{ kind: 'malformed_response' }`,
+  which routes to `publication_retry` on `judge_pr_prose` — the documented contract adds a
+  capability and removes no existing safety.
 - **Invalid input:** Given a provider that emits a JSON object with an unrecognized `kind`, when
-  `decodePrProseJudgment` runs, then it fails closed to `revision_required/structurally_incomplete`
-  rather than accepting the unknown verdict.
+  `decodePrProseJudgment` runs, then it fails closed to `malformed_response` rather than accepting
+  the unknown verdict.
+- **Resource exhaustion:** Given a provider that never emits the documented JSON across the
+  publication progress allowance, when the allowance is exhausted, then the run halts rather than
+  retrying judgment indefinitely — this is the bound that keeps ADR Condition 2's accepted cost
+  sound now that non-compliance degrades to a retry instead of a halt.
 - **Auth/permission failure:** Given a provider dispatch that fails outright (`success: false`), when
   `decodePrProseJudgment` runs, then it returns `provider_unavailable`, which routes to
   `publication_retry` — an infrastructure failure must never be recorded as a deliberate refusal.
@@ -243,8 +258,8 @@ contract, so that a genuine blocker can be reported as `refused` instead of degr
 - [ ] A test asserts the vocabulary documented in `SKILL.md` and the vocabulary accepted by
       `isPrProseJudgmentResult` agree.
 - [ ] `test/test_harness_integrity.sh` passes.
-- [ ] A test proves an unstructured prose reply still fails closed to
-      `revision_required/structurally_incomplete`.
+- [ ] A test proves an unstructured prose reply still fails closed to `malformed_response` and
+      routes to `publication_retry`, and that the bounded allowance still ends the run.
 
 ---
 

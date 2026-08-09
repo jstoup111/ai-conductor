@@ -1,5 +1,8 @@
 import type { PrProseJudgmentResult } from './finish-publication.js';
 
+const MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH = 1_000;
+const DETAIL_TRUNCATION_MARKER = '…';
+
 export interface FinishPrProseJudgmentResponse {
   success: boolean;
   output?: string;
@@ -16,6 +19,15 @@ function isPrProseJudgmentResult(value: unknown): value is PrProseJudgmentResult
     result.kind === 'malformed_response' ||
     (result.kind === 'revision_required' &&
       (result.reason === 'placeholder' || result.reason === 'halt' || result.reason === 'structurally_incomplete'));
+}
+
+function normalizeDetail(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const detail = value.trim();
+  if (detail.length === 0) return undefined;
+  if (detail.length <= MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH) return detail;
+  return detail.slice(0, MAX_PR_PROSE_JUDGMENT_DETAIL_LENGTH - DETAIL_TRUNCATION_MARKER.length) +
+    DETAIL_TRUNCATION_MARKER;
 }
 
 /**
@@ -50,6 +62,16 @@ export function decodePrProseJudgment(
   const structured = result.publicationDisposition === undefined
     ? parseFinishPrProseJudgment(result.output)
     : result.publicationDisposition;
-  if (isPrProseJudgmentResult(structured)) return structured;
-  return { kind: 'malformed_response' };
+  if (!isPrProseJudgmentResult(structured)) return { kind: 'malformed_response' };
+
+  const detail = normalizeDetail((structured as { detail?: unknown }).detail);
+  if (structured.kind === 'refused') {
+    return detail === undefined ? { kind: 'refused' } : { kind: 'refused', detail };
+  }
+  if (structured.kind === 'revision_required') {
+    return detail === undefined
+      ? { kind: 'revision_required', reason: structured.reason }
+      : { kind: 'revision_required', reason: structured.reason, detail };
+  }
+  return structured;
 }

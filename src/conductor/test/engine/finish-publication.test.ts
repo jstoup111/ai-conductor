@@ -1,8 +1,61 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from '../../src/engine/pr-labels.js';
 import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
+import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import { HUMAN_REQUIRED_REASONS } from '../../src/engine/finish-publication.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
+import { Conductor } from '../test-conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { writeState } from '../../src/engine/state.js';
 
 const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
+
+describe('FINISH human-required guidance', () => {
+  it.each([
+    'judgment_refused',
+    'judgment_halt_prose',
+    'ambiguous_pr_identity',
+    'invalid_shipped_record',
+    'interactive_intent_deferred',
+    'interactive_intent_declined',
+    'interactive_intent_destructive_choice',
+    'interactive_intent_unrecognized',
+    'unattended_intent_destructive_choice',
+    'unattended_intent_unauthorized_outcome',
+  ] as const)('provides reader guidance for %s', (reason) => {
+    expect(HUMAN_REQUIRED_REASONS[reason]).toEqual({
+      message: expect.any(String),
+      nextAction: expect.any(String),
+    });
+  });
+
+  it('defines distinct non-blank message and next-action guidance for every human-required reason', () => {
+    const reasons = [
+      'judgment_refused',
+      'judgment_halt_prose',
+      'ambiguous_pr_identity',
+      'invalid_shipped_record',
+      'interactive_intent_deferred',
+      'interactive_intent_declined',
+      'interactive_intent_destructive_choice',
+      'interactive_intent_unrecognized',
+      'unattended_intent_destructive_choice',
+      'unattended_intent_unauthorized_outcome',
+    ] as const;
+    const messages = reasons.map((reason) => {
+      const guidance = HUMAN_REQUIRED_REASONS[reason];
+      expect(guidance.message.trim(), `${reason} message`).not.toBe('');
+      expect(guidance.nextAction.trim(), `${reason} nextAction`).not.toBe('');
+      return guidance.message;
+    });
+
+    expect(messages).toHaveLength(10);
+    expect(new Set(messages)).toHaveLength(messages.length);
+  });
+});
 
 async function routeFinishPublicationDisposition(disposition: unknown) {
   const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
@@ -282,6 +335,90 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
+describe('FINISH human-required halt marker', () => {
+  it('writes the rendered provider refusal through the coordinator to the needs-human halt marker', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'finish-publication-refusal-marker-'));
+    const pipelineDir = join(projectRoot, '.pipeline');
+    const stateFilePath = join(pipelineDir, 'conduct-state.json');
+    const prUrl = 'https://github.com/acme/widget/pull/1172';
+    const detail = 'The provider declined the requested prose judgment.';
+
+    try {
+      await mkdir(join(projectRoot, '.docs', 'shipped'), { recursive: true });
+      await mkdir(pipelineDir);
+      await writeFile(join(pipelineDir, 'finish-choice'), 'pr\n');
+      await writeFile(join(projectRoot, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
+      const state: Record<string, unknown> = {
+        complexity_tier: 'S',
+        feature_desc: 'finish-publication',
+        worktree_branch: 'feat/finish-publication',
+        pr_url: prUrl,
+      };
+      for (const step of [
+        'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
+        'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+        'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+        'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+        'architecture_review_as_built', 'retro', 'rebase',
+      ] satisfies StepName[]) {
+        state[step] = 'done';
+      }
+      await writeState(stateFilePath, state as ConductState);
+
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot,
+        stateFilePath,
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/finish-publication\n' },
+        gh: async (args) => {
+          if (args[0] === 'auth') return { stdout: '' };
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              stdout: JSON.stringify({
+                url: prUrl,
+                title: 'feat: publish FINISH refusal guidance',
+                body: `Reader-facing prose.\n${HALT_PR_BANNER_SENTINEL}`,
+                isDraft: true,
+              }),
+            };
+          }
+          throw new Error(`unexpected GitHub call: ${args.join(' ')}`);
+        },
+        observeReleaseReadiness: async () => 'present',
+      });
+      const provider = vi.fn(async () => ({
+        success: true,
+        output: JSON.stringify({ kind: 'refused', detail }),
+      }));
+      const conductor = new Conductor({
+        stateFilePath,
+        stepRunner: { run: provider },
+        finishPublication: coordinator,
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        fromStep: 'finish',
+        mode: 'auto',
+        daemon: true,
+        git: async () => ({ stdout: '' }),
+        gh: async () => ({ stdout: '' }),
+        runGh: async () => ({ stdout: '' }),
+      });
+
+      await conductor.run();
+
+      const haltBody = await readFile(join(pipelineDir, 'HALT'), 'utf8');
+      expect(provider).toHaveBeenCalledOnce();
+      expect(haltBody).toContain('Next action:');
+      expect(haltBody).toContain(detail);
+      await expect(readFile(join(pipelineDir, 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('finish-publication domain types', () => {
   it('exports the semantic unions for the publication lifecycle', async () => {
     type PublicationIntent = import('../../src/engine/finish-publication.js').PublicationIntent;
@@ -316,6 +453,11 @@ describe('finish-publication domain types', () => {
     };
     const transition: PublicationTransition = 'establish_pr';
     const disposition: PublicationDisposition = { kind: 'complete' };
+    const invalidHumanRequiredDisposition: PublicationDisposition = {
+      kind: 'human_required',
+      // @ts-expect-error Human-required reasons must be a closed token union.
+      reason: 'not_a_real_token',
+    };
 
     const destructiveIntent: PublicationIntent = {
       // @ts-expect-error Unattended authority cannot choose an operator-only destructive outcome.
@@ -323,7 +465,7 @@ describe('finish-publication domain types', () => {
       authority: { kind: 'unattended_policy', mode: 'daemon' },
     };
 
-    void [mismatchedSnapshot, transition, disposition, destructiveIntent];
+    void [mismatchedSnapshot, transition, disposition, invalidHumanRequiredDisposition, destructiveIntent];
 
     await expect(import('../../src/engine/finish-publication.js')).resolves.toBeTypeOf('object');
   });
@@ -421,6 +563,133 @@ describe('finish-publication domain types', () => {
 });
 
 describe('FINISH publication disposition routing', () => {
+  it('renders human-required guidance into the halt reason', async () => {
+    const route = await routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'ambiguous_pr_identity',
+    });
+
+    expect(route).toEqual({
+      kind: 'halt',
+      reason: expect.stringContaining('More than one pull request matches this feature'),
+    });
+    expect(route).toMatchObject({
+      reason: expect.stringContaining('Identify the correct pull request'),
+    });
+    expect(route).not.toEqual({ kind: 'halt', reason: 'ambiguous_pr_identity' });
+  });
+
+  it('renders a human-required provider detail alongside mapped guidance', async () => {
+    const detail = 'The provider declined to make the requested judgment.';
+
+    const route = await routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'judgment_refused',
+      detail,
+    });
+
+    expect(route).toEqual({
+      kind: 'halt',
+      reason: expect.stringContaining('The PR prose judgment was refused'),
+    });
+    expect(route).toMatchObject({
+      reason: expect.stringContaining('Review the refusal'),
+    });
+    expect(route).toMatchObject({ reason: expect.stringContaining(detail) });
+  });
+
+  it('renders detail-less human-required guidance without an empty suffix', async () => {
+    const route = await routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'judgment_refused',
+    });
+    if (route.kind !== 'halt') throw new Error('expected a human-required halt');
+    const guidance = HUMAN_REQUIRED_REASONS.judgment_refused;
+    expect(route.reason).toContain(guidance.message);
+    expect(route.reason).toContain(guidance.nextAction);
+    expect(route.reason).not.toContain(' Detail:');
+    expect(route.reason).not.toContain('undefined');
+  });
+
+  it.each([
+    ['complete', { kind: 'complete' }, { kind: 'complete' }],
+    [
+      'publication progress',
+      { kind: 'publication_progress', transition: 'record_outcome' },
+      { kind: 'progress_finish', transition: 'record_outcome' },
+    ],
+    [
+      'transition-based publication retry',
+      {
+        kind: 'publication_retry',
+        transition: 'record_outcome',
+        reason: 'outcome_record_write_failed',
+      },
+      { kind: 'retry_finish', reason: 'outcome_record_write_failed' },
+    ],
+    [
+      'condition-based publication retry',
+      {
+        kind: 'publication_retry',
+        condition: {
+          code: 'release_readiness_missing',
+          message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+          nextAction: 'publish_release_readiness',
+        },
+      },
+      { kind: 'retry_finish', reason: 'release_readiness_missing' },
+    ],
+    [
+      'implementation invalid',
+      { kind: 'implementation_invalid', evidence: 'build-review FAIL: finish-publication.ts' },
+      { kind: 'retry_build', evidence: 'build-review FAIL: finish-publication.ts' },
+    ],
+    [
+      'contradictory disposition',
+      { kind: 'complete', reason: 'contradictory' },
+      {
+        kind: 'halt',
+        reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
+      },
+    ],
+  ] as const)('preserves the established %s route without human-required rendering', async (_route, disposition, expected) => {
+    await expect(routeFinishPublicationDisposition(disposition)).resolves.toEqual(expected);
+  });
+
+  it('fails closed when an unlisted human-required reason has no guidance', async () => {
+    const reason = 'future_unlisted_reason';
+
+    await expect(routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason,
+    } as unknown)).resolves.toEqual({
+      kind: 'halt',
+      reason: expect.stringMatching(new RegExp(`^.*${reason}.*no guidance is registered.*$`, 'i')),
+    });
+  });
+
+  it('accepts a human-required disposition with a non-empty detail through exact validation', async () => {
+    await expect(routeFinishPublicationDisposition({
+      kind: 'human_required',
+      reason: 'judgment_refused',
+      detail: 'x',
+    })).resolves.toEqual({ kind: 'halt', reason: expect.stringContaining('x') });
+  });
+
+  it.each([
+    ['a blank detail', { kind: 'human_required', reason: 'judgment_refused', detail: '' }],
+    ['a whitespace-only detail', { kind: 'human_required', reason: 'judgment_refused', detail: '   ' }],
+    ['a numeric detail', { kind: 'human_required', reason: 'judgment_refused', detail: 42 }],
+    ['an object detail', { kind: 'human_required', reason: 'judgment_refused', detail: {} }],
+    ['an extra key', { kind: 'human_required', reason: 'judgment_refused', detail: 'x', extra: 'x' }],
+    ['a missing reason', { kind: 'human_required', detail: 'x' }],
+  ])('rejects a human-required disposition with %s through exact validation', async (_shape, disposition) => {
+    await expect(routeFinishPublicationDisposition(disposition)).resolves.toEqual({
+      kind: 'halt',
+      reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
+    });
+  });
+
   it.each([
     ['establish_pr', 'pr_identity_not_verified_after_establish'],
     ['write_shipped_record', 'shipped_record_not_verified_after_write'],
@@ -1361,11 +1630,29 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
   );
 
   it.each([
-    ['refusal', { kind: 'refused' }, 'judgment_refused'],
-    ['halt boilerplate', { kind: 'revision_required', reason: 'halt' }, 'judgment_halt_prose'],
+    [
+      'refusal',
+      { kind: 'refused', detail: 'The provider declined the requested prose judgment.' },
+      { kind: 'human_required', reason: 'judgment_refused', detail: 'The provider declined the requested prose judgment.' },
+    ],
+    [
+      'halt boilerplate',
+      { kind: 'revision_required', reason: 'halt', detail: 'The PR contains an unresolved operator blocker.' },
+      { kind: 'human_required', reason: 'judgment_halt_prose', detail: 'The PR contains an unresolved operator blocker.' },
+    ],
+    [
+      'placeholder prose',
+      { kind: 'revision_required', reason: 'placeholder', detail: 'The title and body are placeholders.' },
+      { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
+    ],
+    [
+      'structurally incomplete prose',
+      { kind: 'revision_required', reason: 'structurally_incomplete', detail: 'The body is missing its validation section.' },
+      { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
+    ],
   ] as const)(
-    'requires a human without rolling back verified publication progress when judgment returns %s',
-    async (_failure, judgmentResult, reason) => {
+    'preserves the established route while forwarding detail only for human-required %s judgments',
+    async (_failure, judgmentResult, expected) => {
       const dispatchJudgment = vi.fn(async () => judgmentResult);
       const createShippedRecord = vi.fn(async () => undefined);
       const draft = draftPrFakes(() => new Error('must not create another PR'));
@@ -1375,7 +1662,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
           observe: async () => readyPublicationSnapshot(),
           effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
         }),
-      ).resolves.toEqual({ kind: 'human_required', reason });
+      ).resolves.toEqual(expected);
 
       expect(dispatchJudgment).toHaveBeenCalledTimes(1);
       expect(createShippedRecord).not.toHaveBeenCalled();
