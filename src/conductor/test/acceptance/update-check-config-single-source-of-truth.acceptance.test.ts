@@ -52,6 +52,7 @@ interface CommandResult {
 interface FixtureHarness {
   root: string;
   update: string;
+  conduct: string;
   gitLog: string;
   env: NodeJS.ProcessEnv;
 }
@@ -100,12 +101,15 @@ async function makeHarness(options: { withConductor?: boolean } = {}): Promise<F
   const bin = join(root, 'bin');
   const lib = join(bin, 'lib');
   const update = join(bin, 'update');
+  const conduct = join(bin, 'conduct');
   const gitLog = join(scratch, 'git-calls.log');
   await mkdir(join(root, '.git'), { recursive: true });
   await mkdir(lib, { recursive: true });
   await copyFile(REAL_UPDATE, update);
+  await copyFile(REAL_CONDUCT, conduct);
   await copyFile(REAL_COMMON, join(lib, 'harness-common.sh'));
   await chmod(update, 0o755);
+  await chmod(conduct, 0o755);
 
   if (options.withConductor !== false) {
     await symlink(REAL_CONDUCT_TS, join(bin, 'conduct-ts'));
@@ -122,6 +126,7 @@ async function makeHarness(options: { withConductor?: boolean } = {}): Promise<F
   return {
     root,
     update,
+    conduct,
     gitLog,
     env: {
       ...process.env,
@@ -270,6 +275,50 @@ describe('update-check config uses one schema-owned surface (#1400)', () => {
     const result = await run(harness.update, ['--auto'], env);
 
     expect(result.exitCode).toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/conduct-ts/i);
+    expect(existsSync(harness.gitLog)).toBe(false);
+  });
+
+  it('lets ordinary bin/conduct startup continue after an unreadable advisory config', async () => {
+    // ST-1400-4's non-failing-caller requirement. `conduct` runs under
+    // `set -euo pipefail`, so an advisory config read that exits non-zero
+    // used to take the whole CLI down before argument handling ran: the
+    // operator saw only the prerequisite warning and exit 1, with no sign
+    // that `conduct` had understood the command at all.
+    const harness = await makeHarness({ withConductor: false });
+    await writeUserConfig('conductor:\n  auto_check: true\n');
+    const env = {
+      ...harness.env,
+      PATH: `${join(harness.root, 'bin')}:/usr/bin:/bin`,
+    };
+
+    const result = await run(harness.conduct, ['--resume'], env);
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    // Reports the prerequisite, once — not swallowed, not repeated per read.
+    expect(output).toMatch(/conduct-ts is required to read conductor configuration/);
+    expect(output.match(/conduct-ts is required to read/g)).toHaveLength(1);
+    // ...and still reaches normal CLI handling, which is the observable that
+    // separates "declined the update check" from "died during startup".
+    expect(output).toMatch(/Feature description required/);
+    // No assertion on harness.gitLog here: continuing into normal startup is
+    // the point, and that path legitimately shells out to git.
+  });
+
+  it('keeps an explicit bin/conduct --update strict when the config cannot be read', async () => {
+    // The containment above is scoped to the advisory startup call. When the
+    // update check *is* the requested operation, an unreadable config must
+    // still fail: silently declining would look like "already up to date".
+    const harness = await makeHarness({ withConductor: false });
+    await writeUserConfig('conductor:\n  auto_check: true\n');
+    const env = {
+      ...harness.env,
+      PATH: `${join(harness.root, 'bin')}:/usr/bin:/bin`,
+    };
+
+    const result = await run(harness.conduct, ['--update'], env);
+
+    expect(result.exitCode).not.toBe(0);
     expect(`${result.stdout}\n${result.stderr}`).toMatch(/conduct-ts/i);
     expect(existsSync(harness.gitLog)).toBe(false);
   });

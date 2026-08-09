@@ -298,10 +298,13 @@ check_harness_update() {
   [ -d "${HARNESS_DIR}/.git" ] || return 0
 
   local auto_check channel
-  auto_check=$(conductor_cfg_get autoCheck true)
+  # A read that cannot complete is not a default. Decline the whole check
+  # rather than continuing on values that were never read (ST-1400-4); the
+  # accessor has already named the missing prerequisite on stderr.
+  auto_check=$(conductor_cfg_get autoCheck true) || return 1
   [ "$auto_check" = "false" ] && return 0
 
-  channel=$(conductor_cfg_get updateChannel tagged)
+  channel=$(conductor_cfg_get updateChannel tagged) || return 1
   case "$channel" in
     main)   check_harness_update_main ;;
     tagged|*) check_harness_update_tagged ;;
@@ -2703,7 +2706,12 @@ if command -v conduct-ts >/dev/null 2>&1 && [ ! -f "$CONDUCT_TS_NOTICE_MARKER" ]
   touch "$CONDUCT_TS_NOTICE_MARKER" 2>/dev/null || true
 fi
 
-check_harness_update
+# Advisory startup check: a config read that cannot complete (no conduct-ts, an
+# unreadable conductor block) must report itself and step aside, never take the
+# CLI down with it (ST-1400-4). The accessors already warn on stderr, so the
+# operator still sees the prerequisite. `conduct --update` keeps the strict
+# behavior — there the update *is* the requested operation.
+check_harness_update || true
 
 # On resume, check for merged PRs and offer cleanup first
 if [ "$MODE" = "resume" ] && [ -d "${PROJECT_DIR}/.worktrees" ]; then
