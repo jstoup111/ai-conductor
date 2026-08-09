@@ -117,7 +117,8 @@ The group only fans out when all of these hold:
 3. The entry step's own prerequisite gate passes.
 4. More than one member is dispatchable. A width-1 group degrades silently to the serial path.
 
-Fan-out width is capped by the `validation_concurrency` config key (default 2; see
+Fan-out width is capped by the `validation_concurrency` config key (default 4, which covers the
+three-member group in a single wave; see
 [configuration](configuration.md)). Branches never write `conduct-state.json` or `.pipeline/gates/*` —
 only the loop thread does, after every branch settles.
 
