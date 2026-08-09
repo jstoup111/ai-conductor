@@ -1,11 +1,14 @@
 /**
  * RED acceptance specs for `.docs/stories/build-post-task-tail-telemetry.md`.
  *
- * These scenarios exercise the two genuinely multi-operation story flows:
+ * These scenarios exercise the three genuinely multi-operation story flows:
  *
  * 1. mutate task state across watcher ticks and observe provenance on the real bus;
  * 2. invoke the real pipeline-owned closeout primitive twice, then observe the
  *    resulting sibling ledger in append order without touching the engine ledger.
+ * 3. tail a pipeline-owned closeout record onto the real event bus and observe
+ *    the daemon, terminal, and OTel production consumer paths without adding a
+ *    second persistence writer.
  *
  * The rollup, gate, and report stories each expose one operation and remain owned
  * by their scoped TDD tests under plan Tasks 12-17 (writing-system-tests §3a).
@@ -18,10 +21,28 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { Writable } from 'node:stream';
+import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+} from '@opentelemetry/sdk-metrics';
 
 import { BuildProgressWatcher } from '../../src/engine/build-progress-watcher.js';
 import { dispatchCloseoutEventCommand } from '../../src/engine/closeout-cli.js';
+import { CloseoutEventTail } from '../../src/engine/closeout-tail.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import {
+  persistedEventTypes,
+  renderedEventTypes,
+} from '../../src/engine/event-sinks.js';
+import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
+import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
+import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import { createLiveRegion } from '../../src/ui/live-region.js';
+import { createRenderer } from '../../src/ui/create-renderer.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -31,6 +52,19 @@ type BuildProgress = Extract<ConductorEvent, { type: 'build_progress' }> & {
   tickReason?: 'task-delta' | 'head-moved' | 'heartbeat';
   headMoved?: boolean;
 };
+
+class CaptureStream extends Writable {
+  private readonly chunks: string[] = [];
+
+  _write(chunk: Buffer | string, _encoding: string, callback: (error?: Error | null) => void): void {
+    this.chunks.push(chunk.toString());
+    callback();
+  }
+
+  output(): string {
+    return this.chunks.join('');
+  }
+}
 
 describe('BUILD post-task tail telemetry acceptance', () => {
   let projectRoot: string;
@@ -165,5 +199,100 @@ describe('BUILD post-task tail telemetry acceptance', () => {
     ).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
+  }, 30_000);
+
+  it('re-emits closeout telemetry to daemon, terminal, and OTel consumers without a second writer', async () => {
+    vi.useRealTimers();
+    const pipelineDir = join(projectRoot, '.pipeline');
+    const engineLedger = join(pipelineDir, 'events.jsonl');
+    await mkdir(pipelineDir, { recursive: true });
+
+    const spanExporter = new InMemorySpanExporter();
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const otelConfig = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      pipelineDir,
+    );
+    const otel = new OtelVisualizer(otelConfig, {
+      runId: 'build-post-task-tail-acceptance',
+      feature: 'build-post-task-tail-telemetry',
+      project: 'ai-conductor',
+      spanExporter,
+      metricExporter,
+    });
+    otel.start(emitter);
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+
+    const originalEngineLedger = '{"type":"step_started","step":"build","ts":1}\n';
+    await writeFile(engineLedger, originalEngineLedger, 'utf8');
+    const persister = new EventPersister(engineLedger, emitter);
+    persister.start();
+
+    const daemonLines: string[] = [];
+    for (const type of renderedEventTypes()) {
+      emitter.on(type, (event) => renderDaemonEvent(event, (line) => daemonLines.push(line)));
+    }
+
+    const terminalStream = new CaptureStream();
+    const renderer = createRenderer({
+      stateFilePath: join(pipelineDir, 'conduct-state.json'),
+      steps: [],
+      readStateFn: async () => ({ ok: true, value: {} }),
+      liveRegion: createLiveRegion({ stream: terminalStream, forceTTY: false }),
+    });
+    const terminal = new TerminalSubscriber(emitter, renderer);
+    terminal.start();
+
+    const closeout = {
+      type: 'pipeline_closeout',
+      obligation: 'evaluator',
+      startedAt: 100,
+      endedAt: 140,
+      ts: 150,
+    } as const;
+    await writeFile(
+      join(pipelineDir, 'pipeline-events.jsonl'),
+      `${JSON.stringify(closeout)}\n`,
+      'utf8',
+    );
+
+    const tail = new CloseoutEventTail({ projectRoot, events: emitter });
+    try {
+      await tail.poll();
+    } finally {
+      tail.stop();
+      terminal.stop();
+      persister.stop();
+      await otel.stop();
+    }
+
+    const buildSpan = spanExporter.getFinishedSpans().find((span) => span.name === 'build');
+    const closeoutMetric = metricExporter
+      .getMetrics()
+      .flatMap((resource) => resource.scopeMetrics)
+      .flatMap((scope) => scope.metrics)
+      .find((metric) =>
+        metric.descriptor.name.includes('closeout')
+        && metric.dataPoints.some((point) => point.attributes.obligation === 'evaluator'),
+      );
+    const engineAfter = await readFile(engineLedger, 'utf8');
+
+    expect({
+      daemonRendered: /evaluator/i.test(daemonLines.join('\n')),
+      terminalRendered: /evaluator/i.test(terminalStream.output()),
+      otelSpanEvent: buildSpan?.events.some((event) => event.name === 'pipeline_closeout') ?? false,
+      otelDurationMetric: closeoutMetric !== undefined,
+      renderRouted: renderedEventTypes().includes('pipeline_closeout'),
+      persistRouted: persistedEventTypes().includes('pipeline_closeout'),
+      engineLedgerChanged: engineAfter !== originalEngineLedger,
+    }).toEqual({
+      daemonRendered: true,
+      terminalRendered: true,
+      otelSpanEvent: true,
+      otelDurationMetric: true,
+      renderRouted: true,
+      persistRouted: false,
+      engineLedgerChanged: false,
+    });
   }, 30_000);
 });
