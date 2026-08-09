@@ -678,7 +678,9 @@ apply to this repository. See [self-hosting](../guides/self-hosting.md).
   versus `AGENT_INSTRUCTIONS.md`, the two skill catalogs, and the registration gates in
   `test/test_harness_integrity.sh` and `test/test_provider_skill_contracts.sh`.
 - **Outputs** — three verdicts (audience, catalog, provider) plus the registration list the verdicts
-  require. No repository file artifact.
+  require. No repository file artifact. The verdicts are an input to the author's decision, not the
+  decision itself: `AGENT_INSTRUCTIONS.md` → Scope Decisions requires a conflict between a verdict and
+  the operator's plain request to be surfaced before landing.
 - **Gate role** — neither. Advisory, with no marker file and no HALT. Its value is that the
   registration cost of the two catalogs differs sharply: a `skills/` addition must satisfy integrity
   checks 2, 4, 5, 5a, and 5b plus the provider contract audit and installs globally, while an
