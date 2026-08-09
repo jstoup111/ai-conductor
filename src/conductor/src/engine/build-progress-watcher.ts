@@ -301,6 +301,7 @@ export class BuildProgressWatcher {
     const current = tasks.find((t) => t.status === 'in_progress');
 
     let head: string | undefined;
+    let headProbeFailed = false;
     try {
       const git = makeGitRunner(this.projectRoot);
       const result = await git(['rev-parse', 'HEAD']);
@@ -310,6 +311,7 @@ export class BuildProgressWatcher {
     } catch {
       // HEAD probe failed (corrupted worktree, not a repo, etc) — degrade to
       // task-file-only diffing rather than throwing.
+      headProbeFailed = true;
     }
 
     let noEvidenceAttempts = 0;
@@ -432,7 +434,7 @@ export class BuildProgressWatcher {
       currentTaskName: snapshot.currentTaskName,
       commitCount,
       tickReason: taskDelta ? 'task-delta' : 'head-moved',
-      headMoved: headMoved || undefined,
+      headMoved: headProbeFailed ? false : headMoved || undefined,
       noEvidenceAttempts,
       featureSlug: this.featureSlug,
     });

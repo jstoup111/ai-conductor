@@ -8,6 +8,24 @@ import { readSnapshot, BuildProgressWatcher } from '../src/engine/build-progress
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { ConductorEvent } from '../src/types/index.js';
 
+const gitProbe = vi.hoisted(() => ({ throws: false }));
+
+vi.mock('../src/engine/rebase.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../src/engine/rebase.js')>();
+  return {
+    ...original,
+    makeGitRunner: (cwd: string) => {
+      const git = original.makeGitRunner(cwd);
+      return async (args: string[], opts?: { input?: string }) => {
+        if (gitProbe.throws && args[0] === 'rev-parse' && args[1] === 'HEAD') {
+          throw new Error('injected HEAD probe failure');
+        }
+        return git(args, opts);
+      };
+    },
+  };
+});
+
 describe('readSnapshot', () => {
   let dir: string;
 
@@ -151,6 +169,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
   });
 
   afterEach(async () => {
+    gitProbe.throws = false;
     vi.useRealTimers();
     await rm(dir, { recursive: true, force: true });
   });
@@ -310,6 +329,19 @@ describe('BuildProgressWatcher change-driven emission', () => {
     const last = events[events.length - 1];
     expect(last.featureSlug).toBe('my-feature');
     expect(last.noEvidenceAttempts).toBe(2);
+  });
+
+  it('emits build_progress with headMoved false when the HEAD probe throws', async () => {
+    await writeTasks(5, 21);
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    gitProbe.throws = true;
+
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ type: 'build_progress', resolved: 5, total: 21, headMoved: false }),
+    ]);
   });
 
   // #1086 regression: the production stall shape. Since #773 removed the
