@@ -3089,7 +3089,11 @@ export function isStoriesApproved(content: string): boolean {
  * approval gate; other declared statuses are retained for diagnostics.
  */
 export function adrApprovalStatus(content: string): { approved: boolean; found: string | null } {
-  const match = content.match(
+  const withoutFencedCodeBlocks = content.replace(
+    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
+    '',
+  );
+  const match = withoutFencedCodeBlocks.match(
     /^\s*(?:[-+*]\s+)?(?:\*\*status\s*:\s*\*\*|\*\*status\*\*\s*:|status\s*:)\s*(.*?)\s*$/im,
   );
   if (!match) return { approved: false, found: null };

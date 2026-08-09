@@ -3229,6 +3229,20 @@ describe('engine/artifacts', () => {
     ])('approves a %s declaration', (_description, declaration, found) => {
       expect(adrApprovalStatus(`# ADR\n\n${declaration}\n`)).toEqual({ approved: true, found });
     });
+
+    it('ignores a disallowed status declaration inside a fenced code block', () => {
+      expect(adrApprovalStatus(`# ADR\n\nStatus: APPROVED\n\n\`\`\`markdown\nStatus: DRAFT\n\`\`\`\n`)).toEqual({
+        approved: true,
+        found: 'APPROVED',
+      });
+    });
+
+    it('does not treat a status declaration inside a fenced code block as an ADR status', () => {
+      expect(adrApprovalStatus(`# ADR\n\n\`\`\`markdown\nStatus: APPROVED\n\`\`\`\n`)).toEqual({
+        approved: false,
+        found: null,
+      });
+    });
   });
 
   describe('classifyPrdAuditGaps', () => {
