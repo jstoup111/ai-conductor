@@ -23,6 +23,15 @@ Obligations: unrecorded
   `unrecorded`. No `pipeline-events.jsonl` sibling ledger or `pipeline_closeout`
   event exists in the corpus, so no obligation duration is recorded. The reader
   does not invent an obligation name for an absent event.
+- Remediation coverage: `remediation=0` above is structurally forced, not
+  measured. The classifier's sole input is `headMoved`, which this change
+  introduces; seven of the eight retained ledgers contain no occurrence of it, so
+  `buildProgressTicks` defaults it to `false`
+  (`src/conductor/src/engine/build-tail-rollup.ts:60`) and
+  `computeBuildTailRollup` classifies every post-resolution tick as `closeout`
+  (`src/conductor/src/engine/build-tail-rollup.ts:124`). Read this as
+  "remediation is unobservable in this corpus", never as "no remediation
+  occurred".
 
 The historical corpus predates closeout events. Its ISO timestamps are normalized
 by the rollup reader before this baseline is computed.
