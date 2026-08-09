@@ -33,7 +33,7 @@
 //      branch is the worktree's branch — never deleted here.
 
 import { access, readdir, readFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, isAbsolute, resolve as resolvePath } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
@@ -53,6 +53,7 @@ import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-ga
 import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
 import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
+import { validateWiredIntoPlan } from '../validate-wired-into.js';
 
 const execFile = promisify(execFileCb);
 
@@ -247,6 +248,46 @@ export async function landSpec(
     throw new Error(
       `landSpec: plan targets sealed artifacts owned by another feature: ${targets}. ` +
         'Amend accepted artifacts during DECIDE, then re-author the plan.',
+    );
+  }
+
+  // 4b-ii. Plan `**Wired-into:**` anchors must resolve at DECIDE time.
+  //
+  // `validateWiredIntoPlan` (#1190) already ran the SAME machinery BUILD runs
+  // (`extractWiredIntoContracts` + `verifyDeclaredSites`) against plan text,
+  // but only as the optional `conduct-ts validate-wired-into` command that
+  // nothing invoked automatically — so an unresolvable anchor was approved at
+  // DECIDE and only discovered mid-BUILD, where the build agent "fixed" it by
+  // rewriting the approved plan (a needs-human HALT on
+  // `build-post-task-tail-telemetry`). This makes it a gate.
+  //
+  // It sits here, in landSpec beside the protected-target gate, rather than in
+  // the coherence gate below: anchor resolvability is a plan-structure fact
+  // that holds at EVERY tier, whereas the coherence gate is tier-S exempt and
+  // engages only when a `.docs/coherence/` artifact is in the change set. A
+  // coherence-gate home would silently exempt exactly the small and legacy
+  // plans that also get built.
+  const wiredIntoResult = await validateWiredIntoPlan(planContent, async (anchorPath) => {
+    // Anchor paths come from untrusted plan text; keep the read inside the
+    // worktree. An escaping path is reported as an unresolvable anchor (the
+    // reader's rejection becomes a `file not found` gap), never followed.
+    if (isAbsolute(anchorPath)) throw new Error('anchor path is absolute');
+    const abs = resolvePath(worktreePath, anchorPath);
+    const rel = relative(worktreePath, abs);
+    if (rel.startsWith('..')) throw new Error('anchor path escapes the worktree');
+    return readFile(abs, 'utf-8');
+  });
+  if (!wiredIntoResult.ok) {
+    const failures = wiredIntoResult.rows
+      .filter((row) => row.status === 'fail')
+      .map((row) => `Task ${row.taskId}: ${row.detail}`)
+      .join('; ');
+    throw new Error(
+      `landSpec: plan declares **Wired-into:** anchors that do not resolve: ${failures}. ` +
+        'Every declared anchor must name an existing non-test call site the new surface is reached from — ' +
+        'an anchor in a file the same task creates asserts no downstream wiring at all. ' +
+        'Run `conduct-ts validate-wired-into <plan-file-path>` and fix the plan during DECIDE, ' +
+        'or declare a `none (...)` form. BUILD must never have to rewrite an approved plan to make it resolve.',
     );
   }
 

@@ -123,7 +123,8 @@ to emit the ids in the correct form so a later waiver can cite them):
 
 - `outcome-<n>` — unmapped or negative-verdict outcome bullet
 - `fr-<N>` — FR cited by no story, or only by a story that itself maps to no task
-- `story-<id>` — story cited by no task
+- `story-<id>` — story cited by no task, or a story that does not tie out to the PRD
+  (cites an `FR-N` the PRD never declares, or cites no FR at all — §4e)
 - `task-<id>` — task with no valid story citation and no supporting-purpose exemption
 - `claim-<row>` — the plan's own `## Coverage Check` table cites a phantom id or
   contradicts the parsed task tree (row number within that table)
@@ -180,6 +181,44 @@ defer it to BUILD. Follow the accepted-artifact amendment convention the sibling
 skills use: add a dated note beside the original assertion, additively, leaving the
 original text in place.
 
+### 4e. PRD ↔ Stories Tie-Out
+
+The `fr` and `story` row classes are the two halves of one question: **do the PRD and the
+stories tie out?** Both directions must hold, and they fail differently:
+
+- **Forward (PRD → stories).** Every enumerated `FR-N` is cited by ≥1 story's
+  `**Requirement:**` line, and ≥1 of those stories is itself covered by a plan task. An FR
+  nothing implements is `gap` on its `fr` row (`fr-<N>`).
+- **Reverse (stories → PRD).** Every story cites ≥1 `FR-N`, and every `FR-N` it cites is one
+  the PRD actually declares. A story citing `FR-9` when the PRD stops at `FR-4` is a phantom
+  requirement; a story citing no FR at all is untraced — it asserts behavior the product spec
+  never asked for. Either is `gap` on that story's `story` row (`story-<id>`).
+
+Both directions are **enforced mechanically by the land-time gate** over parsed ids — it
+re-derives them from the real PRD and stories files regardless of what this artifact claims,
+and reports every offending id, not the first. Do not spend judgement re-deriving set
+membership by hand: read the ids, record the rows, and let the gate be the authority on
+coverage. Reserve judgement for the part the gate cannot compute:
+
+- **Does the story actually deliver the FR it cites?** A correct citation is not a correct
+  implementation. An `FR-N` requiring an immutable field, cited by a story whose scenario
+  edits that field, is `fail` (§4d) — coverage is satisfied, consistency is not. This is the
+  reverse-direction contradiction the mechanical check cannot see, and it is the reason the
+  `fr` and `story` rows carry verdicts at all rather than just id lists.
+- **Is the citation load-bearing or decorative?** A story citing three FRs while its scenarios
+  exercise one is not covered for the other two — record those FRs as `gap` on their own `fr`
+  rows and say so in Notes, rather than crediting a citation the acceptance criteria do not
+  honor.
+
+**Boundary vs `/conflict-check`.** `/conflict-check` sweeps **story against story** — two
+stories that cannot both hold. This section sweeps **story against the PRD** — a story that
+does not tie out to, or contradicts, the requirement it claims to implement. A story pair that
+conflicts with each other but each tie out cleanly to their FRs is `/conflict-check`'s finding,
+not this one; a single story that no other story disagrees with but which contradicts its own
+FR is this one's, and nothing else in DECIDE sees it. Do not re-report a conflict-check finding
+here, and do not assume conflict-check's clean pass says anything about PRD agreement — it
+never reads the PRD's FRs as a party to the comparison.
+
 ## 5. Semantic-Judging Instructions (verify-claims protocol)
 
 Per `/verify-claims`, this skill is a **verifier/judge** role: it renders a verdict
@@ -223,6 +262,11 @@ per row and must never assert "covered" that it has not actually confirmed.
       (an invented string is treated as affirmative by the validator and silently passes)
 - [ ] §4d consistency pass run over every covered row; contradictions recorded as `fail`
       with `CONTRADICTS:` notes quoting the opposing text from both artifacts
+- [ ] §4e PRD↔stories tie-out checked in BOTH directions — no FR without a story, and no
+      story citing a phantom FR or citing no FR at all
+- [ ] Every story's cited FR confirmed to be actually delivered by that story's scenarios —
+      a correct citation that the acceptance criteria contradict is `fail`, not `covered`
+- [ ] Story-vs-story conflicts left to `/conflict-check`; this artifact reports story-vs-PRD only
 - [ ] Cross-layer pairs (outcome↔task, FR↔story) checked in both directions for
       oscillation — same-layer pairs are `/conflict-check`'s sweep, cross-layer are this skill's
 - [ ] Every `gap` row's Notes column restates its gap id in the canonical form (Section 4c)

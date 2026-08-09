@@ -539,6 +539,107 @@ export function checkFrCoverage(
   return { ok: true };
 }
 
+// --- Story<->PRD tie-out layer (reverse direction of FR coverage) ---
+//
+// `checkFrCoverage` walks PRD -> story -> task and catches an FR nothing
+// implements. It cannot see the OTHER direction: a story whose
+// `**Requirement:**` line cites an `FR-N` the PRD never declares (a phantom
+// requirement), or a story that cites no FR at all while the PRD does declare
+// FRs (an untraced story asserting behavior the product spec never asked for).
+// Both are set comparisons over parsed ids — deterministic, no judgement — so
+// they belong in the gate rather than in skill prose.
+//
+// Scope boundary: this layer answers "does every story tie back to a declared
+// PRD requirement?". It never judges whether a story's scenario *semantically*
+// contradicts the FR it cites (that is the /coherence-check skill's §4e
+// consistency pass, recorded as a `fail` verdict), and it never compares one
+// story against another (that is /conflict-check's story-vs-story sweep).
+
+/** How a story failed to tie out to the PRD. */
+export type StoryFrGapKind = 'phantom-fr' | 'untraced-story';
+
+/** A single story that does not tie out to the PRD's declared FRs. */
+export interface StoryFrGapFinding {
+  /** The `story-<id>` gap id, in the §4c canonical waiver vocabulary. */
+  gapId: string;
+  /** Which side of the tie-out broke. */
+  kind: StoryFrGapKind;
+  /** The bare story id, e.g. `2`. */
+  storyId: string;
+  /** The story's title, taken from its `## Story <id>: <title>` heading. */
+  title: string;
+  /**
+   * For `phantom-fr`, every cited FR id absent from the PRD, in citation
+   * order. Empty for `untraced-story` (nothing was cited at all).
+   */
+  frIds: string[];
+}
+
+export type StoryFrTieOutResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'story-fr-gap';
+      /** Every offending story, not just the first — FR-9. */
+      gaps: StoryFrGapFinding[];
+    };
+
+/**
+ * Reverse-direction set-difference check between the PRD and the stories
+ * file: every story must cite at least one `FR-N` on a `**Requirement:**`
+ * line, and every `FR-N` it cites must be one the PRD actually declares under
+ * its `## Functional Requirements` heading.
+ *
+ * A story citing a mix of real and phantom FRs is a `phantom-fr` gap naming
+ * only the phantom ids — the real citations are not evidence that the phantom
+ * one is fine. A story citing nothing is an `untraced-story` gap.
+ *
+ * A technical-track spec has no PRD (`prdText === null`), and a PRD that
+ * declares no FRs has no requirement layer to tie out against; both pass
+ * trivially rather than reporting every story as untraced.
+ */
+export function checkStoryFrTieOut(
+  prdText: string | null,
+  storiesText: string | null,
+): StoryFrTieOutResult {
+  const prdFrIds = extractPrdFrIds(prdText);
+  if (prdFrIds.size === 0) return { ok: true };
+
+  const storyFrMap = extractStoryRequirementFrIds(storiesText);
+
+  const gaps: StoryFrGapFinding[] = [];
+  for (const block of splitStoryBlocks(storiesText ?? '')) {
+    if (!block.id) continue;
+    const title = extractStoryTitle(block.text);
+    const cited = storyFrMap.get(block.id);
+
+    if (!cited || cited.size === 0) {
+      gaps.push({
+        gapId: `story-${block.id}`,
+        kind: 'untraced-story',
+        storyId: block.id,
+        title,
+        frIds: [],
+      });
+      continue;
+    }
+
+    const phantom = [...cited].filter((fr) => !prdFrIds.has(fr));
+    if (phantom.length > 0) {
+      gaps.push({
+        gapId: `story-${block.id}`,
+        kind: 'phantom-fr',
+        storyId: block.id,
+        title,
+        frIds: phantom,
+      });
+    }
+  }
+
+  if (gaps.length > 0) return { ok: false, reason: 'story-fr-gap', gaps };
+  return { ok: true };
+}
+
 // --- Orphan-task layer (Task 10) ---
 
 /** A single orphan task: the `task-<id>` id and its title. */
@@ -778,10 +879,11 @@ export function checkCoverageTableConsistency(planText: string | null): Coverage
 
 // --- Aggregated deterministic gap report (Task 12) ---
 
-/** The six coverage/consistency layers a gap can originate from, in fixed report order. */
+/** The seven coverage/consistency layers a gap can originate from, in fixed report order. */
 export type CoherenceGapLayer =
   | 'outcome'
   | 'fr'
+  | 'story-fr'
   | 'story'
   | 'orphan-task'
   | 'coverage-table'
@@ -791,6 +893,7 @@ export type CoherenceGapLayer =
 const GAP_LAYER_ORDER: readonly CoherenceGapLayer[] = [
   'outcome',
   'fr',
+  'story-fr',
   'story',
   'orphan-task',
   'coverage-table',
@@ -836,7 +939,7 @@ export function renderGapReport(gaps: CoherenceGap[]): string {
   return lines.join('\n') + '\n';
 }
 
-/** The real-artifact inputs the full coherence validator runs all five layers against. */
+/** The real-artifact inputs the full coherence validator runs all six layers against. */
 export interface ValidateCoherenceInputs {
   /** Parsed coherence artifact rows (Task 5), used by the outcome-coverage layer. */
   rows: CoherenceRow[];
@@ -855,8 +958,9 @@ export type ValidateCoherenceResult =
   | { ok: false; gaps: CoherenceGap[]; report: string };
 
 /**
- * Orchestrate all five coverage/consistency layers (outcome, FR, story,
- * orphan-task, coverage-table) and aggregate every gap they report into one
+ * Orchestrate all six coverage/consistency layers (outcome, FR, story<->FR
+ * tie-out, story, orphan-task, coverage-table) and aggregate every gap they
+ * report into one
  * deterministic report, rather than stopping at the first failing layer.
  * Each layer independently returns at most one gap per call; this function
  * collects one gap per layer (when that layer fails) into a single list and
@@ -891,6 +995,21 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
         item: gap.storyId
           ? `${gap.frId} is cited by story-${gap.storyId} but no task covers that story`
           : `${gap.frId} is not cited by any story's Requirement line`,
+      });
+    }
+  }
+
+  const tieOutResult = checkStoryFrTieOut(inputs.prdText, inputs.storiesText);
+  if (!tieOutResult.ok) {
+    for (const gap of tieOutResult.gaps) {
+      gaps.push({
+        layer: 'story-fr',
+        gapId: gap.gapId,
+        artifact: 'stories',
+        item:
+          gap.kind === 'phantom-fr'
+            ? `story-${gap.storyId} ("${gap.title}") cites ${gap.frIds.join(', ')}, which the PRD does not declare`
+            : `story-${gap.storyId} ("${gap.title}") cites no FR on a **Requirement:** line, so it traces to no PRD requirement`,
       });
     }
   }
@@ -1068,7 +1187,7 @@ export async function advisoryDuplicateClaimWarn(
 //
 // Per adr-2026-07-22-coherence-gate-placement-and-validation-split.md ("Tier
 // exemption", "Track/origin degradation") the validator does not always run
-// all five layers against every spec. `resolveRequiredLayers` is the single
+// all layers against every spec. `resolveRequiredLayers` is the single
 // entry guard `land-spec.ts` (Task 16) calls before touching the fail-closed
 // missing-artifact rule, so:
 //
@@ -1079,7 +1198,7 @@ export async function advisoryDuplicateClaimWarn(
 //      `.docs/coherence/` file in it at all — predates the /coherence-check
 //      step existing; the gate disengages entirely rather than rejecting a
 //      spec that was never asked to author the artifact (no-retroactivity).
-//   3. Otherwise the gate engages and derives which of the five coverage
+//   3. Otherwise the gate engages and derives which of the coverage
 //      layers are REQUIRED from committed signals only: no track marker (or
 //      an explicit `product` track) requires the FR layer; a `technical`
 //      track marker skips it. No persisted intake outcome bullets skips the
@@ -1087,7 +1206,11 @@ export async function advisoryDuplicateClaimWarn(
 //      coverage-table layers are structural (they need no external marker)
 //      and are always required once the gate is engaged.
 
-/** The five coverage/consistency layers `validateCoherence` can enforce. */
+/**
+ * The layers `validateCoherence` can enforce. The story<->FR tie-out layer
+ * is not listed separately: it is part of the `fr` layer's product-track
+ * requirement surface and is gated by the same signal (a non-null PRD).
+ */
 export type CoherenceRequiredLayer =
   | 'outcome'
   | 'fr'
@@ -1175,7 +1298,7 @@ export function resolveRequiredLayers(
 // existing DRAFT-ADR gate. Wires together, in order: `resolveRequiredLayers`
 // (tier exemption / no-retroactivity / layer degradation) -> parse the
 // committed coherence artifact -> `crossCheckIds` (fabricated-citation
-// fail-closed reject) -> `validateCoherence` (the five coverage/consistency
+// fail-closed reject) -> `validateCoherence` (the coverage/consistency
 // layers, gated to only the required ones) -> the offline duplicate-claim
 // scan -> waiver evaluation over any aggregated gaps. Throws a single Error
 // naming every unresolved gap id on any unwaived failure; resolves silently
