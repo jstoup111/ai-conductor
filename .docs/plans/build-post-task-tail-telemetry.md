@@ -175,7 +175,7 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-events.ts — new appender module
 - src/conductor/test/closeout-events.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/closeout-cli.ts)
+**Wired-into:** src/conductor/src/engine/closeout-cli.ts#dispatchCloseoutEventCommand
 **Dependencies:** Task 5
 
 ### Task 7: Expose the appender as a `conduct-ts` subcommand
@@ -233,7 +233,7 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-tail.ts — new reader
 - src/conductor/test/closeout-tail.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/conductor.ts)
+**Wired-into:** src/conductor/src/engine/conductor.ts#Conductor.run
 **Dependencies:** Task 5
 
 ### Task 10: Re-emit tailed closeout events onto the live bus
@@ -309,7 +309,7 @@ goes in the PR body.
 - src/conductor/src/engine/build-tail-rollup.ts — new module
 - src/conductor/test/build-tail-rollup.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/build-tail-cli.ts)
+**Wired-into:** src/conductor/src/engine/build-tail-cli.ts#dispatchBuildTailCommand
 **Dependencies:** Task 5
 
 ### Task 14: Decompose each window and classify first-pass vs re-entry
@@ -326,7 +326,7 @@ goes in the PR body.
 **Files likely touched:**
 - src/conductor/src/engine/build-tail-rollup.ts — decomposition and classification
 
-**Wired-into:** same as Task 13
+**Wired-into:** src/conductor/src/engine/build-tail-cli.ts#dispatchBuildTailCommand
 **Dependencies:** Task 13
 
 ### Task 15: Degrade to `partial`/`unavailable` instead of lying or throwing
@@ -343,7 +343,7 @@ goes in the PR body.
 **Files likely touched:**
 - src/conductor/src/engine/build-tail-rollup.ts — degradation handling
 
-**Wired-into:** same as Task 13
+**Wired-into:** src/conductor/src/engine/build-tail-cli.ts#dispatchBuildTailCommand
 **Dependencies:** Task 14
 
 ### Task 16: Expose the rollup as a deterministic reporting subcommand
