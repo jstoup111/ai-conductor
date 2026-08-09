@@ -848,6 +848,16 @@ export async function discoverBacklog(
     blockedItems.push(item);
     await warnOnce(item.slug, message);
   };
+  let unapprovedAdr: { path: string; found: string | null } | null = null;
+  for (const adrFile of await tree.listAdrFiles()) {
+    const path = `.docs/decisions/${adrFile}`;
+    const approval = adrApprovalStatus((await tree.readFile(path)) ?? '');
+    if (!approval.approved) {
+      unapprovedAdr = { path, found: approval.found };
+      break;
+    }
+  }
+  let adrCorpusWarningLogged = false;
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
   // is present but malformed (see the dependency-gate loop below).
   const malformedSourceRefs = new Map<string, string>();
@@ -971,23 +981,20 @@ export async function discoverBacklog(
       );
       continue;
     }
-    let blockedByAdr = false;
-    for (const adrFile of await tree.listAdrFiles()) {
-      const adrRel = `.docs/decisions/${adrFile}`;
-      const approval = adrApprovalStatus((await tree.readFile(adrRel)) ?? '');
-      if (approval.approved) continue;
-
-      const status = approval.found === null ? 'no status declaration' : `status "${approval.found}"`;
-      const remedy = `Approve ${adrRel} (${status}) on the default branch.`;
-      await block(
-        { slug, reason: 'adr-not-approved', remedy },
-        `skip ${slug}: merged spec cannot build — ADR ${adrRel} is not approved (${status}). ` +
-          `${remedy} logged once.`,
-      );
-      blockedByAdr = true;
-      break;
+    if (unapprovedAdr !== null) {
+      const status =
+        unapprovedAdr.found === null ? 'no status declaration' : `status "${unapprovedAdr.found}"`;
+      const remedy = `Approve ${unapprovedAdr.path} (${status}) on the default branch.`;
+      blockedItems.push({ slug, reason: 'adr-not-approved', remedy });
+      if (!adrCorpusWarningLogged) {
+        log(
+          `skip ${slug}: merged specs cannot build — ADR ${unapprovedAdr.path} is not approved ` +
+            `(${status}). ${remedy} logged once this pass.`,
+        );
+        adrCorpusWarningLogged = true;
+      }
+      continue;
     }
-    if (blockedByAdr) continue;
     if (!planHasDependencyTree(planContent)) {
       blockedItems.push({
         slug,

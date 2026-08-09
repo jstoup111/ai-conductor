@@ -210,6 +210,42 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.blocked).toEqual([]);
   });
 
+  it('scans an unapproved ADR corpus once per pass and recovers after correction', async () => {
+    const slugs = ['alpha', 'beta', 'gamma'];
+    const files = new Map<string, string>();
+    for (const slug of slugs) {
+      files.set(`.docs/plans/${slug}.md`, planWithDeps(`.docs/stories/${slug}.md`));
+      files.set(`.docs/stories/${slug}.md`, APPROVED_STORIES);
+      files.set(`.docs/coherence/${slug}.md`, COHERENCE_TABLE);
+    }
+    files.set('.docs/decisions/adr-gate.md', '# ADR\n\nStatus: Proposed\n');
+    const listAdrFiles = vi.fn(async () => ['adr-gate.md']);
+    const readFile = vi.fn(async (path: string) => files.get(path) ?? null);
+    const tree: BacklogTreeSource = {
+      listPlanFiles: async () => slugs.map((slug) => `${slug}.md`),
+      listShippedFiles: async () => [],
+      listAdrFiles,
+      readFile,
+    };
+    const logs: string[] = [];
+
+    const blocked = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: tree,
+    });
+
+    expect(blocked.items).toEqual([]);
+    expect(blocked.blocked).toHaveLength(3);
+    expect(listAdrFiles).toHaveBeenCalledTimes(1);
+    expect(readFile.mock.calls.filter(([path]) => path === '.docs/decisions/adr-gate.md')).toHaveLength(1);
+    expect(logs.filter((message) => /ADR.*not approved/i.test(message))).toHaveLength(1);
+
+    files.set('.docs/decisions/adr-gate.md', '# ADR\n\nStatus: APPROVED\n');
+    const recovered = await discoverBacklog(dir, undefined, undefined, { treeSource: tree });
+
+    expect(recovered.blocked).toEqual([]);
+    expect(recovered.items.map((item) => item.slug)).toEqual(slugs);
+  });
+
   it('does not classify an unresolvable Stories reference as blocked after a processed-marker dedup', async () => {
     await writeFile(
       join(dir, '.docs/plans/processed-unresolvable.md'),
