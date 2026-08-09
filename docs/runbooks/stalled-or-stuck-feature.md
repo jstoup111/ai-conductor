@@ -37,7 +37,10 @@ with a reason and remedy. This is a discovery refusal, not a feature HALT: no fe
 ([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)); use `daemon status`.
 
 **Diagnosis:** Read the `BLOCKED` line. Common reasons are `unresolvable-stories-ref`,
-`stories-missing`, `stories-not-approved`, `no-dependency-tree`, and `missing-coherence`. The
+`stories-missing`, `stories-not-approved`, `adr-not-approved`, `no-dependency-tree`, and
+`missing-coherence`. `adr-not-approved` means the default branch's `.docs/decisions/` corpus
+contains an ADR whose first declared status is not `APPROVED` or `SUPERSEDED` (or that declares no
+status); it blocks every merged spec, not just the one it names. The
 snapshot is `.daemon/blocked.json`; a missing or malformed snapshot means only that no completed
 discovery pass is available, not that the spec is clear.
 

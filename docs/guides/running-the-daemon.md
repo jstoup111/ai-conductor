@@ -31,16 +31,22 @@ logs one of these lines:
 
 ```text
 skip <slug>: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.
+skip <slug>: merged specs cannot build — ADR .docs/decisions/<adr-file> is not approved (status "<found>" | no status declaration). Approve <adr-file> on the default branch. logged once this pass.
 skip <slug>: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.
 skip <slug>: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/<slug>.md) required for tier <tier>. Author it on the default branch; logged once.
 ```
 
-The first two reject an unapproved stories artifact or a plan without a task dependency tree. The
-third applies only outside tier S: author a parseable `.docs/coherence/<stem>.md` on the default
-branch, or verify that the feature is correctly classified as tier S. Fix the indicated artifact
-on the default branch; the next discovery pass replaces the blocked snapshot, clearing a repaired
-spec without manual cleanup. Each reason is logged once per slug through `.daemon/warned/<slug>`;
-the marker suppresses repeated poll warnings until the spec is fixed.
+The first rejects an unapproved stories artifact. The second rejects a non-conforming ADR corpus:
+discovery scans every `.docs/decisions/adr-*.md` file on the default branch once per pass, and any
+merged spec is blocked while any ADR's first declared status is not `APPROVED` or `SUPERSEDED`
+(including an ADR with no status declaration at all) — approving the offending ADR unblocks every
+spec the next pass, with no daemon restart. The third rejects a plan without a task dependency
+tree. The fourth applies only outside tier S: author a parseable `.docs/coherence/<stem>.md` on the
+default branch, or verify that the feature is correctly classified as tier S. Fix the indicated
+artifact on the default branch; the next discovery pass replaces the blocked snapshot, clearing a
+repaired spec without manual cleanup. Each reason is logged once per slug (the ADR reason once per
+pass for the whole corpus) through `.daemon/warned/<slug>`; the marker suppresses repeated poll
+warnings until the spec is fixed.
 
 Run `conduct-ts daemon status` to read the persisted `BLOCKED` section. It lists each blocked slug,
 machine-readable reason, remedy, and the latest scan age without invoking Git or the network. An

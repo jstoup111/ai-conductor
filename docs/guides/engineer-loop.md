@@ -180,7 +180,8 @@ pass `branch` and the same `--worktree` to step 6.
 Before committing, `land` refuses on any of:
 
 - a missing required artifact for the recorded tier,
-- any artifact carrying `Status: DRAFT`, including a DRAFT ADR,
+- any artifact carrying `Status: DRAFT`,
+- an ADR under `.docs/decisions/` whose first declared status is not `APPROVED` or `SUPERSEDED`, or that declares no status at all,
 - an empty or stub artifact,
 - uncommitted changes in the worktree outside `.docs/`,
 - an unresolved identity (no `spec_owner` configured and no `gh` login).
