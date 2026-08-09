@@ -218,6 +218,16 @@ describe('renderDaemonEvent', () => {
     ).toEqual(['· ✋ ci_failed[myorg/myrepo]: phase=exhausted attempts=2 checks=[build]']);
   });
 
+  it('renders sealed-artifact remediation redirects with their gap and artifact', () => {
+    expect(lines({
+      type: 'remediation_sealed_artifact_redirect',
+      gapId: 'sealed-gap',
+      artifact: '.docs/specs/another-feature.md',
+    })).toEqual([
+      '· ↩ remediation gap sealed-gap → plan — sealed artifact .docs/specs/another-feature.md',
+    ]);
+  });
+
   it('shows only UNSATISFIED gate verdicts (satisfied ones are routine)', () => {
     expect(lines({ type: 'gate_verdict', step: 'plan', satisfied: true })).toEqual([]);
     expect(

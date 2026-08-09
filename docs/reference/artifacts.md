@@ -117,7 +117,8 @@ Two independent mechanisms protect `.docs/` during a run.
 `.docs/stories/` during the `retro` step.
 
 **Protected-artifact seal.** `.pipeline/protected-artifact-seal.json` fingerprints every file under
-`.docs/architecture`, `.docs/plans`, `.docs/specs`, and `.docs/stories` against a baseline commit:
+`.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, and `.docs/stories` against a
+baseline commit:
 
 ```ts
 interface ProtectedArtifactSeal {

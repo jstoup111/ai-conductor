@@ -266,6 +266,12 @@ export type ConductorEvent =
       path?: string;
     }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
+  | {
+      /** A foreign sealed DECIDE artifact redirected remediation back to DECIDE. */
+      type: 'remediation_sealed_artifact_redirect';
+      gapId: string;
+      artifact: string;
+    }
   | ({
       /**
        * Emitted after a verdict-consuming completion check

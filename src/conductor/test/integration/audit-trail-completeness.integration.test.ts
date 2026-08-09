@@ -80,6 +80,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   protected_artifact_rebaseline: 'not-audited-by-design',
   protected_artifact_rebaseline_refused: 'not-audited-by-design',
   auto_heal: 'not-audited-by-design',
+  remediation_sealed_artifact_redirect: 'not-audited-by-design',
   verdict_freshness: 'friction-mapped',
   build_review_base: 'not-audited-by-design',
   build_review_stale_mirage_regrade: 'not-audited-by-design',
@@ -205,6 +206,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     path: '.docs/plans/feature.md',
   },
   auto_heal: { type: 'auto_heal', step: 'build', healed: 1, skipped: 0 },
+  remediation_sealed_artifact_redirect: {
+    type: 'remediation_sealed_artifact_redirect',
+    gapId: 'gap-1',
+    artifact: '.docs/stories/another-feature.md',
+  },
   verdict_freshness: {
     type: 'verdict_freshness',
     step: 'build_review',

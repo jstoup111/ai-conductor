@@ -40,9 +40,9 @@
  * runner silently breaks all three callers at once.
  */
 import { execa } from 'execa';
-import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat, lstat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
+import { PRE_COMMIT_HOOK, PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 import {
   PRE_DISPATCH_HOOK,
   DOCS_GUARD_HOOK,
@@ -424,24 +424,42 @@ export async function ensureSessionHooks(
 }
 
 /**
- * Write git hook scripts to the worktree and wire them via git config.
- * Fail-open: logs and continues on any error, never throwing.
+ * Attribution hooks fail open, while the preventive pre-commit control fails
+ * closed: a worktree without it must never enter BUILD/SHIP.
  */
 async function writeGitHooksAndWire(
   worktreePath: string,
   log?: (msg: string) => void,
 ): Promise<void> {
+  // Some unit-level setup tests exercise the project-script boundary in a
+  // plain temporary directory rather than a Git worktree. There is no commit
+  // surface to protect in that shape, so leave the historical no-op intact.
+  // A present but inaccessible .git is different: it claims to be a checkout
+  // but cannot receive the preventive hook, so fail closed before BUILD/SHIP.
+  try {
+    await lstat(join(worktreePath, '.git'));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`preventive git hook installation failed: unable to inspect .git metadata: ${msg}`);
+  }
+  try {
+    await stat(join(worktreePath, '.git'));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`preventive git hook installation failed: unable to access .git metadata: ${msg}`);
+  }
   try {
     await writeGitHooks(worktreePath, log);
     await wireGitHooks(worktreePath, log);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log?.(`git hooks: skipped (${msg})`);
+    throw new Error(`preventive git hook installation failed: ${msg}`);
   }
 }
 
 /**
- * Write the two attribution hook scripts to .pipeline/git-hooks/ and make them executable.
+ * Write attribution and preventive hook scripts to .pipeline/git-hooks/.
  */
 async function writeGitHooks(
   worktreePath: string,
@@ -449,6 +467,10 @@ async function writeGitHooks(
 ): Promise<void> {
   const hooksDir = join(worktreePath, '.pipeline', 'git-hooks');
   await mkdir(hooksDir, { recursive: true });
+
+  const preCommitPath = join(hooksDir, 'pre-commit');
+  await writeFile(preCommitPath, PRE_COMMIT_HOOK, 'utf-8');
+  await chmod(preCommitPath, 0o755);
 
   const prepareCommitMsgPath = join(hooksDir, 'prepare-commit-msg');
   await writeFile(prepareCommitMsgPath, PREPARE_COMMIT_MSG_HOOK, 'utf-8');

@@ -297,7 +297,9 @@ export async function planProtectedTargetsCommand(
   }
 
   for (const { taskId, path } of violations) {
-    print(`Task ${taskId}: ${path}`);
+    print(
+      `Task ${taskId}: ${path} — ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the task's targets.`,
+    );
   }
   return 1;
 }

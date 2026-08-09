@@ -16,10 +16,15 @@ function undatedStem(stem: string): string {
 
 export const PROTECTED_ARTIFACT_DIRECTORIES = [
   '.docs/architecture',
+  '.docs/decisions',
   '.docs/plans',
   '.docs/specs',
   '.docs/stories',
 ] as const;
+
+export function isProtectedArtifactPath(path: string): boolean {
+  return PROTECTED_ARTIFACT_DIRECTORIES.some((directory) => path === directory || path.startsWith(`${directory}/`));
+}
 
 export const PROTECTED_ARTIFACT_SEAL_PATH = '.pipeline/protected-artifact-seal.json';
 
@@ -170,13 +175,22 @@ function canonicalWorkspaceTarget(projectRoot: string, target: unknown):
   if (typeof target !== 'string' || target.length === 0 || target.includes('\0')) {
     return { ok: false, reason: 'missing-or-malformed-target' };
   }
+  const root = resolve(projectRoot);
   if (target.includes('$') || target.includes('*') || target.includes('?') || target.includes('{')) {
+    const wildcard = target.search(/[?*{]/);
+    if (wildcard >= 0) {
+      const staticTarget = target.slice(0, wildcard).replace(/[\\/]+$/, '');
+      const staticResolved = resolve(root, staticTarget);
+      if (staticTarget.length > 0 && isContainedBy(root, staticResolved)
+        && isProtectedArtifactPath(relative(root, staticResolved).replaceAll('\\', '/'))) {
+        return { ok: false, reason: 'protected-glob-target' };
+      }
+    }
     return { ok: false, reason: 'dynamic-target' };
   }
   if (target.split(/[\\/]/).includes('..')) {
     return { ok: false, reason: 'traversal-target' };
   }
-  const root = resolve(projectRoot);
   const resolved = resolve(root, target);
   if (!isContainedBy(root, resolved)) return { ok: false, reason: 'outside-workspace-target' };
   const canonical = relative(root, resolved).replaceAll('\\', '/');
@@ -202,7 +216,7 @@ export function classifyMutationTarget({
   if (isActiveStepArtifactException({ phase, step, target: canonicalTarget })) {
     return { kind: 'allowed', target: canonicalTarget };
   }
-  if (canonicalTarget === '.docs' || canonicalTarget.startsWith('.docs/')) {
+  if (isProtectedArtifactPath(canonicalTarget)) {
     return { kind: 'protected', target: canonicalTarget };
   }
   return { kind: 'unprotected', target: canonicalTarget };

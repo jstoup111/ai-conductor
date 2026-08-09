@@ -1,3 +1,5 @@
+import { PROTECTED_ARTIFACT_DIRECTORIES } from './protected-artifact-seal.js';
+
 /**
  * Git hook scripts embedded as engine assets
  *
@@ -5,6 +7,77 @@
  * and wired via git config core.hooksPath. They use no dist references; the
  * commit-msg hook invokes the installed conduct-ts scope-check command.
  */
+
+const protectedArtifactPathCase = `    ${PROTECTED_ARTIFACT_DIRECTORIES
+  .flatMap((directory) => [directory, `${directory}/*`])
+  .join('|')})`;
+
+/**
+ * pre-commit hook
+ *
+ * Rejects staged protected artifacts before a commit is created. The emitted
+ * Bash remains self-contained while its protected-path cases are derived from
+ * the engine's shared protected artifact definition.
+ */
+export const PRE_COMMIT_HOOK = [
+  '#!/bin/bash',
+  'set -e',
+  '',
+  '# Engine bookkeeping is intentionally outside the preventive gate.',
+  'if [[ "${CONDUCT_ENGINE_COMMIT:-}" == "1" ]]; then exit 0; fi',
+  '',
+  'WORKTREE_ROOT="$(git rev-parse --show-toplevel)"',
+  'MARKER="$WORKTREE_ROOT/.pipeline/phase-active"',
+  '[[ -f "$MARKER" ]] || exit 0',
+  'PHASE="$(sed -n "s/^phase: //p" "$MARKER" | head -1)"',
+  '[[ "$PHASE" == "BUILD" || "$PHASE" == "SHIP" ]] || exit 0',
+  'PLAN_REF="$WORKTREE_ROOT/.pipeline/task-status.json"',
+  'FEATURE_STEM=""',
+  'if [[ -f "$PLAN_REF" ]]; then',
+  '  FEATURE_STEM="$(sed -n "s/.*\\\"plan_ref\\\"[[:space:]]*:[[:space:]]*\\\"\\([^\\\"]*\\\)\\\".*/\\1/p" "$PLAN_REF" | head -1)"',
+  '  FEATURE_STEM="${FEATURE_STEM##*/}"; FEATURE_STEM="${FEATURE_STEM%.md}"',
+  'fi',
+  'OFFENDERS=()',
+  'while IFS= read -r -d "" path; do',
+  '  allowed=false',
+  '  while IFS= read -r prefix; do',
+  '    [[ -z "$prefix" ]] || [[ "$path" != "$prefix"* ]] || allowed=true',
+  '  done < <(sed -n "s/^allow: //p" "$MARKER")',
+  '  [[ "$allowed" == true ]] && continue',
+  '  own=false',
+  '  if [[ -n "$FEATURE_STEM" ]]; then',
+  '    stem="${path##*/}"; stem="${stem%.md}"',
+  '    own_stem="$(printf "%s" "$FEATURE_STEM" | sed -E "s/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//")"',
+  '    path_stem="$(printf "%s" "$stem" | sed -E "s/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//")"',
+  '    [[ "$own_stem" == "$path_stem" ]] && own=true',
+  '  fi',
+  '  case "$path" in',
+  '    ""|/*|../*|*/../*|*/./*)',
+  '      # Git normally supplies repository-relative names, but never let a',
+  '      # malformed or escaping target turn the preventive gate into allow.',
+  '      OFFENDERS+=("$path")',
+  '      ;;',
+  protectedArtifactPathCase,
+  '      [[ "$own" == true ]] || OFFENDERS+=("$path")',
+  '      ;;',
+  '  esac',
+  'done < <(git diff --cached --name-only -z)',
+  '',
+  'if [[ ${#OFFENDERS[@]} -gt 0 ]]; then',
+  '  printf "pre-commit: rejected protected artifact(s) during %s: %s\\n" "$PHASE" "${OFFENDERS[*]}" >&2',
+  '  echo "Amend the owning DECIDE artifact through its DECIDE step, not this BUILD/SHIP commit." >&2',
+  '  exit 1',
+  'fi',
+  '',
+  '# Preserve repository-owned hooks after the engine gate has passed.',
+  'COMMON_DIR="$(git rev-parse --git-common-dir)"',
+  'COMMON_HOOKS_DIR="$COMMON_DIR/hooks"',
+  '[[ "$COMMON_DIR" = /* ]] || COMMON_HOOKS_DIR="$WORKTREE_ROOT/$COMMON_DIR/hooks"',
+  'CHAINED_HOOK="$COMMON_HOOKS_DIR/pre-commit"',
+  '[[ ! -x "$CHAINED_HOOK" ]] || "$CHAINED_HOOK" "$@"',
+  '',
+  'exit 0',
+].join('\n');
 
 /**
  * prepare-commit-msg hook

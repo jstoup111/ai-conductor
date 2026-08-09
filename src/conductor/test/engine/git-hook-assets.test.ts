@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
+import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK, PRE_COMMIT_HOOK } from '../../src/engine/git-hook-assets.js';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
@@ -40,6 +40,18 @@ describe('git-hook-assets — embedding hook scripts', () => {
     } catch {
       // Ignore cleanup errors
     }
+  });
+
+  describe('PRE_COMMIT_HOOK', () => {
+    it('is syntactically valid Bash', async () => {
+      expect(await checkBashSyntax(PRE_COMMIT_HOOK)).toBe(0);
+    });
+
+    it('is self-contained and protects only BUILD/SHIP commits', () => {
+      expect(PRE_COMMIT_HOOK).not.toMatch(/conduct-ts|src\/conductor\/dist/);
+      expect(PRE_COMMIT_HOOK).toContain('"$PHASE" == "BUILD" || "$PHASE" == "SHIP"');
+      expect(PRE_COMMIT_HOOK).toContain('CONDUCT_ENGINE_COMMIT');
+    });
   });
 
   describe('PREPARE_COMMIT_MSG_HOOK', () => {
@@ -98,6 +110,147 @@ describe('git-hook-assets — embedding hook scripts', () => {
         /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "2" \]\]; then\n\s+exit 1\n\s+fi/,
       );
     });
+  });
+
+  it('rejects staging .docs/specs/other-feature.md while a BUILD phase marker is present', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-pre-commit-'));
+    try {
+      await execFileAsync('git', ['-C', repoDir, 'init', '-b', 'main']);
+      await execFileAsync('git', ['-C', repoDir, 'config', 'user.email', 'test@example.com']);
+      await execFileAsync('git', ['-C', repoDir, 'config', 'user.name', 'Test']);
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n', 'utf-8');
+      await execFileAsync('git', ['-C', repoDir, 'add', 'README.md']);
+      await execFileAsync('git', ['-C', repoDir, 'commit', '-m', 'chore: initial commit']);
+      const hooksDir = join(repoDir, '.git-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await writeFile(join(hooksDir, 'pre-commit'), PRE_COMMIT_HOOK, 'utf-8');
+      await chmod(join(hooksDir, 'pre-commit'), 0o755);
+      await execFileAsync('git', ['-C', repoDir, 'config', 'core.hooksPath', hooksDir]);
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await writeFile(join(repoDir, '.pipeline', 'phase-active'), 'step: build\nphase: BUILD\n', 'utf-8');
+      await mkdir(join(repoDir, '.docs', 'specs'), { recursive: true });
+      await writeFile(join(repoDir, '.docs', 'specs', 'other-feature.md'), '# protected\n', 'utf-8');
+      await execFileAsync('git', ['-C', repoDir, 'add', '.docs/specs/other-feature.md']);
+
+      let exitCode = 0;
+      let stderr = '';
+      try {
+        await execFileAsync('git', ['-C', repoDir, 'commit', '-m', 'test: protected mutation']);
+      } catch (error) {
+        const result = error as { code?: number; stderr?: string };
+        exitCode = result.code ?? 1;
+        stderr = result.stderr ?? '';
+      }
+
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain('.docs/specs/other-feature.md');
+    } finally {
+      await rm(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the real pre-commit gate across phase, own-artifact, allowlist, and stable-refusal paths', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-pre-commit-matrix-'));
+    const git = async (...args: string[]) => execFileAsync('git', ['-C', repoDir, ...args]);
+    const commit = async (message: string) => {
+      try {
+        await git('commit', '-m', message);
+        return { code: 0, stderr: '' };
+      } catch (error) {
+        const result = error as { code?: number; stderr?: string };
+        return { code: result.code ?? 1, stderr: result.stderr ?? '' };
+      }
+    };
+    try {
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repoDir, 'README.md'), '# scratch\n');
+      await git('add', 'README.md');
+      await git('commit', '-m', 'initial');
+      const hooks = join(repoDir, '.git-hooks');
+      await mkdir(hooks, { recursive: true });
+      await writeFile(join(hooks, 'pre-commit'), PRE_COMMIT_HOOK);
+      await chmod(join(hooks, 'pre-commit'), 0o755);
+      await git('config', 'core.hooksPath', hooks);
+      await mkdir(join(repoDir, '.docs/decisions'), { recursive: true });
+      await mkdir(join(repoDir, '.docs/specs'), { recursive: true });
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+
+      await writeFile(join(repoDir, '.docs/decisions/no-marker.md'), '# ADR');
+      await git('add', '.docs/decisions/no-marker.md');
+      expect((await commit('no marker')).code).toBe(0);
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: DECIDE\n');
+      await writeFile(join(repoDir, '.docs/decisions/decide.md'), '# ADR');
+      await git('add', '.docs/decisions/decide.md');
+      expect((await commit('decide marker')).code).toBe(0);
+
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: BUILD\n');
+      await writeFile(join(repoDir, '.docs/decisions/build.md'), '# ADR');
+      await git('add', '.docs/decisions/build.md');
+      expect((await commit('build marker')).code).not.toBe(0);
+      await git('reset', 'HEAD', '.docs/decisions/build.md');
+
+      await writeFile(join(repoDir, '.pipeline/task-status.json'), JSON.stringify({ plan_ref: '.docs/plans/my-feature.md' }));
+      await writeFile(join(repoDir, '.docs/specs/my-feature.md'), '# own');
+      await git('add', '.docs/specs/my-feature.md');
+      expect((await commit('own artifact')).code).toBe(0);
+
+      await writeFile(join(repoDir, '.docs/specs/other-feature.md'), '# foreign');
+      await git('add', '.docs/specs/other-feature.md');
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: SHIP\n');
+      const first = await commit('foreign artifact');
+      const second = await commit('foreign artifact');
+      expect(first.code).not.toBe(0);
+      expect(second.stderr).toBe(first.stderr);
+      expect(first.stderr).toContain('.docs/specs/other-feature.md');
+      expect(first.stderr).toContain('SHIP');
+      expect(first.stderr).toContain('DECIDE step');
+
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: SHIP\nallow: .docs/specs/\n');
+      expect((await commit('allowlisted protected artifact')).code).toBe(0);
+    } finally {
+      await rm(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when the real pre-commit asset receives an escaping staged path', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'git-hook-assets-escaping-path-'));
+    const fakeBin = join(repoDir, 'fake-bin');
+    const hookPath = join(repoDir, 'pre-commit');
+    try {
+      await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+      await mkdir(fakeBin, { recursive: true });
+      await writeFile(join(repoDir, '.pipeline/phase-active'), 'phase: BUILD\n');
+      await writeFile(hookPath, PRE_COMMIT_HOOK, { mode: 0o755 });
+      await writeFile(
+        join(fakeBin, 'git'),
+        '#!/bin/bash\nif [[ "$1" == "rev-parse" ]]; then printf "%s\\n" "$HOOK_TEST_ROOT"; exit 0; fi\nif [[ "$1" == "diff" ]]; then printf "../escaping-target.md\\0"; exit 0; fi\nexit 1\n',
+        { mode: 0o755 },
+      );
+      const run = async () => {
+        try {
+          await execFileAsync('bash', [hookPath], {
+            cwd: repoDir,
+            env: { ...process.env, HOOK_TEST_ROOT: repoDir, PATH: `${fakeBin}:${process.env.PATH ?? ''}` },
+          });
+          return { code: 0, stderr: '' };
+        } catch (error) {
+          const result = error as { code?: number; stderr?: string };
+          return { code: result.code ?? 1, stderr: result.stderr ?? '' };
+        }
+      };
+
+      const first = await run();
+      const second = await run();
+      expect(first.code).not.toBe(0);
+      expect(first.stderr).toBe(second.stderr);
+      expect(first.stderr).toContain('../escaping-target.md');
+      expect(first.stderr).toContain('BUILD');
+      expect(first.stderr).toContain('DECIDE step');
+    } finally {
+      await rm(repoDir, { recursive: true, force: true });
+    }
   });
 
   describe('Regression lock: no dist/CLI dependencies (#403 class)', () => {

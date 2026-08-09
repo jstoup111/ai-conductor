@@ -81,6 +81,25 @@ describe('engine/plan-protected-targets', () => {
     expect(scanPlanProtectedTargets(plan, 'build-tasks-can-amend-protected-docs-artifacts-ame')).toEqual([]);
   });
 
+  it('rejects an undeclared task that cites a foreign protected artifact', () => {
+    const plan = `### Task 16: Review the existing decision
+Read \`.docs/specs/2026-07-04-operator-park.md\` first.
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([
+      { taskId: '16', path: '.docs/specs/2026-07-04-operator-park.md' },
+    ]);
+  });
+
+  it('allows a declared task to cite a protected artifact as context', () => {
+    const plan = `### Task 17: Implement the scanner
+**Files:** src/conductor/src/x.ts
+Read \`.docs/specs/other-feature.md\` as context.
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([]);
+  });
+
   it('does not produce violations for a clean in-memory plan', () => {
     const plan = `# Implementation Plan
 

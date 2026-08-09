@@ -50,8 +50,13 @@ const BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES = [
   'build_member_evidence_recomputed',
 ] satisfies Array<ConductorEvent['type']>;
 
+const REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES = [
+  'remediation_sealed_artifact_redirect',
+] satisfies Array<ConductorEvent['type']>;
+
 const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
+  ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
   'verdict_freshness',
   'operator_park_boundary',
   // Seal-rebaseline decisions are durable telemetry: the record of which
@@ -113,6 +118,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'finish_publication_transition',
   'finish_publication_blocked',
   'finish_publication_disposition',
+  ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
 ] satisfies Array<ConductorEvent['type']>;
 
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
@@ -204,8 +210,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 68 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(68);
+  it('is total over all 69 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(69);
   });
 
   it('routes verdict_freshness to every sink', () => {
@@ -230,6 +236,7 @@ describe('event sink subscriptions', () => {
     expect(new Set(auditedEventTypes())).toEqual(new Set([
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
       'verdict_freshness',
+      ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
     ]));
   });
 

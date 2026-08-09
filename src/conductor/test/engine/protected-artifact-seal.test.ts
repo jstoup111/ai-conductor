@@ -12,6 +12,7 @@ import {
   evaluateProtectedArtifactSealRotation,
   evaluateProtectedArtifactSealRotationInRepository,
   isActiveStepArtifactException,
+  isProtectedArtifactPath,
   namesOwnFeature,
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
@@ -75,9 +76,21 @@ afterEach(async () => {
 
 it('exports protected artifact directory and feature-name helpers', () => {
   expect({ PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature }).toEqual({
-    PROTECTED_ARTIFACT_DIRECTORIES: ['.docs/architecture', '.docs/plans', '.docs/specs', '.docs/stories'],
+    PROTECTED_ARTIFACT_DIRECTORIES: ['.docs/architecture', '.docs/decisions', '.docs/plans', '.docs/specs', '.docs/stories'],
     namesOwnFeature: expect.any(Function),
   });
+});
+
+it('classifies decision records as protected wherever protected artifacts are selected', () => {
+  const path = '.docs/decisions/adr-x.md';
+
+  expect(isProtectedArtifactPath(path)).toBe(true);
+  expect(classifyMutationTarget({
+    projectRoot: '/workspace/feature-907',
+    target: path,
+    phase: 'BUILD',
+    step: 'build',
+  })).toEqual({ kind: 'protected', target: path });
 });
 
 describe('createProtectedArtifactSeal', () => {
@@ -1419,6 +1432,15 @@ describe('classifyMutationTarget', () => {
       phase: 'BUILD',
       step: 'build',
     })).toMatchObject({ kind: 'indeterminate' });
+  });
+
+  it('fails closed for a glob over a protected directory', () => {
+    expect(classifyMutationTarget({
+      projectRoot,
+      target: '.docs/plans/*.md',
+      phase: 'BUILD',
+      step: 'build',
+    })).toEqual({ kind: 'indeterminate', reason: 'protected-glob-target' });
   });
 });
 

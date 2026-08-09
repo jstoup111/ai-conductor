@@ -2431,13 +2431,17 @@ export class Conductor {
     }
 
     const planPath = await this.getActivePlanPath();
-    const sealedArtifactGapIds = new Set(
-      planPath
-        ? plan.gaps
-            .filter((gap) => remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath)))
-            .map((gap) => gap.id)
-        : [],
-    );
+    const sealedArtifactsByGapId = new Map<string, string>();
+    if (planPath) {
+      for (const gap of plan.gaps) {
+        const artifact = remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath));
+        if (artifact) sealedArtifactsByGapId.set(gap.id, artifact);
+      }
+    }
+    const sealedArtifactGapIds = new Set(sealedArtifactsByGapId.keys());
+    for (const [gapId, artifact] of sealedArtifactsByGapId) {
+      await this.events.emit({ type: 'remediation_sealed_artifact_redirect', gapId, artifact });
+    }
     const gaps = plan.gaps.map((gap) =>
       sealedArtifactGapIds.has(gap.id) &&
       (gap.disposition === 'build' || gap.disposition === 'acceptance_specs')
@@ -9407,13 +9411,41 @@ export function earliestRemediationTarget(
 function remediationGapTargetsAnotherFeatureSealedArtifact(
   gap: RemediationGap,
   activePlanStem: string,
-): boolean {
+): string | undefined {
   const taskScopes = gap.tasks
     .map(
       (task) => `### Task ${task.id}: remediation\n\n**Files:** ${task.title}`,
     )
     .join('\n\n');
-  return scanPlanProtectedTargets(taskScopes, activePlanStem).length > 0;
+  const taskTarget = scanPlanProtectedTargets(taskScopes, activePlanStem)[0]?.path;
+  if (taskTarget) return taskTarget;
+
+  // Rationale is prose rather than a plan Files declaration. Treat it as a
+  // target only when it both names a resolvable protected artifact and directs
+  // an edit; a context-only citation must not re-route source work.
+  const rationalePaths = Array.from(
+    gap.rationale.matchAll(
+      /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g,
+    ),
+  );
+  if (rationalePaths.length === 0) return undefined;
+  const action = /\b(?:amend|change|delete|edit|remove|rewrite|update)\b/i;
+  const directedPaths = rationalePaths.flatMap((match) => {
+    const path = match[1];
+    const pathOffset = (match.index ?? 0) + match[0].lastIndexOf(path);
+    // A semicolon separates independent clauses just as a sentence boundary
+    // does. Only an action in this path's own preceding clause can direct it.
+    const beforePath = gap.rationale.slice(0, pathOffset);
+    const clauseStart = Math.max(
+      beforePath.lastIndexOf('.'),
+      beforePath.lastIndexOf(';'),
+      beforePath.lastIndexOf('\n'),
+    );
+    return action.test(beforePath.slice(clauseStart + 1)) ? [path] : [];
+  });
+  if (directedPaths.length === 0) return undefined;
+  const rationaleScope = `### Task ${gap.id}: remediation\n\n**Files:** ${directedPaths.join(', ')}`;
+  return scanPlanProtectedTargets(rationaleScope, activePlanStem)[0]?.path;
 }
 
 /**

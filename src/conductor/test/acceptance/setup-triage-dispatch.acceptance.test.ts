@@ -482,13 +482,10 @@ fi
 
     // Force every `git commit` in this repo to fail from here on — a real git
     // failure injected at the exact point triage's quarantine step must
-    // exercise (`git commit`), not a mocked GitRunner. `prepareWorktree` wires
-    // `core.hooksPath` to `.pipeline/git-hooks/` (the attribution-hook seam),
-    // which shadows `.git/hooks/` for the remainder of this process — the
-    // failing hook must be installed at the path that's actually active.
-    await mkdir(join(dir, '.pipeline', 'git-hooks'), { recursive: true });
-    await writeFile(join(dir, '.pipeline', 'git-hooks', 'pre-commit'), '#!/bin/sh\nexit 1\n', 'utf-8');
-    await chmod(join(dir, '.pipeline', 'git-hooks', 'pre-commit'), 0o755);
+    // exercise (`git commit`), not a mocked GitRunner. The quarantine commit
+    // carries CONDUCT_ENGINE_COMMIT=1 and therefore bypasses the engine hook,
+    // so an invalid author identity is the direct deterministic seam.
+    await git('config', 'user.name', '');
 
     await writeFile(join(dir, 'README.md'), '# base\nuncommitted mess\n');
     await writeFile(join(dir, 'stray.txt'), 'stray\n');
@@ -507,7 +504,7 @@ fi
     expect(out.status).toBe('error'); // errors + parks exactly as today
 
     const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
-    expect(halt).toMatch(/preservation failure|quarantine commit/i);
+    expect(halt).toContain('fatal: empty ident name');
   });
 
   it('TS-2 negative: a pre-existing quarantine branch is refreshed (force-moved to the new tip); the old tip stays reachable via reflog and the refresh is logged', async () => {

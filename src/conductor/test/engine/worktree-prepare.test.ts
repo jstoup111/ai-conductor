@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, stat, access, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -513,6 +513,17 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       await rm(repoRoot, { recursive: true, force: true });
     });
 
+    it('fails closed when present .git metadata is inaccessible, while a plain setup directory still no-ops', async () => {
+      const plainDir = await mkdtemp(join(tmpdir(), 'wt-prepare-plain-'));
+      try {
+        await expect(prepareWorktree(plainDir)).resolves.toBeUndefined();
+        await symlink(join(plainDir, 'missing-git-metadata'), join(plainDir, '.git'));
+        await expect(prepareWorktree(plainDir)).rejects.toThrow(/preventive git hook installation failed: unable to access .git metadata/i);
+      } finally {
+        await rm(plainDir, { recursive: true, force: true });
+      }
+    });
+
     it('writes the two attribution hooks executable under .pipeline/git-hooks/', async () => {
       await prepareWorktree(worktreeDir);
 
@@ -543,7 +554,7 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       expect(primaryHooksPath.code).not.toBe(0);
     });
 
-    it('is fail-open when git config --worktree fails: logs a skip, provisioning still succeeds', async () => {
+    it('fails closed when git config --worktree fails to wire the preventive hook', async () => {
       // Simulate an unsupported/old git by pointing HOME at a location where
       // git's config write cannot succeed: make .git read-only so any
       // `git config --worktree` write fails, without touching the hook-file
@@ -551,27 +562,23 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       const dotGit = join(worktreeDir, '.git');
       await chmod(dotGit, 0o500).catch(() => undefined);
 
-      const lines: string[] = [];
-      await expect(prepareWorktree(worktreeDir, (m) => lines.push(m))).resolves.toBeUndefined();
+      await expect(prepareWorktree(worktreeDir)).rejects.toThrow(/preventive git hook installation failed/i);
 
       await chmod(dotGit, 0o700).catch(() => undefined);
 
-      expect(lines.some((l) => /hook/i.test(l) && /skip/i.test(l))).toBe(true);
     });
 
-    it('is fail-open when the hook asset copy fails: logs a skip, provisioning still succeeds', async () => {
+    it('fails closed when the preventive hook asset cannot be written', async () => {
       // Make the destination directory uncreatable/unwritable to force the
       // hook-file write to fail.
       const pipelineDir = join(worktreeDir, '.pipeline');
       await mkdir(pipelineDir, { recursive: true });
       await chmod(pipelineDir, 0o500);
 
-      const lines: string[] = [];
-      await expect(prepareWorktree(worktreeDir, (m) => lines.push(m))).resolves.toBeUndefined();
+      await expect(prepareWorktree(worktreeDir)).rejects.toThrow(/preventive git hook installation failed/i);
 
       await chmod(pipelineDir, 0o700).catch(() => undefined);
 
-      expect(lines.some((l) => /hook/i.test(l) && /skip/i.test(l))).toBe(true);
     });
 
     it('leaves the existing bin/setup + namespace contract unchanged when hooks are wired', async () => {

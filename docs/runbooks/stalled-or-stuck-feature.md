@@ -631,6 +631,21 @@ conduct-ts daemon logs | grep '\[<slug>\]'
 If the grant remains, the feature did not enter the authorized step; re-read the HALT rather than
 clearing it again.
 
+### Worktree preparation failed to install the preventive git hook
+
+**Symptom:** the worktree step halts with `preventive git hook installation failed: <reason>` — for
+example `unable to inspect .git metadata`, `unable to access .git metadata`, or a `writeFile`/git-config
+error. This is deliberately fail-closed: a worktree with a `.git` present must have the
+`.pipeline/git-hooks/pre-commit` protected-artifact gate installed and wired before BUILD/SHIP can
+dispatch into it, so a broken installation halts the run rather than proceeding without the gate. See
+[settings and hooks](../reference/settings-and-hooks.md#git-hooks) for what the hook does.
+
+Diagnose the underlying filesystem or git-config failure named in `<reason>` — a permissions problem on
+`.git` or `.pipeline/git-hooks/`, a full disk, or a `git config --worktree` failure are the usual causes.
+Fix it, then clear the HALT and let the daemon re-dispatch; worktree preparation retries the write on the
+next attempt. A worktree with no `.git` at all is unaffected — that shape has no commit surface to
+protect and is skipped as a no-op.
+
 ### The halt is a protected-artifact violation
 
 Do not delete or edit `.pipeline/protected-artifact-seal.json`. The engine rebaselines a stale seal
@@ -649,7 +664,9 @@ original assertion before BUILD starts again:
 The note is additive: retain the original text and create no separate record. Re-author the plan
 without a task targeting the other feature's sealed artifact, then run
 `conduct-ts plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
-`No protected-target violations found.`; each violation is reported as `Task <id>: <path>`.
+`No protected-target violations found.`; each violation is reported as `Task <id>: <path> —
+ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the
+task's targets.`
 
 1. Read the refusal in `.daemon/daemon.log`:
    ```bash
