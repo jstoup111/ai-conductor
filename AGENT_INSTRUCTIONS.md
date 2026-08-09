@@ -28,25 +28,14 @@ self-reports or commit-trailer stamps — `Task:` trailers are telemetry only (#
 fixed path matching engine-side; #433 replaces trailer discipline with engine-stamped
 task ids and commit hooks.)
 
-**Extend the existing event spine; never add a parallel channel.** Before designing any new
-way to observe, report, or coordinate something — a watcher, a poller, a sidecar file, an
-ad-hoc log, a timestamp stamped into an artifact — ask first: **does the event bus already
-carry this concern?** If it does, extend it. Every consumer reads one spine —
-`ConductorEventEmitter` → the `ConductorEvent` union → `EventPersister` →
-`.pipeline/events.jsonl` — so a second channel is invisible to all of them. The test is
-**schema, not file**: a sibling ledger in the *same* `ConductorEvent` schema, merged by the
-same reader, is one spine and is fine; a bespoke sidecar with its own format is the violation.
-Only three things move the *write*, and none move the schema:
-
-- a separate OS process with no bus access
-  (`adr-2026-07-10-intra-step-build-progress-events` rejected runner-push on this ground);
-- an atomicity limit forcing one writer per file (`appendFileSync` is atomic only under
-  `PIPE_BUF`; `parseLedger` nulls the whole rollup on one malformed line);
-- durable **state** — gate evidence, a committed design doc — not an occurrence in time.
-
-"Faster to bolt on" is not one. A new channel needs an ADR saying why the bus could not carry
-the concern — as when closeout timestamps stamped into five existing artifacts were rejected
-for being invisible to every bus consumer (#1176).
+**Extend the existing event spine; never add a parallel channel.** This repository has one
+telemetry spine — `ConductorEventEmitter` → the `ConductorEvent` union → `EventPersister` →
+`.pipeline/events.jsonl` — and every consumer reads it, so a second channel for a concern the
+spine already carries is invisible to all of them. Before designing any new way to observe,
+report, or coordinate something — a watcher, a poller, a sidecar file, an ad-hoc log, a
+timestamp stamped into an artifact — the active host agent MUST read and follow
+[`.agents/skills/event-spine/SKILL.md`](.agents/skills/event-spine/SKILL.md), which carries the
+decision procedure, the schema-not-file test, and the only three exceptions.
 
 **Third-party calls are smoke-only in tests.** Unit tests inject mocked adapters. Acceptance,
 integration, and end-to-end tests run the real internal flow with faithful fakes at every

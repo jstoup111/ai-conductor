@@ -6,7 +6,7 @@ nav_order: 7
 
 # Skills
 
-The catalog of all 33 skills: 29 under `skills/` and 4 repository-local ones under `.agents/skills/`.
+The catalog of all 34 skills: 29 under `skills/` and 5 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -626,6 +626,22 @@ respectively. Both are blocking and cannot be tier-skipped or satisfied by a sco
 
 These live under `.agents/skills/` rather than `skills/`, declare only `name` and `description`, and
 apply to this repository. See [self-hosting](../guides/self-hosting.md).
+
+### event-spine
+
+> Use BEFORE designing any new way to observe, report, or coordinate something in the ai-conductor repository — a watcher, a poller, a sidecar file, an ad-hoc log, a second telemetry path, or a timestamp stamped into an artifact to be read back later. Also use when adding a member to the `ConductorEvent` union, introducing a new `.pipeline/*.jsonl` ledger, deciding whether something 'should be an event', or reaching for a channel outside the bus because the bus looks inconvenient. Decides whether the existing spine (`ConductorEventEmitter` → `ConductorEvent` → `EventPersister` → `.pipeline/events.jsonl`) already carries the concern, applies the schema-not-file test, and names the only three exceptions that justify a separate write. Invoke it even when the new mechanism looks small, obviously correct, or too minor to count as telemetry — a parallel channel is cheap to prevent at design time and near-impossible to remove once consumers depend on it.
+
+- **Frontmatter** — `name` and `description` only. No `enforcement`, `phase`, `standalone`, `requires`,
+  or `model`.
+- **Engine step** — none. Invoked at design time, before an approach is written down. Symlinked from
+  `.claude/skills/event-spine` so both supported hosts discover the same file.
+- **Inputs** — the design under consideration, plus the spine itself: the `ConductorEvent` union in
+  `src/conductor/src/types/events.ts`, `EventPersister`, and `.pipeline/events.jsonl`.
+- **Outputs** — a four-line verdict (channel?, occurrence versus durable state, extend/sibling/new
+  channel, and which exception applies). No repository file artifact.
+- **Gate role** — neither. Advisory, with no marker file and no HALT. Its rule is stated as a Design
+  Principle in `AGENT_INSTRUCTIONS.md`, which points here and makes reading it mandatory before any
+  such design; a genuinely new channel is escalated to an ADR rather than blocked by this skill.
 
 ### maintain-documentation
 
