@@ -28,42 +28,30 @@ warn() { echo -e "${YELLOW}  ⚠${NC} $*"; }
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
 
-# Read a scalar field from the legacy ai-conductor.config.json. Kept as a
-# read-only fallback for installs that haven't migrated to YAML yet.
+# Map the legacy update-flow field names to the schema-owned conductor block.
+# Usage: conductor_cfg_key <legacyField>
+conductor_cfg_key() {
+  case "$1" in
+    updateChannel) echo "update_channel" ;;
+    autoCheck) echo "auto_check" ;;
+    currentVersion) echo "current_version" ;;
+    lastCheckedAt) echo "last_checked_at" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# Read a scalar field from the schema-owned conductor block.
 # Usage: conductor_cfg_get <field> [default]
 conductor_cfg_get() {
   local field=$1 default=${2:-}
-  [ -f "$CONDUCTOR_CONFIG" ] || { echo "$default"; return 0; }
-  python3 - "$CONDUCTOR_CONFIG" "$field" "$default" <<'PY' 2>/dev/null || echo "$default"
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        cfg = json.load(f)
-    val = cfg.get(sys.argv[2], sys.argv[3])
-    print(val if val is not None else sys.argv[3])
-except Exception:
-    print(sys.argv[3])
-PY
+  conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>/dev/null || echo "$default"
 }
 
-# Write a scalar field to the legacy ai-conductor.config.json, preserving
-# other fields. Kept only so a pre-migration install can still boot; new
-# writes should target the YAML via harness_cfg_set.
+# Write a scalar field to the schema-owned conductor block.
 # Usage: conductor_cfg_set <field> <value>
 conductor_cfg_set() {
   local field=$1 value=$2
-  mkdir -p "$(dirname "$CONDUCTOR_CONFIG")"
-  CFG_PATH="$CONDUCTOR_CONFIG" FIELD="$field" VALUE="$value" python3 -c '
-import json, os
-from pathlib import Path
-p = Path(os.environ["CFG_PATH"])
-try:
-    cfg = json.loads(p.read_text())
-except Exception:
-    cfg = {}
-cfg[os.environ["FIELD"]] = os.environ["VALUE"]
-p.write_text(json.dumps(cfg, indent=2) + "\n")
-'
+  conduct-ts config set "conductor.$(conductor_cfg_key "$field")" "$value"
 }
 
 # Read a scalar or array from ~/.ai-conductor/config.yml using dotted paths
