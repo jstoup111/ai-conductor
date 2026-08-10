@@ -156,7 +156,7 @@ from specs that would waste a build.
 | stories approval | stories without the explicit acceptance marker — not being draft is not enough |
 | ADR status | any ADR under `.docs/decisions/` whose first line-anchored `Status:` declaration is not `APPROVED` or `SUPERSEDED`, or that declares no status at all — fenced code-block examples of rejected statuses are excluded from matching |
 | tier agreement | a declared complexity tier that disagrees with the artifacts present |
-| coherence | a traceability record that does not connect outcomes, requirements, stories, and tasks, or stories that do not tie out to the PRD |
+| coherence | a traceability record that does not connect outcomes, requirements, accepted ADRs, stories, and tasks, or stories that do not tie out to the PRD |
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
 | plan wiring anchor | a task whose `**Wired-into:**` anchor does not resolve to a real, existing call site |
@@ -217,8 +217,9 @@ than a text search. Until then the mechanical half stays the only blocking autho
 The coherence gate is itself layered. It disengages entirely at tier S, and it does not apply retroactively:
 a change set with no coherence artifact path in it is treated as a legacy change, not a violation. Once
 engaged, the story, orphan-task, and coverage-table layers are always required; the functional-requirement
-layer only on the product track; the outcome layer only when outcomes exist. It aggregates every gap rather
-than stopping at the first, and reports them as one error. See [engineer loop](../guides/engineer-loop.md).
+layer only on the product track; the outcome layer only when outcomes exist; and the ADR layer when an
+accepted ADR constrains the spec. It aggregates every gap rather than stopping at the first, and reports
+them as one error. See [engineer loop](../guides/engineer-loop.md).
 
 The functional-requirement layer checks both directions, because coverage alone is only half of a tie-out.
 Forward, a PRD requirement no story cites — or whose only citing stories no task covers — is a gap.
@@ -228,6 +229,13 @@ PRD, so it has no requirement layer to tie out against. What the gate does not j
 *semantically* delivers the requirement it cites — a story whose scenarios contradict its own FR is a
 `fail` verdict the `/coherence-check` skill records, not a set comparison. Story-versus-story contradictions
 belong to `conflict-check` earlier in DECIDE; this gate compares each story against the PRD only.
+
+Earlier in DECIDE, `conflict_check` also compares each relevant story with the selected approved ADR
+corpus. The default `change_set` corpus is bounded to the current spec's ADRs; `repo_wide` narrows all
+approved ADRs to overlapping subjects and records the ADRs it examined and excluded. That judgment resolves
+ADR-versus-story conflicts before planning. The coherence gate then independently requires an applicable ADR
+traceability row, so an accepted decision cannot disappear from the plan merely because no direct conflict
+was found.
 
 ### Self-host gates
 

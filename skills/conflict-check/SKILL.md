@@ -157,6 +157,9 @@ declared identifier.
 Record an ADR-versus-story conflict only when both opposing sentences are present and demonstrate
 the incompatibility. An ungrounded suspicion is an assumption, not a recorded conflict; verify it
 against the ADR and story text or report it as an assumption under the `/verify-claims` protocol.
+When the opposing passage spans multiple sentences, quote the needed sentences verbatim in their
+original order and put `[…]` at every omitted span. Do not silently truncate, join, or reword the
+passage: the report must make both the quoted evidence and every omission explicit.
 
 Worked ADR-versus-story report:
 
