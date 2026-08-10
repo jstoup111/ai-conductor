@@ -62,15 +62,19 @@ describe('C2 in-memory idempotency guard removed', () => {
     expect(existsSync(p)).toBe(false);
   });
 
-  it('no source file references the removed guard', () => {
-    // grep-zero gate: walk intake/ src and assert no `idempotency` references.
+  it('no source file imports the removed guard', () => {
+    // Walk intake/ src and reject module-specifier references to the deleted
+    // guard. `idempotency` is a valid general term elsewhere (for example,
+    // sanitize.ts documents its own idempotent replacement behavior).
     const intakeSrc = join(__dirname, '../../../../src/engine/engineer/intake');
     const offenders: string[] = [];
+    const removedGuardImport =
+      /\b(?:from\s+|import\s*\(?\s*|require\s*\(\s*)['"][^'"]*\/?idempotency(?:\.[cm]?[jt]s)?['"]/;
     const walk = (d: string) => {
       for (const e of require('node:fs').readdirSync(d, { withFileTypes: true })) {
         const fp = join(d, e.name);
         if (e.isDirectory()) walk(fp);
-        else if (e.name.endsWith('.ts') && /idempotency/.test(readFileSync(fp, 'utf8'))) {
+        else if (e.name.endsWith('.ts') && removedGuardImport.test(readFileSync(fp, 'utf8'))) {
           offenders.push(fp);
         }
       }

@@ -1357,6 +1357,47 @@ else
   fi
 fi
 
+# ── 22. Update flow remains on the schema-owned configuration surface ───────
+# The update flow formerly read and wrote ~/.claude/ai-conductor.config.json in
+# several scripts. The legacy file is now a one-time seed input owned solely by
+# bin/lib/harness-common.sh; any other bin/ reference recreates split ownership.
+#
+# The check itself lives in test/check_update_flow_config_ownership.sh and its
+# fixtures in test/test_harness_integrity_update_flow.sh, following the same
+# checker + fixture-spec split as check 19. Both are invoked here: the checker
+# against the real tree, the spec against disposable copies. The spec calls the
+# checker directly rather than this suite, so nothing recurses.
+echo ""
+echo -e "${BOLD}22. Update flow config ownership${NC}"
+
+update_flow_checker="${HARNESS_DIR}/test/check_update_flow_config_ownership.sh"
+update_flow_fixture_test="${HARNESS_DIR}/test/test_harness_integrity_update_flow.sh"
+
+if [ ! -f "$update_flow_checker" ] || [ ! -f "$update_flow_fixture_test" ]; then
+  assert "update flow config ownership checker and fixtures exist" 1
+else
+  set +e
+  update_flow_output=$(bash "$update_flow_checker" 2>&1)
+  update_flow_exit=$?
+  update_flow_fixture_output=$(bash "$update_flow_fixture_test" 2>&1)
+  update_flow_fixture_exit=$?
+  set -e
+
+  if [ "$update_flow_exit" -eq 0 ]; then
+    assert "update flow config ownership — real tree names only schema-allowed conductor keys" 0
+  else
+    echo "$update_flow_output" | sed 's/^/    /'
+    assert "update flow config ownership — real tree names only schema-allowed conductor keys" 1
+  fi
+
+  if [ "$update_flow_fixture_exit" -eq 0 ]; then
+    assert "update flow config ownership — fixtures still reject legacy paths, unknown keys, and an undeterminable allowlist" 0
+  else
+    echo "$update_flow_fixture_output" | sed 's/^/    /'
+    assert "update flow config ownership — fixtures still reject legacy paths, unknown keys, and an undeterminable allowlist" 1
+  fi
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

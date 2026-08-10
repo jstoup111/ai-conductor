@@ -28,42 +28,121 @@ warn() { echo -e "${YELLOW}  ⚠${NC} $*"; }
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
 
-# Read a scalar field from the legacy ai-conductor.config.json. Kept as a
-# read-only fallback for installs that haven't migrated to YAML yet.
-# Usage: conductor_cfg_get <field> [default]
-conductor_cfg_get() {
-  local field=$1 default=${2:-}
-  [ -f "$CONDUCTOR_CONFIG" ] || { echo "$default"; return 0; }
-  python3 - "$CONDUCTOR_CONFIG" "$field" "$default" <<'PY' 2>/dev/null || echo "$default"
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        cfg = json.load(f)
-    val = cfg.get(sys.argv[2], sys.argv[3])
-    print(val if val is not None else sys.argv[3])
-except Exception:
-    print(sys.argv[3])
-PY
+# Map the legacy update-flow field names to the schema-owned conductor block.
+# Usage: conductor_cfg_key <legacyField>
+conductor_cfg_key() {
+  case "$1" in
+    updateChannel) echo "update_channel" ;;
+    autoCheck) echo "auto_check" ;;
+    currentVersion) echo "current_version" ;;
+    lastCheckedAt) echo "last_checked_at" ;;
+    *) echo "$1" ;;
+  esac
 }
 
-# Write a scalar field to the legacy ai-conductor.config.json, preserving
-# other fields. Kept only so a pre-migration install can still boot; new
-# writes should target the YAML via harness_cfg_set.
+# Read a scalar field from the schema-owned conductor block.
+#
+# The optional default is retained for callers migrating from the legacy
+# accessor signature, but intentionally never substitutes for a failed read:
+# update decisions must decline rather than pretend configuration was read.
+# Usage: conductor_cfg_get <field> [default]
+conductor_cfg_get() {
+  if ! seed_conductor_config_from_legacy; then
+    return 1
+  fi
+  local field=$1
+  if ! command -v conduct-ts &>/dev/null; then
+    warn "conduct-ts is required to read conductor configuration; install or restore it, then re-run bin/install" >&2
+    return 1
+  fi
+  local value
+  if ! value=$(conduct-ts config read "conductor.$(conductor_cfg_key "$field")" 2>&1); then
+    warn "${value:-conduct-ts could not read conductor configuration; install or restore it, then re-run bin/install}" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
+# Write a scalar field to the schema-owned conductor block.
 # Usage: conductor_cfg_set <field> <value>
 conductor_cfg_set() {
+  if ! seed_conductor_config_from_legacy; then
+    return 1
+  fi
   local field=$1 value=$2
-  mkdir -p "$(dirname "$CONDUCTOR_CONFIG")"
-  CFG_PATH="$CONDUCTOR_CONFIG" FIELD="$field" VALUE="$value" python3 -c '
-import json, os
-from pathlib import Path
-p = Path(os.environ["CFG_PATH"])
+  if ! command -v conduct-ts &>/dev/null; then
+    warn "conduct-ts is required to save conductor configuration; install or restore it, then re-run bin/install" >&2
+    return 1
+  fi
+  conduct-ts config set "conductor.$(conductor_cfg_key "$field")" "$value"
+}
+
+# Copy supported values from the former Claude-only JSON config into the
+# schema-owned conductor block exactly once.  Renaming the source is the
+# migration marker, so invalid JSON remains available for a later repair.
+# Usage: seed_conductor_config_from_legacy
+seed_conductor_config_from_legacy() {
+  local legacy_values field value
+
+  if [ "${CONDUCTOR_LEGACY_SEED_ATTEMPTED:-}" = "1" ]; then
+    return 0
+  fi
+  CONDUCTOR_LEGACY_SEED_ATTEMPTED=1
+
+  [ -e "$CONDUCTOR_CONFIG" ] || return 0
+
+  if ! legacy_values=$(CONDUCTOR_CONFIG="$CONDUCTOR_CONFIG" python3 - <<'PY'
+import json
+import os
+import sys
+
+path = os.environ["CONDUCTOR_CONFIG"]
 try:
-    cfg = json.loads(p.read_text())
-except Exception:
-    cfg = {}
-cfg[os.environ["FIELD"]] = os.environ["VALUE"]
-p.write_text(json.dumps(cfg, indent=2) + "\n")
-'
+    with open(path, encoding="utf-8") as source:
+        config = json.load(source)
+except (OSError, json.JSONDecodeError) as error:
+    print(error, file=sys.stderr)
+    sys.exit(1)
+
+if not isinstance(config, dict):
+    print("expected a JSON object", file=sys.stderr)
+    sys.exit(1)
+
+channel = config.get("updateChannel")
+if "updateChannel" in config:
+    if isinstance(channel, str) and channel in {"tagged", "main"}:
+        print(f"updateChannel\t{channel}")
+    else:
+        print("invalid-updateChannel")
+
+if type(config.get("autoCheck")) is bool:
+    print(f"autoCheck\t{'true' if config['autoCheck'] else 'false'}")
+
+for field in ("currentVersion", "lastCheckedAt"):
+    if isinstance(config.get(field), str):
+        print(f"{field}\t{config[field]}")
+PY
+); then
+    warn "legacy JSON configuration is empty or malformed; leaving it unchanged" >&2
+    return 1
+  fi
+
+  while IFS=$'\t' read -r field value; do
+    [ -n "$field" ] || continue
+    if [ "$field" = "invalid-updateChannel" ]; then
+      warn "legacy JSON updateChannel is invalid; expected tagged or main" >&2
+      continue
+    fi
+    if ! conductor_cfg_set "$field" "$value"; then
+      warn "could not seed conductor configuration from legacy JSON" >&2
+      return 1
+    fi
+  done <<< "$legacy_values"
+
+  if ! mv "$CONDUCTOR_CONFIG" "${CONDUCTOR_CONFIG}.migrated"; then
+    warn "could not rename legacy JSON configuration after seeding" >&2
+    return 1
+  fi
 }
 
 # Read a scalar or array from ~/.ai-conductor/config.yml using dotted paths

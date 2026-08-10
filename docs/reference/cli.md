@@ -35,11 +35,12 @@ bin/migrate [--yes|-y] [--dry-run]
 ```
 
 Runs `bin/install --update`, then, from a consumer project, finds runnable `bash migration` fences in
-each release through the installed target version. On a project's first run, the lower bound is the
-recorded `currentVersion` (or the target version itself, if `currentVersion` is an unparsable channel
-identity such as `main@<sha>`); that bound is then pinned into the ledger as its `candidateBaseline`
-and used on every later run, so it stays fixed even as `currentVersion` advances. It exports
-`HARNESS_DIR` to every block. Blocks are ordered by release version and document position.
+each release through the installed target version. If it cannot read the installed-version
+configuration, it exits non-zero before selecting migrations. On a project's first run, the lower
+bound is the recorded `currentVersion` (or the target version itself, if `currentVersion` is an
+unparsable channel identity such as `main@<sha>`); that bound is then pinned into the ledger as its
+`candidateBaseline` and used on every later run, so it stays fixed even as `currentVersion` advances.
+It exports `HARNESS_DIR` to every block. Blocks are ordered by release version and document position.
 
 `--dry-run` shows the install action and selected migrations without executing or recording them.
 Without `--yes`, an interactive run previews each block and accepts `yes`, `no`, `all`, or `stop`;
@@ -510,15 +511,16 @@ file already exists, it reports that path, preserves the file byte-for-byte, and
 The command exits 1 without writing when the current directory is not a Git repository or when the
 template cannot be resolved or written.
 
-## `conduct-ts config read` / `conduct-ts config write`
+## `conduct-ts config read` / `conduct-ts config write` / `conduct-ts config set`
 
 ```bash
 conduct-ts config read <dotted.path>
 conduct-ts config write <markdown_viewer|mermaid_renderer> <preset> <command> <args> <mode>
+conduct-ts config set conductor.<key> <scalar>
 ```
 
 Read and write user-scoped `~/.ai-conductor/config.yml` — the config `bin/install` uses to persist
-the chosen markdown viewer and mermaid renderer, replacing its earlier direct PyYAML reads/writes.
+the chosen markdown viewer and mermaid renderer, plus the update flow's `conductor:` block.
 
 `read` prints the value at `<dotted.path>` (e.g. `markdown_viewer.command`) to stdout, joining an
 array value with spaces, and prints an empty line for a missing key. It exits 1 and prints the
@@ -528,6 +530,13 @@ config path and parse error to stderr when the file exists but fails to parse.
 is a single space-separated argument, split on whitespace — preserving every other top-level key
 already in the file. It exits 1 and prints the config path and error to stderr when the existing
 file fails to parse or the write fails (e.g. an unwritable directory).
+
+`set` updates exactly one `conductor` key without replacing other user configuration. Supported
+keys are `update_channel`, `auto_check`, `current_version`, and `last_checked_at`.
+`conductor.auto_check` accepts only `true` or `false` and is stored as a YAML boolean; the other
+keys are stored as strings. The command validates both the existing and prospective `conductor:`
+block before writing, so invalid channels, unknown keys, malformed user YAML, and write failures
+exit 1 without changing the file. Use `config read conductor.<key>` to inspect the stored scalar.
 
 ## `conduct-ts task`
 

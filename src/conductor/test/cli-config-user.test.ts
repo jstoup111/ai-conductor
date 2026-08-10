@@ -3,10 +3,14 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
+import { execa } from 'execa';
 import {
   createProgram,
   userConfigReadCommand,
+  userConfigSetCommand,
   userConfigWriteCommand,
+  detectUserConfigSetCommand,
+  detectUserConfigWriteCommand,
 } from '../src/cli.js';
 
 let home: string | undefined;
@@ -104,6 +108,240 @@ describe('conduct config write', () => {
         args: ['-i', '{file}'],
         mode: 'external',
       },
+    });
+  });
+});
+
+describe('conduct config set', () => {
+  it('dispatches config set through the real argv entry point', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    await mkdir(configDir);
+    await writeFile(configPath, 'conductor:\n  update_channel: tagged\n', 'utf8');
+
+    const result = await execa(
+      'node',
+      ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'config', 'set', 'conductor.update_channel', 'main'],
+      { env: { ...process.env, HOME: home }, reject: false },
+    );
+
+    expect({ exitCode: result.exitCode, config: loadYaml(await readFile(configPath, 'utf8')) }).toEqual({
+      exitCode: 0,
+      config: { conductor: { update_channel: 'main' } },
+    });
+  });
+
+  it('detects a dotted scalar config set command', () => {
+    expect(
+      detectUserConfigSetCommand([
+        'node',
+        'conduct-ts',
+        'config',
+        'set',
+        'conductor.update_channel',
+        'main',
+      ]),
+    ).toEqual({
+      kind: 'user-config-set',
+      path: 'conductor.update_channel',
+      value: 'main',
+    });
+  });
+
+  it('does not detect config set without both a path and value', () => {
+    expect([
+      detectUserConfigSetCommand(['node', 'conduct-ts', 'config', 'set']),
+      detectUserConfigSetCommand(['node', 'conduct-ts', 'config', 'set', 'conductor.auto_check']),
+    ]).toEqual([null, null]);
+  });
+
+  it('leaves the existing config write grammar to its own detector', () => {
+    const argv = [
+      'node',
+      'conduct-ts',
+      'config',
+      'write',
+      'markdown_viewer',
+      'glow',
+      'glow',
+      '-p {file}',
+      'inline',
+    ];
+
+    expect({
+      set: detectUserConfigSetCommand(argv),
+      write: detectUserConfigWriteCommand(argv),
+    }).toEqual({
+      set: null,
+      write: {
+        kind: 'user-config-write',
+        section: 'markdown_viewer',
+        preset: 'glow',
+        command: 'glow',
+        args: ['-p', '{file}'],
+        mode: 'inline',
+      },
+    });
+  });
+
+  it('persists a valid update channel without replacing unrelated top-level keys', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    await mkdir(configDir);
+    await writeFile(
+      configPath,
+      'markdown_viewer:\n  command: glow\nconductor:\n  update_channel: tagged\n',
+      'utf8',
+    );
+    process.env.HOME = home;
+
+    const code = await userConfigSetCommand({
+      kind: 'user-config-set',
+      path: 'conductor.update_channel',
+      value: 'main',
+    });
+
+    expect({ code, config: loadYaml(await readFile(configPath, 'utf8')) }).toEqual({
+      code: 0,
+      config: {
+        markdown_viewer: { command: 'glow' },
+        conductor: { update_channel: 'main' },
+      },
+    });
+  });
+
+  it('coerces auto check strings to YAML booleans and creates a missing conductor block', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configPath = join(home, '.ai-conductor', 'config.yml');
+    process.env.HOME = home;
+
+    const code = await userConfigSetCommand({
+      kind: 'user-config-set',
+      path: 'conductor.auto_check',
+      value: 'true',
+    });
+
+    expect({ code, config: loadYaml(await readFile(configPath, 'utf8')) }).toEqual({
+      code: 0,
+      config: { conductor: { auto_check: true } },
+    });
+  });
+
+  it('rejects an invalid update channel without modifying user config', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    const original = 'conductor:\n  update_channel: tagged\n';
+    await mkdir(configDir);
+    await writeFile(configPath, original, 'utf8');
+    process.env.HOME = home;
+    let output = '';
+
+    const code = await userConfigSetCommand(
+      { kind: 'user-config-set', path: 'conductor.update_channel', value: 'nightly' },
+      (message) => (output += message),
+    );
+
+    expect({ code, output, content: await readFile(configPath, 'utf8') }).toEqual({
+      code: 1,
+      output: expect.stringContaining('update_channel'),
+      content: original,
+    });
+  });
+
+  it('rejects a non-boolean auto check without modifying user config', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    const original = 'conductor:\n  auto_check: true\n';
+    await mkdir(configDir);
+    await writeFile(configPath, original, 'utf8');
+    process.env.HOME = home;
+    let output = '';
+
+    const code = await userConfigSetCommand(
+      { kind: 'user-config-set', path: 'conductor.auto_check', value: 'sometimes' },
+      (message) => (output += message),
+    );
+
+    expect({ code, output, content: await readFile(configPath, 'utf8') }).toEqual({
+      code: 1,
+      output: expect.stringContaining('auto_check'),
+      content: original,
+    });
+  });
+
+  it('rejects an unknown conductor key without modifying user config', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    const original = 'conductor:\n  update_channel: tagged\n';
+    await mkdir(configDir);
+    await writeFile(configPath, original, 'utf8');
+    process.env.HOME = home;
+    let output = '';
+
+    const code = await userConfigSetCommand(
+      { kind: 'user-config-set', path: 'conductor.unknown', value: 'value' },
+      (message) => (output += message),
+    );
+
+    expect({ code, output, content: await readFile(configPath, 'utf8') }).toEqual({
+      code: 1,
+      output: expect.stringContaining('Unknown key'),
+      content: original,
+    });
+  });
+
+  it('does not overwrite an unparseable user config', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    const original = 'conductor: [';
+    await mkdir(configDir);
+    await writeFile(configPath, original, 'utf8');
+    process.env.HOME = home;
+    let output = '';
+
+    const code = await userConfigSetCommand(
+      { kind: 'user-config-set', path: 'conductor.update_channel', value: 'main' },
+      (message) => (output += message),
+    );
+
+    expect({ code, output, content: await readFile(configPath, 'utf8') }).toEqual({
+      code: 1,
+      output: expect.stringContaining(configPath),
+      content: original,
+    });
+  });
+
+  it('does not modify user config when its directory is unwritable', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    const configDir = join(home, '.ai-conductor');
+    const configPath = join(configDir, 'config.yml');
+    const original = 'conductor:\n  update_channel: tagged\n';
+    await mkdir(configDir);
+    await writeFile(configPath, original, 'utf8');
+    process.env.HOME = home;
+    let output = '';
+
+    await chmod(configDir, 0o500);
+    let code: number;
+    try {
+      code = await userConfigSetCommand(
+        { kind: 'user-config-set', path: 'conductor.update_channel', value: 'main' },
+        (message) => (output += message),
+      );
+    } finally {
+      await chmod(configDir, 0o700);
+    }
+
+    expect({ code: code!, output, content: await readFile(configPath, 'utf8') }).toEqual({
+      code: 1,
+      output: expect.stringContaining(configPath),
+      content: original,
     });
   });
 });

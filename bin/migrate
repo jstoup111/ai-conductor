@@ -4,9 +4,9 @@ set -euo pipefail
 # migrate — Post-update migration runner for the james-stoup-agents harness.
 #
 # Invoked by bin/conduct after an update is accepted (tagged or main channel).
-# Self-configuring: reads the current ("from") version from
-# ~/.claude/ai-conductor.config.json and the target ("to") version from the
-# harness repo's VERSION file (or the checked-out tag).
+# Self-configuring: reads the current ("from") version from the schema-owned
+# `conductor:` block and the target ("to") version from the harness repo's
+# VERSION file (or the checked-out tag).
 #
 # Responsibilities:
 #   1. Re-run `bin/install --update` to refresh symlinks and settings.json.
@@ -18,7 +18,6 @@ set -euo pipefail
 # Usage: bin/migrate [--yes] [--dry-run]
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-CONFIG_FILE="${HOME}/.claude/ai-conductor.config.json"
 CHANGELOG="${HARNESS_DIR}/CHANGELOG.md"
 
 RED='\033[0;31m'
@@ -58,19 +57,11 @@ trap print_migration_summary EXIT
 # ─── Read from_version from config ────────────────────────────────────────────
 
 read_from_version() {
-  if [ ! -f "$CONFIG_FILE" ]; then
-    echo ""
-    return 0
+  local version
+  if ! version=$(conductor_cfg_get currentVersion ""); then
+    return 1
   fi
-  python3 - "$CONFIG_FILE" <<'PY' 2>/dev/null || echo ""
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        cfg = json.load(f)
-    print(cfg.get("currentVersion", ""))
-except Exception:
-    print("")
-PY
+  printf '%s' "$version"
 }
 
 # ─── Determine to_version ─────────────────────────────────────────────────────
@@ -95,10 +86,6 @@ read_to_version() {
   [ -n "$sha" ] && echo "main@$sha"
 }
 
-FROM_VERSION=$(read_from_version)
-TO_VERSION=$(read_to_version)
-
-info "Migrating harness: ${FROM_VERSION:-<unknown>} → ${TO_VERSION:-<unknown>}"
 
 # ─── Step 1: Harness-level install refresh ────────────────────────────────────
 
@@ -666,6 +653,17 @@ run_project_migrations() {
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+
+# shellcheck source=bin/lib/harness-common.sh
+source "${HARNESS_DIR}/bin/lib/harness-common.sh"
+
+if ! FROM_VERSION=$(read_from_version); then
+  fail "Cannot continue: installed-version config read failed"
+  exit 1
+fi
+TO_VERSION=$(read_to_version)
+
+info "Migrating harness: ${FROM_VERSION:-<unknown>} → ${TO_VERSION:-<unknown>}"
 
 run_install_update || exit 1
 run_project_migrations || exit 1

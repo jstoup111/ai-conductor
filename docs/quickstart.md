@@ -272,9 +272,10 @@ in [runbooks/daemon-recovery.md](runbooks/daemon-recovery.md).
 
 ## Updates
 
-The installer records an update channel — `tagged` (default) or `main` — in
-`~/.claude/ai-conductor.config.json`. `conduct-ts` spawns `bin/update --auto` on startup and
-swallows every failure. Update by hand at any time:
+The installer writes `conductor.update_channel` — `tagged` (default) or `main` — to
+`~/.ai-conductor/config.yml`; it does not create the legacy JSON configuration file.
+`conduct-ts` spawns `bin/update --auto` on startup and swallows every failure. Update by hand at
+any time:
 
 ```bash
 cd /path/to/ai-conductor
@@ -297,7 +298,8 @@ git pull && ./bin/install
 > **Known limitation.** `--uninstall` removes only the harness-owned skill symlinks, the
 > `HARNESS.md` links, and `~/.local/bin/conduct`. It leaves `~/.local/bin/conduct-ts`, the 18
 > permission entries and 10 hook commands written into `~/.claude/settings.json`, all of
-> `~/.ai-conductor/`, and `~/.claude/ai-conductor.config.json`. If you then delete the checkout,
+> `~/.ai-conductor/`, and any legacy `~/.claude/ai-conductor.config.json` or
+> `~/.claude/ai-conductor.config.json.migrated` artifact. If you then delete the checkout,
 > those hooks point at a directory that no longer exists and every Claude Code session in every
 > project runs them. Remove `~/.local/bin/conduct-ts` and strip the harness entries from
 > `~/.claude/settings.json` by hand — see

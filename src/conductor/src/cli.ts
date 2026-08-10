@@ -8,6 +8,7 @@ import type {
   MermaidRendererConfig,
 } from './types/config.js';
 import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
+import { validateConfig } from './engine/config.js';
 import { readUserConfig, userConfigPath, writeUserConfig } from './engine/user-config.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -129,6 +130,12 @@ export interface UserConfigWriteDispatch {
   mode: MarkdownViewerConfig['mode'] | MermaidRendererConfig['mode'];
 }
 
+export interface UserConfigSetDispatch {
+  kind: 'user-config-set';
+  path: string;
+  value: string;
+}
+
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
 export function detectUserConfigReadCommand(argv: string[]): UserConfigReadDispatch | null {
   if (argv[2] !== 'config' || argv[3] !== 'read' || !argv[4]) return null;
@@ -157,6 +164,14 @@ export function detectUserConfigWriteCommand(argv: string[]): UserConfigWriteDis
     args: args.split(/\s+/).filter(Boolean),
     mode,
   };
+}
+
+/** Detect `conduct config set <dotted.path> <scalar>` without starting the pipeline. */
+export function detectUserConfigSetCommand(argv: string[]): UserConfigSetDispatch | null {
+  if (argv[2] !== 'config' || argv[3] !== 'set' || !argv[4] || argv[5] === undefined) {
+    return null;
+  }
+  return { kind: 'user-config-set', path: argv[4], value: argv[5] };
 }
 
 /** Print a scalar user-config value for shell callers. */
@@ -197,6 +212,59 @@ export async function userConfigWriteCommand(
     args: cmd.args,
     mode: cmd.mode,
   };
+  try {
+    await writeUserConfig(config);
+    return 0;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    write(`Unable to write user config at ${userConfigPath()}: ${reason}\n`);
+    return 1;
+  }
+}
+
+/** Set one validated conductor value without replacing other user configuration. */
+export async function userConfigSetCommand(
+  cmd: UserConfigSetDispatch,
+  write: (output: string) => void = (output) => process.stderr.write(output),
+): Promise<number> {
+  const { config, parseError } = await readUserConfig();
+  if (parseError) {
+    write(`Unable to read user config at ${userConfigPath()}: ${parseError}\n`);
+    return 1;
+  }
+
+  const [section, key, ...rest] = cmd.path.split('.');
+  if (section !== 'conductor' || !key || rest.length > 0) {
+    write(`Unsupported user config path: ${cmd.path}\n`);
+    return 1;
+  }
+
+  const current = config.conductor ?? {};
+  const currentValidation = validateConfig(
+    { conductor: current },
+    undefined,
+    { materializeDefaults: false },
+  );
+  if (!currentValidation.ok) {
+    write(`${currentValidation.error.message}\n`);
+    return 1;
+  }
+
+  const value = key === 'auto_check' && (cmd.value === 'true' || cmd.value === 'false')
+    ? cmd.value === 'true'
+    : cmd.value;
+  const conductor = { ...current, [key]: value };
+  const prospectiveValidation = validateConfig(
+    { conductor },
+    undefined,
+    { materializeDefaults: false },
+  );
+  if (!prospectiveValidation.ok) {
+    write(`${prospectiveValidation.error.message}\n`);
+    return 1;
+  }
+
+  config.conductor = conductor;
   try {
     await writeUserConfig(config);
     return 0;
@@ -363,6 +431,9 @@ export function createProgram(): Command {
   config
     .command('write <section> <preset> <command> <args> <mode>')
     .description('Write a viewer or renderer section to user-scoped ~/.ai-conductor/config.yml');
+  config
+    .command('set <path> <value>')
+    .description('Set a validated user-scoped conductor value in ~/.ai-conductor/config.yml');
 
   // Engineer subcommands (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
   // (detectEngineerCommand) before the pipeline boots. Bare `engineer` launches the
