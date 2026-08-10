@@ -165,6 +165,8 @@ export interface CrossCheckInputs {
   prdText: string | null;
   /** Number of staged/committed intake outcome bullets (0 when none staged). */
   outcomeCount: number;
+  /** ADR stems available to the coherence artifact (empty until supplied by the caller). */
+  adrIds?: ReadonlySet<string>;
 }
 
 export type CrossCheckResult =
@@ -244,15 +246,16 @@ export function crossCheckIds(
   const taskIds = extractTaskIds(inputs.planText);
   const frIds = extractPrdFrIds(inputs.prdText);
   const outcomeIds = extractOutcomeIds(inputs.outcomeCount);
+  const adrIds = inputs.adrIds ?? new Set<string>();
 
-  const knownIds = new Set<string>([...storyIds, ...taskIds, ...frIds, ...outcomeIds]);
+  const knownIds = new Set<string>([...storyIds, ...taskIds, ...frIds, ...outcomeIds, ...adrIds]);
 
-  const poolByClass: Record<CoherenceRowClass, Set<string>> = {
+  const poolByClass: Record<CoherenceRowClass, ReadonlySet<string>> = {
     outcome: outcomeIds,
     fr: frIds,
     story: storyIds,
     task: taskIds,
-    adr: new Set(),
+    adr: adrIds,
   };
 
   for (const row of rows) {

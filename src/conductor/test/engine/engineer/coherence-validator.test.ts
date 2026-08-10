@@ -257,6 +257,34 @@ describe('crossCheckIds', () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it('accepts an ADR row whose id resolves against the supplied ADR pool', () => {
+    const withAdr = `${WELL_FORMED_REAL}| adr | adr-2026-08-10-coherence-pool | story-1 | covered | "records the decision" |\n`;
+
+    expect(
+      crossCheckIds(
+        parsedRows(withAdr),
+        inputsFor({ adrIds: new Set(['adr-2026-08-10-coherence-pool']) }),
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it('rejects an ADR row whose id is absent from the supplied ADR pool', () => {
+    const withFabricatedAdr = `${WELL_FORMED_REAL}| adr | adr-2026-08-10-fabricated | story-1 | covered | "records the decision" |\n`;
+
+    expect(
+      crossCheckIds(
+        parsedRows(withFabricatedAdr),
+        inputsFor({ adrIds: new Set(['adr-2026-08-10-real']) }),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'fabricated-id',
+      rowClass: 'adr',
+      rowId: 'adr-2026-08-10-fabricated',
+      fabricatedId: 'adr-2026-08-10-fabricated',
+    });
+  });
+
   it('rejects a row citing a fabricated story id, naming the row', () => {
     const withFabrication = WELL_FORMED_REAL.replace(
       '| task | task-1 | story-1 | covered | "Task 1: build widget" |',
