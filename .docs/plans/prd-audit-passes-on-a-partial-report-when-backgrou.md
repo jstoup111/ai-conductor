@@ -93,7 +93,7 @@ CLI surface changes, so no migration block is required.
 **Files:** `src/conductor/src/engine/artifacts.ts`,
 `src/conductor/test/prd-audit-coverage.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/artifacts.ts#prdAuditCoverageGap`
+**Wired-into:** none (inert until Task 6)
 
 **Dependencies:** Task 1
 
@@ -115,7 +115,7 @@ CLI surface changes, so no migration block is required.
 **Files:** `src/conductor/src/engine/artifacts.ts`,
 `src/conductor/test/prd-audit-coverage.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/artifacts.ts#prdAuditCoverageGap`
+**Wired-into:** none (inert until Task 6)
 
 **Dependencies:** none
 
@@ -136,7 +136,7 @@ CLI surface changes, so no migration block is required.
 **Files:** `src/conductor/src/engine/artifacts.ts`,
 `src/conductor/test/prd-audit-coverage.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/artifacts.ts#checkStepCompletion`
+**Wired-into:** none (inert until Task 6)
 
 **Dependencies:** Task 2, Task 3
 
@@ -158,7 +158,7 @@ CLI surface changes, so no migration block is required.
 **Files:** `src/conductor/src/engine/artifacts.ts`,
 `src/conductor/test/prd-audit-coverage.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/artifacts.ts#checkStepCompletion`
+**Wired-into:** none (inert until Task 6)
 
 **Dependencies:** Task 4
 
@@ -245,6 +245,17 @@ CLI surface changes, so no migration block is required.
 **Wired-into:** none (no new production surface)
 
 **Dependencies:** Task 8
+
+> **Amended 2026-08-10 by operator (2):** Tasks 2-5 are restored to their approved
+> `none (inert until Task 6)` declarations. BUILD did not rewrite them on its own — `wiring_check`
+> ordered it (`.pipeline/kickback-ledger.json`: "task 2: declared inert but diff adds a production
+> reference to «resolveFeaturePrdPaths» — contract is stale, switch to a declared call site"). But
+> the call site the gate named was `.docs/plans/prd-audit-passes-on-a-partial-report-when-backgrou.md`
+> — this plan document. `wiring-probe.ts:742` filters candidate references with only
+> `file !== exp.file && !isTestPath(file)`, so a Markdown spec that merely names a symbol counts as
+> a production reference. The instruction was a false positive, and complying with it was
+> self-reinforcing: each rewrite put more symbol names into the plan for the next scan to find.
+> The approved declarations stand. Tracked in #1458.
 
 > **Amended 2026-08-10 by operator:** Tasks 10 and 11 are added after BUILD proved the approved
 > task set cannot be implemented as written. Task 5's fail-closed PRD resolution means every
