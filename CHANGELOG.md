@@ -35,6 +35,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review now treats prior wiring_check gate instructions recorded in the event ledger as evidence when grading scope, so plan hunks that implement a gate-mandated fix are no longer wrongly flagged as out-of-plan work. ([implementation PR #1452](https://github.com/jstoup111/ai-conductor/pull/1452)).
 - Update checks now use the schema-owned conductor configuration and automatically migrate supported legacy preferences. ([implementation PR #1412](https://github.com/jstoup111/ai-conductor/pull/1412)).
 - The remediate step may now amend a plan in response to a blocking gate; the build step still may not. ([implementation PR #1459](https://github.com/jstoup111/ai-conductor/pull/1459)).
+- wiring_check no longer treats a Markdown or .docs/ mention of a symbol as a production reference, so a task declared inert is no longer flagged stale against its own plan document. ([implementation PR #1460](https://github.com/jstoup111/ai-conductor/pull/1460)).
 
 ### Security
 
