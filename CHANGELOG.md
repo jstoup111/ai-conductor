@@ -11,6 +11,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.101.1] - 2026-08-10
+
+### Fixed
+
+- A legacy-JSON seeding failure no longer disables the harness update check when the schema-owned conductor config is readable. ([implementation PR #1464](https://github.com/jstoup111/ai-conductor/pull/1464)).
+
 ## [0.101.0] - 2026-08-10
 
 ### Added
