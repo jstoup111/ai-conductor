@@ -56,6 +56,7 @@ export function detectResealCommand(argv: string[]): ResealDispatch | null {
 
 export interface ResealCommandDependencies {
   cwd?: string;
+  isInteractive?: boolean;
   out?: (line: string) => void;
   err?: (line: string) => void;
   access?: (path: string) => Promise<void>;
@@ -72,6 +73,11 @@ export async function dispatchResealCommand(
   const cwd = deps.cwd ?? process.cwd();
   const out = deps.out ?? console.log;
   const err = deps.err ?? console.error;
+  const isInteractive = deps.isInteractive ?? process.stdin.isTTY === true;
+  if (!isInteractive) {
+    err('reseal: requires an interactive terminal.');
+    return 1;
+  }
   const ensureAccessible = deps.access ?? access;
   const readSeal = deps.readFile ?? readFile;
   const reseal = deps.reseal ?? resealProtectedArtifactSeal;

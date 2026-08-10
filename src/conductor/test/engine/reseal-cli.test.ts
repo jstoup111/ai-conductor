@@ -193,6 +193,7 @@ describe('dispatchResealCommand', () => {
         cwd: '/project',
         out,
         access: vi.fn().mockResolvedValue(undefined),
+        isInteractive: true,
         readFile: vi.fn().mockResolvedValue(JSON.stringify({ baselineCommit: 'base' })),
         resolveHead: vi.fn().mockResolvedValue('target'),
         reseal,
@@ -214,6 +215,41 @@ describe('dispatchResealCommand', () => {
     });
   });
 
+  it('refuses to reseal from a non-interactive terminal without changing the seal', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const sealJson = JSON.stringify({ baselineCommit: 'base' });
+    const err = vi.fn();
+    const readFile = vi.fn().mockResolvedValue(sealJson);
+    const reseal = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      dispatchResealCommand(command, {
+        cwd: '/project',
+        err,
+        access: vi.fn().mockResolvedValue(undefined),
+        isInteractive: false,
+        readFile,
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal,
+      }),
+    ).resolves.toBe(1);
+
+    expect({
+      err: err.mock.calls,
+      readFile: readFile.mock.calls,
+      reseal: reseal.mock.calls,
+      sealJson,
+    }).toEqual({
+      err: [['reseal: requires an interactive terminal.']],
+      readFile: [],
+      reseal: [],
+      sealJson: JSON.stringify({ baselineCommit: 'base' }),
+    });
+  });
+
   it('refuses an unknown feature worktree', async () => {
     const command = detectResealCommand(
       argv('--slug', 'missing', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
@@ -225,6 +261,7 @@ describe('dispatchResealCommand', () => {
       dispatchResealCommand(command, {
         cwd: '/project',
         err,
+        isInteractive: true,
         access: vi.fn().mockRejectedValue(new Error('missing')),
       }),
     ).resolves.toBe(1);
@@ -243,6 +280,7 @@ describe('dispatchResealCommand', () => {
       dispatchResealCommand(command, {
         cwd: '/project',
         err,
+        isInteractive: true,
         access: vi.fn().mockResolvedValue(undefined),
         readFile: vi.fn().mockRejectedValue(new Error('missing')),
       }),
