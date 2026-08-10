@@ -594,6 +594,38 @@ export async function resolveFeatureStoriesPath(
 }
 
 /**
+ * Resolve the approved PRD files for the active feature without ever treating
+ * the whole specs corpus as that feature's denominator. The identity ladder is
+ * deliberately ordered: the recorded active plan is authoritative, followed
+ * by the feature description convention, then the broader identity set.
+ * Superseded PRDs are never approved input.
+ */
+export async function resolveFeaturePrdPaths(
+  projectRoot: string,
+  context: ArtifactResolutionContext,
+): Promise<string[]> {
+  const prdFiles = (await matchGlob(projectRoot, '.docs/specs/*.md')).filter(
+    (path) => !basename(path).startsWith('SUPERSEDED-'),
+  );
+  const matchesStem = (stem: string): string[] =>
+    prdFiles.filter((path) => planStem(path) === stem);
+
+  if (context.activePlanPath) {
+    const matches = matchesStem(planStem(context.activePlanPath));
+    if (matches.length > 0) return matches;
+  }
+
+  if (context.featureDesc) {
+    const matches = matchesStem(slugify(context.featureDesc));
+    if (matches.length > 0) return matches;
+  }
+
+  return prdFiles.filter((path) =>
+    context.featureIdentities.includes(planStem(path)),
+  );
+}
+
+/**
  * True if the step has at least one artifact on disk. True for steps that
  * produce no artifacts (nothing to verify).
  */
