@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { splitStoryBlocks, collectPlanCoverage } from '../artifacts.js';
 import { parsePlanTaskPaths } from '../plan-task-parse.js';
+import { extractPrdFrIds } from '../prd-fr-ids.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { runOverlapScan, type RunOverlapScanArgs, type OverlapReport } from '../overlap-scan.js';
 import { createBlockerResolver } from '../blocker-resolver.js';
@@ -179,25 +180,6 @@ export type CrossCheckResult =
       /** The cited id that does not resolve against any real input. */
       fabricatedId: string;
     };
-
-/** `FR-<n>` ids declared under a PRD's `## Functional Requirements` heading. */
-function extractPrdFrIds(prdText: string | null): Set<string> {
-  const ids = new Set<string>();
-  if (!prdText) return ids;
-  const headingIdx = prdText.search(/^##\s+Functional Requirements\s*$/im);
-  if (headingIdx === -1) return ids;
-  const afterHeading = prdText.slice(headingIdx);
-  const nextHeadingMatch = afterHeading.slice(1).match(/\n##\s+/);
-  const section = nextHeadingMatch
-    ? afterHeading.slice(0, nextHeadingMatch.index! + 1)
-    : afterHeading;
-  const frRe = /\bFR-\d+[A-Za-z]?\b/gi;
-  let m: RegExpExecArray | null;
-  while ((m = frRe.exec(section)) !== null) {
-    ids.add(m[0].toUpperCase());
-  }
-  return ids;
-}
 
 /** `story-<id>` ids for every story block heading in the stories file. */
 function extractStoryIds(storiesText: string | null): Set<string> {
