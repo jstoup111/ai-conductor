@@ -122,12 +122,6 @@ PR.
 
 **Wired-into:** none (inert until `src/conductor/src/index.ts`)
 
-> **Amended 2026-08-10 by #1281:** The implemented reseal dispatcher imports the scoped
-> reseal boundary directly; its actual production call site is the dispatcher, not the later
-> pre-boot index dispatch.
-
-**Wired-into:** `src/conductor/src/engine/reseal-cli.ts#resealProtectedArtifactSeal`
-
 **Dependencies:** Task 2
 
 ---
@@ -244,11 +238,6 @@ PR.
 - `src/conductor/test/engine/reseal-cli.test.ts` — parser cases
 
 **Wired-into:** none (inert until `src/conductor/src/index.ts`)
-
-> **Amended 2026-08-10 by #1281:** The parser and dispatch exports are now in the
-> pre-boot index chain, so their actual call sites replace this deferred contract.
-
-**Wired-into:** `src/conductor/src/index.ts#detectResealCommand`, `src/conductor/src/index.ts#detectMissingResealReasonCommand`, `src/conductor/src/index.ts#dispatchResealCommand`
 
 **Dependencies:** none
 

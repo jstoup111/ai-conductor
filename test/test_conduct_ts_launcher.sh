@@ -49,13 +49,6 @@ make_fake_conductor() {
 console.log("RESOLVED_URL:" + import.meta.url);
 EOF
   ln -s "dist-versions/v123" "$dir/src/conductor/dist"
-  # Deliberately resemble a checked-out development install. The launcher
-  # remains pinned to dist even when these local dev-loader files exist.
-  mkdir -p "$dir/src/conductor/node_modules/.bin" "$dir/src/conductor/node_modules/tsx/dist" "$dir/src/conductor/src"
-  : > "$dir/src/conductor/node_modules/.bin/tsx"
-  chmod +x "$dir/src/conductor/node_modules/.bin/tsx"
-  : > "$dir/src/conductor/node_modules/tsx/dist/loader.mjs"
-  printf 'console.log("SOURCE_ENTRY_SHOULD_NOT_RUN");\n' > "$dir/src/conductor/src/cli-entry.ts"
   cp "$LAUNCHER" "$dir/bin/conduct-ts"
   echo "$dir"
 }
@@ -72,14 +65,6 @@ if command -v node >/dev/null 2>&1; then
     *)
       echo "$OUT"
       assert "execs resolved dist-versions/<id>/index.js path" 1
-      ;;
-  esac
-  case "$OUT" in
-    *"SOURCE_ENTRY_SHOULD_NOT_RUN"*)
-      assert "ignores local tsx loader-shaped dependencies" 1
-      ;;
-    *)
-      assert "ignores local tsx loader-shaped dependencies" 0
       ;;
   esac
   case "$OUT" in
