@@ -11,6 +11,79 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.101.0] - 2026-08-10
+
+### Added
+
+- `conduct-ts validate-wired-into <plan>` resolves a plan's **Wired-into:** anchors at DECIDE time through the same machinery BUILD-time completion verification uses, and exits 1 on any anchor that cannot resolve. ([implementation PR #1190](https://github.com/jstoup111/ai-conductor/pull/1190)).
+- conflict-check detects oscillating requirements — pairs that are individually satisfiable but mutually exclusive, which send work round a non-terminating kickback loop. coherence-check gains a `fail` verdict and a consistency pass for cross-layer contradictions that coverage alone cannot express. ([implementation PR #1394](https://github.com/jstoup111/ai-conductor/pull/1394)).
+- The release-metadata check now labels each PR with the semver impact it declares (semver:major/minor/patch), so merge order is readable from the PR list. ([implementation PR #1405](https://github.com/jstoup111/ai-conductor/pull/1405)).
+- Worktrees now get a preventive pre-commit hook that blocks commits touching another feature's sealed DECIDE artifacts (`.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, `.docs/stories`) during BUILD/SHIP, and remediation gaps that target a sealed artifact are now redirected to the owning DECIDE step. ([implementation PR #1396](https://github.com/jstoup111/ai-conductor/pull/1396)).
+- The daemon, spec authoring, and spec landing now refuse to dispatch or land work whose ADRs are not declared APPROVED or SUPERSEDED, closing the gap where a merged spec with an unapproved architecture decision could still reach build. ([implementation PR #1384](https://github.com/jstoup111/ai-conductor/pull/1384)).
+- Spec and implementation PRs now inherit the originating issue's `priority:` criticality labels. ([implementation PR #1440](https://github.com/jstoup111/ai-conductor/pull/1440)).
+
+### Changed
+
+- The validation-phase fan-out now defaults to 4, so the SHIP-tail group (manual test, PRD audit, as-built architecture review) dispatches in a single wave instead of two. ([implementation PR #1413](https://github.com/jstoup111/ai-conductor/pull/1413)).
+
+### Fixed
+
+- The land-time coherence gate now checks that stories tie out to the PRD in both directions — a story citing a requirement the PRD never declares, or citing none at all, is reported as a gap. Plan `Wired-into:` anchors are now validated as a blocking gate at every tier instead of by an optional command, and the plan skill judges the residue the matcher cannot decide: an anchor into a file the same task creates, or one whose match is an import, comment, or re-export rather than a call. ([implementation PR #1401](https://github.com/jstoup111/ai-conductor/pull/1401)).
+- A pull request whose `## Migration` section is its last section no longer fails its own release gate at finish; the release metadata block below it is parsed correctly instead of being swallowed into the migration content. ([implementation PR #1404](https://github.com/jstoup111/ai-conductor/pull/1404)).
+- A pull request whose `## Migration` section sits above its release metadata block, or is followed by a trailer, no longer fails the finish-time release gate as non-canonical, and the merged body no longer duplicates the Migration section. ([implementation PR #1406](https://github.com/jstoup111/ai-conductor/pull/1406)).
+- `conduct-ts shipped-record` reports success on stdout, so a successful ship no longer appears in the daemon log tagged `[error]`. ([implementation PR #1407](https://github.com/jstoup111/ai-conductor/pull/1407)).
+- build_review now treats prior wiring_check gate instructions recorded in the event ledger as evidence when grading scope, so plan hunks that implement a gate-mandated fix are no longer wrongly flagged as out-of-plan work. ([implementation PR #1452](https://github.com/jstoup111/ai-conductor/pull/1452)).
+- Update checks now use the schema-owned conductor configuration and automatically migrate supported legacy preferences. ([implementation PR #1412](https://github.com/jstoup111/ai-conductor/pull/1412)).
+- The remediate step may now amend a plan in response to a blocking gate; the build step still may not. ([implementation PR #1459](https://github.com/jstoup111/ai-conductor/pull/1459)).
+- wiring_check no longer treats a Markdown or .docs/ mention of a symbol as a production reference, so a task declared inert is no longer flagged stale against its own plan document. ([implementation PR #1460](https://github.com/jstoup111/ai-conductor/pull/1460)).
+
+### Security
+
+- Intake filing now redacts credentials and operator-identifying paths from the issue title and body before publishing, and reports what it replaced. ([implementation PR #1420](https://github.com/jstoup111/ai-conductor/pull/1420)).
+- The daemon's DECIDE-entry grant is now stored outside the feature worktree so a build agent can no longer authorize its own DECIDE entry, and the `plan` step can never be granted at all. ([implementation PR #1403](https://github.com/jstoup111/ai-conductor/pull/1403)).
+
+## Migration
+
+```bash migration
+# The engine now installs a third, fail-closed worktree git hook (pre-commit)
+# that rejects staged commits under protected .docs/ artifact directories
+# during BUILD/SHIP. It is generated fresh into <worktree>/.pipeline/git-hooks/
+# only when a worktree is (re)prepared, so already-prepared, in-flight
+# worktrees do not pick it up automatically. Recreate each affected worktree
+# from its branch (the branch is the source of truth) so the daemon
+# re-provisions it with the new hook:
+
+conduct-ts daemon park <slug>
+rm -rf .worktrees/<slug>
+conduct-ts daemon unpark <slug>
+# The daemon recreates the worktree on its next dispatch, running
+# prepareWorktree and installing pre-commit/prepare-commit-msg/commit-msg
+# together. No action is needed for worktrees created after this change ships.
+```
+
+```bash migration
+# The DECIDE grant moved out of the feature worktree into the daemon-owned store.
+# Any grant still pending in a worktree is now inert; move it, or drop it if stale.
+# Grants naming `plan` are no longer honored and are removed rather than migrated.
+set -euo pipefail
+mkdir -p .daemon/grants
+for grant in .worktrees/*/.pipeline/decide-grant.json; do
+  [ -e "$grant" ] || continue
+  slug=$(basename "$(dirname "$(dirname "$grant")")")
+  if grep -q '"step"[[:space:]]*:[[:space:]]*"plan"' "$grant"; then
+    echo "dropping ungrantable plan grant for ${slug}"
+  else
+    echo "migrating grant for ${slug} -> .daemon/grants/${slug}.json"
+    cp "$grant" ".daemon/grants/${slug}.json"
+  fi
+  rm -f "$grant"
+done
+```
+
+```bash migration
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/update" --auto
+```
+
 ## [0.100.0] - 2026-08-07
 
 ### Added
