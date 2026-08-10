@@ -35,11 +35,12 @@ bin/migrate [--yes|-y] [--dry-run]
 ```
 
 Runs `bin/install --update`, then, from a consumer project, finds runnable `bash migration` fences in
-each release through the installed target version. On a project's first run, the lower bound is the
-recorded `currentVersion` (or the target version itself, if `currentVersion` is an unparsable channel
-identity such as `main@<sha>`); that bound is then pinned into the ledger as its `candidateBaseline`
-and used on every later run, so it stays fixed even as `currentVersion` advances. It exports
-`HARNESS_DIR` to every block. Blocks are ordered by release version and document position.
+each release through the installed target version. If it cannot read the installed-version
+configuration, it exits non-zero before selecting migrations. On a project's first run, the lower
+bound is the recorded `currentVersion` (or the target version itself, if `currentVersion` is an
+unparsable channel identity such as `main@<sha>`); that bound is then pinned into the ledger as its
+`candidateBaseline` and used on every later run, so it stays fixed even as `currentVersion` advances.
+It exports `HARNESS_DIR` to every block. Blocks are ordered by release version and document position.
 
 `--dry-run` shows the install action and selected migrations without executing or recording them.
 Without `--yes`, an interactive run previews each block and accepts `yes`, `no`, `all`, or `stop`;
