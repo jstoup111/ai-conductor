@@ -273,6 +273,32 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
     });
 
+    it('keeps the graded diff byte-identical when a qualifying event-ledger record is added', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+
+      const withoutLedgerRecord = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+      const instruction = {
+        type: 'kickback', from: 'wiring_check', to: 'build',
+        evidence: 'use the declared call site', count: 1,
+      };
+      await writeFile(join(dir, '.pipeline/events.jsonl'), JSON.stringify(instruction));
+      await git('add', '.pipeline/events.jsonl');
+      await git('commit', '-m', 'record wiring_check feedback');
+
+      const withLedgerRecord = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(withLedgerRecord.diff).toBe(withoutLedgerRecord.diff);
+      expect(withLedgerRecord.gateInstructions).toEqual([{
+        from: instruction.from,
+        to: instruction.to,
+        evidence: instruction.evidence,
+        count: instruction.count,
+      }]);
+    });
+
     it('returns no gate instructions when the event ledger has no kickbacks', async () => {
       const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });

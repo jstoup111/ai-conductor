@@ -23,7 +23,9 @@ import type { GitRunner } from '../../src/engine/rebase.js';
 //      sentinel in task-status.json and a transcript-like file, assemble the
 //      full grader prompt from it, and assert the sentinel never appears.
 
-const SENTINEL = 'MAKER_SUMMARY_SENTINEL_12345';
+const TASK_STATUS_SENTINEL = 'TASK_STATUS_SENTINEL_12345';
+const TRANSCRIPT_SENTINEL = 'TRANSCRIPT_SENTINEL_12345';
+const MAKER_SUMMARY_SENTINEL = 'MAKER_SUMMARY_SENTINEL_12345';
 const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const BROAD_FALLBACK_TRIGGERS = [
   'A shared/core module has 3+ production importers.',
@@ -90,11 +92,11 @@ describe('build_review input isolation', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
       join(dir, '.pipeline', 'task-status.json'),
-      JSON.stringify({ summary: SENTINEL, status: 'done' }, null, 2),
+      JSON.stringify({ status: TASK_STATUS_SENTINEL, summary: MAKER_SUMMARY_SENTINEL }, null, 2),
     );
     await writeFile(
       join(dir, 'transcript.log'),
-      `maker session transcript\n${SENTINEL}\nsome narrative about the work\n`,
+      `maker session transcript\n${TRANSCRIPT_SENTINEL}\nsome narrative about the work\n`,
     );
   });
 
@@ -102,7 +104,7 @@ describe('build_review input isolation', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('never leaks the maker-summary sentinel into the assembled grader prompt', async () => {
+  it('never leaks task status, transcript, or maker-summary content into assembled inputs or the grader prompt', async () => {
     const inputs = await assembleBuildReviewInputs(realGit(), planPath);
     const prompt = buildGraderPrompt(inputs);
 
@@ -113,7 +115,14 @@ describe('build_review input isolation', () => {
     expect(inputs.diff).not.toContain('task-status.json');
     expect(inputs.diff).not.toContain('transcript.log');
 
-    expect(prompt).not.toContain(SENTINEL);
+    const assembledContent = JSON.stringify({ inputs, prompt });
+    for (const sentinel of [
+      TASK_STATUS_SENTINEL,
+      TRANSCRIPT_SENTINEL,
+      MAKER_SUMMARY_SENTINEL,
+    ]) {
+      expect(assembledContent).not.toContain(sentinel);
+    }
   });
 
   it('admits only (git, planPath) / (inputs) at the type level — no state parameter exists', () => {
