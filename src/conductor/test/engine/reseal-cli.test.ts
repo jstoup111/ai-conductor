@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProgram } from '../../src/cli.js';
@@ -232,6 +232,85 @@ describe('dispatchResealCommand', () => {
       }]],
       out: [['Resealed protected artifacts: .docs/plans/repair.md']],
     });
+  });
+
+  it('preserves and clears a protected-artifact halt after a successful reseal with --clear-halt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-clear-halt-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.', '--clear-halt'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      }));
+      await writeFile(join(worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'protected-artifact');
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        isInteractive: true,
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal: vi.fn().mockResolvedValue({
+          baselineCommit: 'target',
+          protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+          rebaselines: [],
+          version: 2,
+        }),
+        events: new ConductorEventEmitter(),
+      })).resolves.toBe(0);
+
+      await expect(readFile(join(worktree, '.pipeline', 'HALT.cleared'), 'utf8')).resolves.toBe('protected artifact changed\n');
+      await expect(access(join(worktree, '.pipeline', 'HALT'))).rejects.toThrow();
+      await expect(access(join(worktree, '.pipeline', 'HALT.class'))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves halt markers untouched after a successful reseal without --clear-halt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-keep-halt-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      }));
+      await writeFile(join(worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'protected-artifact');
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        isInteractive: true,
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal: vi.fn().mockResolvedValue({
+          baselineCommit: 'target',
+          protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+          rebaselines: [],
+          version: 2,
+        }),
+        events: new ConductorEventEmitter(),
+      })).resolves.toBe(0);
+
+      await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');
+      await expect(readFile(join(worktree, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('protected-artifact');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('constructs the audit sink at the resolved worktree and records the performed reseal', async () => {

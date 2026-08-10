@@ -8,6 +8,8 @@ import {
   type ResealProtectedArtifactSealOptions,
 } from './protected-artifact-seal.js';
 import { AuditTrailWriter } from './audit-trail.js';
+import { clearMarker } from './daemon-rekick.js';
+import { HALT_CLASS_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 
 export interface ResealDispatch {
@@ -157,6 +159,13 @@ export async function dispatchResealCommand(
       fromCommit: seal.baselineCommit,
       toCommit: resealed.baselineCommit,
     });
+
+    if (command.clearHalt) {
+      const haltClass = await readSeal(join(worktree, HALT_CLASS_MARKER), 'utf8').catch(() => null);
+      if (haltClass?.trim() === PROTECTED_ARTIFACT_HALT_CLASS) {
+        await clearMarker(worktree);
+      }
+    }
   } catch (error) {
     await refuse(error instanceof Error ? error.message : String(error));
     return 1;
