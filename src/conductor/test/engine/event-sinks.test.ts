@@ -202,7 +202,7 @@ describe('event sink subscriptions', () => {
       expect({ ledger, auditRecord }).toMatchObject({
         ledger: { ...kickback, ts: expect.any(String) },
         auditRecord: {
-          step: 'build',
+          origin: 'build',
           event: 'kickback',
           cause: 'wiring_check evidence: Task 1: replace stale anchor.',
         },
