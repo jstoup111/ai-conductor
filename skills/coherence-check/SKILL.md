@@ -10,7 +10,8 @@ requires: [verify-claims]
 ## Purpose
 
 Authors `.docs/coherence/<plan-stem>.md`: a single committed artifact mapping every
-intake outcome bullet, every PRD FR (product track), every accepted ADR, every story,
+intake outcome bullet, every PRD FR (product track), every non-deleted ADR file in the
+current spec change set when the coherence gate engages, every story,
 and every plan task to its counterpart ids with a per-row verdict. This artifact is the auditable
 traceability record the operator (and the land-time coherence validator) reads instead
 of trusting self-reported "everything's covered" prose in a spec PR.
@@ -61,8 +62,9 @@ Load, in order:
    ids.
 4. The plan — `.docs/plans/<plan-stem>.md`, for `**Story:**` lines, task ids, and the
    plan's own `## Coverage Check` table if present.
-5. The accepted ADRs — `.docs/decisions/adr-*.md`, for each decision that constrains
-   the stories in this spec.
+5. The ADR files in the current spec change set — each non-deleted
+   `.docs/decisions/adr-*.md` file. This is the row set when the coherence gate engages;
+   do not expand it to every decision that conceptually constrains the stories.
 
 ## 4. Mapping-Artifact Format
 
@@ -90,7 +92,8 @@ The artifact is a Markdown table (or one table per row class) with these columns
    Counterpart: the story id it serves, OR — for `infrastructure`/`refactor`-typed
    tasks — a non-empty supporting-purpose statement from the task's `**Story:**` line
    in place of a story id.
-5. **adr** — one row per accepted architecture decision record. Cited id:
+5. **adr** — when the coherence gate engages, one row per non-deleted
+   `.docs/decisions/adr-*.md` file in the current spec change set. Cited id:
    `adr-<stem>`. Counterpart: the story id(s) that implement or are constrained by the
    decision.
 
@@ -134,8 +137,8 @@ For the `adr` row class, the cited id form and the canonical gap-id form are bot
 - `story-<id>` — story cited by no task, or a story that does not tie out to the PRD
   (cites an `FR-N` the PRD never declares, or cites no FR at all — §4e)
 - `task-<id>` — task with no valid story citation and no supporting-purpose exemption
-- `adr-<stem>` — accepted architecture decision record cited by no story, or only by a
-  story that does not implement or honor the decision
+- `adr-<stem>` — non-deleted ADR file in the current spec change set cited by no story,
+  or only by a story that does not implement or honor the decision
 - `claim-<row>` — the plan's own `## Coverage Check` table cites a phantom id or
   contradicts the parsed task tree (row number within that table)
 - `duplicate:<ref>` — a second spec claiming an already-claimed `Source-Ref` (emitted
@@ -260,8 +263,9 @@ per row and must never assert "covered" that it has not actually confirmed.
 2. Ensure the file renders as valid Markdown (a real table, not fenced prose) — it
    must be readable directly in the spec PR diff (Story 2).
 3. Do not stage or commit a coherence artifact for a technical-track spec's `fr` row
-   class, a chat-origin spec's `outcome` row class, or an `adr` row class when no accepted
-   ADR constrains the spec — omission is correct there, not a gap.
+   class, a chat-origin spec's `outcome` row class, or an `adr` row class when the current
+   spec change set has no non-deleted `.docs/decisions/adr-*.md` file — omission is
+   correct there, not a gap.
 
 ## Verification
 
