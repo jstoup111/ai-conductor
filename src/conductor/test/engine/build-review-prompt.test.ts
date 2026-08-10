@@ -158,6 +158,87 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain('fed987cba654');
   });
 
+  it('renders engine-recorded wiring-check instructions without changing existing contexts', () => {
+    const contextInputs: BuildReviewInputs = {
+      ...inputs,
+      repairContext: [{
+        id: 'repair-abc123def456',
+        reason: 'command_failed',
+        diagnostic: 'stale aggregate command expectation',
+        rebaseInvalidatedAt: 101,
+      }],
+      acceptedWidenings: [{
+        path: 'src/conductor/src/engine/shared.ts',
+        rationale: 'the shared parser is an atomic dependency',
+        taskId: '12',
+        sha: 'abc123def456',
+      }],
+    };
+    const first = {
+      from: 'wiring_check' as const,
+      to: 'build' as const,
+      evidence: 'src/engine/runner.ts does not invoke the required verifier',
+      count: 1,
+    };
+    const second = {
+      from: 'wiring_check' as const,
+      to: 'build' as const,
+      evidence: 'src/engine/reporter.ts omits the required verdict field',
+      count: 2,
+    };
+    const emptyPrompt = buildGraderPrompt(contextInputs);
+    const oneInstructionPrompt = buildGraderPrompt({
+      ...contextInputs,
+      gateInstructions: [first],
+    });
+    const twoInstructionPrompt = buildGraderPrompt({
+      ...contextInputs,
+      gateInstructions: [first, second],
+    });
+    const section = (prompt: string, heading: string, nextHeading?: string) =>
+      prompt.slice(
+        prompt.indexOf(heading) + heading.length + 2,
+        nextHeading === undefined ? undefined : prompt.indexOf(nextHeading),
+      ).trimEnd();
+    const rebaseContext = (prompt: string) => section(
+      prompt,
+      '## Engine-recorded rebase repair context',
+      '## Engine-accepted scope widenings',
+    );
+    const scopeWidenings = (prompt: string) => section(
+      prompt,
+      '## Engine-accepted scope widenings',
+    );
+
+    expect({
+      empty: section(
+        emptyPrompt,
+        '## Engine-recorded gate instructions',
+        '## Engine-recorded rebase repair context',
+      ),
+      one: section(
+        oneInstructionPrompt,
+        '## Engine-recorded gate instructions',
+        '## Engine-recorded rebase repair context',
+      ),
+      two: section(
+        twoInstructionPrompt,
+        '## Engine-recorded gate instructions',
+        '## Engine-recorded rebase repair context',
+      ),
+      rebaseUnchanged: [emptyPrompt, oneInstructionPrompt, twoInstructionPrompt]
+        .every((prompt) => rebaseContext(prompt) === rebaseContext(emptyPrompt)),
+      scopeUnchanged: [emptyPrompt, oneInstructionPrompt, twoInstructionPrompt]
+        .every((prompt) => scopeWidenings(prompt) === scopeWidenings(emptyPrompt)),
+    }).toEqual({
+      empty: '(none)',
+      one: '- wiring_check → build (attempt 1)\n  Evidence: src/engine/runner.ts does not invoke the required verifier',
+      two: '- wiring_check → build (attempt 1)\n  Evidence: src/engine/runner.ts does not invoke the required verifier\n\n- wiring_check → build (attempt 2)\n  Evidence: src/engine/reporter.ts omits the required verdict field',
+      rebaseUnchanged: true,
+      scopeUnchanged: true,
+    });
+  });
+
 
   it('never references task-status, maker summary, or maker internal state', () => {
     const prompt = buildGraderPrompt(inputs);
