@@ -32,6 +32,10 @@ export type AuditRecord = {
   cause?: string;
   /** Present for an operator-performed protected-artifact reseal. */
   paths?: AuditResealPath[];
+  /** Present when an operator protected-artifact reseal is refused. */
+  condition?: string;
+  /** Present when a specific protected artifact caused a reseal refusal. */
+  path?: string;
   fromCommit?: string;
   toCommit?: string;
   attempt?: number;
@@ -178,6 +182,13 @@ export class AuditTrailWriter {
           reason: event.reason,
           fromCommit: event.fromCommit,
           toCommit: event.toCommit,
+        };
+      case 'protected_artifact_reseal_refused':
+        return {
+          origin: 'operator',
+          event: 'reseal_refused',
+          condition: event.condition,
+          ...(event.path ? { path: event.path } : {}),
         };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict

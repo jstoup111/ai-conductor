@@ -347,6 +347,88 @@ describe('dispatchResealCommand', () => {
     });
   });
 
+  it('emits a refusal event for unlisted protected-artifact drift', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const events = new ConductorEventEmitter();
+    const refused = vi.fn();
+    events.on('protected_artifact_reseal_refused', refused);
+
+    await expect(
+      dispatchResealCommand(command, {
+        cwd: '/project',
+        err: vi.fn(),
+        isInteractive: true,
+        access: vi.fn().mockResolvedValue(undefined),
+        readFile: vi.fn().mockResolvedValue(JSON.stringify({
+          baselineCommit: 'base',
+          protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+          rebaselines: [],
+          version: 2,
+        })),
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal: vi.fn().mockRejectedValue(
+          new Error('Protected artifact changed: .docs/stories/unlisted.md'),
+        ),
+        events,
+      }),
+    ).resolves.toBe(1);
+
+    expect(refused).toHaveBeenCalledWith({
+      type: 'protected_artifact_reseal_refused',
+      condition: 'Protected artifact changed: .docs/stories/unlisted.md',
+      path: '.docs/stories/unlisted.md',
+    });
+  });
+
+  it('records malformed rationale and non-interactive refusals in the resolved worktree audit trail', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-refusal-audit-'));
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const seal = JSON.stringify({
+      baselineCommit: 'base',
+      protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+      rebaselines: [],
+      version: 2,
+    });
+
+    try {
+      await expect(
+        dispatchResealCommand({ ...command, reason: ' ' }, {
+          cwd: root,
+          err: vi.fn(),
+          isInteractive: true,
+          access: vi.fn().mockResolvedValue(undefined),
+          readFile: vi.fn().mockResolvedValue(seal),
+        }),
+      ).resolves.toBe(1);
+      await expect(
+        dispatchResealCommand(command, {
+          cwd: root,
+          err: vi.fn(),
+          isInteractive: false,
+          access: vi.fn().mockResolvedValue(undefined),
+          readFile: vi.fn().mockResolvedValue(seal),
+        }),
+      ).resolves.toBe(1);
+
+      const audit = await readFile(
+        join(root, '.worktrees', 'repair', '.pipeline', 'audit-trail', 'events.jsonl'),
+        'utf8',
+      );
+      expect(audit.split('\n').filter(Boolean).map((line) => JSON.parse(line))).toMatchObject([
+        { origin: 'operator', event: 'reseal_refused', condition: 'missing rationale' },
+        { origin: 'operator', event: 'reseal_refused', condition: 'requires an interactive terminal' },
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses an unknown feature worktree', async () => {
     const command = detectResealCommand(
       argv('--slug', 'missing', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),

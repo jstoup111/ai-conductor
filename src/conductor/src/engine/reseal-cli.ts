@@ -68,6 +68,10 @@ export interface ResealCommandDependencies {
   events?: ConductorEventEmitter;
 }
 
+function refusalPath(condition: string): string | undefined {
+  return condition.match(/(\.docs\/(?:plans|stories)\/[^\s\n]+)/)?.[1];
+}
+
 /** Reseal one feature worktree without entering the conductor pipeline. */
 export async function dispatchResealCommand(
   command: ResealDispatch,
@@ -84,14 +88,31 @@ export async function dispatchResealCommand(
   // provider therefore observes process.stdin.isTTY === false and must stop
   // at this gate.
   const isInteractive = deps.isInteractive ?? process.stdin.isTTY === true;
-  if (!isInteractive) {
-    err('reseal: requires an interactive terminal.');
-    return 1;
-  }
   const ensureAccessible = deps.access ?? access;
   const readSeal = deps.readFile ?? readFile;
   const reseal = deps.reseal ?? resealProtectedArtifactSeal;
   const worktree = join(cwd, '.worktrees', command.slug);
+
+  const events = deps.events ?? new ConductorEventEmitter();
+  if (!deps.events) new AuditTrailWriter(worktree).subscribe(events);
+  const refuse = async (condition: string): Promise<void> => {
+    const path = refusalPath(condition);
+    await events.emit({
+      type: 'protected_artifact_reseal_refused',
+      condition,
+      ...(path ? { path } : {}),
+    });
+    err(`reseal: ${condition}.`);
+  };
+
+  if (!command.reason.trim()) {
+    await refuse('missing rationale');
+    return 1;
+  }
+  if (!isInteractive) {
+    await refuse('requires an interactive terminal');
+    return 1;
+  }
 
   try {
     await ensureAccessible(worktree);
@@ -104,15 +125,12 @@ export async function dispatchResealCommand(
   try {
     seal = JSON.parse(await readSeal(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8')) as ProtectedArtifactSeal;
   } catch {
-    err(`reseal: protected artifact seal is missing for '${command.slug}'.`);
+    await refuse(`protected artifact seal is missing for '${command.slug}'`);
     return 1;
   }
 
   const resolveHead = deps.resolveHead ?? (async (projectRoot: string): Promise<string> =>
     (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim());
-
-  const events = deps.events ?? new ConductorEventEmitter();
-  if (!deps.events) new AuditTrailWriter(worktree).subscribe(events);
 
   try {
     const resealed = await reseal({
@@ -140,7 +158,7 @@ export async function dispatchResealCommand(
       toCommit: resealed.baselineCommit,
     });
   } catch (error) {
-    err(`reseal: ${error instanceof Error ? error.message : String(error)}`);
+    await refuse(error instanceof Error ? error.message : String(error));
     return 1;
   }
 

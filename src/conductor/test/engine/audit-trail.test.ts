@@ -213,6 +213,27 @@ describe('engine/audit-trail', () => {
     });
   });
 
+  it('subscribe() records a refused operator reseal with its condition and offending path', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'protected_artifact_reseal_refused',
+      condition: 'Protected artifact changed: .docs/stories/feature.md',
+      path: '.docs/stories/feature.md',
+    });
+
+    const contents = await readFile(join(dir, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8');
+    const [line] = contents.split('\n').filter((value) => value.length > 0);
+    expect(JSON.parse(line) as AuditRecord).toMatchObject({
+      origin: 'operator',
+      event: 'reseal_refused',
+      condition: 'Protected artifact changed: .docs/stories/feature.md',
+      path: '.docs/stories/feature.md',
+    });
+  });
+
   it('gate_verdict with satisfied:false maps to gate_fail with non-divergent reason and at >= checkedAt', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();
