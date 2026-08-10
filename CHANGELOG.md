@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-08-10
+## [0.101.0] - 2026-08-10
 
 ### Added
 
@@ -33,6 +33,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A pull request whose `## Migration` section sits above its release metadata block, or is followed by a trailer, no longer fails the finish-time release gate as non-canonical, and the merged body no longer duplicates the Migration section. ([implementation PR #1406](https://github.com/jstoup111/ai-conductor/pull/1406)).
 - `conduct-ts shipped-record` reports success on stdout, so a successful ship no longer appears in the daemon log tagged `[error]`. ([implementation PR #1407](https://github.com/jstoup111/ai-conductor/pull/1407)).
 - build_review now treats prior wiring_check gate instructions recorded in the event ledger as evidence when grading scope, so plan hunks that implement a gate-mandated fix are no longer wrongly flagged as out-of-plan work. ([implementation PR #1452](https://github.com/jstoup111/ai-conductor/pull/1452)).
+- Update checks now use the schema-owned conductor configuration and automatically migrate supported legacy preferences. ([implementation PR #1412](https://github.com/jstoup111/ai-conductor/pull/1412)).
+- The remediate step may now amend a plan in response to a blocking gate; the build step still may not. ([implementation PR #1459](https://github.com/jstoup111/ai-conductor/pull/1459)).
 
 ### Security
 
@@ -75,6 +77,10 @@ for grant in .worktrees/*/.pipeline/decide-grant.json; do
   fi
   rm -f "$grant"
 done
+```
+
+```bash migration
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/update" --auto
 ```
 
 ## [0.100.0] - 2026-08-07
