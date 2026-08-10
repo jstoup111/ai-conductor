@@ -1347,6 +1347,28 @@ describe('scanDuplicateClaim (Task 14, offline)', () => {
   });
 });
 
+describe('ADR coherence waiver integration (Task 12)', () => {
+  it.each([
+    ['waives', 'adr-payment-terms', true],
+    ['does not waive with a different id', 'adr-other-decision', false],
+  ])('%s an ADR gap only when its exact id is named', async (_case, waivedId, expectedOk) => {
+    const verdict = await evaluateCoherenceWaiver({
+      gaps: [
+        {
+          layer: 'adr',
+          gapId: 'adr-payment-terms',
+          artifact: 'ADRs',
+          item: 'adr-payment-terms has no affirmative adjudication row',
+        },
+      ],
+      changedFiles: [{ status: 'A', path: '.docs/coherence-waivers/payment-terms.md' }],
+      readText: async () => `Waives: ${waivedId}\nRationale: documented exception.\n`,
+    });
+
+    expect(verdict.ok).toBe(expectedOk);
+  });
+});
+
 describe('advisoryDuplicateClaimWarn (fail-open, reuses overlap-scan.ts)', () => {
   it('is fail-open on a network/scan error: the warn is skipped, never throwing', async () => {
     const throwingGit: GitRunner = async () => {
