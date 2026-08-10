@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execa } from 'execa';
 import {
   checkStepCompletion,
   findFrIdsWithoutRows,
   prdAuditCoverageGap,
   resolveFeaturePrdPaths,
+  sweepStaleReviewArtifacts,
   type ArtifactResolutionContext,
 } from '../src/engine/artifacts.js';
 
@@ -263,5 +265,85 @@ describe('prd_audit completion predicate coverage', () => {
     await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+});
+
+describe('prd_audit code-validity coverage rechecks', () => {
+  let root: string;
+  const featureContext = context({ activePlanPath: '.docs/plans/current-feature.md' });
+  const partialReport = [
+    '| FR | Verdict | Gap-class | Evidence |',
+    '| --- | --- | --- | --- |',
+    '| FR-1 | ALIGNED | — | Covered |',
+  ].join('\n');
+  const fullReport = [
+    '| FR | Verdict | Gap-class | Evidence |',
+    '| --- | --- | --- | --- |',
+    '| FR-1 | ALIGNED | — | Covered |',
+    '| FR-2 | ALIGNED | — | Covered |',
+  ].join('\n');
+
+  const codeValidGit = async (args: string[]) => {
+    if (args[0] === 'symbolic-ref') return { exitCode: 1, stdout: '', stderr: '' };
+    return { exitCode: 0, stdout: '', stderr: '' };
+  };
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'prd-audit-preserve-coverage-'));
+    await mkdir(join(root, '.docs/specs'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/specs/current-feature.md'),
+      '## Functional Requirements\n\nFR-1\nFR-2',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('does not preserve a code-valid sidecar when the current report omits an FR verdict', async () => {
+    await writeFile(join(root, '.pipeline/prd-audit.md'), partialReport);
+    await writeFile(join(root, '.pipeline/prd-audit-code-stamp.json'), '{"codeStamp":"baseline"}');
+
+    await expect(
+      checkStepCompletion(root, 'prd_audit', {
+        artifactResolution: featureContext,
+        git: codeValidGit,
+        sessionStartedAt: Date.now(),
+      }),
+    ).resolves.toMatchObject({ done: false });
+  });
+
+  it('still preserves a fully-covered code-valid report', async () => {
+    await writeFile(join(root, '.pipeline/prd-audit.md'), fullReport);
+    await writeFile(join(root, '.pipeline/prd-audit-code-stamp.json'), '{"codeStamp":"baseline"}');
+
+    await expect(
+      checkStepCompletion(root, 'prd_audit', {
+        artifactResolution: featureContext,
+        git: codeValidGit,
+        sessionStartedAt: Date.now(),
+      }),
+    ).resolves.toMatchObject({ done: true });
+  });
+
+  it('does not spare a stale partial report with a code-valid sidecar', async () => {
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: root });
+    await execa('git', ['add', '.'], { cwd: root });
+    await execa('git', ['commit', '-qm', 'test fixture'], { cwd: root });
+    const baseline = (await execa('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout;
+    const reportPath = join(root, '.pipeline/prd-audit.md');
+    await writeFile(reportPath, partialReport);
+    await writeFile(join(root, '.pipeline/prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: baseline }));
+    await writeFile(
+      join(root, '.pipeline/engine-state.json'),
+      JSON.stringify({ activePlanPath: '.docs/plans/current-feature.md' }),
+    );
+    await utimes(reportPath, 1, 1);
+
+    await expect(sweepStaleReviewArtifacts(root, 'prd_audit', Date.now())).resolves.toEqual([reportPath]);
   });
 });

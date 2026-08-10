@@ -4041,6 +4041,15 @@ Task 1 → Task 2
       return r.stdout.trim();
     }
 
+    async function writePrdFixture(d: string): Promise<void> {
+      await mkdir(join(d, '.docs/specs'), { recursive: true });
+      await writeFile(join(d, '.docs/specs/current-feature.md'), '## Functional Requirements\n\nFR-1\n');
+      await writeFile(
+        join(d, '.pipeline/engine-state.json'),
+        JSON.stringify({ activePlanPath: '.docs/plans/current-feature.md' }),
+      );
+    }
+
     /** Wires an `origin` remote with a real `refs/remotes/origin/HEAD`, so
      * `deriveFeatureSurface` (feature-runtime gates) can compute a non-empty
      * feature surface `F` in-fixture instead of failing open to `[]`. */
@@ -4087,6 +4096,7 @@ Task 1 → Task 2
       it('preserves a stale-mtime report with a codeStamp sidecar when the surface since the stamp is unchanged', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
+        await writePrdFixture(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeReport(gdir);
         await writeSidecar(gdir, baseline);
@@ -4295,6 +4305,15 @@ Task 1 → Task 2
       return r.stdout.trim();
     }
 
+    async function writePrdFixture(d: string): Promise<void> {
+      await mkdir(join(d, '.docs/specs'), { recursive: true });
+      await writeFile(join(d, '.docs/specs/current-feature.md'), '## Functional Requirements\n\nFR-1\n');
+      await writeFile(
+        join(d, '.pipeline/engine-state.json'),
+        JSON.stringify({ activePlanPath: '.docs/plans/current-feature.md' }),
+      );
+    }
+
     /** Wires an `origin` remote with a real `refs/remotes/origin/HEAD`, so
      * `deriveFeatureSurface` (feature-runtime gates) can compute a non-empty
      * feature surface `F` in-fixture instead of failing open to `[]`. */
@@ -4325,6 +4344,7 @@ Task 1 → Task 2
 
       it('spares a stale report whose codeStamp sidecar surface is unchanged', async () => {
         gdir = await makeGitDir();
+        await writePrdFixture(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeStaleReport(gdir);
         await writeFile(join(gdir, SIDECAR), JSON.stringify({ codeStamp: baseline }, null, 2));

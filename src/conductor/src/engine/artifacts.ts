@@ -711,7 +711,13 @@ async function sweptArtifactStillValid(
       // presence signals "last recorded verdict was a PASS", but the report
       // about to be swept can diverge from what it was stamped from — never
       // spare a report that does not itself currently read clean.
-      return findUnalignedFrRows(await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8')).length === 0;
+      const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
+      if (findUnalignedFrRows(report).length > 0) return false;
+      return (await prdAuditCoverageGap(
+        dir,
+        await buildArtifactResolutionContext(dir, { git }),
+        report,
+      )) === null;
     }
     if (step === 'architecture_review_as_built') {
       const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
@@ -2286,8 +2292,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             const preCheckFiles = await findArtifactFiles(dir, 'prd_audit');
             if (preCheckFiles.length > 0) {
               let stillClean = true;
+              const artifactResolution =
+                ctx.artifactResolution ??
+                (await buildArtifactResolutionContext(dir, {
+                  planPath: ctx.planPath,
+                  featureDesc: ctx.featureDesc,
+                  git: ctx.git,
+                }));
               for (const f of preCheckFiles) {
-                if (findUnalignedFrRows(await readFile(f, 'utf-8')).length > 0) {
+                const report = await readFile(f, 'utf-8');
+                if (
+                  findUnalignedFrRows(report).length > 0 ||
+                  (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null
+                ) {
                   stillClean = false;
                   break;
                 }
