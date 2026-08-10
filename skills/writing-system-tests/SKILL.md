@@ -81,6 +81,26 @@ Compare `.docs/stories/*.md` against the existing acceptance specs in the projec
 test directory (whatever the framework uses — see §1). Generate specs for any story file that
 lacks a corresponding spec.
 
+### 2a. Declared Pattern Replication
+
+When the active plan's header resolves a complete `**Pattern-source:**` and
+`**Rename-map:**` declaration, `acceptance_specs` **copies rather than derives** the source
+feature's acceptance specs. This replacement applies only to a resolved declaration; with no
+declaration, derive specs from the stories exactly as this skill otherwise requires.
+
+Copy each source spec to its rename-map-derived target path, applying the map to its filename and
+content.
+
+Locate the source feature's acceptance specs using the project's established acceptance-spec
+layout. For each source spec, apply the ordered Rename-map to both its relative path (including
+the filename) and its content, then write the resulting target spec. Run those copied specs at
+`acceptance_specs` time before continuing.
+
+The copied run earns RED only when its failure includes at least one copied spec failing because
+the target does not yet exist, with a non-zero failure count and zero errors and zero skips. Record
+that real result using the existing §6 RED-evidence contract. Never fall back to derivation after a
+declaration has resolved: copied specs are the feature's acceptance coverage for this step.
+
 **Skip specs for already-tested behavior:** Before generating, grep the existing test suite
 for overlap. For each acceptance criterion, search test files for keywords from the criterion
 (e.g., function/method names, status codes, error messages). If a matching test already exists —

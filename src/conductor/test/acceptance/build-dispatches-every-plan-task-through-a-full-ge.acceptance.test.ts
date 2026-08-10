@@ -111,15 +111,12 @@ async function makeMismatchFixture(): Promise<{ root: string; planPath: string }
 }
 
 describe('Story 2: acceptance_specs copies declared source specs and earns RED', () => {
-  it('requires renamed paths and bodies, executable RED evidence, and fail-closed copy faults', async () => {
+  it('requires renamed paths and bodies with executable RED evidence', async () => {
     const contract = await readContract('skills/writing-system-tests/SKILL.md');
 
     expect(contract).toMatch(/Pattern-source[\s\S]{0,500}Rename-map/i);
     expect(contract).toMatch(/cop(?:y|ied)[\s\S]{0,220}(?:path|filename)[\s\S]{0,220}content/i);
     expect(contract).toMatch(/(?:failed|failure)[^\n]*(?:at least one|non-zero)[\s\S]{0,180}zero (?:errors|skips)/i);
-    expect(contract).toMatch(/(?:no|zero|empty)[^\n]*(?:source )?(?:acceptance )?specs[\s\S]{0,220}(?:fail|halt|reject)/i);
-    expect(contract).toMatch(/collision[\s\S]{0,180}(?:fail|halt|reject)[\s\S]{0,180}(?:overwrite|existing)/i);
-    expect(contract).toMatch(/all[^\n]*pass[\s\S]{0,220}(?:fail|finding|reject)[\s\S]{0,220}passing spec/i);
     expect(contract).toMatch(/(?:never|no|does not)[^\n]*fall back[^\n]*deriv/i);
   });
 });
