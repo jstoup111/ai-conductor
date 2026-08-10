@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.101.0] - 2026-08-09
+## [0.101.0] - 2026-08-10
 
 ### Added
 
@@ -20,6 +20,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The release-metadata check now labels each PR with the semver impact it declares (semver:major/minor/patch), so merge order is readable from the PR list. ([implementation PR #1405](https://github.com/jstoup111/ai-conductor/pull/1405)).
 - Worktrees now get a preventive pre-commit hook that blocks commits touching another feature's sealed DECIDE artifacts (`.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, `.docs/stories`) during BUILD/SHIP, and remediation gaps that target a sealed artifact are now redirected to the owning DECIDE step. ([implementation PR #1396](https://github.com/jstoup111/ai-conductor/pull/1396)).
 - The daemon, spec authoring, and spec landing now refuse to dispatch or land work whose ADRs are not declared APPROVED or SUPERSEDED, closing the gap where a merged spec with an unapproved architecture decision could still reach build. ([implementation PR #1384](https://github.com/jstoup111/ai-conductor/pull/1384)).
+- Spec and implementation PRs now inherit the originating issue's `priority:` criticality labels. ([implementation PR #1440](https://github.com/jstoup111/ai-conductor/pull/1440)).
 
 ### Changed
 
