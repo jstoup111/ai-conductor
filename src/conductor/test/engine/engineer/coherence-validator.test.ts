@@ -126,6 +126,15 @@ describe('parseCoherenceArtifact', () => {
     });
   });
 
+  it('rejects the unknown decision row class after allowing adr', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| decision | adr-2026-08-10 | story-1 | covered | "records the decision" |
+`),
+    ).toEqual({ ok: false, reason: 'unparseable-coherence-artifact' });
+  });
+
   it('rejects a missing file (null input) as missing-coherence-artifact', () => {
     const result = parseCoherenceArtifact(null);
     expect(result.ok).toBe(false);
