@@ -45,11 +45,18 @@ conductor_cfg_key() {
 # The optional default is retained for callers migrating from the legacy
 # accessor signature, but intentionally never substitutes for a failed read:
 # update decisions must decline rather than pretend configuration was read.
+#
+# Seeding the legacy JSON is a one-time migration convenience, not a
+# precondition for reading. It therefore degrades rather than blocking: the
+# seed reports its own failure on stderr and leaves its source in place for a
+# later repair, and the read below still decides fail-closed on the
+# schema-owned block. Letting a stale ~/.claude JSON file veto the read
+# disabled the update check outright even when config.yml was perfectly
+# readable — most visibly mid-update, when an installed conduct-ts too old for
+# `config set` failed the seed's write while `config read` still worked.
 # Usage: conductor_cfg_get <field> [default]
 conductor_cfg_get() {
-  if ! seed_conductor_config_from_legacy; then
-    return 1
-  fi
+  seed_conductor_config_from_legacy || true
   local field=$1
   if ! command -v conduct-ts &>/dev/null; then
     warn "conduct-ts is required to read conductor configuration; install or restore it, then re-run bin/install" >&2

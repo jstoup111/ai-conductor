@@ -455,6 +455,15 @@ no-op. A missing source is a no-op; malformed or non-object JSON is left in plac
 repaired and retried. Invalid or absent individual legacy fields are skipped, while valid fields
 still seed the block before the source is renamed.
 
+Because the seed is a migration convenience rather than a precondition, a seed that cannot complete
+does not block a *read* of `conductor:`. The failure is reported on stderr and its source file is
+kept for a later repair, but the read still proceeds and decides fail-closed on the schema-owned
+block alone. A *write* stays fail-closed on the seed, so an explicit value can never be replayed
+over by legacy JSON on a later run. Without this split, an unseedable `~/.claude` file disabled the
+update check outright even with a perfectly readable `config.yml` — most visibly mid-update, where a
+`conduct-ts` build old enough to predate `config set` failed the seed's write while `config read`
+still worked.
+
 > **Known limitation.** `src/conductor/src/types/config.ts:198-201` states "Project configs should not
 > override this block — it's per-user, not per-repo," but nothing enforces it. Unlike `spec_owner`, a
 > `conductor` block in a project config loads and wins the merge. Tracked in

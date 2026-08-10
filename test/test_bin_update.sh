@@ -646,6 +646,63 @@ for LEGACY_CASE in empty malformed; do
     "$( [ -f "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
 done
 
+# Legacy seeding is a one-time migration convenience, not a precondition for
+# reading configuration. When it fails but the schema-owned block is readable,
+# the getter must still return that block's value: a stale legacy file cannot
+# be allowed to disable the update check outright. Fail-closed still governs
+# the read itself — only the seed degrades.
+REPO=$(make_repo "legacy-seed-failure-readable-config")
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+printf '{ not valid json\n' > "$HOME_DIR/.claude/ai-conductor.config.json"
+set_conductor_cfg "$HOME_DIR" updateChannel main
+set +e
+ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
+  bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
+  _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+ACCESSOR_CODE=$?
+set -e
+ACCESSOR_STDERR=$(cat "$HOME_DIR/accessor-stderr")
+assert "unseedable legacy JSON: getter still reads the schema-owned value" \
+  "$(if [ "$ACCESSOR_CODE" -eq 0 ] && [ "$ACCESSOR_VALUE" = "main" ]; then echo 0; else echo 1; fi)"
+assert "unseedable legacy JSON: getter still warns about the failed seed" \
+  "$(case "$ACCESSOR_STDERR" in *"legacy JSON"*) echo 0;; *) echo 1;; esac)"
+assert "unseedable legacy JSON: source is kept for a later repair" \
+  "$( [ -f "$HOME_DIR/.claude/ai-conductor.config.json" ] && [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1 )"
+
+# The seed writes through conduct-ts, so an installed binary too old to accept
+# `config set` fails the seed while `config read` still works. That is exactly
+# the mid-update stale-build case, and it must not decline the update check.
+REPO=$(make_repo "legacy-seed-set-unsupported")
+cat > "$REPO/bin/conduct-ts" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+config="${HOME}/.ai-conductor/config.yml"
+if [ "${1:-}" = "config" ] && [ "${2:-}" = "read" ]; then
+  awk -F ': *' -v key="${3#conductor.}" '$1 == "  " key { print $2; exit }' "$config" 2>/dev/null || true
+  exit 0
+fi
+echo "conduct: the inline SDLC pipeline now runs under the \`inline\` subcommand." >&2
+exit 1
+EOF
+chmod +x "$REPO/bin/conduct-ts"
+HOME_DIR=$(make_isolated_home)
+mkdir -p "$HOME_DIR/.claude"
+cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
+{
+  "updateChannel": "main"
+}
+EOF
+set_conductor_cfg "$HOME_DIR" updateChannel main
+set +e
+ACCESSOR_VALUE=$(HOME="$HOME_DIR" PATH="$REPO/bin:$TEST_PATH" \
+  bash -c 'source "$1"; conductor_cfg_get updateChannel tagged' \
+  _ "$HARNESS_DIR/bin/lib/harness-common.sh" 2>"$HOME_DIR/accessor-stderr")
+ACCESSOR_CODE=$?
+set -e
+assert "unwritable conductor block during seed: getter still reads the channel" \
+  "$(if [ "$ACCESSOR_CODE" -eq 0 ] && [ "$ACCESSOR_VALUE" = "main" ]; then echo 0; else echo 1; fi)"
+
 # A partial valid legacy config must not invent the auto-check preference.
 REPO=$(make_repo "legacy-json-missing-auto-check")
 HOME_DIR=$(make_isolated_home)
