@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.101.0] - 2026-08-10
+## [1.0.0] - 2026-08-10
 
 ### Added
 
@@ -36,6 +36,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Security
 
 - Intake filing now redacts credentials and operator-identifying paths from the issue title and body before publishing, and reports what it replaced. ([implementation PR #1420](https://github.com/jstoup111/ai-conductor/pull/1420)).
+- The daemon's DECIDE-entry grant is now stored outside the feature worktree so a build agent can no longer authorize its own DECIDE entry, and the `plan` step can never be granted at all. ([implementation PR #1403](https://github.com/jstoup111/ai-conductor/pull/1403)).
 
 ## Migration
 
@@ -54,6 +55,25 @@ conduct-ts daemon unpark <slug>
 # The daemon recreates the worktree on its next dispatch, running
 # prepareWorktree and installing pre-commit/prepare-commit-msg/commit-msg
 # together. No action is needed for worktrees created after this change ships.
+```
+
+```bash migration
+# The DECIDE grant moved out of the feature worktree into the daemon-owned store.
+# Any grant still pending in a worktree is now inert; move it, or drop it if stale.
+# Grants naming `plan` are no longer honored and are removed rather than migrated.
+set -euo pipefail
+mkdir -p .daemon/grants
+for grant in .worktrees/*/.pipeline/decide-grant.json; do
+  [ -e "$grant" ] || continue
+  slug=$(basename "$(dirname "$(dirname "$grant")")")
+  if grep -q '"step"[[:space:]]*:[[:space:]]*"plan"' "$grant"; then
+    echo "dropping ungrantable plan grant for ${slug}"
+  else
+    echo "migrating grant for ${slug} -> .daemon/grants/${slug}.json"
+    cp "$grant" ".daemon/grants/${slug}.json"
+  fi
+  rm -f "$grant"
+done
 ```
 
 ## [0.100.0] - 2026-08-07
