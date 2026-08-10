@@ -23,9 +23,11 @@ PR aggregates the highest declared impact across its candidates and computes the
 
 ### Version freeze
 
-This repository sets `harness_self_host.version_freeze` in `.ai-conductor/config.yml`. While the worktree
-`VERSION` equals the frozen value, the self-host VERSION approval gate self-satisfies. A feature that
-actually changes `VERSION` still HALTs for operator approval. This is a self-host arrangement specific to
+This repository sets `harness_self_host.version_freeze` in `.ai-conductor/config.yml` to `latest`, which
+tracks the resolved base branch's `VERSION` rather than pinning a literal — so a bot-owned release does
+not leave every self-host build halting on a stale freeze until an operator bumps the key by hand. While
+the worktree `VERSION` equals the resolved frozen value, the self-host VERSION approval gate
+self-satisfies. A feature that actually changes `VERSION` still HALTs for operator approval. This is a self-host arrangement specific to
 this repo, not default harness behavior — see [self-hosting](../guides/self-hosting.md).
 
 ## Semver rules
