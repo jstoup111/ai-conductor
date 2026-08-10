@@ -28,6 +28,7 @@ import type { AuthoredLedgerOpts } from './authored-ledger.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { extractPrUrl } from '../state.js';
 import { injectIssueRef } from './issue-ref.js';
+import { ensureReleaseMetadata } from './release-metadata-inject.js';
 import { mirrorIssueCriticalityLabels } from '../pr-criticality-labels.js';
 import type { GitRunner } from '../pr-labels.js';
 
@@ -217,6 +218,21 @@ export async function openSpecPr(
   //    The `feature` is the spec branch name — consistent with how the engineer's
   //    authored ledger identifies authoring events (one branch = one feature spec).
   await recordAuthoredKey(target.name, branch, ledgerOpts ?? {});
+
+  // 3a2. Guarantee the PR declares a release disposition. `--fill` builds the
+  //      body from the branch name and last commit message, so it never carries
+  //      a `## Release metadata` section and the required check fails closed on
+  //      every landed spec PR. Runs unconditionally — the obligation is on every
+  //      PR, not only those linking an issue. Idempotent and non-fatal.
+  await ensureReleaseMetadata({
+    gh: async (args, opts) => {
+      const r = await runner(args, { cwd: opts.cwd });
+      return { stdout: r.stdout };
+    },
+    prUrl: url,
+    cwd,
+    log: deps.log,
+  });
 
   // 3b. Link the spec PR to the originating issue with a NON-CLOSING `Refs` line
   //     (the issue must NOT close when the spec merges — only when the daemon's
