@@ -437,12 +437,12 @@ For what does resolve a tier, see
 
 The sole update-check configuration surface. `bin/install` and the update flow read and write the
 user-level `conductor:` block in `~/.ai-conductor/config.yml`; it is validated by
-`validateConductorBlock` (`config.ts:1059-1093`), and an unknown key inside the block is a hard
+`validateConductorBlock` (`config.ts:1133-1165`), and an unknown key inside the block is a hard
 error.
 
 | Key | Type | Allowed | Written by |
 | --- | --- | --- | --- |
-| `conductor.update_channel` | string | `tagged` or `main` only; anything else is a hard error (`config.ts:1073-1082`) | `bin/install` and the update flow |
+| `conductor.update_channel` | string | `tagged` or `main` only; anything else is a hard error (`config.ts:1146-1153`) | `bin/install` and the update flow |
 | `conductor.auto_check` | boolean | — | `bin/install` and the update flow |
 | `conductor.current_version` | string | — | `bin/install` and the update flow (machine state) |
 | `conductor.last_checked_at` | string | ISO-8601 UTC | `bin/install` and the update flow (machine state) |
