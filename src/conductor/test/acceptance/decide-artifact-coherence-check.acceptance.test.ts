@@ -150,6 +150,7 @@ const COHERENCE = [
   '| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |',
   '| task    | task-1    | story-1  | covered | "task 1 maps to story 1"     |',
   '| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |',
+  '| adr     | adr-coherence | story-1 | covered | "ADR is adjudicated by story 1" |',
   '',
 ].join('\n');
 
