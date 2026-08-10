@@ -1005,9 +1005,9 @@ export async function resealProtectedArtifactSeal({
   featureDesc,
   baseBranch,
 }: ResealProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
-  const recomputed = await createScopedProtectedArtifactSeal({ projectRoot, seal, toCommit, paths });
   const classification = await inspectSeal(projectRoot, seal, featureDesc, baseBranch, new Set(paths));
   if (!classification.ok) throw new Error(classification.reason);
+  const recomputed = await createScopedProtectedArtifactSeal({ projectRoot, seal, toCommit, paths });
   return persistProtectedArtifactSealRotation({
     projectRoot,
     seal,
