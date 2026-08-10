@@ -511,7 +511,7 @@ async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<
   return { version: 2, baselineCommit: options.baselineCommit, protectedArtifacts, rebaselines: [] };
 }
 
-export async function createScopedProtectedArtifactSeal({
+async function createScopedProtectedArtifactSeal({
   projectRoot,
   seal,
   toCommit,

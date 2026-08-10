@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
   createProtectedArtifactSeal,
-  createScopedProtectedArtifactSeal,
   classifyMutationTarget,
   evaluateProtectedArtifactSealRotation,
   evaluateProtectedArtifactSealRotationInRepository,
@@ -176,102 +175,7 @@ describe('createProtectedArtifactSeal', () => {
   });
 });
 
-describe('createScopedProtectedArtifactSeal', () => {
-  it('re-fingerprints only the enumerated protected artifact at the target commit', async () => {
-    const repo = await makeRepo({
-      '.docs/plans/p1.md': 'incorrect plan\n',
-      '.docs/plans/p2.md': 'sealed plan two\n',
-      '.docs/plans/p3.md': 'sealed plan three\n',
-    });
-    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
-    const seal = {
-      version: 2 as const,
-      baselineCommit,
-      protectedArtifacts: [
-        {
-          path: '.docs/plans/p1.md',
-          fingerprint: `sha256:${createHash('sha256').update('incorrect plan\n').digest('hex')}`,
-        },
-        { path: '.docs/plans/p2.md', fingerprint: 'sha256:sealed-p2' },
-        { path: '.docs/plans/p3.md', fingerprint: 'sha256:sealed-p3' },
-      ],
-      rebaselines: [],
-    };
-    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
-    await git(repo, ['add', '.docs/plans/p1.md']);
-    await git(repo, ['commit', '-q', '-m', 'correct protected plan']);
-    const toCommit = await git(repo, ['rev-parse', 'HEAD']);
-
-    await expect(createScopedProtectedArtifactSeal({
-      projectRoot: repo,
-      seal,
-      toCommit,
-      paths: ['.docs/plans/p1.md'],
-    })).resolves.toEqual({
-      ...seal,
-      protectedArtifacts: [
-        {
-          path: '.docs/plans/p1.md',
-          fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
-        },
-        seal.protectedArtifacts[1],
-        seal.protectedArtifacts[2],
-      ],
-    });
-  });
-
-  it.each([
-    ['an empty path set', [], undefined, 'Scoped protected artifact reseal requires at least one path'],
-    ['a path absent from the seal', ['.docs/plans/missing.md'], undefined,
-      'Protected artifact reseal target is not sealed: .docs/plans/missing.md'],
-    ['a path outside the protected directories', ['README.md'], undefined,
-      'Protected artifact reseal target is not protected: README.md'],
-    ['a path with uncommitted changes', ['.docs/plans/p1.md'], async (repo: string) => {
-      await writeProjectFile(repo, '.docs/plans/p1.md', 'dirty correction\n');
-    }, 'Protected artifact reseal target has uncommitted changes: .docs/plans/p1.md\nCommit the protected artifact before resealing.'],
-    ['a deleted path', ['.docs/plans/p1.md'], async (repo: string) => {
-      await rm(join(repo, '.docs/plans/p1.md'));
-    }, 'Protected artifact reseal target is deleted: .docs/plans/p1.md'],
-    ['an unresolvable target commit', ['.docs/plans/p1.md'], undefined,
-      'Protected artifact reseal target commit is unresolvable: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
-  ] as const)('refuses %s without changing the seal', async (_name, paths, mutate, message) => {
-    const repo = await makeRepo({ '.docs/plans/p1.md': 'approved plan\n' });
-    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
-    const seal = {
-      version: 2 as const,
-      baselineCommit,
-      protectedArtifacts: [{
-        path: '.docs/plans/p1.md',
-        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
-      }],
-      rebaselines: [],
-    };
-    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
-    const originalBytes = `${JSON.stringify(seal, null, 2)}\n`;
-    await mkdir(dirname(sealPath), { recursive: true });
-    await writeFile(sealPath, originalBytes);
-    await mutate?.(repo);
-
-    const rejection = await createScopedProtectedArtifactSeal({
-      projectRoot: repo,
-      seal,
-      toCommit: _name === 'an unresolvable target commit'
-        ? 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
-        : baselineCommit,
-      paths: [...paths],
-    }).then(() => 'resolved', (error: Error) => error.message);
-
-    expect({
-      rejection,
-      persistedBytes: await readFile(sealPath, 'utf8'),
-      seal,
-    }).toEqual({
-      rejection: message,
-      persistedBytes: originalBytes,
-      seal: JSON.parse(originalBytes),
-    });
-  });
-
+describe('resealProtectedArtifactSeal', () => {
   it('advances the baseline, records scoped lineage, and verifies every sealed entry', async () => {
     const repo = await makeRepo({
       '.docs/plans/p1.md': 'incorrect plan\n',

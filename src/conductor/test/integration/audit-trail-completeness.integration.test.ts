@@ -79,9 +79,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   dashboard_refresh: 'not-audited-by-design',
   protected_artifact_rebaseline: 'not-audited-by-design',
   protected_artifact_rebaseline_refused: 'not-audited-by-design',
-  // Task 14 declares the audit sinks; Task 15 maps the performed event to an audit record.
-  protected_artifact_reseal: 'not-audited-by-design',
-  protected_artifact_reseal_refused: 'not-audited-by-design',
+  // Operator-initiated reseals and refusals are auditable friction events.
+  protected_artifact_reseal: 'friction-mapped',
+  protected_artifact_reseal_refused: 'friction-mapped',
   auto_heal: 'not-audited-by-design',
   remediation_sealed_artifact_redirect: 'not-audited-by-design',
   verdict_freshness: 'friction-mapped',
