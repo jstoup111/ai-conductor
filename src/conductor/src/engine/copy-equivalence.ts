@@ -8,6 +8,14 @@ export type CopyEquivalenceVerdict = {
   verifiedPair: { sourcePath: string; targetPath: string };
 };
 
+/**
+ * The gate-facing outcome of an equivalence check. Unlike the per-task
+ * floors, an invalid declared copy is a blocking condition for build_review.
+ */
+export type CopyEquivalenceStepResult =
+  | { success: true; verdict: CopyEquivalenceVerdict }
+  | { success: false; output: string };
+
 function renameMapCollision(renameMap: ResolvedPlanPatternSource['renameMap']) {
   const targets = new Map<string, string>();
   for (const pair of renameMap) {
@@ -89,4 +97,20 @@ export async function verifyCopyEquivalence(
     kind: 'equivalent',
     verifiedPair: { sourcePath: declaration.sourcePath, targetPath },
   };
+}
+
+/**
+ * Converts the diagnostic-oriented comparison primitive into the outcome a
+ * step runner can return. Task 8 owns invoking this from build_review.
+ */
+export async function runCopyEquivalence(
+  declaration: ResolvedPlanPatternSource,
+  targetPath: string,
+  readFile: CopyEquivalenceFileReader,
+): Promise<CopyEquivalenceStepResult> {
+  try {
+    return { success: true, verdict: await verifyCopyEquivalence(declaration, targetPath, readFile) };
+  } catch (error) {
+    return { success: false, output: error instanceof Error ? error.message : String(error) };
+  }
 }
