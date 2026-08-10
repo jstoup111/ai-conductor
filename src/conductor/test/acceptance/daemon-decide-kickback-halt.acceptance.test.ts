@@ -229,7 +229,10 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     );
   }
 
-  function conductorAtBuild(runner: StepRunner, opts: { daemon: boolean }): Conductor {
+  function conductorAtBuild(
+    runner: StepRunner,
+    opts: { daemon: boolean; disablePrdAudit?: boolean },
+  ): Conductor {
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -242,6 +245,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       maxRetries: 1,
       git: fakeGit,
       shipmentEvidence: validShipmentEvidence,
+      config: opts.disablePrdAudit ? { steps: { prd_audit: { disable: true } } } : undefined,
     });
   }
 
@@ -448,7 +452,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     it('manual_test FAIL kicks back to build, re-dispatches it, and writes no HALT/HALT.class', async () => {
       await git('init', '-q', '-b', 'main');
       await git('commit', '--allow-empty', '-q', '-m', 'init');
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
 
       let fixed = false;
       const ran: StepName[] = [];
@@ -500,7 +504,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         halted = true;
       });
 
-      await conductorAtBuild(runner, { daemon: true }).run();
+      await conductorAtBuild(runner, { daemon: true, disablePrdAudit: true }).run();
 
       expect(kicks).toContainEqual({ from: 'manual_test', to: 'build' });
       expect(ran.filter((s) => s === 'build')).toHaveLength(2);
@@ -519,7 +523,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
   describe('S3: the daemon flag is the discriminator, at both call sites', () => {
     it('interactive (daemon: false): a DECIDE kickback re-opens plan and dispatches it (happy path)', async () => {
       await seedStoriesAndPlan();
-      await writeState(statePath, { ...FRONT_DONE, track: 'technical' });
+      await writeState(statePath, { ...FRONT_DONE });
 
       const ran: StepName[] = [];
       const kicks: Array<{ from: string; to: string }> = [];
@@ -531,7 +535,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         halted = true;
       });
 
-      await conductorAtBuild(buildKicksBackToPlan(ran), { daemon: false }).run();
+      await conductorAtBuild(buildKicksBackToPlan(ran), { daemon: false, disablePrdAudit: true }).run();
 
       expect(kicks).toContainEqual({ from: 'build', to: 'plan' });
       expect(ran).toContain('plan'); // the amendment pass actually ran

@@ -96,7 +96,7 @@ describe('integration/gate-loop', () => {
       events,
       projectRoot: dir,
       verifyArtifacts: true,
-      mode: 'auto',
+      mode: 'auto' as const,
       fromStep: 'build',
       maxRetries: 1,
     });
@@ -963,7 +963,7 @@ describe('integration/gate-loop', () => {
       await git('commit', '--allow-empty', '-q', '-m', 'init');
     }
 
-    function daemonConductor(runner: StepRunner): Conductor {
+    function daemonConductor(runner: StepRunner, config?: HarnessConfig): Conductor {
       const fakeGit: GitRunner = async (args) =>
         args.includes('--symbolic-full-name')
           ? { stdout: 'refs/remotes/origin/feature/x\n' }
@@ -980,6 +980,7 @@ describe('integration/gate-loop', () => {
         fromStep: 'build',
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
+        config,
       });
     }
 
@@ -987,7 +988,7 @@ describe('integration/gate-loop', () => {
       await initRepo();
       // rebase seeded skipped: the engine-native rebase step needs an origin
       // this fixture doesn't have; skipping it keeps the tail converging.
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
 
       let fixed = false;
       const ran: string[] = [];
@@ -1038,7 +1039,7 @@ describe('integration/gate-loop', () => {
         halted = true;
       });
 
-      await daemonConductor(runner).run();
+      await daemonConductor(runner, { steps: { prd_audit: { disable: true } } }).run();
 
       // One kickback, one fix build, convergence — no HALT.
       expect(kickbacks).toEqual([{ from: 'manual_test', to: 'build' }]);
@@ -1067,7 +1068,7 @@ describe('integration/gate-loop', () => {
 
     it('FAIL → kickback → build commits nothing → PASS rewrite is refused (whitewash) and the run HALTs', async () => {
       await initRepo();
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
 
       let kicked = false;
       const runner: StepRunner = {
@@ -1105,7 +1106,7 @@ describe('integration/gate-loop', () => {
         completed = true;
       });
 
-      await daemonConductor(runner).run();
+      await daemonConductor(runner, { steps: { prd_audit: { disable: true } } }).run();
 
       // The guard refused the no-commit PASS rewrite and the run HALTed. As
       // of #367's whitewash-guard-marker fallback in readManualTestFailRows,
@@ -1744,7 +1745,7 @@ describe('integration/gate-loop', () => {
     });
 
     it('the build_review counter is independent of manualTestSelfHeals', async () => {
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
       let buildRuns = 0;
       let manualTestRuns = 0;
       const runner: StepRunner = {
@@ -1813,7 +1814,7 @@ describe('integration/gate-loop', () => {
         daemon: true,
         fromStep: 'build',
         maxRetries: 1,
-        config,
+        config: { ...config, steps: { prd_audit: { disable: true } } },
         baseBranch: 'main',
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
@@ -1976,7 +1977,7 @@ describe('integration/gate-loop', () => {
         if (args[0] === 'show') return { stdout: planText } as never;
         return { stdout: '' } as never;
       });
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
 
       const config = { build_review: { enabled: true } };
       let buildRuns = 0;
@@ -2071,7 +2072,7 @@ describe('integration/gate-loop', () => {
         daemon: true,
         fromStep: 'build',
         maxRetries: 1,
-        config,
+        config: { ...config, steps: { prd_audit: { disable: true } } },
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
       });
@@ -2297,5 +2298,141 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     // the structural predicate alone never mistakes an unresolved plan
     // task for done.
     expect(verdict.done).toBe(false);
+  });
+});
+
+describe('prd_audit coverage recheck through a real repository (Task 11)', () => {
+  const execFileP = promisify(execFile);
+  let repoDir: string;
+
+  async function git(...args: string[]): Promise<void> {
+    await execFileP('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args], {
+      cwd: repoDir,
+    });
+  }
+
+  beforeEach(async () => {
+    repoDir = await mkdtemp(join(tmpdir(), 'prd-audit-real-tail-'));
+    await git('init', '-q', '-b', 'main');
+    await mkdir(join(repoDir, '.docs/specs'), { recursive: true });
+    await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(repoDir, '.docs/specs/current-feature.md'),
+      '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2\nFR-3\n',
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: add feature PRD');
+    // The production protected-artifact seal resolves the base through the
+    // remote-tracking ref, so provide the local stand-in used by real-repo
+    // fixtures without introducing a network remote.
+    await git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  });
+
+  afterEach(async () => {
+    await rm(repoDir, { recursive: true, force: true });
+    vi.doMock('execa', () => ({ execa: vi.fn() }));
+    vi.resetModules();
+  });
+
+  it('kicks back on a coverage-incomplete report, then converges only after every PRD FR has a verdict', async () => {
+    // This file normally mocks execa. Resetting before the dynamic import makes
+    // the production tail use real git for protected-artifact sealing and PRD
+    // resolution, rather than a hand-built artifact-resolution context.
+    vi.doUnmock('execa');
+    vi.resetModules();
+    const { Conductor: RealConductor } = await import('../test-conductor.js');
+    const { ConductorEventEmitter: RealEvents } = await import('../../src/ui/events.js');
+    const { writeState: writeRealState, readState: readRealState } = await import('../../src/engine/state.js');
+    const { createProtectedArtifactSeal } = await import('../../src/engine/protected-artifact-seal.js');
+
+    const { stdout: baselineCommit } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    await createProtectedArtifactSeal({ projectRoot: repoDir, baselineCommit: baselineCommit.trim() });
+
+    const realStatePath = join(repoDir, 'conduct-state.json');
+    await writeRealState(realStatePath, {
+      ...FRONT_DONE,
+      feature_desc: 'current feature',
+      architecture_review: 'skipped',
+      rebase: 'skipped',
+    } as ConductState);
+
+    const realEvents = new RealEvents();
+    const kicks: Array<{ from: string; to: string }> = [];
+    realEvents.on('kickback', (event) => {
+      if (event.type === 'kickback') kicks.push({ from: event.from, to: event.to });
+    });
+    let auditRuns = 0;
+    let buildRuns = 0;
+    const runner: StepRunner = {
+      run: async (step, _artifacts, options) => {
+        if (step === 'build') {
+          buildRuns += 1;
+          await writeFile(
+            join(repoDir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+          );
+          if (options?.retryReason) {
+            await writeFile(join(repoDir, 'implemented.ts'), 'export const fixed = true;\n');
+            await git('add', '.');
+            await git('commit', '-q', '-m', 'fix: cover the second PRD requirement');
+          }
+          return { success: true };
+        }
+        if (step === 'prd_audit') {
+          auditRuns += 1;
+          await writeFile(
+            join(repoDir, '.pipeline/prd-audit.md'),
+            auditRuns === 1
+              ? '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | MISSING | impl-gap | implemented.ts:1 | no |\n'
+              : '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | ALIGNED | | implemented.ts:1 | yes |\n| FR-3 | ALIGNED | | implemented.ts:1 | yes |\n',
+          );
+          return { success: true };
+        }
+        if (step === 'retro') {
+          await writeFile(join(repoDir, '.pipeline/retro.md'), '# Retro\n');
+        } else if (step === 'finish') {
+          await writeFile(join(repoDir, '.pipeline/finish-choice'), 'keep\n');
+        }
+        return { success: true };
+      },
+    };
+
+    const conductorOptions = {
+      stateFilePath: realStatePath,
+      stepRunner: runner,
+      events: realEvents,
+      projectRoot: repoDir,
+      verifyArtifacts: true,
+      mode: 'auto' as const,
+      daemon: true,
+      fromStep: 'manual_test' as StepName,
+      maxRetries: 1,
+      baseBranch: 'main',
+      config: { steps: { manual_test: { disable: true } } },
+      shipmentEvidence: validShipmentEvidence,
+    };
+
+    await new RealConductor(conductorOptions).run();
+
+    expect(kicks).toContainEqual({ from: 'prd_audit', to: 'build' });
+    expect(buildRuns).toBeGreaterThan(0);
+
+    // The kickback has already re-run BUILD and its native verifier group.
+    // Resume the SHIP tail with that deterministic BUILD evidence recorded so
+    // the second production dispatch demonstrates the repaired report's path.
+    const afterBuild = await readRealState(realStatePath);
+    if (!afterBuild.ok) throw new Error(afterBuild.error.message);
+    await writeRealState(realStatePath, {
+      ...afterBuild.value,
+      wiring_check: 'done',
+      test_suite: 'done',
+      build_review: 'skipped',
+      prd_audit: 'stale',
+    });
+    await new RealConductor({ ...conductorOptions, fromStep: 'prd_audit' }).run();
+
+    expect(auditRuns).toBe(2);
+    const finalState = await readRealState(realStatePath);
+    expect(finalState.ok && finalState.value.prd_audit).toBe('done');
   });
 });
