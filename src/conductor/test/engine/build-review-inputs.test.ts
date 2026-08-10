@@ -255,6 +255,36 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.repairContext).toEqual([repair]);
     });
 
+    it('returns wiring_check kickbacks from the event ledger in ledger order', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await writeFile(join(dir, '.pipeline/events.jsonl'), [
+        JSON.stringify({ type: 'kickback', from: 'wiring_check', to: 'build', evidence: 'use the declared call site', count: 1 }),
+        JSON.stringify({ type: 'kickback', from: 'wiring_check', to: 'build', evidence: 'replace the stale anchor', count: 2 }),
+      ].join('\n'));
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.gateInstructions).toEqual([
+        { from: 'wiring_check', to: 'build', evidence: 'use the declared call site', count: 1 },
+        { from: 'wiring_check', to: 'build', evidence: 'replace the stale anchor', count: 2 },
+      ]);
+    });
+
+    it('returns no gate instructions when the event ledger has no kickbacks', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await writeFile(join(dir, '.pipeline/events.jsonl'), '');
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.gateInstructions).toEqual([]);
+    });
+
   });
 
   // Regression fixture for the stale-tracking-ref incident (#870/#872): a
