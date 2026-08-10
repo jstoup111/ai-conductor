@@ -29,6 +29,7 @@ import type * as ts from 'typescript';
 import type { GitRunner } from './pr-labels.js';
 import {
   extractWiredIntoContracts,
+  inertRefText,
   type InertRef,
   type WiredIntoParseResult,
   type WiredIntoSite,
@@ -655,6 +656,15 @@ export type FileExistsChecker = (path: string) => Promise<boolean>;
 import type { GhRunner } from './tracker-client.js';
 export type { GhRunner };
 
+/**
+ * The set of task ids a plan declares, used to resolve `Task N` inert waiver
+ * refs. Derived from the same contract list the gate already walks, so a task
+ * ref can never resolve against anything outside its own plan.
+ */
+function planTaskIds(tasks: readonly TaskWiringContract[]): ReadonlySet<string> {
+  return new Set(tasks.map((task) => task.taskId));
+}
+
 export interface ResolveWaiverRefResult {
   status: 'waived' | 'gap';
   message?: string;
@@ -678,6 +688,7 @@ export async function resolveWaiverRef(
   fileExists: FileExistsChecker,
   gh: GhRunner,
   cwd: string,
+  knownTaskIds?: ReadonlySet<string>,
 ): Promise<ResolveWaiverRefResult> {
   if (ref.form === 'path') {
     const exists = await fileExists(ref.path);
@@ -687,7 +698,26 @@ export async function resolveWaiverRef(
     return { status: 'gap', message: `inert waiver ref ${ref.path} not found` };
   }
 
-  const slug = `${ref.owner}/${ref.repo}#${ref.number}`;
+  if (ref.form === 'task') {
+    // Resolved against the plan's own task set — never the filesystem and never
+    // `gh`. Fails closed when the caller supplies no task set: an unresolvable
+    // waiver must not silently pass as waived.
+    if (!knownTaskIds) {
+      return {
+        status: 'gap',
+        message: `inert waiver ref ${inertRefText(ref)} unresolvable (plan task set unavailable)`,
+      };
+    }
+    return knownTaskIds.has(ref.taskId)
+      ? { status: 'waived', evidence: `(${inertRefText(ref)} is a task in this plan)` }
+      : {
+          status: 'gap',
+          message: `inert waiver ref ${inertRefText(ref)} is not a task in this plan`,
+        };
+  }
+
+  // `gh issue view` accepts a bare number and resolves the repo from `cwd`.
+  const slug = ref.owner && ref.repo ? `${ref.owner}/${ref.repo}#${ref.number}` : `${ref.number}`;
   let stdout: string;
   try {
     const result = await gh(['issue', 'view', slug, '--json', 'state'], { cwd });
@@ -717,7 +747,7 @@ export async function resolveWaiverRef(
 
   return {
     status: 'gap',
-    message: `inert waiver ref ${slug} is ${state.toLowerCase() || 'unknown'}`,
+    message: `inert waiver ref ${inertRefText(ref)} is ${state.toLowerCase() || 'unknown'}`,
   };
 }
 
@@ -750,11 +780,18 @@ export async function checkInertContractContradiction(
   cwd: string,
 ): Promise<string[]> {
   const gaps: string[] = [];
+  const knownTaskIds = planTaskIds(tasks);
 
   for (const task of tasks) {
     if (task.parseResult?.kind !== 'inert') continue;
 
-    const resolution = await resolveWaiverRef(task.parseResult.ref, fileExists, gh, cwd);
+    const resolution = await resolveWaiverRef(
+      task.parseResult.ref,
+      fileExists,
+      gh,
+      cwd,
+      knownTaskIds,
+    );
     if (resolution.status !== 'waived') continue;
 
     const taskFiles = new Set(task.files);
@@ -1222,11 +1259,8 @@ function describeContract(parseResult: WiredIntoParseResult | null): string {
       return parseResult.sites.map((s) => `${s.path}#${s.symbol}`).join(', ') || '(empty)';
     case 'no_new_surface':
       return 'none (no new production surface)';
-    case 'inert': {
-      const ref = parseResult.ref;
-      const refText = ref.form === 'issue' ? `${ref.owner}/${ref.repo}#${ref.number}` : ref.path;
-      return `none (inert until ${refText})`;
-    }
+    case 'inert':
+      return `none (inert until ${inertRefText(parseResult.ref)})`;
     case 'malformed':
       return parseResult.message;
   }
@@ -1384,9 +1418,16 @@ export async function computeWiringEvidence(
 
   // ── resolveWaiverRef / checkInertContractContradiction (inert declarations) ──
   const waivers: unknown[] = [];
+  const knownTaskIds = planTaskIds(tasks);
   for (const task of tasks) {
     if (task.parseResult?.kind !== 'inert') continue;
-    const resolution = await resolveWaiverRef(task.parseResult.ref, fileExists, gh, projectRoot);
+    const resolution = await resolveWaiverRef(
+      task.parseResult.ref,
+      fileExists,
+      gh,
+      projectRoot,
+      knownTaskIds,
+    );
     waivers.push({ taskId: task.taskId, ref: task.parseResult.ref, status: resolution.status });
     if (resolution.status !== 'waived') {
       pushGap(

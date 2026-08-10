@@ -63,6 +63,59 @@ describe('resolveWaiverRef — path-form', () => {
   });
 });
 
+describe('resolveWaiverRef — task-form', () => {
+  const fileExists: FileExistsChecker = async (_path: string) => false;
+
+  it('resolves as waived when the referenced task exists in the same plan', async () => {
+    const { gh, calls } = fakeGh();
+    const ref: InertRef = { form: 'task', taskId: '6' };
+
+    const result = await resolveWaiverRef(ref, fileExists, gh, '/repo', new Set(['2', '6']));
+
+    expect(result.status).toBe('waived');
+    expect(result.evidence).toContain('Task 6');
+    expect(calls.length).toBe(0);
+  });
+
+  it('reports a gap when the referenced task is not in the plan', async () => {
+    const { gh } = fakeGh();
+    const ref: InertRef = { form: 'task', taskId: '99' };
+
+    const result = await resolveWaiverRef(ref, fileExists, gh, '/repo', new Set(['2', '6']));
+
+    expect(result.status).toBe('gap');
+    expect(result.message).toBe('inert waiver ref Task 99 is not a task in this plan');
+  });
+
+  // A task ref is resolved against the plan, never the filesystem: the whole
+  // defect this form fixes was `Task 6` being stat'd as a path.
+  it('never touches the filesystem or gh when resolving a task-form ref', async () => {
+    const { gh, calls } = fakeGh();
+    const statted: string[] = [];
+    const trackingExists: FileExistsChecker = async (path: string) => {
+      statted.push(path);
+      return true;
+    };
+    const ref: InertRef = { form: 'task', taskId: '6' };
+
+    await resolveWaiverRef(ref, trackingExists, gh, '/repo', new Set(['6']));
+
+    expect(statted).toEqual([]);
+    expect(calls.length).toBe(0);
+  });
+
+  // Fail closed: without a known-task set there is nothing to resolve against,
+  // so the waiver must not silently pass.
+  it('reports a gap when no known-task set is supplied', async () => {
+    const { gh } = fakeGh();
+    const ref: InertRef = { form: 'task', taskId: '6' };
+
+    const result = await resolveWaiverRef(ref, fileExists, gh, '/repo');
+
+    expect(result.status).toBe('gap');
+  });
+});
+
 describe('resolveWaiverRef — issue-form', () => {
   const fileExists = async (_path: string) => false;
   const ref: InertRef = { form: 'issue', owner: 'acme', repo: 'widgets', number: 42 };

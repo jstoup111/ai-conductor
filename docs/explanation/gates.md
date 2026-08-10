@@ -199,6 +199,16 @@ into the plan for the next scan to find, and `build_review` flagged the rewrites
 documentation shapes rather than an allowlist of source extensions, so no code file in any language
 changes classification — a genuine source reference still contradicts an inert declaration.
 
+The waiver's `<ref>` itself is a closed grammar for the same reason. It is a repo-relative path, an
+issue (`#N` or `owner/repo#N`), or `Task N` naming another task in the same plan. Path form used to be
+an unconditional fallback, so any unrecognized text — `none (inert until Task 6)`, the natural way to
+say a surface is wired by a later task of the same plan — became a path ref, passed authoring-time
+validation (which resolves no refs), and then failed at BUILD as `inert waiver ref Task 6 not found`.
+That is unfixable from inside BUILD: the only remedy edits the plan, a protected DECIDE artifact, so
+`wiring_check` kicked back to a build that could not move the tree until the no-op escalation HALTed
+the run. A ref matching no form is now malformed at authoring time, and a `Task N` ref resolves against
+the plan's own task list in both places.
+
 What still is not caught: a plan authored without the judged pass, or one whose author judged wrongly.
 The judged half is prose, and prose is not enforcement — the durable fix would be a probe that
 distinguishes a definition from a call in the declared file, which needs language-aware analysis rather

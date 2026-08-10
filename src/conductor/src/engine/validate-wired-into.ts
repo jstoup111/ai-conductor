@@ -20,7 +20,11 @@
  * with it for free.
  */
 
-import { extractWiredIntoContracts, type WiredIntoParseResult } from './wired-into.js';
+import {
+  extractWiredIntoContracts,
+  inertRefText,
+  type WiredIntoParseResult,
+} from './wired-into.js';
 import { verifyDeclaredSites, type FileReader } from './wiring-probe.js';
 
 /** `pass` — every declared site verified; `fail` — blocking; `skip` — a `none (...)` waiver form. */
@@ -58,9 +62,11 @@ export async function validateWiredIntoPlan(
   readFile: FileReader,
 ): Promise<WiredIntoValidationResult> {
   const rows: WiredIntoValidationRow[] = [];
+  const contracts = [...extractWiredIntoContracts(planText)];
+  const knownTaskIds = new Set(contracts.map(([taskId]) => taskId));
 
-  for (const [taskId, contract] of extractWiredIntoContracts(planText)) {
-    rows.push(await validateContract(taskId, contract, readFile));
+  for (const [taskId, contract] of contracts) {
+    rows.push(await validateContract(taskId, contract, readFile, knownTaskIds));
   }
 
   return { rows, ok: rows.every((row) => row.status !== 'fail') };
@@ -70,6 +76,7 @@ async function validateContract(
   taskId: string,
   contract: WiredIntoParseResult,
   readFile: FileReader,
+  knownTaskIds: ReadonlySet<string>,
 ): Promise<WiredIntoValidationRow> {
   switch (contract.kind) {
     case 'malformed':
@@ -84,10 +91,29 @@ async function validateContract(
       };
 
     case 'inert': {
-      const ref =
-        contract.ref.form === 'issue'
-          ? `${contract.ref.owner}/${contract.ref.repo}#${contract.ref.number}`
-          : contract.ref.path;
+      const ref = inertRefText(contract.ref);
+
+      // A `Task N` ref is the one inert form fully resolvable at authoring
+      // time: the plan's own task set is right here. Path and issue refs stay
+      // deferred on purpose — a path ref legitimately names a file a LATER task
+      // creates, so resolving it now would fail plans that are perfectly valid
+      // by the time BUILD checks them.
+      if (contract.ref.form === 'task') {
+        return knownTaskIds.has(contract.ref.taskId)
+          ? {
+              taskId,
+              status: 'skip',
+              form: 'inert',
+              detail: `none (inert until ${ref}) — deferred until ${ref} wires it`,
+            }
+          : {
+              taskId,
+              status: 'fail',
+              form: 'inert',
+              detail: `none (inert until ${ref}) — ${ref} is not a task in this plan`,
+            };
+      }
+
       return {
         taskId,
         status: 'skip',
