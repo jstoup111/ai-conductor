@@ -3263,6 +3263,16 @@ function parseFrVerdictRow(line: string): ParsedFrRow | null {
   return { fr: frId, blocking, gapClass };
 }
 
+/** Return expected FR ids that have no parseable verdict row in the report. */
+export function findFrIdsWithoutRows(content: string, expectedIds: ReadonlySet<string>): string[] {
+  const present = new Set<string>();
+  for (const line of content.split('\n')) {
+    const row = parseFrVerdictRow(line);
+    if (row) present.add(row.fr);
+  }
+  return [...expectedIds].filter((id) => !present.has(id.toUpperCase()));
+}
+
 /**
  * Scan a PRD-audit report for functional-requirement verdict rows that are not
  * ALIGNED and not human-ACCEPTED. Returns the FR identifier of every still-
