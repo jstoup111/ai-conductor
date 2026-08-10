@@ -62,6 +62,12 @@ export function removePhaseMarker(root: string): void {
  */
 export const DOCS_WRITE_ALLOWLIST: Record<string, string[]> = {
   retro: ['.docs/retros/', '.docs/stories/'],
+  // `remediate` is the step that reasons about a blocking gate's dispositions,
+  // so it is the step that may amend a plan in response to one. BUILD must not:
+  // a build agent rewriting its own plan to match what it implemented is the
+  // scope violation `build_review` exists to catch, and the repair routes to
+  // the ungrantable `plan` step, ending the run in a needs-human HALT (#1458).
+  remediate: ['.docs/plans/'],
 };
 
 /**

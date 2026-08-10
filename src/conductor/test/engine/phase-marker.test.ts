@@ -77,6 +77,17 @@ describe('phase-marker', () => {
     ]);
   });
 
+  it('resolveDocsAllowlist grants remediate the plan directory', () => {
+    expect(resolveDocsAllowlist('remediate')).toEqual([
+      '.docs/release-waivers/',
+      '.docs/plans/',
+    ]);
+  });
+
+  it('resolveDocsAllowlist withholds the plan directory from build', () => {
+    expect(resolveDocsAllowlist('build')).toEqual(['.docs/release-waivers/']);
+  });
+
   it('resolveDocsAllowlist returns only always-allowed for manual_test', () => {
     expect(resolveDocsAllowlist('manual_test')).toEqual(['.docs/release-waivers/']);
   });
