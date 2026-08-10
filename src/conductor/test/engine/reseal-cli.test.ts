@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import { createProgram } from '../../src/cli.js';
-import { detectResealCommand } from '../../src/engine/reseal-cli.js';
+import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
 
 // argv is process.argv: [node, entry, subcommand, ...arguments].
 const argv = (...arguments_: string[]) => ['node', 'conduct', 'reseal', ...arguments_];
@@ -176,4 +177,85 @@ describe('detectResealCommand', () => {
       ).toBeNull();
     },
   );
+});
+
+describe('dispatchResealCommand', () => {
+  it('reseals a known worktree and reports the named paths without starting the pipeline', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const out = vi.fn();
+    const reseal = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      dispatchResealCommand(command, {
+        cwd: '/project',
+        out,
+        access: vi.fn().mockResolvedValue(undefined),
+        readFile: vi.fn().mockResolvedValue(JSON.stringify({ baselineCommit: 'base' })),
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal,
+      }),
+    ).resolves.toBe(0);
+
+    expect({
+      reseal: reseal.mock.calls,
+      out: out.mock.calls,
+    }).toEqual({
+      reseal: [[{
+        projectRoot: '/project/.worktrees/repair',
+        seal: { baselineCommit: 'base' },
+        toCommit: 'target',
+        trigger: 'operator-reseal',
+        paths: ['.docs/plans/repair.md'],
+      }]],
+      out: [['Resealed protected artifacts: .docs/plans/repair.md']],
+    });
+  });
+
+  it('refuses an unknown feature worktree', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'missing', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const err = vi.fn();
+
+    await expect(
+      dispatchResealCommand(command, {
+        cwd: '/project',
+        err,
+        access: vi.fn().mockRejectedValue(new Error('missing')),
+      }),
+    ).resolves.toBe(1);
+
+    expect(err).toHaveBeenCalledWith("reseal: unknown feature worktree 'missing'.");
+  });
+
+  it('refuses a known worktree without a protected artifact seal', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const err = vi.fn();
+
+    await expect(
+      dispatchResealCommand(command, {
+        cwd: '/project',
+        err,
+        access: vi.fn().mockResolvedValue(undefined),
+        readFile: vi.fn().mockRejectedValue(new Error('missing')),
+      }),
+    ).resolves.toBe(1);
+
+    expect(err).toHaveBeenCalledWith("reseal: protected artifact seal is missing for 'repair'.");
+  });
+
+  it('wires reseal into the pre-boot chain before normal pipeline parsing', async () => {
+    const source = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
+
+    expect(source).toMatch(/from ['"]\.\/engine\/reseal-cli\.js['"]/);
+    expect(source).toMatch(/detectResealCommand\(process\.argv\)/);
+    expect(source.indexOf('detectResealCommand(process.argv)')).toBeLessThan(source.indexOf('opts = parseArgs(rest)'));
+  });
 });

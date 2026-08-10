@@ -1,3 +1,13 @@
+import { access, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { execa } from 'execa';
+import {
+  PROTECTED_ARTIFACT_SEAL_PATH,
+  resealProtectedArtifactSeal,
+  type ProtectedArtifactSeal,
+  type ResealProtectedArtifactSealOptions,
+} from './protected-artifact-seal.js';
+
 export interface ResealDispatch {
   kind: 'reseal';
   slug: string;
@@ -42,4 +52,62 @@ export function detectResealCommand(argv: string[]): ResealDispatch | null {
   if (slug.includes('/') || slug.includes('\\') || slug === '.' || slug === '..') return null;
 
   return { kind: 'reseal', slug, paths, reason, clearHalt };
+}
+
+export interface ResealCommandDependencies {
+  cwd?: string;
+  out?: (line: string) => void;
+  err?: (line: string) => void;
+  access?: (path: string) => Promise<void>;
+  readFile?: (path: string, encoding: BufferEncoding) => Promise<string>;
+  resolveHead?: (projectRoot: string) => Promise<string>;
+  reseal?: (options: ResealProtectedArtifactSealOptions) => Promise<ProtectedArtifactSeal>;
+}
+
+/** Reseal one feature worktree without entering the conductor pipeline. */
+export async function dispatchResealCommand(
+  command: ResealDispatch,
+  deps: ResealCommandDependencies = {},
+): Promise<number> {
+  const cwd = deps.cwd ?? process.cwd();
+  const out = deps.out ?? console.log;
+  const err = deps.err ?? console.error;
+  const ensureAccessible = deps.access ?? access;
+  const readSeal = deps.readFile ?? readFile;
+  const reseal = deps.reseal ?? resealProtectedArtifactSeal;
+  const worktree = join(cwd, '.worktrees', command.slug);
+
+  try {
+    await ensureAccessible(worktree);
+  } catch {
+    err(`reseal: unknown feature worktree '${command.slug}'.`);
+    return 1;
+  }
+
+  let seal: ProtectedArtifactSeal;
+  try {
+    seal = JSON.parse(await readSeal(join(worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8')) as ProtectedArtifactSeal;
+  } catch {
+    err(`reseal: protected artifact seal is missing for '${command.slug}'.`);
+    return 1;
+  }
+
+  const resolveHead = deps.resolveHead ?? (async (projectRoot: string): Promise<string> =>
+    (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim());
+
+  try {
+    await reseal({
+      projectRoot: worktree,
+      seal,
+      toCommit: await resolveHead(worktree),
+      trigger: 'operator-reseal',
+      paths: command.paths,
+    });
+  } catch (error) {
+    err(`reseal: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+
+  out(`Resealed protected artifacts: ${command.paths.join(', ')}`);
+  return 0;
 }

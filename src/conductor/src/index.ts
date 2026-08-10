@@ -146,6 +146,7 @@ import {
   dispatchScopedRunCommand,
 } from './engine/scoped-run-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
+import { detectResealCommand, dispatchResealCommand } from './engine/reseal-cli.js';
 import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
 import {
   detectCloseoutEventCommand,
@@ -548,6 +549,12 @@ async function main(): Promise<void> {
   const decideGrantCmd = detectDecideGrantCommand(process.argv);
   if (decideGrantCmd) {
     process.exitCode = await dispatchDecideGrantCommand(decideGrantCmd);
+    return;
+  }
+
+  const resealCmd = detectResealCommand(process.argv);
+  if (resealCmd) {
+    process.exitCode = await dispatchResealCommand(resealCmd);
     return;
   }
 
