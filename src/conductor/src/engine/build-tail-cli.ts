@@ -71,6 +71,13 @@ function renderMeasuredRollup(rollup: Extract<BuildTailRollup, { state: 'measure
 }
 
 function renderBuildTailRollup(rollup: BuildTailRollup): string {
+  if (rollup.state === 'partial' && rollup.closeout !== undefined) {
+    const obligations = Object.entries(rollup.closeout.obligations)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([obligation, durationMs]) => `${obligation}=${durationMs}ms`)
+      .join(', ');
+    return `Build tail rollup: partial\nCloseout: ${rollup.closeout.durationMs}ms (${obligations})`;
+  }
   if (rollup.state !== 'measured') return `Build tail rollup: ${rollup.state}`;
   return renderMeasuredRollup(rollup);
 }

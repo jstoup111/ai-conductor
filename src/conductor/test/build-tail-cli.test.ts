@@ -78,4 +78,27 @@ describe('build-tail CLI', () => {
 
     expect(output).toEqual(['Build tail rollup: unavailable']);
   });
+
+  it('renders closeout timing when only the sibling ledger records closeout', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'build-tail-cli-'));
+    temporaryDirectories.push(directory);
+    const pipelineDirectory = join(directory, '.pipeline');
+    await mkdir(pipelineDirectory, { recursive: true });
+    await writeFile(join(pipelineDirectory, 'events.jsonl'), `${JSON.stringify({ type: 'feature_started', ts: 10 })}\n`, 'utf8');
+    await writeFile(join(pipelineDirectory, 'pipeline-events.jsonl'), [
+      { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 100, endedAt: 3100, ts: 3100 },
+      { type: 'pipeline_closeout', obligation: 'summary', startedAt: 3200, endedAt: 3700, ts: 3700 },
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n', 'utf8');
+    const output: string[] = [];
+
+    await expect(dispatchBuildTailCommand({ kind: 'build-tail' }, {
+      cwd: directory,
+      print: (line) => output.push(line),
+    })).resolves.toBe(0);
+
+    expect(output).toEqual([
+      'Build tail rollup: partial\n' +
+        'Closeout: 3500ms (evaluator=3000ms, summary=500ms)',
+    ]);
+  });
 });

@@ -252,6 +252,25 @@ describe('build-tail rollup evidence states', () => {
     await expect(readBuildWindows(directory)).resolves.toEqual({ state: 'unavailable' });
   });
 
+  it('returns a closeout-bearing partial when only the sibling ledger records closeout', async () => {
+    const directory = await writeLedgers({
+      engine: [{ type: 'feature_started', ts: 10 }],
+      pipeline: [
+        { type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 100, endedAt: 3100, ts: 3100 },
+        { type: 'pipeline_closeout', obligation: 'summary', startedAt: 3200, endedAt: 3700, ts: 3700 },
+      ],
+    });
+
+    await expect(readBuildWindows(directory)).resolves.toEqual({
+      state: 'partial',
+      closeout: {
+        state: 'recorded',
+        durationMs: 3500,
+        obligations: { evaluator: 3000, summary: 500 },
+      },
+    });
+  });
+
   it('returns partial for an unterminated build window', async () => {
     const directory = await writeLedgers({ engine: [{ type: 'step_started', step: 'build', ts: 10 }] });
 

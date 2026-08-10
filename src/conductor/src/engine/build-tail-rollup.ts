@@ -31,14 +31,19 @@ export interface MeasuredBuildTailRollup {
   windows: readonly BuildTailWindowRollup[];
 }
 
+export interface PartialBuildTailRollup {
+  state: 'partial';
+  closeout?: Extract<BuildTailWindowRollup['closeout'], { state: 'recorded' }>;
+}
+
 export type BuildTailRollup =
   | MeasuredBuildTailRollup
-  | { state: 'partial' }
+  | PartialBuildTailRollup
   | { state: 'unavailable' };
 
 export type BuildWindowsResult =
   | { state: 'measured'; windows: readonly BuildWindow[] }
-  | { state: 'partial' }
+  | PartialBuildTailRollup
   | { state: 'unavailable' };
 
 interface BuildProgressTick {
@@ -208,7 +213,11 @@ export async function readBuildWindows(worktreeDir: string): Promise<BuildWindow
     }
   }
   if (current !== undefined) return { state: 'partial' };
-  return windows.length === 0
-    ? { state: 'unavailable' }
-    : { state: 'measured', windows };
+  if (windows.length > 0) return { state: 'measured', windows };
+
+  const closeout = closeoutDurations(events);
+  if (closeout === undefined) return { state: 'partial' };
+  return closeout.state === 'recorded'
+    ? { state: 'partial', closeout }
+    : { state: 'unavailable' };
 }
