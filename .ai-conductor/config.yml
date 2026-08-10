@@ -15,10 +15,16 @@ reconcile_parked_auto_cleanup: true
 # VERSION approval gate self-satisfies when the worktree VERSION still equals
 # the frozen value — no per-feature HALT + manual .pipeline/version-approval
 # round-trip. A feature that ACTUALLY bumps VERSION still halts for approval.
-# Read at daemon startup; restart the daemon to apply. Update or remove this
-# key when cutting 1.0.
+# Read at daemon startup; restart the daemon to apply. Remove this key when
+# cutting 1.0.
+#
+# `latest` tracks the resolved base branch's VERSION rather than pinning a
+# literal, so a bot-owned release no longer leaves every self-host build
+# halting on a stale freeze until an operator bumps this by hand. Resolution
+# is fail-closed: any git/network failure resolves to no freeze and the gate
+# falls through to signal classification exactly as if none were declared.
 harness_self_host:
-  version_freeze: "0.100.0"
+  version_freeze: latest
 
 # Stale-engine auto-restart (issue #256, PR #307). When the idle daemon detects
 # that dist points at a newer engine than the one it is running (after a local
