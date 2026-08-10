@@ -76,6 +76,13 @@ export async function dispatchResealCommand(
   const cwd = deps.cwd ?? process.cwd();
   const out = deps.out ?? console.log;
   const err = deps.err ?? console.error;
+  // Autonomous steps reach providers via DefaultStepRunner.runAutonomous
+  // (step-runners.ts:1088). The built-in provider subprocesses do not inherit
+  // an operator terminal there: Claude writes its prompt through `input`
+  // (execution/claude-provider.ts:560-580), while Codex does the same
+  // (execution/codex-provider.ts:225-234). A `conduct reseal` child of either
+  // provider therefore observes process.stdin.isTTY === false and must stop
+  // at this gate.
   const isInteractive = deps.isInteractive ?? process.stdin.isTTY === true;
   if (!isInteractive) {
     err('reseal: requires an interactive terminal.');

@@ -319,6 +319,34 @@ describe('dispatchResealCommand', () => {
     });
   });
 
+  it('refuses reseal when an autonomous step subprocess has non-interactive stdin', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const err = vi.fn();
+    const reseal = vi.fn();
+
+    await expect(
+      dispatchResealCommand(command, {
+        cwd: '/project',
+        // DefaultStepRunner's autonomous provider path supplies ignored or
+        // piped stdin, so a nested CLI sees no TTY.
+        isInteractive: false,
+        err,
+        reseal,
+      }),
+    ).resolves.toBe(1);
+
+    expect({
+      err: err.mock.calls,
+      reseal: reseal.mock.calls,
+    }).toEqual({
+      err: [['reseal: requires an interactive terminal.']],
+      reseal: [],
+    });
+  });
+
   it('refuses an unknown feature worktree', async () => {
     const command = detectResealCommand(
       argv('--slug', 'missing', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
