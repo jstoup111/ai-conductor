@@ -174,6 +174,17 @@ a gate that instructs a mid-build plan-contract rewrite makes `build_review` rep
 unauthorized scope violation, and the remediation re-triggers the original gate, a loop that costs a
 needs-human HALT.
 
+A related BUILD-time check has the mirror shape: a task declaring `none (inert until <ref>)` whose diff
+nonetheless wires the new symbol somewhere is a stale contract, so `wiring_check` searches the repository
+for references to that symbol. That search is a repo-wide `git grep`, and documentation is not wiring —
+Markdown files (`.md`/`.markdown`/`.mdx`) and anything under `.docs/` are excluded from the reference set
+alongside test paths, because a feature's own plan and PRD necessarily spell out the symbols they plan.
+Counting prose was self-reinforcing: the gate ordered a plan rewrite, the rewrite wrote more symbol names
+into the plan for the next scan to find, and `build_review` flagged the rewrites as unauthorized scope
+([#1390](https://github.com/jstoup111/ai-conductor/issues/1390)). The exclusion is a denylist of
+documentation shapes rather than an allowlist of source extensions, so no code file in any language
+changes classification — a genuine source reference still contradicts an inert declaration.
+
 What still is not caught: a plan authored without the judged pass, or one whose author judged wrongly.
 The judged half is prose, and prose is not enforcement — the durable fix would be a probe that
 distinguishes a definition from a call in the declared file, which needs language-aware analysis rather
