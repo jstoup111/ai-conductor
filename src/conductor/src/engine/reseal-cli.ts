@@ -9,7 +9,7 @@ import {
 } from './protected-artifact-seal.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { clearMarker } from './daemon-rekick.js';
-import { HALT_CLASS_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
+import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 
 export interface ResealDispatch {
@@ -67,6 +67,7 @@ export interface ResealCommandDependencies {
   readFile?: (path: string, encoding: BufferEncoding) => Promise<string>;
   resolveHead?: (projectRoot: string) => Promise<string>;
   reseal?: (options: ResealProtectedArtifactSealOptions) => Promise<ProtectedArtifactSeal>;
+  clearHalt?: (worktreePath: string) => Promise<void>;
   events?: ConductorEventEmitter;
 }
 
@@ -93,6 +94,7 @@ export async function dispatchResealCommand(
   const ensureAccessible = deps.access ?? access;
   const readSeal = deps.readFile ?? readFile;
   const reseal = deps.reseal ?? resealProtectedArtifactSeal;
+  const clearHalt = deps.clearHalt ?? clearMarker;
   const worktree = join(cwd, '.worktrees', command.slug);
 
   const events = deps.events ?? new ConductorEventEmitter();
@@ -116,6 +118,7 @@ export async function dispatchResealCommand(
     return 1;
   }
 
+  let haltClearStatus: string | undefined;
   try {
     await ensureAccessible(worktree);
   } catch {
@@ -161,9 +164,27 @@ export async function dispatchResealCommand(
     });
 
     if (command.clearHalt) {
-      const haltClass = await readSeal(join(worktree, HALT_CLASS_MARKER), 'utf8').catch(() => null);
-      if (haltClass?.trim() === PROTECTED_ARTIFACT_HALT_CLASS) {
-        await clearMarker(worktree);
+      try {
+        await ensureAccessible(join(worktree, HALT_MARKER));
+      } catch {
+        haltClearStatus = 'No halt to clear.';
+      }
+
+      if (!haltClearStatus) {
+        const haltClass = await readSeal(join(worktree, HALT_CLASS_MARKER), 'utf8').catch(() => null);
+        const classification = haltClass?.trim();
+        if (!classification) {
+          haltClearStatus = 'Halt was not cleared: it is unclassified.';
+        } else if (classification !== PROTECTED_ARTIFACT_HALT_CLASS) {
+          haltClearStatus = `Halt was not cleared: its class is ${classification}.`;
+        } else {
+          try {
+            await clearHalt(worktree);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            haltClearStatus = `Halt was not fully cleared: ${message}.`;
+          }
+        }
       }
     }
   } catch (error) {
@@ -172,5 +193,6 @@ export async function dispatchResealCommand(
   }
 
   out(`Resealed protected artifacts: ${command.paths.join(', ')}`);
+  if (haltClearStatus) out(haltClearStatus);
   return 0;
 }

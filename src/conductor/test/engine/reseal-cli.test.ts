@@ -313,6 +313,211 @@ describe('dispatchResealCommand', () => {
     }
   });
 
+  it('leaves a non-protected halt intact and reports why after a successful --clear-halt reseal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-unrelated-halt-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.', '--clear-halt'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const out = vi.fn();
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      }));
+      await writeFile(join(worktree, '.pipeline', 'HALT'), 'awaiting an operator\n');
+      await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'needs-human');
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        isInteractive: true,
+        out,
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal: vi.fn().mockResolvedValue({
+          baselineCommit: 'target',
+          protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+          rebaselines: [],
+          version: 2,
+        }),
+        events: new ConductorEventEmitter(),
+      })).resolves.toBe(0);
+
+      await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('awaiting an operator\n');
+      await expect(readFile(join(worktree, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      expect(out).toHaveBeenCalledWith('Halt was not cleared: its class is needs-human.');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports that there is no halt to clear after a successful --clear-halt reseal', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.', '--clear-halt'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const out = vi.fn();
+
+    await expect(dispatchResealCommand(command, {
+      cwd: '/project',
+      isInteractive: true,
+      out,
+      access: vi.fn().mockImplementation(async (path: string) => {
+        if (path.endsWith('/.pipeline/HALT')) throw new Error('missing');
+      }),
+      readFile: vi.fn().mockResolvedValue(JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      })),
+      resolveHead: vi.fn().mockResolvedValue('target'),
+      reseal: vi.fn().mockResolvedValue({
+        baselineCommit: 'target',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+        rebaselines: [],
+        version: 2,
+      }),
+      events: new ConductorEventEmitter(),
+    })).resolves.toBe(0);
+
+    expect(out).toHaveBeenCalledWith('No halt to clear.');
+  });
+
+  it('leaves an unclassified halt intact after a successful --clear-halt reseal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-unclassified-halt-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.', '--clear-halt'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const out = vi.fn();
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      }));
+      await writeFile(join(worktree, '.pipeline', 'HALT'), 'legacy halt\n');
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        isInteractive: true,
+        out,
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal: vi.fn().mockResolvedValue({
+          baselineCommit: 'target',
+          protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+          rebaselines: [],
+          version: 2,
+        }),
+        events: new ConductorEventEmitter(),
+      })).resolves.toBe(0);
+
+      await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('legacy halt\n');
+      await expect(access(join(worktree, '.pipeline', 'HALT.class'))).rejects.toThrow();
+      expect(out).toHaveBeenCalledWith('Halt was not cleared: it is unclassified.');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves halt markers untouched when a --clear-halt reseal is refused', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-refused-halt-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.', '--clear-halt'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      }));
+      await writeFile(join(worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'protected-artifact');
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        err: vi.fn(),
+        isInteractive: true,
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal: vi.fn().mockRejectedValue(new Error('unlisted protected artifact changed')),
+        events: new ConductorEventEmitter(),
+      })).resolves.toBe(1);
+
+      await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');
+      await expect(readFile(join(worktree, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('protected-artifact');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a partial halt-clear failure after a successful reseal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-partial-clear-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.', '--clear-halt'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const out = vi.fn();
+    const clearHalt = vi.fn(async (path: string) => {
+      await writeFile(join(path, '.pipeline', 'HALT.cleared'), 'protected artifact changed\n');
+      throw new Error('HALT.class could not be removed');
+    });
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'protected-artifact-seal.json'), JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      }));
+      await writeFile(join(worktree, '.pipeline', 'HALT'), 'protected artifact changed\n');
+      await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'protected-artifact');
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        isInteractive: true,
+        out,
+        resolveHead: vi.fn().mockResolvedValue('target'),
+        reseal: vi.fn().mockResolvedValue({
+          baselineCommit: 'target',
+          protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+          rebaselines: [],
+          version: 2,
+        }),
+        clearHalt,
+        events: new ConductorEventEmitter(),
+      })).resolves.toBe(0);
+
+      await expect(readFile(join(worktree, '.pipeline', 'HALT.cleared'), 'utf8')).resolves.toBe('protected artifact changed\n');
+      await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('protected artifact changed\n');
+      await expect(readFile(join(worktree, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('protected-artifact');
+      expect({ clearHalt: clearHalt.mock.calls, out: out.mock.calls }).toEqual({
+        clearHalt: [[worktree]],
+        out: [
+          ['Resealed protected artifacts: .docs/plans/repair.md'],
+          ['Halt was not fully cleared: HALT.class could not be removed.'],
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('constructs the audit sink at the resolved worktree and records the performed reseal', async () => {
     const root = await mkdtemp(join(tmpdir(), 'reseal-cli-audit-'));
     const command = detectResealCommand(
