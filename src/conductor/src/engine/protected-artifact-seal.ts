@@ -130,7 +130,10 @@ export interface RotateProtectedArtifactSealOptions {
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
-export interface ResealProtectedArtifactSealOptions extends RotateProtectedArtifactSealOptions {}
+export interface ResealProtectedArtifactSealOptions extends RotateProtectedArtifactSealOptions {
+  featureDesc?: string;
+  baseBranch?: string;
+}
 
 export interface VerifyProtectedArtifactSealOptions {
   projectRoot: string;
@@ -676,6 +679,7 @@ async function inspectSeal(
   seal: ProtectedArtifactSeal,
   featureDesc?: string,
   baseBranch?: string,
+  excludedPaths?: ReadonlySet<string>,
 ): Promise<ProtectedArtifactSealVerdict> {
   const selfAmendments: ProtectedArtifactSelfAmendment[] = [];
   // Resolved at most once per verification, and only lazily — a fully clean
@@ -731,6 +735,7 @@ async function inspectSeal(
   }
 
   for (const path of actualPaths) {
+    if (excludedPaths?.has(path)) continue;
     if (!expected.has(path)) {
       // Same base-inheritance tolerance as the change branch below: an entirely
       // NEW protected artifact appears under a feature's feet when it rebases
@@ -773,6 +778,7 @@ async function inspectSeal(
   }
 
   for (const path of expected.keys()) {
+    if (excludedPaths?.has(path)) continue;
     if (!actualPaths.includes(path)) {
       return { ok: false, reason: `Protected artifact deleted: ${path}` };
     }
@@ -996,8 +1002,12 @@ export async function resealProtectedArtifactSeal({
   paths,
   fileOperations = { writeFile, rename, rm },
   onRebaseline,
+  featureDesc,
+  baseBranch,
 }: ResealProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
   const recomputed = await createScopedProtectedArtifactSeal({ projectRoot, seal, toCommit, paths });
+  const classification = await inspectSeal(projectRoot, seal, featureDesc, baseBranch, new Set(paths));
+  if (!classification.ok) throw new Error(classification.reason);
   return persistProtectedArtifactSealRotation({
     projectRoot,
     seal,

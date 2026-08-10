@@ -337,6 +337,115 @@ describe('createScopedProtectedArtifactSeal', () => {
       },
     });
   });
+
+  it('permits only the enumerated artifact to differ', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/p2.md': 'approved plan two\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+    await git(repo, ['add', '.docs/plans/p1.md']);
+    await git(repo, ['commit', '-q', '-m', 'correct protected plan']);
+
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+    });
+
+    expect(resealed.protectedArtifacts).toEqual([
+      {
+        path: '.docs/plans/p1.md',
+        fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
+      },
+      seal.protectedArtifacts[1],
+    ]);
+  });
+
+  it('permits an unlisted artifact inherited from the base tip without replacing its seal entry', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/p2.md': 'approved plan two\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await git(repo, ['checkout', '-q', '-b', 'feature']);
+    await git(repo, ['checkout', '-q', 'main']);
+    await writeProjectFile(repo, '.docs/plans/p2.md', 'base-tip plan two\n');
+    await git(repo, ['add', '.docs/plans/p2.md']);
+    await git(repo, ['commit', '-q', '-m', 'base updates plan two']);
+    await git(repo, ['checkout', '-q', 'feature']);
+    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+    await writeProjectFile(repo, '.docs/plans/p2.md', 'base-tip plan two\n');
+    await git(repo, ['add', '.docs']);
+    await git(repo, ['commit', '-q', '-m', 'rebase inherited plan and correct p1']);
+    gitInvocations.length = 0;
+
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+      baseBranch: 'main',
+    });
+
+    expect({
+      protectedArtifacts: resealed.protectedArtifacts,
+      gitInvocations,
+    }).toEqual({
+      protectedArtifacts: [
+        {
+          path: '.docs/plans/p1.md',
+          fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
+        },
+        seal.protectedArtifacts[1],
+      ],
+      gitInvocations: expect.arrayContaining([
+        ['show', 'main:.docs/plans/p2.md'],
+      ]),
+    });
+  });
+
+  it('permits a tolerated unlisted self-amendment without replacing its seal entry', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/feature.md': 'approved feature plan\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+    await writeProjectFile(repo, '.docs/plans/feature.md', 'self-amended feature plan\n');
+    await git(repo, ['add', '.docs']);
+    await git(repo, ['commit', '-q', '-m', 'correct p1 and amend feature plan']);
+
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+      featureDesc: 'feature',
+    });
+
+    expect(resealed.protectedArtifacts).toEqual([
+      seal.protectedArtifacts[0],
+      {
+        path: '.docs/plans/p1.md',
+        fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
+      },
+    ]);
+  });
 });
 
 describe('evaluateProtectedArtifactSealRotation', () => {
