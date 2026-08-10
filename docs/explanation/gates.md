@@ -241,7 +241,11 @@ unknown target or phase, or an unsatisfied or unverified DECIDE completion contr
 The policy fast-forwards without dispatch only when the DECIDE step is tier-skipped, has no completion
 contract, or has a verified satisfied contract. Otherwise an operator must create a matching
 [`decide-grant`](../reference/cli.md#conduct-ts-decide-grant); the grant authorizes one named step and
-is consumed immediately before that step dispatches. A `planRemediation` rewind that names a DECIDE
+is consumed immediately before that step dispatches. The grant is stored in the daemon-owned
+`.daemon/grants/<slug>.json`, outside every feature worktree, so a build agent cannot author its own
+authorization; a `decide-grant.json` inside `.pipeline/` authorizes nothing. `plan` is excluded
+entirely — it is refused before any grant is consulted, and the CLI rejects `--step plan`, because a
+daemon that re-plans rewrites an approved DECIDE artifact with no human at the gate. A `planRemediation` rewind that names a DECIDE
 step is the one exception: remediation explicitly asking to revise that step is evidence the accepted
 artifact needs another look, so a satisfied contract does not fast-forward it either — the same grant
 is still required. Interactive runs retain their existing DECIDE authoring path.

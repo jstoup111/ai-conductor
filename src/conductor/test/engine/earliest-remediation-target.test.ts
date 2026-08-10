@@ -165,7 +165,7 @@ describe('planRemediation DECIDE-entry policy wiring', () => {
     expect(outcome.detail).toContain('artifact satisfaction is unknown');
   });
 
-  it('leaves a matching operator grant available for the subsequent dispatch seam', async () => {
+  it('halts instead of routing to a live DECIDE target even with a matching operator grant', async () => {
     CUSTOM_COMPLETION_PREDICATES.plan = async () => ({ done: false, reason: 'plan needs a pass' });
     await writeFile(
       join(projectRoot, '.pipeline/decide-grant.json'),
@@ -176,7 +176,8 @@ describe('planRemediation DECIDE-entry policy wiring', () => {
     const { dispatched, outcome } = await planRemediation([planGap]);
 
     expect(dispatched).toEqual(['remediate']);
-    expect(outcome).toMatchObject({ kind: 'route', target: 'plan' });
+    expect(outcome).toMatchObject({ kind: 'halt' });
+    // Unconsumed: nothing was authorized, so nothing was spent.
     await expect(readFile(join(projectRoot, '.pipeline/decide-grant.json'), 'utf8')).resolves.toContain('plan');
   });
 

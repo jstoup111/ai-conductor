@@ -248,10 +248,21 @@ export async function dispatchDecideGrantCommand(
   command: DecideGrantDispatch,
   cwd: string = process.cwd(),
 ): Promise<number> {
-  const pipelineDir = join(cwd, '.worktrees', command.slug, '.pipeline');
-  await mkdir(pipelineDir, { recursive: true });
+  // `plan` is ungrantable — refused here as well as in the policy, so the operator
+  // learns at the point of the mistake rather than from a HALT one dispatch later.
+  if (command.step === 'plan') {
+    console.error(
+      "decide-grant: 'plan' cannot be granted — the daemon may not re-plan. " +
+        'Drive the plan revision interactively, then resume the feature.',
+    );
+    return 2;
+  }
+  // The grant is daemon-owned and lives OUTSIDE the feature worktree: a build agent
+  // writing its own `.pipeline/decide-grant.json` must not be able to authorize itself.
+  const grantsDir = join(cwd, '.daemon', 'grants');
+  await mkdir(grantsDir, { recursive: true });
   await writeFile(
-    join(pipelineDir, 'decide-grant.json'),
+    join(grantsDir, `${command.slug}.json`),
     JSON.stringify({
       version: 1,
       step: command.step,

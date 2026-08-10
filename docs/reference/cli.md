@@ -759,14 +759,26 @@ conduct-ts decide-grant --slug <slug> --step <step> --reason "<operator directio
 ```
 
 Records one explicit authorization for an autonomous run to enter a named DECIDE step. Run it from the
-main repository checkout. It writes `.worktrees/<slug>/.pipeline/decide-grant.json`; the daemon never
-creates this artifact itself.
+main repository checkout. It writes `.daemon/grants/<slug>.json`; the daemon never creates this
+artifact itself.
+
+The grant lives in the daemon-owned `.daemon/` directory, **outside every feature worktree**, and
+that placement is the authorization boundary. It previously lived at
+`.worktrees/<slug>/.pipeline/decide-grant.json` — inside the directory a build agent writes all build
+long — so the subject of the authorization could write its own permission slip. A
+`decide-grant.json` inside a worktree authorizes nothing.
 
 | Flag | Required | Effect |
 | --- | --- | --- |
 | `--slug <slug>` | yes | Feature worktree slug. A slash, `.` or `..` is rejected. |
-| `--step <step>` | yes | Exact DECIDE step to authorize. The grant does not authorize any other step. |
+| `--step <step>` | yes | Exact DECIDE step to authorize. The grant does not authorize any other step. `plan` is rejected — see below. |
 | `--reason <reason>` | yes | Operator's reason for allowing this one DECIDE entry. |
+
+**`plan` can never be granted.** The command exits non-zero when `--step plan` is passed, and the
+entry policy refuses `plan` before it consults a grant at all, so no grant of any provenance admits
+it. A daemon that re-plans rewrites an approved DECIDE artifact with no human at the gate — the same
+class of failure the re-entry was meant to repair. Drive the plan revision interactively, then resume
+the feature.
 
 The matching grant is consumed immediately before the provider dispatches the named step. A stale,
 malformed, mismatched, or already-consumed grant authorizes nothing and the run remains fail-closed.

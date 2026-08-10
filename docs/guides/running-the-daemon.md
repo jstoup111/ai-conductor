@@ -745,6 +745,11 @@ conduct-ts decide-grant --slug <slug> --step <step> --reason "<why this authorin
 rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
 ```
 
+The grant is written to `.daemon/grants/<slug>.json` in the main checkout — deliberately outside the
+feature worktree, so a build agent cannot authorize its own DECIDE entry by writing a file into
+`.pipeline/`. `plan` is never grantable: the command rejects it and the entry policy refuses it
+regardless, so a halt requesting a plan revision is driven by hand and then cleared.
+
 The grant is scoped to the exact step and consumed immediately before its provider dispatch. Clearing
 the halt alone only makes the feature eligible to be checked again; with no matching grant, it halts
 again without entering DECIDE. Follow the full

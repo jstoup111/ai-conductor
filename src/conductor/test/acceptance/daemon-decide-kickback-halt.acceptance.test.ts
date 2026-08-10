@@ -560,9 +560,10 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         stories: 'done',
         acceptance_specs: 'done',
       } as ConductState);
-      // The test intentionally starts at conflict_check so it can prove the
-      // front-half scan. Authorize that one DECIDE entry; the architecture
-      // amendment it emits remains ungranted and must HALT.
+      // DECIDE is human-only under the daemon, so a grant no longer buys the
+      // one entry this test used to rely on. Seeding it anyway proves the
+      // stronger guarantee: the front-half scan refuses conflict_check itself,
+      // and the grant is neither honored nor consumed.
       await writeFile(
         join(dir, '.pipeline/decide-grant.json'),
         JSON.stringify({ version: 1, step: 'conflict_check', grantedBy: 'operator' }),
@@ -610,15 +611,14 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(halted).toBe(true);
       const body = await readHaltBody();
       expect(body).not.toBeNull();
-      expect(body).toContain('architecture_review');
       expect(body).toMatch(/DECIDE/);
-      expect(body).toMatch(/Source gate:\s*conflict_check/i);
-      // The exact conflict_check grant was consumed to dispatch its named
-      // step. It cannot authorize the separate architecture_review entry:
-      // that entry is refused before its runner dispatches.
-      expect(ran).toEqual(['conflict_check']);
+      // The front-half scan refuses at conflict_check — the first live DECIDE
+      // target — so architecture_review is never even reached.
+      expect(body).toContain('conflict_check');
+      expect(ran).toEqual([]);
       expect(ran).not.toContain('architecture_review');
-      expect(await exists('.pipeline/decide-grant.json')).toBe(false);
+      // Nothing was authorized, so the grant is left unspent.
+      expect(await exists('.pipeline/decide-grant.json')).toBe(true);
     });
   });
 

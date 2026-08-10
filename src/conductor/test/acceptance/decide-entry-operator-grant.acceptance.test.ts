@@ -48,8 +48,35 @@ describe('acceptance: explicit operator grants are scoped and single-use', () =>
     );
   }
 
-  it('the real CLI writes the grant into the named feature worktree', async () => {
+  it('the real CLI writes the grant into the daemon-owned store, outside the worktree', async () => {
     const slug = 'grant-fixture';
+    await mkdir(join(commandRoot, '.worktrees', slug), { recursive: true });
+    const binary = join(process.cwd(), '..', '..', 'bin', 'conduct-ts');
+
+    const result = await execa(
+      binary,
+      ['decide-grant', '--slug', slug, '--step', 'stories', '--reason', 'approve stories amendment'],
+      { cwd: commandRoot, reject: false },
+    );
+
+    expect(result.exitCode).toBe(0);
+    const grant = JSON.parse(
+      (await readOptional(commandRoot, join('.daemon', 'grants', `${slug}.json`))) ?? '{}',
+    ) as Record<string, unknown>;
+    expect(grant).toMatchObject({
+      version: 1,
+      step: 'stories',
+      reason: 'approve stories amendment',
+      grantedBy: 'operator',
+    });
+    // Nothing is written into the agent-writable worktree location.
+    expect(
+      await readOptional(join(commandRoot, '.worktrees', slug), '.pipeline/decide-grant.json'),
+    ).toBeNull();
+  }, 30_000);
+
+  it('the real CLI refuses to grant plan at all', async () => {
+    const slug = 'grant-fixture-plan';
     await mkdir(join(commandRoot, '.worktrees', slug), { recursive: true });
     const binary = join(process.cwd(), '..', '..', 'bin', 'conduct-ts');
 
@@ -59,19 +86,11 @@ describe('acceptance: explicit operator grants are scoped and single-use', () =>
       { cwd: commandRoot, reject: false },
     );
 
-    expect(result.exitCode).toBe(0);
-    const grant = JSON.parse(
-      (await readOptional(
-        join(commandRoot, '.worktrees', slug),
-        '.pipeline/decide-grant.json',
-      )) ?? '{}',
-    ) as Record<string, unknown>;
-    expect(grant).toMatchObject({
-      version: 1,
-      step: 'plan',
-      reason: 'approve plan amendment',
-      grantedBy: 'operator',
-    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/cannot be granted/i);
+    expect(
+      await readOptional(commandRoot, join('.daemon', 'grants', `${slug}.json`)),
+    ).toBeNull();
   }, 30_000);
 
   it('rejects a traversal slug instead of writing outside a feature worktree', async () => {
@@ -105,15 +124,17 @@ describe('acceptance: explicit operator grants are scoped and single-use', () =>
     expect(grantWriters).toEqual(['cli.ts']);
   });
 
-  it('dispatches only the granted step and consumes the grant before provider work starts', async () => {
+  it('a grant dispatches nothing and is left unconsumed — DECIDE is human-only under the daemon', async () => {
     await writeFixtureState(fixture, resolvedState({ plan: 'pending', coherence_check: 'pending' }));
     await seedGrant('plan');
     const ran: StepName[] = [];
 
     await conductorFor(fixture, recordingFailureRunner(ran)).run();
 
-    expect(ran[0]).toBe('plan');
-    expect(await pathExists(fixture.root, '.pipeline/decide-grant.json')).toBe(false);
+    // No provider work: the grant authorizes nothing, so nothing is consumed either.
+    expect(ran).toEqual([]);
+    expect(await pathExists(fixture.root, '.pipeline/decide-grant.json')).toBe(true);
+    expect(await readOptional(fixture.root, '.pipeline/HALT.class')).toMatch(/needs-human/i);
   });
 
   it('a consumed plan grant cannot authorize a later plan entry', async () => {

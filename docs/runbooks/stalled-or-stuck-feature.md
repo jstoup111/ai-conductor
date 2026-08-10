@@ -615,21 +615,54 @@ conduct-ts decide-grant --slug <slug> --step <target-from-HALT> \
 rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
 ```
 
-The first command writes a durable grant for only that target. The conductor consumes it immediately
-before provider dispatch, so it cannot authorize another DECIDE step or a later retry. Do not create or
-edit `.pipeline/decide-grant.json` by hand.
+The first command writes a durable grant for only that target, into the daemon-owned
+`.daemon/grants/<slug>.json` in the main checkout. The conductor consumes it immediately before
+provider dispatch, so it cannot authorize another DECIDE step or a later retry.
+
+**Never hand-write a grant file.** The grant deliberately lives outside the feature worktree: a
+`decide-grant.json` written inside `.worktrees/<slug>/.pipeline/` authorizes nothing, because that
+directory is the build agent's own scratch space and an agent must not be able to authorize itself.
+Use the command from the main checkout.
+
+**`plan` is never grantable.** `conduct-ts decide-grant --step plan` exits non-zero, and the entry
+policy refuses `plan` before consulting any grant. If the HALT names `plan` as the requested target,
+the correct recovery is to drive the plan revision yourself — interactively, with `/conduct` or by
+editing the plan — and then clear the halt so the feature resumes into BUILD. See
+[the plan-revision recovery](#a-halt-requests-a-plan-revision) below.
 
 **Clearing the HALT alone does not authorize entry.** Without a valid matching grant, the next poll
-writes the same `needs-human` HALT and launches no provider. A grant for `plan`, for example, does not
-authorize `stories`.
+writes the same `needs-human` HALT and launches no provider. A grant for `stories`, for example, does
+not authorize `architecture_review`.
 
 **Verification:** After the daemon resumes, confirm the one-use artifact was consumed and then inspect
 the result of the named step:
 
 ```bash
-test ! -e .worktrees/<slug>/.pipeline/decide-grant.json
+test ! -e .daemon/grants/<slug>.json
 conduct-ts daemon logs | grep '\[<slug>\]'
 ```
+
+### A halt requests a plan revision
+
+**Symptom:** `.pipeline/HALT` is `needs-human` and names `plan` as the requested target — typically
+from a `remediate` or `build_review` disposition asking for a DECIDE revision.
+
+**There is no grant for this.** The daemon may not re-plan under any authorization. Recover by hand:
+
+1. Read the halt body and the remediation that produced it
+   (`.worktrees/<slug>/.pipeline/remediation.json`) to see which plan change is actually being asked
+   for. Verify the request against the gate evidence — a remediation whose fix would re-trigger the
+   gate that caused it is wrong, and amending the plan to match it makes things worse.
+2. Make the plan edit yourself in the feature worktree. When BUILD discovered that an approved DECIDE
+   assertion must change, add the correction beside the original rather than rewriting it — see
+   [amendment requests](#amendment-requests) above.
+3. Clear the halt so the feature resumes into BUILD:
+   ```bash
+   rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
+   ```
+
+If the feature is parked while you do this, unpark it last — the daemon re-dispatches as soon as it
+is eligible.
 
 If the grant remains, the feature did not enter the authorized step; re-read the HALT rather than
 clearing it again.

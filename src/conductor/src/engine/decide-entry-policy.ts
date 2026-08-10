@@ -1,8 +1,48 @@
 import type { ComplexityTier, StepDefinition, StepName } from '../types/index.js';
 import { readFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
-const DECIDE_GRANT_PATH = '.pipeline/decide-grant.json';
+/**
+ * Operator-only grant store, in the MAIN checkout's daemon-owned directory.
+ *
+ * The grant used to live at `<worktree>/.pipeline/decide-grant.json` — inside the
+ * very directory the build agent writes all build long (task-status, evidence,
+ * verdicts). That put the authorization token within reach of the subject it
+ * authorizes, so "operator-only" held by convention, not by construction: on
+ * 2026-08-09 an agent hand-wrote two grant files, never touched the CLI, and the
+ * daemon honored both and dispatched `plan`.
+ *
+ * `.daemon/` is daemon-owned, sits outside every worktree, and is already excluded
+ * from the self-host live boundary. A build agent operating inside its worktree has
+ * no business there, and a `.pipeline/decide-grant.json` it writes now authorizes
+ * nothing at all.
+ */
+const DAEMON_GRANT_DIR = join('.daemon', 'grants');
+
+/**
+ * The one DECIDE target no grant may ever unlock, even a well-formed
+ * operator-written one (operator rule, 2026-08-09): the daemon must never re-plan.
+ * A grant approves ONE authoring pass, but the daemon then runs the step itself —
+ * rewriting an approved DECIDE artifact with no human at the gate, which is the
+ * same class of failure the re-entry was meant to repair.
+ */
+const UNGRANTABLE_STEP: StepName = 'plan';
+
+/**
+ * Resolve the operator grant path for a run rooted at `projectRoot`.
+ *
+ * A daemon feature runs in `<root>/.worktrees/<slug>`, so the main checkout and the
+ * slug are both recoverable from that path; the grant is read from
+ * `<root>/.daemon/grants/<slug>.json`. A run whose root is not a `.worktrees/<slug>`
+ * path (interactive `/conduct` in the main checkout) has no daemon grant store —
+ * and needs none, since interactive DECIDE entry never consults a grant.
+ */
+export function resolveGrantPath(projectRoot: string): string | null {
+  const slug = basename(projectRoot);
+  const worktreesDir = dirname(projectRoot);
+  if (basename(worktreesDir) !== '.worktrees') return null;
+  return join(dirname(worktreesDir), DAEMON_GRANT_DIR, `${slug}.json`);
+}
 
 export interface OperatorGrant {
   version?: number;
@@ -15,10 +55,10 @@ export interface OperatorGrant {
 
 /** Read a durable operator grant. Malformed or unavailable grants authorize nothing. */
 export async function readOperatorGrant(projectRoot: string): Promise<OperatorGrant | null> {
+  const grantPath = resolveGrantPath(projectRoot);
+  if (grantPath === null) return null;
   try {
-    const value: unknown = JSON.parse(
-      await readFile(join(projectRoot, DECIDE_GRANT_PATH), 'utf-8'),
-    );
+    const value: unknown = JSON.parse(await readFile(grantPath, 'utf-8'));
     if (
       typeof value !== 'object' ||
       value === null ||
@@ -41,10 +81,15 @@ export async function consumeOperatorGrant(
   projectRoot: string,
   target: StepName,
 ): Promise<OperatorGrant | null> {
+  const grantPath = resolveGrantPath(projectRoot);
+  if (grantPath === null) return null;
   const grant = await readOperatorGrant(projectRoot);
   if (grant?.step !== target) return null;
+  // Defense in depth: `plan` is refused before consumption is ever reached, so a
+  // plan grant must never be spent — it stays on disk as operator-visible evidence.
+  if (target === UNGRANTABLE_STEP) return null;
   try {
-    await unlink(join(projectRoot, DECIDE_GRANT_PATH));
+    await unlink(grantPath);
     return grant;
   } catch {
     return null;
@@ -113,6 +158,20 @@ export function decideEntryDisposition(input: {
 
   if (!input.hasContract) return { kind: 'fast-forward', as: 'skipped' };
   if (input.satisfied === true) return { kind: 'fast-forward', as: 'done' };
+
+  // `plan` is ungrantable, full stop — checked BEFORE the grant so no grant of any
+  // provenance can reach it. Deliberately placed AFTER the tier-skippable /
+  // no-contract / satisfied fast-forwards: those never RUN the step, they only
+  // record it, so halting them would wedge ordinary S-tier and already-satisfied
+  // flows.
+  if (input.target === UNGRANTABLE_STEP) {
+    return halt(
+      input,
+      `Autonomous entry to '${UNGRANTABLE_STEP}' is never permitted — the daemon may not ` +
+        're-plan, and no operator grant authorizes this target. Drive the plan ' +
+        'revision interactively, then resume the feature.',
+    );
+  }
 
   if (
     input.grant?.step === input.target
