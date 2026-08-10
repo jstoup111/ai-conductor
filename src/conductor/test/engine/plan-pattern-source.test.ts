@@ -23,4 +23,19 @@ describe('resolvePlanPatternSource', () => {
       sourcePath: 'src/conductor/src/engine/Wired-Into.ts',
     });
   });
+
+  it.each([
+    ['an inline-code path', '`src/conductor/src/engine/wired-into.ts`'],
+    [
+      'a Markdown link',
+      '[wired-into source](src/conductor/src/engine/wired-into.ts)',
+    ],
+  ])('resolves %s identically to a bare path', (_form, reference) => {
+    const result = resolvePlanPatternSource(`**Pattern-source:** ${reference}`);
+
+    expect(result).toEqual({
+      kind: 'resolved',
+      sourcePath: 'src/conductor/src/engine/wired-into.ts',
+    });
+  });
 });
