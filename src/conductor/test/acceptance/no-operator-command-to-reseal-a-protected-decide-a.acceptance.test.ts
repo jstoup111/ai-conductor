@@ -324,14 +324,15 @@ describe('operator-audited scoped reseal (#1281)', () => {
     expect(verdict).toEqual({ ok: false, reason: expect.stringContaining(P2) });
   });
 
-  it('Story 6: the real pre-boot binary audits a missing rationale refusal in the named worktree', async () => {
+  it('Story 6: the real pre-boot binary audits a whitespace-only rationale refusal in the named worktree', async () => {
     const result = await execa(
       REAL_CONDUCT_TS,
-      ['reseal', '--slug', SLUG, '--path', P1],
+      ['reseal', '--slug', SLUG, '--path', P1, '--reason', '   '],
       { cwd: fixture.root, reject: false },
     );
 
     expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('reseal: missing rationale.');
     expect((await auditRecords()).at(-1)).toMatchObject({
       origin: 'operator',
       event: 'reseal_refused',

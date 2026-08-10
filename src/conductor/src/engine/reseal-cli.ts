@@ -54,7 +54,10 @@ export function detectResealCommand(argv: string[]): ResealDispatch | null {
     }
   }
 
-  if (!slug || !reason || !reason.trim() || paths.length === 0) return null;
+  // An explicitly supplied empty/whitespace rationale is syntactically a
+  // reseal command. Preserve it so dispatch can refuse and audit it; omitted
+  // and malformed --reason forms remain parser failures.
+  if (!slug || reason === undefined || paths.length === 0) return null;
   if (slug.includes('/') || slug.includes('\\') || slug === '.' || slug === '..') return null;
 
   return { kind: 'reseal', slug, paths, reason, clearHalt };

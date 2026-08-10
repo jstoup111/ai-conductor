@@ -176,6 +176,48 @@ describe('createProtectedArtifactSeal', () => {
 });
 
 describe('resealProtectedArtifactSeal', () => {
+  it.each([
+    ['an empty path set', [], undefined, undefined,
+      'Scoped protected artifact reseal requires at least one path'],
+    ['a path outside protected directories', ['README.md'], undefined, undefined,
+      'Protected artifact reseal target is not protected: README.md'],
+    ['a protected path absent from the current seal', ['.docs/plans/missing.md'], undefined, undefined,
+      'Protected artifact reseal target is not sealed: .docs/plans/missing.md'],
+    ['an unresolvable target commit', ['.docs/plans/p1.md'], undefined,
+      'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      'Protected artifact reseal target commit is unresolvable: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
+    ['a target-deleted path', ['.docs/plans/p1.md'], async (repo: string) => {
+      await rm(join(repo, '.docs/plans/p1.md'));
+    }, undefined, 'Protected artifact reseal target is deleted: .docs/plans/p1.md'],
+    ['a path with uncommitted changes', ['.docs/plans/p1.md'], async (repo: string) => {
+      await writeProjectFile(repo, '.docs/plans/p1.md', 'dirty correction\n');
+    }, undefined,
+    'Protected artifact reseal target has uncommitted changes: .docs/plans/p1.md\nCommit the protected artifact before resealing.'],
+  ] as const)('refuses %s without changing the persisted seal bytes', async (
+    _name,
+    paths,
+    mutate,
+    targetCommit,
+    message,
+  ) => {
+    const repo = await makeRepo({ '.docs/plans/p1.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const originalBytes = await readFile(sealPath, 'utf8');
+    await mutate?.(repo);
+
+    await expect(resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: targetCommit ?? baselineCommit,
+      trigger: 'operator-reseal',
+      paths: [...paths],
+    })).rejects.toThrow(message);
+
+    await expect(readFile(sealPath, 'utf8')).resolves.toBe(originalBytes);
+  });
+
   it('advances the baseline, records scoped lineage, and verifies every sealed entry', async () => {
     const repo = await makeRepo({
       '.docs/plans/p1.md': 'incorrect plan\n',

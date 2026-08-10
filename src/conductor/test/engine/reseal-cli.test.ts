@@ -80,9 +80,21 @@ describe('detectResealCommand', () => {
     expect(detectResealCommand(argv('--slug', 'repair', '--reason', 'Corrected after review.'))).toBeNull();
   });
 
-  it.each(['', '   ', '\t\n'])('returns null when --reason is empty or whitespace-only', (reason) => {
+  it('preserves an explicitly supplied whitespace-only --reason for refusal dispatch', () => {
     expect(
-      detectResealCommand(argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', reason)),
+      detectResealCommand(argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', '   ')),
+    ).toEqual({
+      kind: 'reseal',
+      slug: 'repair',
+      paths: ['.docs/plans/repair.md'],
+      reason: '   ',
+      clearHalt: false,
+    });
+  });
+
+  it('returns null when --reason has no value', () => {
+    expect(
+      detectResealCommand(argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', '')),
     ).toBeNull();
   });
 
@@ -780,12 +792,15 @@ describe('dispatchResealCommand', () => {
     });
   });
 
-  it('records malformed rationale and non-interactive refusals in the resolved worktree audit trail', async () => {
+  it('records parser-produced whitespace rationale and non-interactive refusals in the resolved worktree audit trail', async () => {
     const root = await mkdtemp(join(tmpdir(), 'reseal-cli-refusal-audit-'));
     const command = detectResealCommand(
       argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
     );
-    if (!command) throw new Error('expected valid reseal command');
+    const whitespaceReasonCommand = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', '   '),
+    );
+    if (!command || !whitespaceReasonCommand) throw new Error('expected parseable reseal commands');
     const seal = JSON.stringify({
       baselineCommit: 'base',
       protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
@@ -795,9 +810,9 @@ describe('dispatchResealCommand', () => {
 
     try {
       await expect(
-        dispatchResealCommand({ ...command, reason: ' ' }, {
+        dispatchResealCommand(whitespaceReasonCommand, {
           cwd: root,
-          err: vi.fn(),
+          err: (line) => expect(line).toBe('reseal: missing rationale.'),
           isInteractive: true,
           access: vi.fn().mockResolvedValue(undefined),
           readFile: vi.fn().mockResolvedValue(seal),
