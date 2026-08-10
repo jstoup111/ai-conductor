@@ -1349,6 +1349,15 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     expect(result.engaged && result.layers.has('adr')).toBe(true);
   });
 
+  it('does not require the ADR layer for exact non-ADR decision filenames', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], [
+      '.docs/coherence/foo.md',
+      '.docs/decisions/architecture-review-something.md',
+      '.docs/decisions/review-something.md',
+    ]);
+    expect(result.engaged && result.layers.has('adr')).toBe(false);
+  });
+
   it('omits the ADR layer when an engaged M-tier product change set has no ADR path', () => {
     const result = resolveRequiredLayers('/wt', 'M', 'product', [], ['.docs/coherence/foo.md']);
     expect(result).toEqual({
