@@ -325,25 +325,34 @@ export class BuildProgressWatcher {
       // Sidecar read is already tolerant internally; belt-and-suspenders here.
     }
 
+    const previous = this.lastSnapshot;
+    // A failed probe is no observation, not evidence that HEAD changed. Keep
+    // the last known value so a transient Git failure cannot manufacture a
+    // change-driven tick or overwrite the comparison baseline.
+    const observedHead = headProbeFailed ? previous?.head : head;
     const snapshot: TickSnapshot = {
       resolved,
       total,
       currentTaskId: current?.id,
       currentTaskName: current?.title,
-      head,
+      head: observedHead,
       noEvidenceAttempts,
     };
 
-    const previous = this.lastSnapshot;
-    const changed =
+    const headMoved = Boolean(head && previous?.head && head !== previous.head);
+    const taskDelta =
       previous === null ||
       snapshot.resolved !== previous.resolved ||
       snapshot.total !== previous.total ||
       snapshot.currentTaskId !== previous.currentTaskId ||
-      snapshot.head !== previous.head ||
       snapshot.noEvidenceAttempts !== previous.noEvidenceAttempts;
+    const changed =
+      taskDelta || headMoved;
 
     if (!changed) {
+      // Retain a newly available HEAD silently. It establishes a comparison
+      // baseline without claiming that work landed while the probe was down.
+      this.lastSnapshot = snapshot;
       if (this.stopped) return;
 
       // Quiet-episode check (Task 7): fire build_no_progress exactly once
@@ -394,8 +403,6 @@ export class BuildProgressWatcher {
     }
 
     const previousHead = previous?.head;
-    const headMoved = Boolean(head && previousHead && head !== previousHead);
-    const taskDelta = previous === null || snapshot.resolved !== previous.resolved;
     let commitCount: number | undefined;
     if (headMoved) {
       try {
@@ -437,12 +444,12 @@ export class BuildProgressWatcher {
       currentTaskId: snapshot.currentTaskId,
       currentTaskName: snapshot.currentTaskName,
       commitCount,
+      // `head-moved` is reserved for a proven HEAD transition. Other
+      // change-driven progress (including task-pointer and evidence updates)
+      // is a task delta; `headMoved` independently records whether a commit
+      // landed alongside it.
       tickReason: taskDelta ? 'task-delta' : 'head-moved',
-      // A new change-driven record must always distinguish a successful,
-      // unchanged HEAD probe from legacy records that predate provenance.
-      // Probe failures are deliberately false as well: the watcher remains
-      // best-effort instead of throwing on a non-Git or unborn repository.
-      headMoved: headProbeFailed ? false : headMoved,
+      headMoved,
       noEvidenceAttempts,
       featureSlug: this.featureSlug,
     });

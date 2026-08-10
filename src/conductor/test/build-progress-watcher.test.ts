@@ -184,6 +184,11 @@ describe('BuildProgressWatcher change-driven emission', () => {
     await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
   }
 
+  async function writeTaskStatuses(tasks: readonly { id: string; status: string }[]): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
   function buildProgressEvents(): Extract<ConductorEvent, { type: 'build_progress' }>[] {
     return emitSpy.mock.calls
       .map((call) => call[0] as ConductorEvent)
@@ -251,6 +256,63 @@ describe('BuildProgressWatcher change-driven emission', () => {
     const persisted = records.at(-1);
     expect(persisted).toMatchObject({ type: 'build_progress', tickReason: 'task-delta', headMoved: false });
     expect(persisted).toHaveProperty('headMoved', false);
+  });
+
+  it('uses task-delta provenance when only the in-progress task pointer advances', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+    await writeTaskStatuses([
+      { id: '1', status: 'completed' },
+      { id: '2', status: 'in_progress' },
+      { id: '3', status: 'pending' },
+    ]);
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await writeTaskStatuses([
+      { id: '1', status: 'completed' },
+      { id: '2', status: 'pending' },
+      { id: '3', status: 'in_progress' },
+    ]);
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ tickReason: 'task-delta', headMoved: false, resolved: 1, total: 3 }),
+    ]);
+  });
+
+  it('uses task-delta provenance when only no-evidence attempts advance', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+    await writeTasks(1, 3);
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await writeFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 1, migrationGrandfather: [] }),
+    );
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ tickReason: 'task-delta', headMoved: false, noEvidenceAttempts: 1 }),
+    ]);
   });
 
   it('emits build_progress with commitCount when a new HEAD commit lands with no task delta', async () => {
@@ -379,6 +441,27 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(buildProgressEvents()).toEqual([
       expect.objectContaining({ type: 'build_progress', resolved: 5, total: 21, headMoved: false }),
     ]);
+  });
+
+  it('does not emit a false head-moved tick when a later HEAD probe fails', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(1, 3);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+    gitProbe.throws = true;
+
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([]);
   });
 
   // #1086 regression: the production stall shape. Since #773 removed the
