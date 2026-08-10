@@ -91,13 +91,10 @@ describe('openSpecPr', () => {
       expect(result.url).toBe(PR_URL);
     }
 
-    // Exactly one `pr create` call. The runner is also used afterwards to read
-    // and patch the body (release metadata, and `Refs` when a sourceRef exists),
-    // so the PR-creating call is counted rather than the total call count.
-    const creates = calls.filter((c) => c.args[0] === 'pr' && c.args[1] === 'create');
-    expect(creates).toHaveLength(1);
-    expect(creates[0].args).toContain('pr');
-    expect(creates[0].args).toContain('create');
+    // Runner was called exactly once with `pr create` args
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toContain('pr');
+    expect(calls[0].args).toContain('create');
   });
 
   it('calls the runner with cwd = target.canonicalPath', async () => {
@@ -138,12 +135,7 @@ describe('openSpecPr', () => {
 
     await openSpecPr(target, branch, deps);
 
-    // The guarantee under test is ordering: the branch is pushed BEFORE the PR
-    // is created. Body patch-ups (release metadata, `Refs`) follow the create on
-    // the same runner, so the first two entries are pinned rather than the whole
-    // trace — pinning the tail would make this test fail for any later step that
-    // legitimately edits the PR it just opened.
-    expect(trace.slice(0, 2)).toEqual([
+    expect(trace).toEqual([
       { command: 'git', args: ['push', '-u', 'origin', branch], cwd: tempDir },
       {
         command: 'gh',
@@ -151,8 +143,6 @@ describe('openSpecPr', () => {
         cwd: tempDir,
       },
     ]);
-    // Nothing pushes again after the PR exists.
-    expect(trace.slice(2).some((c) => c.command === 'git')).toBe(false);
   });
 
   it('propagates a diverged push rejection without creating or force-pushing a PR', async () => {
@@ -535,14 +525,10 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
     // Loop over ALL recorded calls — exhaustive no-merge / no-build check.
     assertNoMergeNoBuild(calls);
 
-    // Structural check: exactly one PR-creating call. Body patch-ups (release
-    // metadata, `Refs`) also go through this runner, so the guarantee under test
-    // is "one create, and nothing that merges or builds" — the exhaustive
-    // assertNoMergeNoBuild above is what enforces the latter over every call.
-    const creates = calls.filter((c) => c.args[0] === 'pr' && c.args[1] === 'create');
-    expect(creates).toHaveLength(1);
-    expect(creates[0].args).toContain('pr');
-    expect(creates[0].args).toContain('create');
+    // Structural check: exactly one call was made and it contained 'pr' and 'create'.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toContain('pr');
+    expect(calls[0].args).toContain('create');
     // Confirm the recorder captures the call (falsifiability: this would fail if
     // the impl stopped calling the runner, which would be a different bug).
     expect(calls[0].args).toContain('--fill');
