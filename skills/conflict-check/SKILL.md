@@ -143,6 +143,46 @@ What specifically conflicts and why both cannot be true simultaneously.
 **Recommendation:** Option [N] because [rationale].
 ```
 
+For an ADR-versus-story conflict, use the same report format and additionally include this
+grounding block. `ADR filename stem` is the ADR filename without `.md`; `Story ID` is the story's
+declared identifier.
+
+```markdown
+**ADR filename stem:** adr-YYYY-MM-DD-decision-slug
+**Story ID:** STORY-N
+**ADR opposing sentence (verbatim):** "<exact sentence from the ADR>"
+**Story opposing sentence (verbatim):** "<exact sentence from the story>"
+```
+
+Record an ADR-versus-story conflict only when both opposing sentences are present and demonstrate
+the incompatibility. An ungrounded suspicion is an assumption, not a recorded conflict; verify it
+against the ADR and story text or report it as an assumption under the `/verify-claims` protocol.
+
+Worked ADR-versus-story report:
+
+```markdown
+## Conflict: Session-based access contradicts token-only API story
+
+**Stories involved:** Token-only API access vs ADR: Browser session authentication
+**Files:** [.docs/stories/api-access.md] vs [.docs/decisions/adr-2026-08-10-browser-session-authentication.md]
+**Type:** contradiction
+**Severity:** blocking
+**ADR filename stem:** adr-2026-08-10-browser-session-authentication
+**Story ID:** STORY-12
+**ADR opposing sentence (verbatim):** "The API authenticates browser requests with server-side sessions."
+**Story opposing sentence (verbatim):** "The API accepts only bearer tokens and does not create sessions."
+
+**Description:** The same API requests cannot require server-side sessions while accepting only
+bearer tokens and creating no sessions.
+
+**Resolution Options:**
+1. Amend STORY-12 to use the ADR's session mechanism.
+2. Define an explicit session-and-token compatibility boundary.
+3. Create a superseding ADR that selects token-only authentication.
+
+**Recommendation:** Option 1 because it preserves the approved architectural decision.
+```
+
 **Severity definitions:**
 - **blocking** — Cannot proceed to implementation. Stories are mutually exclusive.
 - **degrading** — Can proceed with a known compromise. Both stories work but with reduced functionality in the overlap area.
