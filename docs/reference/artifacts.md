@@ -114,7 +114,12 @@ Two independent mechanisms protect `.docs/` during a run.
 **Phase write-guard.** While a BUILD or SHIP step is dispatched, the engine stamps
 `.pipeline/phase-active` with `allow: <prefix>` lines and `docs-guard.sh` default-denies every other
 `.docs/` write. The allowlist is `.docs/release-waivers/` always, plus `.docs/retros/` and
-`.docs/stories/` during the `retro` step.
+`.docs/stories/` during the `retro` step and `.docs/plans/` during the `remediate` step.
+
+`remediate` holds the plan-write permission because it is the step that reasons about a blocking
+gate's dispositions. `build` deliberately does not: a build agent rewriting its own plan to match
+what it implemented is the scope violation `build_review` exists to catch, and the repair routes to
+the `plan` step, which an autonomous run may not enter.
 
 **Protected-artifact seal.** `.pipeline/protected-artifact-seal.json` fingerprints every file under
 `.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, and `.docs/stories` against a
