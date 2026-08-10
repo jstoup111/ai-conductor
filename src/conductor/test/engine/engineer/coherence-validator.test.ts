@@ -404,6 +404,18 @@ describe('checkAdrCoverage', () => {
     });
   });
 
+  it('treats an ADR row with an unrecognized verdict affirmatively', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision | story-1 | needs-human-review | "decision recorded" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({ ok: true });
+  });
+
   it('passes when every ADR in the pool has a covered row', () => {
     expect(
       checkAdrCoverage(
