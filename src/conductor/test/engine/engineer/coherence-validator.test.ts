@@ -404,12 +404,56 @@ describe('checkAdrCoverage', () => {
     });
   });
 
+  it('blocks a covered ADR row without a counterpart citation', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision |  | covered | "decision recorded" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'adr-gap',
+      gaps: [{ gapId: 'adr-decision' }],
+    });
+  });
+
   it('treats an ADR row with an unrecognized verdict affirmatively', () => {
     expect(
       checkAdrCoverage(
         rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
 | --- | --- | --- | --- | --- |
 | adr | adr-decision | story-1 | needs-human-review | "decision recorded" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it('blocks an unknown-verdict ADR row without a counterpart citation', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision |  | needs-human-review | "decision recorded" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'adr-gap',
+      gaps: [{ gapId: 'adr-decision' }],
+    });
+  });
+
+  it('passes a covered ADR row with a counterpart citation', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision | story-1 | covered | "decision recorded" |
 `),
         new Set(['adr-decision']),
       ),

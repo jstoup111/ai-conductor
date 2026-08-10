@@ -369,7 +369,8 @@ export type AdrCoverageResult =
 
 /**
  * Every non-deleted ADR in the supplied pool must have at least one `adr`
- * row and none of its adjudication rows may carry a negative verdict. The
+ * row with a non-empty counterpart citation and none of its adjudication rows
+ * may carry a negative verdict or lack a counterpart citation. The
  * pool is empty for a deletion-only change set, which therefore passes
  * without demanding a row for the removed decision.
  */
@@ -390,7 +391,10 @@ export function checkAdrCoverage(
     const adjudications = rowsByAdrId.get(adrId) ?? [];
     if (
       adjudications.length === 0 ||
-      adjudications.some((row) => NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase()))
+      adjudications.some(
+        (row) =>
+          NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase()) || row.citedIds.length === 0,
+      )
     ) {
       gaps.push({ gapId: adrId });
     }
