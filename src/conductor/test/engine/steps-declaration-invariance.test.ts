@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ComplexityTier } from '../../src/types/index.js';
-import { resolvePlanContentScheduling } from '../../src/engine/conductor.js';
+import { resolvePlanContentScheduling } from '../../src/engine/plan-content-scheduling.js';
 
 const planPath = '.docs/plans/feature.md';
 const sourcePath = 'src/conductor/src/engine/pattern-source.ts';
