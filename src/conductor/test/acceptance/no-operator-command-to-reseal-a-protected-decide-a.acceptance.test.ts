@@ -324,6 +324,21 @@ describe('operator-audited scoped reseal (#1281)', () => {
     expect(verdict).toEqual({ ok: false, reason: expect.stringContaining(P2) });
   });
 
+  it('Story 6: the real pre-boot binary audits a missing rationale refusal in the named worktree', async () => {
+    const result = await execa(
+      REAL_CONDUCT_TS,
+      ['reseal', '--slug', SLUG, '--path', P1],
+      { cwd: fixture.root, reject: false },
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect((await auditRecords()).at(-1)).toMatchObject({
+      origin: 'operator',
+      event: 'reseal_refused',
+      condition: 'missing rationale',
+    });
+  }, 30_000);
+
   it('Stories 4–6: the real pre-boot binary refuses non-TTY invocation and audits it in the named worktree', async () => {
     await commitChanges({ [P1]: 'plan changed by build\n' }, 'build: mutate sealed plan');
     const before = await readFile(join(fixture.worktree, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8');

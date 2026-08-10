@@ -60,6 +60,46 @@ export function detectResealCommand(argv: string[]): ResealDispatch | null {
   return { kind: 'reseal', slug, paths, reason, clearHalt };
 }
 
+/**
+ * Detect only the one parseable reseal form whose mandatory rationale flag is
+ * absent. The regular detector intentionally keeps returning null for every
+ * malformed form; this lets the entry point audit that specific refusal
+ * without turning parser errors into reseal attempts.
+ */
+export function detectMissingResealReasonCommand(argv: string[]): ResealDispatch | null {
+  if (argv[2] !== 'reseal') return null;
+
+  let slug: string | undefined;
+  const paths: string[] = [];
+  let clearHalt = false;
+
+  for (let index = 3; index < argv.length; index += 1) {
+    const flag = argv[index];
+    if (flag === '--clear-halt') {
+      if (clearHalt) return null;
+      clearHalt = true;
+      continue;
+    }
+    if (flag === '--reason' || (flag !== '--slug' && flag !== '--path')) return null;
+
+    const value = argv[index + 1];
+    if (!value || value.startsWith('--')) return null;
+    index += 1;
+
+    if (flag === '--slug') {
+      if (slug !== undefined) return null;
+      slug = value;
+    } else {
+      paths.push(value);
+    }
+  }
+
+  if (!slug || paths.length === 0) return null;
+  if (slug.includes('/') || slug.includes('\\') || slug === '.' || slug === '..') return null;
+
+  return { kind: 'reseal', slug, paths, reason: '', clearHalt };
+}
+
 export interface ResealCommandDependencies {
   cwd?: string;
   isInteractive?: boolean;
