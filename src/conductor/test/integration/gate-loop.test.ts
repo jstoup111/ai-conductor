@@ -173,6 +173,11 @@ describe('integration/gate-loop', () => {
       );
     } else if (step === 'prd_audit') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/specs'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/specs/add-foo.md'),
+        '## Functional Requirements\n\nFR-1\n',
+      );
       await writeFile(
         join(dir, '.pipeline/prd-audit.md'),
         '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',

@@ -3054,8 +3054,10 @@ describe('engine/artifacts', () => {
 
     it('on true completion, writes a sidecar carrying codeStamp equal to the current head sha', async () => {
       await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n');
+      await createFile('.docs/specs/prd-audit-code-stamp.md', '## Functional Requirements\n\nFR-1\n');
       const result = await checkStepCompletion(dir, 'prd_audit', {
         sessionStartedAt: 0,
+        featureDesc: 'prd-audit-code-stamp',
         getHeadSha: async () => 'ddd444',
       });
       expect(result.done).toBe(true);
