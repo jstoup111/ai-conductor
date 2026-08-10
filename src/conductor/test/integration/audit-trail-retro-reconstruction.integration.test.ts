@@ -52,10 +52,10 @@ async function reconstructFriction(root: string): Promise<ReconstructedFriction>
 
   const records = lines.map((l) => JSON.parse(l));
   return {
-    failures: records.filter((r) => r.event === 'gate_fail').map((r) => ({ step: r.step, reason: r.reason })),
+    failures: records.filter((r) => r.event === 'gate_fail').map((r) => ({ step: r.origin, reason: r.reason })),
     retries: records
       .filter((r) => r.event === 'retry')
-      .map((r) => ({ step: r.step, attempt: r.attempt, reason: r.reason })),
+      .map((r) => ({ step: r.origin, attempt: r.attempt, reason: r.reason })),
     incomplete: false,
   };
 }

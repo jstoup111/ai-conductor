@@ -521,7 +521,7 @@ describe('Story 5: verdict_freshness reaches the audit trail with its outcome', 
     const written = records();
     expect(written).toHaveLength(1);
     expect(written[0] as AuditRecord & { artifact: string; outcome: string }).toMatchObject({
-      step: 'prd_audit',
+      origin: 'prd_audit',
       event: 'verdict_freshness',
       artifact: join(dir, '.pipeline/prd-audit.md'),
       outcome: 'preserved_surface_miss',
@@ -541,7 +541,7 @@ describe('Story 5: verdict_freshness reaches the audit trail with its outcome', 
     const written = records();
     expect(written).toHaveLength(1);
     expect(written[0] as AuditRecord & { artifact: string; outcome: string }).toMatchObject({
-      step: 'build_review',
+      origin: 'build_review',
       event: 'verdict_freshness',
       artifact: join(dir, '.pipeline/build-review.json'),
       outcome: 'stale_invalidated',

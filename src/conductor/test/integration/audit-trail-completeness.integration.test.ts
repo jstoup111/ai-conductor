@@ -395,7 +395,7 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     expect(stepsRun).not.toContain('architecture_diagram');
 
     const records = await readRecords(dir);
-    const recordedSteps = new Set(records.map((r) => r.step));
+    const recordedSteps = new Set(records.map((r) => r.origin));
 
     // executed ⊆ recorded
     const uniqueExecuted = new Set(stepsRun);
@@ -441,9 +441,9 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     await conductor.run();
 
     const records = await readRecords(dir);
-    expect(records.some((r) => r.step === flakyStep && r.event === 'retry')).toBe(true);
+    expect(records.some((r) => r.origin === flakyStep && r.event === 'retry')).toBe(true);
     expect(
-      records.some((r) => r.step === flakyStep && r.event === 'gate_pass'),
+      records.some((r) => r.origin === flakyStep && r.event === 'gate_pass'),
       'the eventually-successful step must leave positive evidence, not only its retry record',
     ).toBe(true);
   });

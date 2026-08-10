@@ -20,7 +20,7 @@ describe('engine/audit-trail', () => {
   it('appends a whole-line JSON record with derived phase and timestamp', async () => {
     const writer = new AuditTrailWriter(dir);
 
-    writer.record({ step: 'build', event: 'retry', reason: 'tests failed', attempt: 2 });
+    writer.record({ origin: 'build', event: 'retry', reason: 'tests failed', attempt: 2 });
 
     const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
     const contents = await readFile(eventsPath, 'utf8');
@@ -30,12 +30,25 @@ describe('engine/audit-trail', () => {
 
     const record = JSON.parse(lines[0]) as AuditRecord;
 
-    expect(record.step).toBe('build');
+    expect(record.origin).toBe('build');
     expect(record.event).toBe('retry');
     expect(record.reason).toBe('tests failed');
     expect(record.attempt).toBe(2);
     expect(record.phase).toBe('BUILD');
     expect(typeof record.at).toBe('number');
+  });
+
+  it('records an operator origin distinctly from a pipeline step', async () => {
+    const writer = new AuditTrailWriter(dir);
+
+    writer.record({ origin: 'operator', event: 'reseal' });
+
+    const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
+    const contents = await readFile(eventsPath, 'utf8');
+    const [line] = contents.split('\n').filter((value) => value.length > 0);
+    const record = JSON.parse(line) as AuditRecord;
+
+    expect(record.origin).toBe('operator');
   });
 
   it('bootstraps the audit-trail dir idempotently without touching existing batch artifacts', async () => {
@@ -52,7 +65,7 @@ describe('engine/audit-trail', () => {
     await writeFile(reviewPath, reviewContent, 'utf8');
 
     const writer = new AuditTrailWriter(dir);
-    writer.record({ step: 'build', event: 'retry', reason: 'tests failed', attempt: 1 });
+    writer.record({ origin: 'build', event: 'retry', reason: 'tests failed', attempt: 1 });
 
     const eventsPath = join(auditTrailDir, 'events.jsonl');
     const eventsContents = await readFile(eventsPath, 'utf8');
@@ -75,7 +88,7 @@ describe('engine/audit-trail', () => {
       const writer = new AuditTrailWriter(rootA);
       process.chdir(rootB);
 
-      writer.record({ step: 'build', event: 'retry', reason: 'tests failed', attempt: 1 });
+      writer.record({ origin: 'build', event: 'retry', reason: 'tests failed', attempt: 1 });
 
       const pathA = join(rootA, '.pipeline', 'audit-trail', 'events.jsonl');
       const pathB = join(rootB, '.pipeline', 'audit-trail', 'events.jsonl');
@@ -108,7 +121,7 @@ describe('engine/audit-trail', () => {
 
     try {
       expect(() =>
-        writer.record({ step: 'build', event: 'retry', reason: 'tests failed', attempt: 2 })
+        writer.record({ origin: 'build', event: 'retry', reason: 'tests failed', attempt: 2 })
       ).not.toThrow();
     } finally {
       process.stderr.write = originalWrite;
@@ -133,7 +146,7 @@ describe('engine/audit-trail', () => {
         // synchronous appendFileSync calls actually interleave in time,
         // rather than one loop running to completion before the other starts.
         await Promise.resolve();
-        writer.record({ step: 'build', event: `${tag}-${i}`, attempt: i });
+        writer.record({ origin: 'build', event: `${tag}-${i}`, attempt: i });
       }
     };
 
@@ -163,7 +176,7 @@ describe('engine/audit-trail', () => {
 
     expect(lines).toHaveLength(1);
     const record = JSON.parse(lines[0]) as AuditRecord;
-    expect(record.step).toBe('build');
+    expect(record.origin).toBe('build');
     expect(record.event).toBe('gate_pass');
   });
 
@@ -240,7 +253,7 @@ describe('engine/audit-trail', () => {
 
     expect(lines).toHaveLength(1);
     const record = JSON.parse(lines[0]) as AuditRecord;
-    expect(record.step).toBe('architecture_review');
+    expect(record.origin).toBe('architecture_review');
     expect(record.event).toBe('kickback');
     expect(record.cause).toBe('conflict_check evidence: missing seam');
   });
@@ -307,7 +320,7 @@ describe('engine/audit-trail', () => {
 
     expect(lines).toHaveLength(1);
     const record = JSON.parse(lines[0]) as AuditRecord;
-    expect(record.step).toBe('build');
+    expect(record.origin).toBe('build');
     expect(record.event).toBe('retry');
     expect(record.attempt).toBe(2);
     expect(record.reason).toBe('tests failed');
@@ -332,7 +345,7 @@ describe('engine/audit-trail', () => {
 
     expect(lines).toHaveLength(1);
     const record = JSON.parse(lines[0]) as AuditRecord;
-    expect(record.step).toBe('build');
+    expect(record.origin).toBe('build');
     expect(record.event).toBe('retry');
     expect(record.attempt).toBe(1);
     expect(record.reason).toBeTruthy();
@@ -380,7 +393,7 @@ describe('engine/audit-trail', () => {
     const second = JSON.parse(lines[1]) as AuditRecord;
 
     expect(first.event).toBe('kickback');
-    expect(first.step).toBe('stories');
+    expect(first.origin).toBe('stories');
     expect(second.event).toBe('intervention');
     expect(second.cause).toBe('kickback cap exceeded');
   });
@@ -421,11 +434,11 @@ describe('engine/audit-trail', () => {
     const first = JSON.parse(lines[0]) as AuditRecord;
     const second = JSON.parse(lines[1]) as AuditRecord;
 
-    expect(first.step).toBe(step);
+    expect(first.origin).toBe(step);
     expect(first.event).toBe('gate_fail');
     expect(first.reason).toBe(failReason);
 
-    expect(second.step).toBe(step);
+    expect(second.origin).toBe(step);
     expect(second.event).toBe('gate_pass');
     expect(second.reason).toBe(passReason);
 
@@ -460,7 +473,7 @@ describe('engine/audit-trail', () => {
 
     expect(lines).toHaveLength(1);
     const record = JSON.parse(lines[0]) as AuditRecord;
-    expect(record.step).toBe('manual_test');
+    expect(record.origin).toBe('manual_test');
     expect(record.event).toBe('gate_pass');
   });
 
@@ -478,7 +491,7 @@ describe('engine/audit-trail', () => {
 
     expect(lines).toHaveLength(1);
     const record = JSON.parse(lines[0]) as AuditRecord;
-    expect(record.step).toBe('build');
+    expect(record.origin).toBe('build');
     expect(record.event).toBe('gate_pass');
   });
 
