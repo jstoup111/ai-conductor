@@ -26,8 +26,8 @@ import {
 } from './coherence-waiver.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 
-/** The four row classes a coherence artifact row may belong to. */
-export type CoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task';
+/** The five row classes a coherence artifact row may belong to. */
+export type CoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task' | 'adr';
 
 /** A single parsed row of the coherence mapping table. */
 export interface CoherenceRow {
@@ -48,7 +48,7 @@ export type CoherenceParseResult =
   | { ok: true; rows: CoherenceRow[] }
   | { ok: false; reason: CoherenceParseFailureReason };
 
-const ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task']);
+const ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task', 'adr']);
 
 /**
  * Strip surrounding whitespace and a single pair of matching straight/curly
@@ -252,6 +252,7 @@ export function crossCheckIds(
     fr: frIds,
     story: storyIds,
     task: taskIds,
+    adr: new Set(),
   };
 
   for (const row of rows) {

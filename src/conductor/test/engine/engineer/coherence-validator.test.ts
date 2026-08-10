@@ -106,6 +106,26 @@ describe('parseCoherenceArtifact', () => {
     });
   });
 
+  it('parses an adr row class', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-2026-08-10 | story-1 | covered | "records the decision" |
+`);
+
+    expect(result).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'adr',
+          id: 'adr-2026-08-10',
+          citedIds: ['story-1'],
+          verdict: 'covered',
+          quote: 'records the decision',
+        },
+      ],
+    });
+  });
+
   it('rejects a missing file (null input) as missing-coherence-artifact', () => {
     const result = parseCoherenceArtifact(null);
     expect(result.ok).toBe(false);
