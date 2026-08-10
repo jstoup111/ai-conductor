@@ -60,6 +60,11 @@ const REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES = [
   'remediation_sealed_artifact_redirect',
 ] satisfies Array<ConductorEvent['type']>;
 
+const RESEAL_EVENT_TYPES = [
+  'protected_artifact_reseal',
+  'protected_artifact_reseal_refused',
+] satisfies Array<ConductorEvent['type']>;
+
 const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
   ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
@@ -288,8 +293,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 70 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(70);
+  it('is total over all 72 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(72);
   });
 
   it('routes verdict_freshness to every sink', () => {
@@ -297,6 +302,39 @@ describe('event sink subscriptions', () => {
       render: true,
       persist: true,
       audit: true,
+    });
+  });
+
+  it('declares performed and refused operator reseals, auditing both outcomes', () => {
+    const events = [
+      {
+        type: 'protected_artifact_reseal',
+        paths: [
+          {
+            path: '.docs/plans/feature.md',
+            priorFingerprint: 'old-fingerprint',
+            newFingerprint: 'new-fingerprint',
+          },
+        ],
+        reason: 'correct an accepted plan',
+        fromCommit: 'abc123',
+        toCommit: 'def456',
+      },
+      {
+        type: 'protected_artifact_reseal_refused',
+        condition: 'unlisted-drift',
+        path: '.docs/stories/feature.md',
+      },
+    ] satisfies ConductorEvent[];
+
+    expect({
+      events,
+      performed: EVENT_SINKS.protected_artifact_reseal,
+      refused: EVENT_SINKS.protected_artifact_reseal_refused,
+    }).toEqual({
+      events,
+      performed: { render: false, persist: false, audit: true },
+      refused: { render: false, persist: false, audit: true },
     });
   });
 
@@ -315,6 +353,7 @@ describe('event sink subscriptions', () => {
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
       'verdict_freshness',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
+      ...RESEAL_EVENT_TYPES,
     ]));
   });
 
