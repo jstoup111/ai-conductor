@@ -1808,6 +1808,12 @@ export class DefaultStepRunner implements StepRunner {
         }
       },
     );
+    if (planSource.kind === 'malformed') {
+      return withBaseFreshness({
+        success: false,
+        output: planSource.message,
+      });
+    }
     if (planSource.kind === 'resolved') {
       const targetPath = planSource.renameMap.reduce(
         (path, pair) => path.replaceAll(pair.source, pair.target),

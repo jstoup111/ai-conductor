@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import {
   recordTestSuiteRemediation,
 } from './test-suite-remediation.js';
-import { dirname, relative, join } from 'node:path';
+import { dirname, relative, join, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import {
   HALT_MARKER,
@@ -121,6 +121,12 @@ import {
 } from './steps.js';
 import type { StepGroup } from '../types/index.js';
 import { checkGate } from './gates.js';
+import { isGatingStep } from './gates.js';
+import {
+  resolvePlanPatternSource,
+  type PatternSourceFileExists,
+  type PlanPatternSourceResolution,
+} from './plan-pattern-source.js';
 import {
   buildArtifactResolutionContext,
   findArtifactFiles as findArtifactFilesForStep,
@@ -508,6 +514,39 @@ export function getNavigableSteps(
       status: state[step.name] as StepStatus,
       phase: step.phase,
     }));
+}
+
+/** The tier scheduling projection derived from the active plan's content. */
+export interface PlanContentScheduling {
+  declaration: PlanPatternSourceResolution;
+  skippedSteps: StepName[];
+  enabledGateSteps: StepName[];
+}
+
+/**
+ * Resolve plan content before deriving its tier policy. A replication declaration
+ * intentionally does not alter tier policy, but it is retained in the returned
+ * projection so both scheduler paths consume the same parsed plan boundary.
+ */
+export async function resolvePlanContentScheduling(input: {
+  planPath: string;
+  planContent: string;
+  tier: ComplexityTier;
+  fileExists: PatternSourceFileExists;
+}): Promise<PlanContentScheduling> {
+  const declaration = await resolvePlanPatternSource(
+    input.planPath,
+    input.planContent,
+    input.fileExists,
+  );
+  const skippedSteps = ALL_STEPS
+    .filter((step) => step.skippableForTiers.includes(input.tier))
+    .map((step) => step.name);
+  const enabledGateSteps = ALL_STEPS
+    .filter((step) => isGatingStep(step.name) && !skippedSteps.includes(step.name))
+    .map((step) => step.name);
+
+  return { declaration, skippedSteps, enabledGateSteps };
 }
 
 export interface StepRunResult {
@@ -2669,6 +2708,46 @@ export class Conductor {
     }
   }
 
+  /**
+   * Resolve the active plan into the shared scheduling boundary. Missing plans
+   * remain declaration-absent until the plan step has authored one.
+   */
+  private async resolvePlanContentScheduling(
+    state: ConductState,
+    tier: ComplexityTier,
+  ): Promise<PlanContentScheduling> {
+    const activePlanPath = await this.getActivePlanPath();
+    if (!activePlanPath) {
+      return resolvePlanContentScheduling({
+        planPath: '.docs/plans/pending.md',
+        planContent: '',
+        tier,
+        fileExists: async () => false,
+      });
+    }
+
+    const planPath = (isAbsolute(activePlanPath)
+      ? relative(this.projectRoot, activePlanPath)
+      : activePlanPath).replaceAll('\\', '/');
+    const absolutePlanPath = isAbsolute(activePlanPath)
+      ? activePlanPath
+      : join(this.projectRoot, activePlanPath);
+    const planContent = await readFile(absolutePlanPath, 'utf-8').catch(() => '');
+    return resolvePlanContentScheduling({
+      planPath,
+      planContent,
+      tier,
+      fileExists: async (path) => {
+        try {
+          await accessFile(join(this.projectRoot, path));
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+  }
+
   /** True when a `.pipeline/` terminal marker (DONE / HALT) exists on disk. */
   private async markerExists(relPath: string): Promise<boolean> {
     try {
@@ -3817,9 +3896,10 @@ export class Conductor {
 
         // Read complexity tier from state each iteration (may change after complexity step)
         const tier = state.complexity_tier ?? 'L';
+        const scheduling = await this.resolvePlanContentScheduling(state, tier);
 
         // Check if step should be skipped for this complexity tier
-        if (step.skippableForTiers.includes(tier)) {
+        if (scheduling.skippedSteps.includes(step.name)) {
           await this.recordStepSkip(state, step, `complexity tier ${tier}`);
           await emitTracked({ type: 'tier_skip', step: step.name, tier });
           continue;
@@ -8609,6 +8689,7 @@ export class Conductor {
     const stateBeforeSkips = { ...state } as Record<string, unknown>;
     const skippedChanges: Record<string, StepStatus> = {};
     const tier = state.complexity_tier ?? 'L';
+    const scheduling = await this.resolvePlanContentScheduling(state, tier);
     // Resolve the track once (state-seeded, or the committed marker in the
     // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
     const track = await this.resolveTrack(state);
@@ -8622,7 +8703,7 @@ export class Conductor {
     for (const s of steps) {
       if (
         getStepStatus(state, s.name) === 'pending' &&
-        (s.skippableForTiers.includes(tier) ||
+        (scheduling.skippedSteps.includes(s.name) ||
           (s.skippableForTracks ?? []).includes(track) ||
           shouldSkipForBootstrapMode(s.name, state.bootstrap_mode) ||
           shouldSkipForUpstreamSkip(s, state) ||

@@ -85,4 +85,18 @@ describe('build_review copy equivalence', () => {
     expect(runCopyEquivalence).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledOnce();
   });
+
+  it('fails before equivalence or grading when the declaration is malformed', async () => {
+    await writeFile(planPath, '**Pattern-source:** src/source-widget.ts\n');
+    const { invoke, runner: subject } = runner();
+
+    const result = await subject.run('build_review', {});
+
+    expect(result).toMatchObject({
+      success: false,
+      output: 'Missing required **Rename-map:** line.',
+    });
+    expect(runCopyEquivalence).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
