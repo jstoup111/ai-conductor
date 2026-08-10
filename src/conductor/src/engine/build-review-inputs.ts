@@ -75,15 +75,19 @@ async function readBuildReviewGateInstructions(featureRoot: string): Promise<Bui
   let ledger: string;
   try {
     ledger = await readFile(join(featureRoot, '.pipeline', 'events.jsonl'), 'utf-8');
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
+  } catch {
+    return [];
   }
   const instructions: BuildReviewGateInstruction[] = [];
 
   for (const line of ledger.split('\n')) {
     if (!line.trim()) continue;
-    const event: unknown = JSON.parse(line);
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
     if (isBuildReviewGateInstruction(event)) {
       instructions.push({
         from: event.from,

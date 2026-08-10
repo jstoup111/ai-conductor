@@ -285,6 +285,50 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.gateInstructions).toEqual([]);
     });
 
+    it('fails open when the event ledger is absent', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.gateInstructions).toEqual([]);
+    });
+
+    it('preserves qualifying kickbacks around malformed event ledger lines', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await writeFile(join(dir, '.pipeline/events.jsonl'), [
+        JSON.stringify({ type: 'kickback', from: 'wiring_check', to: 'build', evidence: 'first valid instruction', count: 1 }),
+        '{"type":"kickback",',
+        'not json',
+        '{"type":"kickback","from":"wiring_check"',
+        JSON.stringify({ type: 'kickback', from: 'wiring_check', to: 'build', evidence: 'second valid instruction', count: 2 }),
+      ].join('\n'));
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.gateInstructions).toEqual([
+        { from: 'wiring_check', to: 'build', evidence: 'first valid instruction', count: 1 },
+        { from: 'wiring_check', to: 'build', evidence: 'second valid instruction', count: 2 },
+      ]);
+    });
+
+    it('fails open when reading the event ledger is rejected', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      const ledgerPath = join(dir, '.pipeline/events.jsonl');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await mkdir(ledgerPath);
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.gateInstructions).toEqual([]);
+    });
+
     it('rejects kickbacks from a gate other than wiring_check', async () => {
       const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
