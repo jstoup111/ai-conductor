@@ -88,6 +88,27 @@ describe('conduct config read', () => {
     expect({ code, stdout }).toEqual({ code: 0, stdout: '/project/adrs\n' });
   });
 
+  it('reads a user conflict-check ADR corpus when the project has no configuration file', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    projectRoot = await mkdtemp(join(tmpdir(), 'conduct-project-config-'));
+    await mkdir(join(home, '.ai-conductor'));
+    await writeFile(
+      join(home, '.ai-conductor', 'config.yml'),
+      'conflict_check:\n  adr_corpus: /user/adrs\n',
+      'utf8',
+    );
+    process.env.HOME = home;
+    process.chdir(projectRoot);
+    let stdout = '';
+
+    const code = await userConfigReadCommand(
+      { kind: 'user-config-read', path: 'conflict_check.adr_corpus' },
+      (output) => (stdout += output),
+    );
+
+    expect({ code, stdout }).toEqual({ code: 0, stdout: '/user/adrs\n' });
+  });
+
   it('falls back to the user conflict-check ADR corpus when the project has no value', async () => {
     home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
     projectRoot = await mkdtemp(join(tmpdir(), 'conduct-project-config-'));
