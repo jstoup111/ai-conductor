@@ -232,7 +232,7 @@ detail.
 | `wiring_check` | `.pipeline/wiring-evidence.json` | no | Validated evidence with non-empty symbols per task. Missing evidence is computed live; evidence recorded at a prior HEAD is re-derived in process rather than rejected |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | no | A live re-inspection returning `CURRENT`. File presence alone can never satisfy this gate |
 | `manual_test` | `.pipeline/manual-test-results.md` | no | The latest attempt section has no FAIL rows and is fresh. After a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
-| `prd_audit` | `.pipeline/prd-audit.md` | no | Fresh audit where every FR row is `ALIGNED` or explicitly `ACCEPTED`. Any `MISSING`, `PARTIAL`, or `DIVERGED` row blocks |
+| `prd_audit` | `.pipeline/prd-audit.md` | no | Fresh audit with exactly one verdict row for every FR enumerated by the feature's approved PRD; each row is `ALIGNED` or explicitly `ACCEPTED`. A missing row blocks identically to a `MISSING`, `PARTIAL`, or `DIVERGED` row. An unresolvable or unreadable feature PRD blocks fail-closed |
 | `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` | no | A `Verdict:` line reading `APPROVED` or `APPROVED WITH DRIFT NOTES`. `BLOCKED`, missing, or unrecognized all block |
 | `retro` | `.docs/retros/*.md` | yes | A retro file matching this feature's slug, fresh this session |
 | `rebase` | — | — | Computed from live git state, not a file |

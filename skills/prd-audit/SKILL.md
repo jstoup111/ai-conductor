@@ -92,10 +92,12 @@ filename, overwritten each run; NOT a committed design artifact):
 [verdict, stages, evidence, rationale from the auditor]
 ```
 
-The verdict-table row format is what the conductor's objective gate reads: a row is **blocking**
-when it carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is **not** marked `ACCEPTED`.
-Mark a row `ACCEPTED` only after the human has explicitly accepted that divergence (see §5). The
-report is overwritten on re-run — it reflects the CURRENT state; git holds the history.
+The verdict table MUST contain exactly one row for every enumerated `FR-N`. A missing FR row blocks
+the gate identically to an un-`ALIGNED` row, even when every row that is present is `ALIGNED`. A
+row is also **blocking** when it carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is
+**not** marked `ACCEPTED`. Mark a row `ACCEPTED` only after the human has explicitly accepted that
+divergence (see §5). The report is overwritten on re-run — it reflects the CURRENT state; git
+holds the history.
 
 ### 5. Gate + Kickback
 
