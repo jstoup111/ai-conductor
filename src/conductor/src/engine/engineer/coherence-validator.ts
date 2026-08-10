@@ -1428,6 +1428,17 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
     );
   }
 
+  const git = makeGitRunner(worktreePath);
+  const changedFiles = await resolveChangedFilesForWaiver(worktreePath, canonicalPath, git);
+  const adrIds = new Set(
+    changedFiles
+      .filter(
+        ({ path, status }) =>
+          path.startsWith('.docs/decisions/adr-') && !status.startsWith('D'),
+      )
+      .map(({ path }) => path.slice('.docs/decisions/'.length).replace(/\.md$/, '')),
+  );
+
   // Fabricated-citation fail-closed reject — never waivable (an evidentiary
   // defect, not a coverage gap).
   const crossCheck = crossCheckIds(parsed.rows, {
@@ -1435,6 +1446,7 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
     planText,
     prdText,
     outcomeCount: outcomeBullets.length,
+    adrIds,
   });
   if (!crossCheck.ok) {
     throw new Error(
@@ -1458,7 +1470,6 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
 
   const gaps: CoherenceGap[] = coverage.ok ? [] : [...coverage.gaps];
 
-  const git = makeGitRunner(worktreePath);
   const defaultBranch = await deriveDefaultBranch(canonicalPath);
   const duplicate = await scanDuplicateClaim(worktreePath, defaultBranch, sourceRef, {
     git,
@@ -1500,7 +1511,6 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
 
   if (gaps.length === 0) return;
 
-  const changedFiles = await resolveChangedFilesForWaiver(worktreePath, canonicalPath, git);
   const readText = async (path: string): Promise<string | null> => {
     try {
       return await readFile(path, 'utf-8');

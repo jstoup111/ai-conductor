@@ -7,7 +7,12 @@
 //   - corrupted/unparseable table → 'unparseable-coherence-artifact'
 //   - three distinct error kinds, never collapsed into one generic error
 
-import { describe, it, expect, vi } from 'vitest';
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdtemp, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   parseCoherenceArtifact,
   crossCheckIds,
@@ -22,13 +27,26 @@ import {
   scanDuplicateClaim,
   advisoryDuplicateClaimWarn,
   resolveRequiredLayers,
+  runCoherenceGate,
   type CrossCheckInputs,
   type CoherenceGap,
   type ValidateCoherenceInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 import { evaluateCoherenceWaiver } from '../../../src/engine/engineer/coherence-waiver.js';
+import { AuthoringGuard } from '../../../src/engine/engineer/authoring-guard.js';
 import type { GitRunner, GitResult } from '../../../src/engine/rebase.js';
 import type { RunOverlapScanArgs } from '../../../src/engine/overlap-scan.js';
+
+const execFile = promisify(execFileCallback);
+const temporaryRepositories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryRepositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  await execFile('git', args, { cwd });
+}
 
 // A scripted GitRunner: matches argv prefixes to canned results, and records
 // every invocation so tests can assert zero-network-call behavior.
@@ -1384,5 +1402,87 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
   it('L-tier engages normally too', () => {
     const result = resolveRequiredLayers('/wt', 'L', 'product', [], WITH_COHERENCE);
     expect(result.engaged).toBe(true);
+  });
+});
+
+describe('runCoherenceGate ADR pool (Task 7)', () => {
+  it('keeps a deleted ADR out of the status-bearing ADR pool', async () => {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-adr-pool-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await mkdir(join(canonicalPath, '.docs/decisions'), { recursive: true });
+    await writeFile(join(canonicalPath, '.docs/decisions/adr-deleted.md'), '# Deleted ADR\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed ADR']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await unlink(join(worktreePath, '.docs/decisions/adr-deleted.md'));
+    await writeFile(join(worktreePath, '.docs/decisions/adr-added.md'), '# Added ADR\n');
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "ship widgets" |
+| outcome | outcome-2 | story-2 | covered | "support returns" |
+| fr | FR-1 | story-1 | covered | "FR-1: widgets" |
+| fr | FR-2 | story-2 | covered | "FR-2: widgets" |
+| story | story-1 | task-1, task-2 | covered | "As a user..." |
+| story | story-2 | task-1 | covered | "As a user..." |
+| task | task-1 | story-1 | covered | "Task 1: build widget" |
+| task | task-2 | story-1 | covered | "Task 2: ship widget" |
+| adr | adr-added | story-1 | covered | "records the new decision" |
+| adr | adr-deleted | story-1 | covered | "records the removed decision" |
+`,
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'replace ADR']);
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath,
+        tier: 'M',
+        track: 'product',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1
+
+## Story 2: Widget returns
+**Requirement:** FR-2
+`,
+        planText: `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/widget.ts
+
+### Task 2: Ship widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/ship.ts
+`,
+        prdText: `# PRD
+
+## Functional Requirements
+
+- FR-1: Widgets can be shipped.
+- FR-2: Widgets can be returned.
+`,
+        outcomeBullets: ['- Ship widgets reliably.', '- Support returns.'],
+        ideaFiles: new Set(['.docs/coherence/idea.md', '.docs/decisions/adr-added.md']),
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).rejects.toThrow('fabricated-id "adr-deleted"');
   });
 });
