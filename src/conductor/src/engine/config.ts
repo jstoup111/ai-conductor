@@ -1766,6 +1766,56 @@ function deepMerge(a: Record<string, unknown>, b: Record<string, unknown>): Reco
   return out;
 }
 
+/** Load project-over-user config for read-only CLI consumers without schema validation. */
+export async function loadMergedConfigForRead(
+  projectRoot: string,
+): Promise<{ ok: true; config: Record<string, unknown> } | { ok: false; error: ConfigError }> {
+  const configPath = projectConfigPath(projectRoot);
+  let raw: string;
+  try {
+    raw = await readFile(configPath, 'utf-8');
+  } catch {
+    return {
+      ok: false,
+      error: {
+        type: 'missing',
+        message: `Config file not found: ${configPath}. Run conduct-ts config init to create it.`,
+      },
+    };
+  }
+
+  let project: unknown;
+  try {
+    project = loadYaml(raw) ?? {};
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      error: {
+        type: 'parse_error',
+        message: error instanceof Error ? error.message : 'Failed to parse YAML',
+      },
+    };
+  }
+  if (!isPlainObject(project)) {
+    return {
+      ok: false,
+      error: { type: 'validation_error', message: 'Project config must be a YAML mapping' },
+    };
+  }
+
+  const userResult = await readUserConfig();
+  if (userResult.parseError) {
+    return {
+      ok: false,
+      error: { type: 'parse_error', message: `user config parse error: ${userResult.parseError}` },
+    };
+  }
+  return {
+    ok: true,
+    config: mergeConfigs(userResult.config, project as HarnessConfig) as Record<string, unknown>,
+  };
+}
+
 /**
  * Load project config (.ai-conductor/config.yml), merge user config
  * (~/.ai-conductor/config.yml) underneath, validate the result. Returns the

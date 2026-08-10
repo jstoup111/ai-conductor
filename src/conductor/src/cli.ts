@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { ViewMode } from './ui/types.js';
@@ -8,7 +9,7 @@ import type {
   MermaidRendererConfig,
 } from './types/config.js';
 import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
-import { validateConfig } from './engine/config.js';
+import { loadMergedConfigForRead, projectConfigPath, validateConfig } from './engine/config.js';
 import { readUserConfig, userConfigPath, writeUserConfig } from './engine/user-config.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -174,18 +175,36 @@ export function detectUserConfigSetCommand(argv: string[]): UserConfigSetDispatc
   return { kind: 'user-config-set', path: argv[4], value: argv[5] };
 }
 
-/** Print a scalar user-config value for shell callers. */
+/** Print a scalar effective-config value for shell callers. */
 export async function userConfigReadCommand(
   cmd: UserConfigReadDispatch,
   write: (output: string) => void = (output) => process.stdout.write(output),
 ): Promise<number> {
+  const projectRoot = process.cwd();
+  if (existsSync(projectConfigPath(projectRoot))) {
+    const result = await loadMergedConfigForRead(projectRoot);
+    if (!result.ok) {
+      write(`Unable to read config: ${result.error.message}\n`);
+      return 1;
+    }
+    return writeConfigValue(result.config, cmd.path, write);
+  }
+
   const { config, parseError } = await readUserConfig();
   if (parseError) {
     write(`Unable to read user config at ${userConfigPath()}: ${parseError}\n`);
     return 1;
   }
-  let value: unknown = config;
-  for (const segment of cmd.path.split('.')) {
+  return writeConfigValue(config, cmd.path, write);
+}
+
+function writeConfigValue(
+  config: object,
+  path: string,
+  write: (output: string) => void,
+): number {
+  let value: unknown = config as Record<string, unknown>;
+  for (const segment of path.split('.')) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
       value = undefined;
       break;
@@ -427,7 +446,7 @@ export function createProgram(): Command {
     .description('Create project-scoped .ai-conductor/config.yml from the template if absent');
   config
     .command('read <path>')
-    .description('Print a value from user-scoped ~/.ai-conductor/config.yml');
+    .description('Print a value from effective configuration: project-over-user when a project config exists, user configuration otherwise');
   config
     .command('write <section> <preset> <command> <args> <mode>')
     .description('Write a viewer or renderer section to user-scoped ~/.ai-conductor/config.yml');

@@ -14,9 +14,16 @@ import {
 } from '../src/cli.js';
 
 let home: string | undefined;
+let projectRoot: string | undefined;
 const originalHome = process.env.HOME;
+const originalCwd = process.cwd();
 
 afterEach(async () => {
+  process.chdir(originalCwd);
+  if (projectRoot) {
+    await rm(projectRoot, { recursive: true, force: true });
+    projectRoot = undefined;
+  }
   if (home) {
     await rm(home, { recursive: true, force: true });
     home = undefined;
@@ -45,13 +52,105 @@ describe('conduct config read', () => {
     expect({ code, stdout }).toEqual({ code: 0, stdout: 'glow\n' });
   });
 
-  it('distinguishes user-scoped read from project-scoped init in config help', async () => {
+  it('describes effective read and scoped write/init behavior in config help', async () => {
     const config = createProgram().commands.find((command) => command.name() === 'config');
     const help = config?.helpInformation() ?? '';
 
-    expect(help).toMatch(/read.*user-scoped|user-scoped.*read/is);
+    expect(help).toMatch(/read.*effective configuration.*project-over-user.*user configuration|effective configuration.*project-over-user.*user configuration.*read/is);
     expect(help).toMatch(/write.*user-scoped|user-scoped.*write/is);
     expect(help).toMatch(/init.*project-scoped|project-scoped.*init/is);
+  });
+
+  it('prefers a project conflict-check ADR corpus over the user configuration', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    projectRoot = await mkdtemp(join(tmpdir(), 'conduct-project-config-'));
+    await mkdir(join(home, '.ai-conductor'));
+    await mkdir(join(projectRoot, '.ai-conductor'));
+    await writeFile(
+      join(home, '.ai-conductor', 'config.yml'),
+      'conflict_check:\n  adr_corpus: /user/adrs\n',
+      'utf8',
+    );
+    await writeFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      'conflict_check:\n  adr_corpus: /project/adrs\n',
+      'utf8',
+    );
+    process.env.HOME = home;
+    process.chdir(projectRoot);
+    let stdout = '';
+
+    const code = await userConfigReadCommand(
+      { kind: 'user-config-read', path: 'conflict_check.adr_corpus' },
+      (output) => (stdout += output),
+    );
+
+    expect({ code, stdout }).toEqual({ code: 0, stdout: '/project/adrs\n' });
+  });
+
+  it('falls back to the user conflict-check ADR corpus when the project has no value', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    projectRoot = await mkdtemp(join(tmpdir(), 'conduct-project-config-'));
+    await mkdir(join(home, '.ai-conductor'));
+    await mkdir(join(projectRoot, '.ai-conductor'));
+    await writeFile(
+      join(home, '.ai-conductor', 'config.yml'),
+      'conflict_check:\n  adr_corpus: /user/adrs\n',
+      'utf8',
+    );
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'conductor: {}\n', 'utf8');
+    process.env.HOME = home;
+    process.chdir(projectRoot);
+    let stdout = '';
+
+    const code = await userConfigReadCommand(
+      { kind: 'user-config-read', path: 'conflict_check.adr_corpus' },
+      (output) => (stdout += output),
+    );
+
+    expect({ code, stdout }).toEqual({ code: 0, stdout: '/user/adrs\n' });
+  });
+
+  it('falls back to the user conflict-check ADR corpus when the project config is empty', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    projectRoot = await mkdtemp(join(tmpdir(), 'conduct-project-config-'));
+    await mkdir(join(home, '.ai-conductor'));
+    await mkdir(join(projectRoot, '.ai-conductor'));
+    await writeFile(
+      join(home, '.ai-conductor', 'config.yml'),
+      'conflict_check:\n  adr_corpus: /user/adrs\n',
+      'utf8',
+    );
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), '', 'utf8');
+    process.env.HOME = home;
+    process.chdir(projectRoot);
+    let stdout = '';
+
+    const code = await userConfigReadCommand(
+      { kind: 'user-config-read', path: 'conflict_check.adr_corpus' },
+      (output) => (stdout += output),
+    );
+
+    expect({ code, stdout }).toEqual({ code: 0, stdout: '/user/adrs\n' });
+  });
+
+  it('prints an empty conflict-check ADR corpus when neither scope provides one', async () => {
+    home = await mkdtemp(join(tmpdir(), 'conduct-user-config-'));
+    projectRoot = await mkdtemp(join(tmpdir(), 'conduct-project-config-'));
+    await mkdir(join(home, '.ai-conductor'));
+    await mkdir(join(projectRoot, '.ai-conductor'));
+    await writeFile(join(home, '.ai-conductor', 'config.yml'), 'conductor: {}\n', 'utf8');
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'conductor: {}\n', 'utf8');
+    process.env.HOME = home;
+    process.chdir(projectRoot);
+    let stdout = '';
+
+    const code = await userConfigReadCommand(
+      { kind: 'user-config-read', path: 'conflict_check.adr_corpus' },
+      (output) => (stdout += output),
+    );
+
+    expect({ code, stdout }).toEqual({ code: 0, stdout: '\n' });
   });
 });
 
