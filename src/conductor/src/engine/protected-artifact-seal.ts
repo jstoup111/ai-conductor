@@ -918,11 +918,41 @@ export async function rotateProtectedArtifactSeal({
   onRebaseline,
 }: RotateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
   const recomputed = await createSeal({ projectRoot, baselineCommit: toCommit });
+  return persistProtectedArtifactSealRotation({
+    projectRoot,
+    seal,
+    recomputed,
+    trigger,
+    paths,
+    fileOperations,
+    onRebaseline,
+  });
+}
+
+interface PersistProtectedArtifactSealRotationOptions {
+  projectRoot: string;
+  seal: ProtectedArtifactSeal;
+  recomputed: ProtectedArtifactSeal;
+  trigger: string;
+  paths: string[];
+  fileOperations: ProtectedArtifactSealFileOperations;
+  onRebaseline?: ProtectedArtifactSealRebaselineObserver;
+}
+
+async function persistProtectedArtifactSealRotation({
+  projectRoot,
+  seal,
+  recomputed,
+  trigger,
+  paths,
+  fileOperations,
+  onRebaseline,
+}: PersistProtectedArtifactSealRotationOptions): Promise<ProtectedArtifactSeal> {
   const rotated: ProtectedArtifactSeal = {
     ...recomputed,
     rebaselines: [
       ...seal.rebaselines,
-      { fromCommit: seal.baselineCommit, toCommit, trigger, paths },
+      { fromCommit: seal.baselineCommit, toCommit: recomputed.baselineCommit, trigger, paths },
     ],
   };
   const sealPath = join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH);
@@ -937,7 +967,7 @@ export async function rotateProtectedArtifactSeal({
       type: 'protected_artifact_rebaseline',
       trigger,
       fromCommit: seal.baselineCommit,
-      toCommit,
+      toCommit: recomputed.baselineCommit,
       paths,
     });
     return rotated;
