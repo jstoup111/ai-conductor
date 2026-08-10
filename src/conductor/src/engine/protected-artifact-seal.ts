@@ -107,6 +107,13 @@ export interface CreateProtectedArtifactSealOptions {
   baselineCommit: string;
 }
 
+export interface CreateScopedProtectedArtifactSealOptions {
+  projectRoot: string;
+  seal: ProtectedArtifactSeal;
+  toCommit: string;
+  paths: string[];
+}
+
 export interface ProtectedArtifactSealFileOperations {
   writeFile(path: string, content: string): Promise<unknown>;
   rename(from: string, to: string): Promise<unknown>;
@@ -492,6 +499,23 @@ async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<
     })),
   );
   return { version: 2, baselineCommit: options.baselineCommit, protectedArtifacts, rebaselines: [] };
+}
+
+export async function createScopedProtectedArtifactSeal({
+  projectRoot,
+  seal,
+  toCommit,
+  paths,
+}: CreateScopedProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
+  const scopedPaths = new Set(paths);
+  const protectedArtifacts = await Promise.all(seal.protectedArtifacts.map(async (artifact) => {
+    if (!scopedPaths.has(artifact.path)) return artifact;
+    return {
+      ...artifact,
+      fingerprint: fingerprint(await contentAtCommit(projectRoot, toCommit, artifact.path)),
+    };
+  }));
+  return { ...seal, protectedArtifacts };
 }
 
 async function workspaceProtectedPaths(projectRoot: string, directory: string): Promise<string[]> {
