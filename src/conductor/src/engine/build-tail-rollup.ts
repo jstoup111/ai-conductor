@@ -123,7 +123,12 @@ export function computeBuildTailRollup(
           endedAt: resolutionTick.ts,
           durationMs: resolutionTick.ts - window.startedAt,
         },
-      postResolutionTicks: (resolutionIndex >= 0 ? ticks.slice(resolutionIndex + 1) : ticks.slice(1))
+      // A re-entry begins after task resolution, so all later ticks belong to
+      // its tail. An unresolved first-pass window has no post-resolution
+      // interval and must not relabel task execution as remediation.
+      postResolutionTicks: (resolutionIndex >= 0
+        ? ticks.slice(resolutionIndex + 1)
+        : firstPass ? [] : ticks.slice(1))
         .map((tick) => ({
           ts: tick.ts,
           classification: tick.headMoved ? 'remediation' as const : 'closeout' as const,

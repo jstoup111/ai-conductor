@@ -211,6 +211,27 @@ describe('computeBuildTailRollup', () => {
     });
   });
 
+  it('does not classify unresolved first-pass task ticks as post-resolution tail', () => {
+    expect(computeBuildTailRollup([
+      {
+        startedAt: 100,
+        endedAt: 200,
+        events: [
+          { type: 'build_progress', resolved: 1, total: 5, ts: 120 },
+          { type: 'build_progress', resolved: 2, total: 5, headMoved: true, ts: 140 },
+          { type: 'build_progress', resolved: 3, total: 5, headMoved: true, ts: 160 },
+        ],
+      },
+    ])).toMatchObject({
+      state: 'measured',
+      windows: [{
+        classification: 'first-pass',
+        taskExecution: undefined,
+        postResolutionTicks: [],
+      }],
+    });
+  });
+
   it('returns partial for a completed window with no progress ticks or invalid closeout duration', () => {
     expect(computeBuildTailRollup([
       {
