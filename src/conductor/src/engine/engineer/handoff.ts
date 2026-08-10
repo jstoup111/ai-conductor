@@ -28,6 +28,7 @@ import type { AuthoredLedgerOpts } from './authored-ledger.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { extractPrUrl } from '../state.js';
 import { injectIssueRef } from './issue-ref.js';
+import { mirrorIssueCriticalityLabels } from '../pr-criticality-labels.js';
 import type { GitRunner } from '../pr-labels.js';
 
 // ─── Public types ──────────────────────────────────────────────────────────────
@@ -231,6 +232,17 @@ export async function openSpecPr(
       keyword: 'Refs',
       sourceRef: deps.sourceRef,
       cwd,
+      log: deps.log,
+    });
+
+    // 3c. Mirror the issue's criticality (`priority: <band>`) labels onto the
+    //     spec PR, so the PR list carries the same urgency signal the daemon
+    //     dispatches on. Fail-open: never throws, never discards the PR.
+    await mirrorIssueCriticalityLabels({
+      gh: async (args, opts) => runner(args, { cwd: opts.cwd }),
+      cwd,
+      prUrl: url,
+      sourceRef: deps.sourceRef,
       log: deps.log,
     });
   }

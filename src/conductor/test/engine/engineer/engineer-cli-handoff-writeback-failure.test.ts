@@ -233,11 +233,15 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
 
     // GhRunner call count: pr create (+ any auxiliary openSpecPr calls) + the
     // three write-back calls (issue comment, label create, REST label-add).
+    // The REST arm is matched on the `engineer:handled` payload specifically:
+    // openSpecPr also reads the issue's labels to mirror its criticality onto
+    // the spec PR, and a bare `labels` match would count that read as a
+    // write-back.
     const writebackCalls = calls.filter(
       (c) =>
         (c[0] === 'issue' && c[1] === 'comment') ||
         (c[0] === 'label' && c[1] === 'create') ||
-        (c[0] === 'api' && c.some((a) => a.includes('labels'))),
+        (c[0] === 'api' && c.some((a) => a.includes('labels[]=engineer:handled'))),
     );
     expect(writebackCalls).toHaveLength(3);
     expect(calls.some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(true);

@@ -257,6 +257,13 @@ What the draft window does and does not mean:
   which is how FINISH knows deterministically that the body is unauthored and must be written before
   anything judges it; FINISH never records completion from placeholder or halt content. If the completion gate still observes that marker on the recorded PR, it re-dispatches
   `finish` for a body rewrite — never `/remediate`, and never a re-opened `build`.
+- **It inherits the issue's criticality.** When the feature came from an intake issue, the engine
+  copies that issue's `priority: <band>` labels onto the PR as it is adopted, so the PR list carries
+  the same urgency the daemon dispatched on without anyone opening the linked issue. Only the
+  criticality family is copied — `size:` and every other label stay on the issue. This is fail-open:
+  no linked issue, an unreadable label list, or a rejected label write logs one `[pr-criticality]`
+  line and changes nothing else. Re-entering SHIP re-applies the same labels, which GitHub accepts
+  unchanged.
 - **It is advisory.** If the push is rejected or `gh` is unauthenticated, the engine logs one loud
   `[ship-draft-pr]` line and the build continues; only the finish-time publish is load-bearing.
 - **It is idempotent.** Re-entering SHIP after a kickback, resume, or rework reuses the open PR — it
