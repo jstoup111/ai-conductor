@@ -17,6 +17,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - A plan can declare that a task replicates an existing source file under a rename map, and BUILD mechanically copies and verifies that replication with a new blocking `build_review` gate instead of relying on an LLM to reproduce it from scratch. ([implementation PR #1451](https://github.com/jstoup111/ai-conductor/pull/1451)).
 
+### Fixed
+
+- Spec PRs opened into a repository that requires a release disposition now always declare one, so its required release-metadata check no longer fails on every landed spec. ([implementation PR #1448](https://github.com/jstoup111/ai-conductor/pull/1448)).
+
 ## [0.101.1] - 2026-08-10
 
 ### Fixed
