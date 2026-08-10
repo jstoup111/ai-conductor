@@ -3281,9 +3281,21 @@ export async function prdAuditCoverageGap(
   reportContent: string,
 ): Promise<string | null> {
   const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
+  if (prdPaths.length === 0) {
+    return 'PRD audit coverage is unresolvable: no approved PRD could be resolved for the feature.';
+  }
+
+  let frIdSets: Set<string>[];
+  try {
+    frIdSets = await Promise.all(
+      prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8'))),
+    );
+  } catch {
+    return 'PRD audit coverage is unreadable: a resolved approved PRD could not be read.';
+  }
+
   const expectedIds = new Set(
-    (await Promise.all(prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8')))))
-      .flatMap((ids) => [...ids]),
+    frIdSets.flatMap((ids) => [...ids]),
   );
   const missing = findFrIdsWithoutRows(reportContent, expectedIds);
   return missing.length === 0 ? null : `PRD audit report is missing verdict rows for ${missing.join(', ')}.`;

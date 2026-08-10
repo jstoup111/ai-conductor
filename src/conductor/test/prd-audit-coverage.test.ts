@@ -132,4 +132,41 @@ describe('prdAuditCoverageGap', () => {
 
     expect(coverageResults).toEqual([null, expect.stringContaining('FR-2'), null]);
   });
+
+  it.each([
+    {
+      name: 'no PRD resolves for the feature',
+      featureContext: context({ activePlanPath: '.docs/plans/current-feature.md' }),
+      setup: async () => undefined,
+      report: '',
+      expectedGap: 'unresolvable',
+    },
+    {
+      name: 'a resolved PRD cannot be read',
+      featureContext: context({ activePlanPath: '.docs/plans/current-feature.md' }),
+      setup: async () => mkdir(join(root, '.docs/specs/current-feature.md')),
+      report: '',
+      expectedGap: 'unreadable',
+    },
+    {
+      name: 'two resolved PRDs contribute their union of FR ids',
+      featureContext: context({ featureIdentities: ['first-feature', 'second-feature'] }),
+      setup: async () => {
+        await writeFile(
+          join(root, '.docs/specs/first-feature.md'),
+          '## Functional Requirements\n\nFR-1',
+        );
+        await writeFile(
+          join(root, '.docs/specs/second-feature.md'),
+          '## Functional Requirements\n\nFR-2',
+        );
+      },
+      report: '| FR-1 | ALIGNED | — | Covered |',
+      expectedGap: 'FR-2',
+    },
+  ])('fails closed when $name', async ({ featureContext, setup, report, expectedGap }) => {
+    await setup();
+
+    await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toContain(expectedGap);
+  });
 });
