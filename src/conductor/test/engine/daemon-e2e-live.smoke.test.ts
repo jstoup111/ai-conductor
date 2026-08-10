@@ -178,10 +178,6 @@ const fixturePlanPath = fileURLToPath(
 const fixtureStoriesPath = fileURLToPath(
   new URL('../fixtures/daemon-e2e/stories.md', import.meta.url),
 );
-const fixtureTouchedPath = fileURLToPath(
-  new URL('../fixtures/daemon-e2e/touched.txt', import.meta.url),
-);
-
 /**
  * The documented default keeps this manually-dispatched smoke bounded while
  * allowing operators to lower it with DAEMON_E2E_LIVE_TOKEN_CAP.
@@ -556,7 +552,10 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
       await mkdir(join(worktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
       await copyFile(fixturePlanPath, planPath);
       await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
-      await copyFile(fixtureTouchedPath, join(worktreeDir, 'test/fixtures/daemon-e2e/touched.txt'));
+      // Task 1's deliverable is deliberately NOT seeded. Seeding it made the
+      // baseline commit already satisfy the plan, so a live agent correctly
+      // declined to redo finished work and the run ended with no task commit
+      // at all — a fixture bug that read as a product failure.
       const { provisionLiveProviderHome } = await import('../fixtures/live-provider-home.js');
       providerHome = await provisionLiveProviderHome(
         fileURLToPath(new URL('../../../../', import.meta.url)),
@@ -581,6 +580,12 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
         cwd: worktreeDir,
       });
       baselineSha = seededBaselineSha;
+      // Fails here rather than 5 minutes and one live dispatch later if the
+      // baseline ever ships Task 1's deliverable again.
+      const { stdout: seededFiles } = await execa(
+        'git', ['ls-tree', '--name-only', '-r', 'HEAD'], { cwd: worktreeDir },
+      );
+      expect(seededFiles.split('\n')).not.toContain('test/fixtures/daemon-e2e/touched.txt');
       await execa('git', ['checkout', '-b', `feature/${slug}`], { cwd: worktreeDir });
 
       await mkdir(pipelineDir, { recursive: true });
