@@ -15,6 +15,7 @@ import {
   isActiveStepArtifactException,
   isProtectedArtifactPath,
   namesOwnFeature,
+  resealProtectedArtifactSeal,
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
@@ -268,6 +269,72 @@ describe('createScopedProtectedArtifactSeal', () => {
       rejection: message,
       persistedBytes: originalBytes,
       seal: JSON.parse(originalBytes),
+    });
+  });
+
+  it('advances the baseline, records scoped lineage, and verifies every sealed entry', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/p2.md': 'approved plan two\n',
+    });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [
+        {
+          path: '.docs/plans/p1.md',
+          fingerprint: `sha256:${createHash('sha256').update('incorrect plan\n').digest('hex')}`,
+        },
+        {
+          path: '.docs/plans/p2.md',
+          fingerprint: `sha256:${createHash('sha256').update('approved plan two\n').digest('hex')}`,
+        },
+      ],
+      rebaselines: [],
+    };
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal, null, 2)}\n`);
+    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+    await git(repo, ['add', '.docs/plans/p1.md']);
+    await git(repo, ['commit', '-q', '-m', 'correct protected plan']);
+    const toCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit,
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+    });
+    const persisted = JSON.parse(await readFile(sealPath, 'utf8'));
+    const verification = await verifyProtectedArtifactSeal({ projectRoot: repo });
+
+    expect({ resealed, persisted, verification }).toEqual({
+      resealed: {
+        version: 2,
+        baselineCommit: toCommit,
+        protectedArtifacts: [
+          {
+            path: '.docs/plans/p1.md',
+            fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
+          },
+          seal.protectedArtifacts[1],
+        ],
+        rebaselines: [{
+          fromCommit: baselineCommit,
+          toCommit,
+          trigger: 'operator-reseal',
+          paths: ['.docs/plans/p1.md'],
+        }],
+      },
+      persisted: resealed,
+      verification: {
+        ok: true,
+        seal: resealed,
+        selfAmendments: [],
+      },
     });
   });
 });

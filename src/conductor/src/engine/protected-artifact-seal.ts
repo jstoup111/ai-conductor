@@ -130,6 +130,8 @@ export interface RotateProtectedArtifactSealOptions {
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
+export interface ResealProtectedArtifactSealOptions extends RotateProtectedArtifactSealOptions {}
+
 export interface VerifyProtectedArtifactSealOptions {
   projectRoot: string;
   /** Required only while validating a first BUILD entry before it may persist a seal. */
@@ -979,6 +981,27 @@ export async function rotateProtectedArtifactSeal({
     projectRoot,
     seal,
     recomputed,
+    trigger,
+    paths,
+    fileOperations,
+    onRebaseline,
+  });
+}
+
+export async function resealProtectedArtifactSeal({
+  projectRoot,
+  seal,
+  toCommit,
+  trigger,
+  paths,
+  fileOperations = { writeFile, rename, rm },
+  onRebaseline,
+}: ResealProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
+  const recomputed = await createScopedProtectedArtifactSeal({ projectRoot, seal, toCommit, paths });
+  return persistProtectedArtifactSealRotation({
+    projectRoot,
+    seal,
+    recomputed: { ...recomputed, baselineCommit: toCommit },
     trigger,
     paths,
     fileOperations,
