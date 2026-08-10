@@ -268,6 +268,78 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 });
 
 describe('rotateProtectedArtifactSeal', () => {
+  it('pins the persisted snapshot and notification produced by a permitted rotation', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/feature.md': 'approved plan\n',
+      '.docs/specs/feature.md': 'approved prd\n',
+    });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [],
+    };
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal, null, 2)}\n`);
+    await writeProjectFile(repo, '.docs/plans/feature.md', 'rebased plan\n');
+    await writeProjectFile(repo, '.docs/specs/feature.md', 'rebased prd\n');
+    await git(repo, ['add', '.docs']);
+    await git(repo, ['commit', '-q', '-m', 'rebase inherited decide artifacts']);
+    const toCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const notifications: unknown[] = [];
+
+    const rotated = await rotateProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit,
+      trigger: 'history-rewrite',
+      paths: ['.docs/plans/feature.md'],
+      onRebaseline: async (event) => { notifications.push(event); },
+    });
+
+    expect({
+      rotated,
+      persisted: JSON.parse(await readFile(sealPath, 'utf8')),
+      sealDirectoryEntries: await readdir(dirname(sealPath)),
+      notifications,
+    }).toEqual({
+      rotated: {
+        version: 2,
+        baselineCommit: toCommit,
+        protectedArtifacts: [
+          {
+            path: '.docs/plans/feature.md',
+            fingerprint: `sha256:${createHash('sha256').update('rebased plan\n').digest('hex')}`,
+          },
+          {
+            path: '.docs/specs/feature.md',
+            fingerprint: `sha256:${createHash('sha256').update('rebased prd\n').digest('hex')}`,
+          },
+        ],
+        rebaselines: [{
+          fromCommit: baselineCommit,
+          toCommit,
+          trigger: 'history-rewrite',
+          paths: ['.docs/plans/feature.md'],
+        }],
+      },
+      persisted: rotated,
+      sealDirectoryEntries: ['protected-artifact-seal.json'],
+      notifications: [{
+        type: 'protected_artifact_rebaseline',
+        fromCommit: baselineCommit,
+        toCommit,
+        trigger: 'history-rewrite',
+        paths: ['.docs/plans/feature.md'],
+      }],
+    });
+  });
+
   it('atomically persists the toCommit snapshot while preserving and appending rebaseline lineage', async () => {
     const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
     const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
