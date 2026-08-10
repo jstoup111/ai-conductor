@@ -285,6 +285,48 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.gateInstructions).toEqual([]);
     });
 
+    it('rejects kickbacks from a gate other than wiring_check', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await writeFile(join(dir, '.pipeline/events.jsonl'), JSON.stringify({
+        type: 'kickback', from: 'test_suite', to: 'build', evidence: 'aggregate failed', count: 1,
+      }));
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.gateInstructions).toEqual([]);
+    });
+
+    it('rejects wiring_check kickbacks that target a step other than build', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await writeFile(join(dir, '.pipeline/events.jsonl'), JSON.stringify({
+        type: 'kickback', from: 'wiring_check', to: 'plan', evidence: 'fix plan', count: 1,
+      }));
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.gateInstructions).toEqual([]);
+    });
+
+    it('rejects non-kickback wiring_check events', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await writeFile(join(dir, '.pipeline/events.jsonl'), JSON.stringify({
+        type: 'step_failed', step: 'wiring_check', evidence: 'probe failed', count: 1,
+      }));
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.gateInstructions).toEqual([]);
+    });
+
   });
 
   // Regression fixture for the stale-tracking-ref incident (#870/#872): a
