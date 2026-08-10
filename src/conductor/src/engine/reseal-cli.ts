@@ -7,6 +7,8 @@ import {
   type ProtectedArtifactSeal,
   type ResealProtectedArtifactSealOptions,
 } from './protected-artifact-seal.js';
+import { AuditTrailWriter } from './audit-trail.js';
+import { ConductorEventEmitter } from '../ui/events.js';
 
 export interface ResealDispatch {
   kind: 'reseal';
@@ -63,6 +65,7 @@ export interface ResealCommandDependencies {
   readFile?: (path: string, encoding: BufferEncoding) => Promise<string>;
   resolveHead?: (projectRoot: string) => Promise<string>;
   reseal?: (options: ResealProtectedArtifactSealOptions) => Promise<ProtectedArtifactSeal>;
+  events?: ConductorEventEmitter;
 }
 
 /** Reseal one feature worktree without entering the conductor pipeline. */
@@ -101,13 +104,33 @@ export async function dispatchResealCommand(
   const resolveHead = deps.resolveHead ?? (async (projectRoot: string): Promise<string> =>
     (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim());
 
+  const events = deps.events ?? new ConductorEventEmitter();
+  if (!deps.events) new AuditTrailWriter(worktree).subscribe(events);
+
   try {
-    await reseal({
+    const resealed = await reseal({
       projectRoot: worktree,
       seal,
       toCommit: await resolveHead(worktree),
       trigger: 'operator-reseal',
       paths: command.paths,
+    });
+    const priorFingerprints = new Map(
+      seal.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]),
+    );
+    const nextFingerprints = new Map(
+      resealed.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]),
+    );
+    await events.emit({
+      type: 'protected_artifact_reseal',
+      paths: command.paths.map((path) => ({
+        path,
+        priorFingerprint: priorFingerprints.get(path) ?? '',
+        newFingerprint: nextFingerprints.get(path) ?? '',
+      })),
+      reason: command.reason,
+      fromCommit: seal.baselineCommit,
+      toCommit: resealed.baselineCommit,
     });
   } catch (error) {
     err(`reseal: ${error instanceof Error ? error.message : String(error)}`);

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createProgram } from '../../src/cli.js';
 import { detectResealCommand, dispatchResealCommand } from '../../src/engine/reseal-cli.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 // argv is process.argv: [node, entry, subcommand, ...arguments].
 const argv = (...arguments_: string[]) => ['node', 'conduct', 'reseal', ...arguments_];
@@ -186,7 +189,12 @@ describe('dispatchResealCommand', () => {
     );
     if (!command) throw new Error('expected valid reseal command');
     const out = vi.fn();
-    const reseal = vi.fn().mockResolvedValue(undefined);
+    const reseal = vi.fn().mockResolvedValue({
+      baselineCommit: 'target',
+      protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+      rebaselines: [],
+      version: 2,
+    });
 
     await expect(
       dispatchResealCommand(command, {
@@ -194,9 +202,15 @@ describe('dispatchResealCommand', () => {
         out,
         access: vi.fn().mockResolvedValue(undefined),
         isInteractive: true,
-        readFile: vi.fn().mockResolvedValue(JSON.stringify({ baselineCommit: 'base' })),
+        readFile: vi.fn().mockResolvedValue(JSON.stringify({
+          baselineCommit: 'base',
+          protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+          rebaselines: [],
+          version: 2,
+        })),
         resolveHead: vi.fn().mockResolvedValue('target'),
         reseal,
+        events: new ConductorEventEmitter(),
       }),
     ).resolves.toBe(0);
 
@@ -206,13 +220,68 @@ describe('dispatchResealCommand', () => {
     }).toEqual({
       reseal: [[{
         projectRoot: '/project/.worktrees/repair',
-        seal: { baselineCommit: 'base' },
+        seal: {
+          baselineCommit: 'base',
+          protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+          rebaselines: [],
+          version: 2,
+        },
         toCommit: 'target',
         trigger: 'operator-reseal',
         paths: ['.docs/plans/repair.md'],
       }]],
       out: [['Resealed protected artifacts: .docs/plans/repair.md']],
     });
+  });
+
+  it('constructs the audit sink at the resolved worktree and records the performed reseal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-audit-'));
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await expect(
+        dispatchResealCommand(command, {
+          cwd: root,
+          isInteractive: true,
+          access: vi.fn().mockResolvedValue(undefined),
+          readFile: vi.fn().mockResolvedValue(JSON.stringify({
+            baselineCommit: 'base',
+            protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+            rebaselines: [],
+            version: 2,
+          })),
+          resolveHead: vi.fn().mockResolvedValue('target'),
+          reseal: vi.fn().mockResolvedValue({
+            baselineCommit: 'target',
+            protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+            rebaselines: [],
+            version: 2,
+          }),
+        }),
+      ).resolves.toBe(0);
+
+      const audit = await readFile(
+        join(root, '.worktrees', 'repair', '.pipeline', 'audit-trail', 'events.jsonl'),
+        'utf8',
+      );
+      expect(JSON.parse(audit) as Record<string, unknown>).toMatchObject({
+        origin: 'operator',
+        event: 'reseal',
+        reason: 'Corrected after review.',
+        fromCommit: 'base',
+        toCommit: 'target',
+        paths: [{
+          path: '.docs/plans/repair.md',
+          priorFingerprint: 'sha256:before',
+          newFingerprint: 'sha256:after',
+        }],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('refuses to reseal from a non-interactive terminal without changing the seal', async () => {

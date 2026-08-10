@@ -180,6 +180,39 @@ describe('engine/audit-trail', () => {
     expect(record.event).toBe('gate_pass');
   });
 
+  it('subscribe() records a performed operator reseal with its complete sealed-artifact lineage', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'protected_artifact_reseal',
+      paths: [{
+        path: '.docs/plans/recoverable-plan.md',
+        priorFingerprint: 'sha256:before',
+        newFingerprint: 'sha256:after',
+      }],
+      reason: 'operator approved corrected DECIDE artifact',
+      fromCommit: 'abc123',
+      toCommit: 'def456',
+    });
+
+    const contents = await readFile(join(dir, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8');
+    const [line] = contents.split('\n').filter((value) => value.length > 0);
+    expect(JSON.parse(line) as AuditRecord).toMatchObject({
+      origin: 'operator',
+      event: 'reseal',
+      reason: 'operator approved corrected DECIDE artifact',
+      fromCommit: 'abc123',
+      toCommit: 'def456',
+      paths: [{
+        path: '.docs/plans/recoverable-plan.md',
+        priorFingerprint: 'sha256:before',
+        newFingerprint: 'sha256:after',
+      }],
+    });
+  });
+
   it('gate_verdict with satisfied:false maps to gate_fail with non-divergent reason and at >= checkedAt', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();

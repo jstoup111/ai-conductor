@@ -14,6 +14,12 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 /** The source of an audit record: a pipeline step or an interactive operator action. */
 export type AuditRecordOrigin = StepName | 'operator';
 
+export type AuditResealPath = {
+  path: string;
+  priorFingerprint: string;
+  newFingerprint: string;
+};
+
 /**
  * A single audit-trail event. `phase` and `at` are derived by the writer —
  * callers supply everything else.
@@ -24,6 +30,10 @@ export type AuditRecord = {
   event: string;
   reason?: string;
   cause?: string;
+  /** Present for an operator-performed protected-artifact reseal. */
+  paths?: AuditResealPath[];
+  fromCommit?: string;
+  toCommit?: string;
   attempt?: number;
   artifact?: string;
   outcome?: VerdictFreshnessOutcome;
@@ -159,6 +169,15 @@ export class AuditTrailWriter {
           event: 'verdict_freshness',
           artifact: event.artifact,
           outcome: event.outcome,
+        };
+      case 'protected_artifact_reseal':
+        return {
+          origin: 'operator',
+          event: 'reseal',
+          paths: event.paths,
+          reason: event.reason,
+          fromCommit: event.fromCommit,
+          toCommit: event.toCommit,
         };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict
