@@ -1398,6 +1398,34 @@ else
   fi
 fi
 
+# ── 23. Pattern-source header grammar agrees with the authoring contract ────
+# The engine accepts a declared replication relationship only when both header
+# lines use its documented forms. Keep the plan authoring guidance pinned to
+# that grammar so authors do not create plans that fail closed at BUILD entry.
+echo ""
+echo -e "${BOLD}23. Pattern-source header grammar authoring contract${NC}"
+
+plan_skill="${HARNESS_DIR}/skills/plan/SKILL.md"
+if [ ! -f "$plan_skill" ]; then
+  assert "skills/plan/SKILL.md exists for the Pattern-source header contract" 1
+else
+  pattern_header_contract=$(awk '
+    /^### `\*\*Pattern-source:\*\*` and `\*\*Rename-map:\*\*` Header Forms$/ { capture=1; next }
+    capture && /^### / { exit }
+    capture { print }
+  ' "$plan_skill")
+
+  if grep -qF '**Pattern-source:**' <<<"$pattern_header_contract" \
+      && grep -qF '**Rename-map:**' <<<"$pattern_header_contract" \
+      && grep -qiE 'plain.*inline-code.*Markdown link|Markdown link.*plain.*inline-code' <<<"$pattern_header_contract" \
+      && grep -qF 'source -> target' <<<"$pattern_header_contract" \
+      && grep -qi 'comma-separated' <<<"$pattern_header_contract"; then
+    assert "skills/plan/SKILL.md — documents Pattern-source and Rename-map headers with accepted forms" 0
+  else
+    assert "skills/plan/SKILL.md — documents Pattern-source and Rename-map headers with accepted forms" 1
+  fi
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

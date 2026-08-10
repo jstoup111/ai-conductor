@@ -330,6 +330,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   call). Blocking, DECIDE-only, and strictly subordinate — a judged finding never overturns a mechanical
   `FAIL`, is never resolved by downgrading to a `none (...)` waiver, and every judged edit must re-pass
   `validate-wired-into`. Integrity check 21 pins this prose to the wired engine gate.
+- **Declared pattern replication** — a plan may add `**Pattern-source:**` and `**Rename-map:**` header
+  lines to declare that it replicates an existing source file under a rename map, so BUILD copies and
+  verifies that source mechanically instead of deriving it from scratch. Both lines are required
+  together; either line alone, an unresolvable source path, or a malformed rename-map pair is
+  `malformed` and fails closed, distinct from the no-declaration `absent` case. See [gates](../explanation/gates.md)
+  for how `build_review` verifies the declared copy.
 
 ### coherence-check
 
@@ -400,6 +406,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Gate role** — blocking. The gate rejects unless the RED evidence shows at least one failure, zero
   skips, zero errors, and at least one executed spec. Any unresolved FR-coverage row is a hard stop
   under the daemon.
+- **Declared pattern replication** — when the plan header resolves a `**Pattern-source:**` /
+  `**Rename-map:**` declaration, the skill copies and renames the source feature's acceptance specs
+  instead of deriving them. RED is still earned honestly: the copied specs fail because their target
+  does not yet exist. An empty source spec set, a rename-map target-path collision, or an all-passing
+  copied set all fail closed rather than falling back to derivation.
 
 ### pipeline
 
@@ -419,6 +430,13 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Gate role** — blocking. Evaluator dispatch at each batch boundary is mandatory; a missing or empty
   `review.json` halts and re-dispatches. `BLOCK` halts and escalates; `REQUEST_CHANGES` triggers rework
   against a three-cycle budget. Two consecutive zero-completion attempts trip a circuit breaker.
+- **Declared replication copy task** — on a plan with a resolved `**Pattern-source:**` /
+  `**Rename-map:**` declaration, exactly one task is the mechanical, zero-LLM copy: it writes only the
+  targets its `**Files:**` declaration lists, fails closed naming an undeclared target or an unreadable
+  source, and leaves no partial copy on failure. A later task the copy commit fully satisfies — every
+  acceptance criterion and its scoped verification — may close through the existing
+  `Evidence: satisfied-by <sha>` form; a task only partly satisfied always runs the full, unmodified
+  RED → DOMAIN → GREEN → DOMAIN → COMMIT cycle instead of being split.
 - **Fan-out** — Standard and Full derive a ready frontier from completed dependencies and
   non-overlapping file sets, then launch up to three tasks in one provider-native concurrent
   dispatch and join before verification. Claude Code uses multiple Agent tool calls in one response;
@@ -443,6 +461,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   and type-check clean, clean tree, and an exact bare plan task id in the trailer. The domain reviewer
   holds veto authority back to RED or GREEN. `Task:` trailers are telemetry only — build completion is
   derived by `build_review`, not from trailer self-reports.
+- **Declared replication does not shorten the cycle** — a declared replication's copy task only
+  establishes a baseline. A later task closes via `Evidence: satisfied-by <copy-sha>` only when the copy
+  satisfies that task's whole scope; any task introducing behavior the source lacks, or only partly
+  covered by the copy, runs the identical unmodified cycle. A first test that passes immediately on a
+  delta task does not permit skipping to implementation.
 - **Dispatches** — `agents/generator.md` (RED and GREEN), `agents/domain-reviewer.md` (both DOMAIN
   phases).
 
@@ -476,6 +499,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — `.pipeline/audit-trail/batch-N-simplification.md`.
 - **Gate role** — blocking within the batch. `CLEAN` proceeds; `SIMPLIFY_REQUIRED` must be fixed before
   the next batch and counts against pipeline's three-cycle rework budget.
+- **Declared replication is informed, not silenced** — a declared replication's mapped source/target
+  pair alone is not flagged as an extract-with-parameters finding. Undeclared duplication, and
+  similarity outside the declared target set, is still flagged, and the skill retains authority to
+  propose extraction on a declared pair when rationale beyond the replication itself merits it.
 
 ### debugging
 

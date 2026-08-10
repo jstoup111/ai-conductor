@@ -63,7 +63,7 @@ service.
 **Steps:**
 1. Write failing test: a plan header containing `**Pattern-source:** src/conductor/src/engine/wired-into.ts` parses to a `resolved` result whose source path is that exact string, case preserved.
 2. Verify test fails (RED)
-3. Implement: new module exporting the header regex and a resolver returning a discriminated union with a `resolved` variant.
+3. Implement: new module with module-local header regexes and an exported resolver returning a discriminated union with a `resolved` variant.
 4. Verify test passes (GREEN)
 5. Commit with message: "feat(plan): parse Pattern-source plan-header line"
 
@@ -71,7 +71,7 @@ service.
 - `src/conductor/src/engine/plan-pattern-source.ts` — new module
 - `src/conductor/src/engine/__tests__/plan-pattern-source.test.ts` — new unit test
 
-**Wired-into:** none (inert until `src/conductor/src/engine/step-runners.ts`)
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
 
 **Dependencies:** none
 
@@ -90,7 +90,7 @@ service.
 
 **Files:** same as Task 1
 
-**Wired-into:** same as Task 1
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
 
 **Dependencies:** 1
 
@@ -109,7 +109,7 @@ service.
 
 **Files:** same as Task 1
 
-**Wired-into:** same as Task 1
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
 
 **Dependencies:** 1
 
@@ -128,7 +128,7 @@ service.
 
 **Files:** same as Task 1
 
-**Wired-into:** same as Task 1
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
 
 **Dependencies:** 3
 
@@ -149,7 +149,7 @@ service.
 - `src/conductor/src/engine/copy-equivalence.ts` — new module
 - `src/conductor/src/engine/__tests__/copy-equivalence.test.ts` — new unit test
 
-**Wired-into:** none (inert until `src/conductor/src/engine/step-runners.ts`)
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
 
 **Dependencies:** 4
 
@@ -168,7 +168,7 @@ service.
 
 **Files:** same as Task 5
 
-**Wired-into:** same as Task 5
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
 
 **Dependencies:** 5
 
@@ -189,7 +189,7 @@ service.
 - `src/conductor/src/engine/copy-equivalence.ts` — blocking verdict
 - `src/conductor/src/engine/__tests__/copy-equivalence-blocking.test.ts` — new test pinning the contrast with the advisory floor
 
-**Wired-into:** same as Task 5
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
 
 **Dependencies:** 6
 
@@ -203,6 +203,14 @@ service.
 1. Write failing test: on a plan with a resolved declaration, the equivalence check runs during the build-review gate sequence and its failure propagates to the step result; on a plan with no declaration it does not run at all.
 2. Verify test fails (RED)
 3. Implement: call the equivalence check from `runBuildReview`, alongside the existing floor calls, reading the resolved declaration from the parser. Guard: it must not run at `acceptance_specs`, and no RED evidence may be derived from its result.
+
+> **Amended 2026-08-10 by operator:** the approved steps cover only the `resolved` and `absent`
+> declarations, but the Technical Approach (lines 21-25) requires that a malformed declaration never
+> read as absent — leaving the fail-closed branch unplanned. Added requirement: on a `malformed`
+> resolution, `runBuildReview` returns an unsuccessful result carrying
+> `resolvePlanPatternSource`'s own diagnostic, before either the equivalence check or provider
+> grading runs. Cover it in `src/conductor/test/engine/step-runners-copy-equivalence.test.ts` with
+> a case proving malformed is handled distinctly from absent.
 4. Verify test passes (GREEN)
 5. Commit with message: "feat(build): wire copy-equivalence into the build-review gate sequence"
 
@@ -382,6 +390,16 @@ service.
 1. Write failing test: with a resolved declaration present, the computed skip set and the enabled-gate set are identical to the same computation with no declaration, at every tier.
 2. Verify test fails (RED)
 3. Implement: the pinning test only. No production change — the test locks the invariant on the declaration axis, which the existing tier-axis pins do not cover.
+
+> **Amended 2026-08-10 by operator:** as approved, this task is not implementable. It demands a
+> declaration-axis comparison while forbidding any production change, but no boundary today accepts
+> a declaration and returns the skip/enabled-gate sets — so the only way to satisfy both constraints
+> is two identical declaration-free calls, which is the tautology `build_review` rejected. Revised
+> requirement: drive the real orchestration/scheduling boundary that consumes plan content, once
+> with an absent declaration and once with a resolved one, at S, M and L. Pin each tier's exact
+> expected skip set and enabled-gate set, so a mutation that globally empties either set fails. A
+> minimal production seam is authorized where that boundary does not yet expose the computed sets;
+> do NOT add a helper that accepts the resolved declaration and ignores it.
 4. Verify test passes (GREEN)
 5. Commit with message: "test(steps): pin skip and gate sets invariant to a replication declaration"
 

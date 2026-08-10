@@ -325,6 +325,29 @@ absolute paths, traversal outside the repository, a prose-only value, or a link 
 stories file. Land and backlog discovery use the same resolution rule, so an invalid or unrelated
 reference is refused before it can become a blocked merged spec.
 
+### `**Pattern-source:**` and `**Rename-map:**` Header Forms
+
+The `**Pattern-source:**` and `**Rename-map:**` lines together declare that this plan replicates
+an existing source pattern. Use both lines or neither: a plan with only one line is malformed.
+The Pattern-source accepts the same plain, inline-code, and Markdown link reference forms as
+`**Stories:**`; the Rename-map accepts one or more ordered, comma-separated `source -> target`
+pairs:
+
+```markdown
+**Pattern-source:** src/conductor/src/engine/wired-into.ts
+**Pattern-source:** `src/conductor/src/engine/wired-into.ts` (source pattern)
+**Pattern-source:** [wired-into source](../../src/conductor/src/engine/wired-into.ts) — reviewed
+
+**Rename-map:** wired-into -> plan-pattern-source
+**Rename-map:** wired-into -> plan-pattern-source, WiredInto -> PlanPatternSource
+```
+
+The Pattern-source value must name a repo-relative path. The plain and inline-code forms use that
+path directly; for a Markdown link, the link target is the path. Do not use an absolute path,
+traversal outside the repository, an empty reference, or a prose-only value. Each Rename-map pair
+must have a non-empty source and target around exactly one `->`; declaration order and case are
+preserved. A malformed declaration fails closed rather than being treated as an absent pattern.
+
 ```markdown
 # Implementation Plan: [Feature Name]
 

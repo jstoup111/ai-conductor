@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import {
   recordTestSuiteRemediation,
 } from './test-suite-remediation.js';
-import { dirname, relative, join } from 'node:path';
+import { dirname, relative, join, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import {
   HALT_MARKER,
@@ -121,6 +121,10 @@ import {
 } from './steps.js';
 import type { StepGroup } from '../types/index.js';
 import { checkGate } from './gates.js';
+import {
+  resolvePlanContentScheduling,
+  type PlanContentScheduling,
+} from './plan-content-scheduling.js';
 import {
   buildArtifactResolutionContext,
   findArtifactFiles as findArtifactFilesForStep,
@@ -2669,6 +2673,46 @@ export class Conductor {
     }
   }
 
+  /**
+   * Resolve the active plan into the shared scheduling boundary. Missing plans
+   * remain declaration-absent until the plan step has authored one.
+   */
+  private async resolvePlanContentScheduling(
+    state: ConductState,
+    tier: ComplexityTier,
+  ): Promise<PlanContentScheduling> {
+    const activePlanPath = await this.getActivePlanPath();
+    if (!activePlanPath) {
+      return resolvePlanContentScheduling({
+        planPath: '.docs/plans/pending.md',
+        planContent: '',
+        tier,
+        fileExists: async () => false,
+      });
+    }
+
+    const planPath = (isAbsolute(activePlanPath)
+      ? relative(this.projectRoot, activePlanPath)
+      : activePlanPath).replaceAll('\\', '/');
+    const absolutePlanPath = isAbsolute(activePlanPath)
+      ? activePlanPath
+      : join(this.projectRoot, activePlanPath);
+    const planContent = await readFile(absolutePlanPath, 'utf-8').catch(() => '');
+    return resolvePlanContentScheduling({
+      planPath,
+      planContent,
+      tier,
+      fileExists: async (path) => {
+        try {
+          await accessFile(join(this.projectRoot, path));
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    });
+  }
+
   /** True when a `.pipeline/` terminal marker (DONE / HALT) exists on disk. */
   private async markerExists(relPath: string): Promise<boolean> {
     try {
@@ -3817,9 +3861,10 @@ export class Conductor {
 
         // Read complexity tier from state each iteration (may change after complexity step)
         const tier = state.complexity_tier ?? 'L';
+        const scheduling = await this.resolvePlanContentScheduling(state, tier);
 
         // Check if step should be skipped for this complexity tier
-        if (step.skippableForTiers.includes(tier)) {
+        if (scheduling.skippedSteps.includes(step.name)) {
           await this.recordStepSkip(state, step, `complexity tier ${tier}`);
           await emitTracked({ type: 'tier_skip', step: step.name, tier });
           continue;
@@ -8609,6 +8654,7 @@ export class Conductor {
     const stateBeforeSkips = { ...state } as Record<string, unknown>;
     const skippedChanges: Record<string, StepStatus> = {};
     const tier = state.complexity_tier ?? 'L';
+    const scheduling = await this.resolvePlanContentScheduling(state, tier);
     // Resolve the track once (state-seeded, or the committed marker in the
     // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
     const track = await this.resolveTrack(state);
@@ -8622,7 +8668,7 @@ export class Conductor {
     for (const s of steps) {
       if (
         getStepStatus(state, s.name) === 'pending' &&
-        (s.skippableForTiers.includes(tier) ||
+        (scheduling.skippedSteps.includes(s.name) ||
           (s.skippableForTracks ?? []).includes(track) ||
           shouldSkipForBootstrapMode(s.name, state.bootstrap_mode) ||
           shouldSkipForUpstreamSkip(s, state) ||

@@ -1,5 +1,5 @@
 import { writeFile, access, readFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
@@ -76,6 +76,8 @@ import {
   type ProviderLifecycleEpisodeStore,
 } from './provider-lifecycle-store.js';
 import { parseFinishPrProseJudgment } from './finish-pr-prose-judgment.js';
+import { resolvePlanPatternSource } from './plan-pattern-source.js';
+import { runCopyEquivalence } from './copy-equivalence.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -1790,6 +1792,40 @@ export class DefaultStepRunner implements StepRunner {
 
     const prependFloorAdvisory = (output: string): string =>
       floorAdvisoryLines.length > 0 ? `${floorAdvisoryLines.join('\n')}\n\n${output}` : output;
+
+    // A declared replication is mechanically verified at the build_review
+    // gate. Unlike the advisory floors above, a mismatch is a blocking gate
+    // result and is never used to derive RED evidence.
+    const planSource = await resolvePlanPatternSource(
+      relative(this.projectDir, planPath).replaceAll('\\', '/'),
+      await readFile(planPath, 'utf-8'),
+      async (path) => {
+        try {
+          await access(join(this.projectDir, path));
+          return true;
+        } catch {
+          return false;
+        }
+      },
+    );
+    if (planSource.kind === 'malformed') {
+      return withBaseFreshness({
+        success: false,
+        output: planSource.message,
+      });
+    }
+    if (planSource.kind === 'resolved') {
+      const targetPath = planSource.renameMap.reduce(
+        (path, pair) => path.replaceAll(pair.source, pair.target),
+        planSource.sourcePath,
+      );
+      const equivalence = await runCopyEquivalence(
+        planSource,
+        targetPath,
+        async (path) => readFile(join(this.projectDir, path), 'utf-8'),
+      );
+      if (!equivalence.success) return withBaseFreshness(equivalence);
+    }
 
     const prompt = buildGraderPrompt(inputs);
 

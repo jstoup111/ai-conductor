@@ -95,6 +95,20 @@ printed in the step output and warning log with its task id, commit SHA, and off
 widening is supplied directly to the isolated grader with its path, rationale, task id, and commit SHA, because
 the grader receives the branch diff rather than commit messages.
 
+### Declared pattern replication check
+
+A plan may declare, in its header, that it replicates an existing source file under a rename map
+(`**Pattern-source:**` / `**Rename-map:**`, parsed by `plan-pattern-source.ts`). When the declaration
+resolves, `build_review` runs a deterministic content-comparison check — the engine's first — before the
+grader runs: it reads the declared copy target, applies the rename map to the source, and requires an
+exact match. Unlike the per-task floors above, which are fail-soft and never change `success`, a copy
+mismatch **fails the step** outright, and its diagnostic (missing target, unexpected target, a rename-map
+collision, or a content mismatch naming the first differing line and column) is returned in place of a
+grader verdict — no RED evidence is derived from it, and it never runs at `acceptance_specs`. A
+`malformed` declaration (one header line without the other, an unresolvable source path, or an invalid
+rename-map pair) fails `build_review` before either the equivalence check or the grader runs, so a
+half-declaration can never be read as no declaration at all.
+
 ### Per-step completion gates
 
 These are the twelve gates that decide whether a step's work is real. Ten replace the default
