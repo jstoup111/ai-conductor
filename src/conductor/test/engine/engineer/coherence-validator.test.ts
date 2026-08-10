@@ -16,6 +16,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   parseCoherenceArtifact,
   crossCheckIds,
+  checkAdrCoverage,
   checkOutcomeCoverage,
   checkFrCoverage,
   checkStoryFrTieOut,
@@ -369,6 +370,51 @@ describe('crossCheckIds', () => {
     expect(result.rowClass).toBe('task');
     expect(result.rowId).toBe('task-2');
     expect(result.fabricatedId).toBe('ghost-id');
+  });
+});
+
+describe('checkAdrCoverage', () => {
+  function rowsFrom(text: string) {
+    const result = parseCoherenceArtifact(text);
+    if (!result.ok) throw new Error('fixture must parse');
+    return result.rows;
+  }
+
+  it('reports an ADR pool member that has no matching adjudication row', () => {
+    expect(checkAdrCoverage([], new Set(['adr-decision']))).toEqual({
+      ok: false,
+      reason: 'adr-gap',
+      gaps: [{ gapId: 'adr-decision' }],
+    });
+  });
+
+  it.each(['gap', 'fail'])('blocks an ADR row with the negative %s verdict', (verdict) => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision | story-1 | ${verdict} | "not adjudicated" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'adr-gap',
+      gaps: [{ gapId: 'adr-decision' }],
+    });
+  });
+
+  it('passes when every ADR in the pool has a covered row', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-first | story-1 | covered | "first decision" |
+| adr | adr-second | story-1 | covered | "second decision" |
+`),
+        new Set(['adr-first', 'adr-second']),
+      ),
+    ).toEqual({ ok: true });
   });
 });
 
@@ -1118,6 +1164,23 @@ No tasks yet.
 `,
     };
     expect(validateCoherence(inputs)).toEqual({ ok: true });
+  });
+
+  it('runs ADR coverage only when the ADR layer is required', () => {
+    const inputs: ValidateCoherenceInputs = {
+      rows: [],
+      outcomeBullets: [],
+      prdText: null,
+      storiesText: `## Story 1: Ship the widget\n`,
+      planText: `### Task 1: Build the widget\n**Story:** Story 1\n`,
+      adrIds: new Set(['adr-decision']),
+      requiredLayers: new Set(['adr']),
+    };
+
+    const result = validateCoherence(inputs);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(['adr-decision']);
   });
 
   it('produces byte-identical reports for identical gap input, twice', () => {

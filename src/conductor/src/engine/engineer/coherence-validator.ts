@@ -350,6 +350,56 @@ export function checkOutcomeCoverage(
   return { ok: true };
 }
 
+// --- ADR-coverage layer (Task 9) ---
+
+/** A single ADR in the pool without an affirmative adjudication row. */
+export interface AdrGapFinding {
+  /** The ADR filename stem, e.g. `adr-2026-08-09-coherence-check`. */
+  gapId: string;
+}
+
+export type AdrCoverageResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'adr-gap';
+      /** Every unadjudicated or negatively adjudicated ADR, not just the first. */
+      gaps: AdrGapFinding[];
+    };
+
+/**
+ * Every non-deleted ADR in the supplied pool must have at least one `adr`
+ * row and none of its adjudication rows may carry a negative verdict. The
+ * pool is empty for a deletion-only change set, which therefore passes
+ * without demanding a row for the removed decision.
+ */
+export function checkAdrCoverage(
+  rows: CoherenceRow[],
+  adrIds: ReadonlySet<string>,
+): AdrCoverageResult {
+  const rowsByAdrId = new Map<string, CoherenceRow[]>();
+  for (const row of rows) {
+    if (row.rowClass !== 'adr') continue;
+    const matches = rowsByAdrId.get(row.id) ?? [];
+    matches.push(row);
+    rowsByAdrId.set(row.id, matches);
+  }
+
+  const gaps: AdrGapFinding[] = [];
+  for (const adrId of adrIds) {
+    const adjudications = rowsByAdrId.get(adrId) ?? [];
+    if (
+      adjudications.length === 0 ||
+      adjudications.some((row) => NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase()))
+    ) {
+      gaps.push({ gapId: adrId });
+    }
+  }
+
+  if (gaps.length > 0) return { ok: false, reason: 'adr-gap', gaps };
+  return { ok: true };
+}
+
 // --- Story-coverage layer (Task 9) ---
 
 /** A single uncovered story: the `story-<id>` id and its title. */
@@ -947,6 +997,10 @@ export function renderGapReport(gaps: CoherenceGap[]): string {
 export interface ValidateCoherenceInputs {
   /** Parsed coherence artifact rows (Task 5), used by the outcome-coverage layer. */
   rows: CoherenceRow[];
+  /** Non-deleted ADR filename stems in this change set's ADR pool. */
+  adrIds?: ReadonlySet<string>;
+  /** Layers this land requires; ADR coverage is inert unless this includes `adr`. */
+  requiredLayers?: ReadonlySet<CoherenceRequiredLayer>;
   /** Verbatim staged/committed intake outcome bullets, in order. */
   outcomeBullets: string[];
   /** PRD file contents, or null on the technical track. */
@@ -972,6 +1026,21 @@ export type ValidateCoherenceResult =
  */
 export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCoherenceResult {
   const gaps: CoherenceGap[] = [];
+
+  if (inputs.requiredLayers?.has('adr')) {
+    const adrResult = checkAdrCoverage(inputs.rows, inputs.adrIds ?? new Set<string>());
+    if (!adrResult.ok) {
+      for (const gap of adrResult.gaps) {
+        gaps.push({
+          // Task 10 adds `adr` to the fixed report-layer union and ordering.
+          layer: 'adr' as CoherenceGapLayer,
+          gapId: gap.gapId,
+          artifact: 'ADRs',
+          item: `${gap.gapId} has no affirmative adjudication row`,
+        });
+      }
+    }
+  }
 
   const outcomeResult = checkOutcomeCoverage(
     inputs.rows,
@@ -1462,6 +1531,8 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
 
   const coverage = validateCoherence({
     rows: parsed.rows,
+    adrIds,
+    requiredLayers: required.layers,
     outcomeBullets: [...effectiveOutcomeBullets],
     prdText: effectivePrdText,
     storiesText,
