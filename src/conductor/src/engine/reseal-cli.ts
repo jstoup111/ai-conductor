@@ -97,11 +97,18 @@ export async function dispatchResealCommand(
   const clearHalt = deps.clearHalt ?? clearMarker;
   const worktree = join(cwd, '.worktrees', command.slug);
 
+  try {
+    await ensureAccessible(worktree);
+  } catch {
+    err(`reseal: unknown feature worktree '${command.slug}'.`);
+    return 1;
+  }
+
   const events = deps.events ?? new ConductorEventEmitter();
-  if (!deps.events) new AuditTrailWriter(worktree).subscribe(events);
+  if (!deps.events) new AuditTrailWriter(worktree, { throwOnWriteFailure: true }).subscribe(events);
   const refuse = async (condition: string): Promise<void> => {
     const path = refusalPath(condition);
-    await events.emit({
+    await events.emitOrThrow({
       type: 'protected_artifact_reseal_refused',
       condition,
       ...(path ? { path } : {}),
@@ -119,12 +126,6 @@ export async function dispatchResealCommand(
   }
 
   let haltClearStatus: string | undefined;
-  try {
-    await ensureAccessible(worktree);
-  } catch {
-    err(`reseal: unknown feature worktree '${command.slug}'.`);
-    return 1;
-  }
 
   let seal: ProtectedArtifactSeal;
   try {
@@ -137,59 +138,61 @@ export async function dispatchResealCommand(
   const resolveHead = deps.resolveHead ?? (async (projectRoot: string): Promise<string> =>
     (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim());
 
+  let resealed: ProtectedArtifactSeal;
   try {
-    const resealed = await reseal({
+    resealed = await reseal({
       projectRoot: worktree,
       seal,
       toCommit: await resolveHead(worktree),
       trigger: 'operator-reseal',
       paths: command.paths,
     });
-    const priorFingerprints = new Map(
-      seal.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]),
-    );
-    const nextFingerprints = new Map(
-      resealed.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]),
-    );
-    await events.emit({
-      type: 'protected_artifact_reseal',
-      paths: command.paths.map((path) => ({
-        path,
-        priorFingerprint: priorFingerprints.get(path) ?? '',
-        newFingerprint: nextFingerprints.get(path) ?? '',
-      })),
-      reason: command.reason,
-      fromCommit: seal.baselineCommit,
-      toCommit: resealed.baselineCommit,
-    });
-
-    if (command.clearHalt) {
-      try {
-        await ensureAccessible(join(worktree, HALT_MARKER));
-      } catch {
-        haltClearStatus = 'No halt to clear.';
-      }
-
-      if (!haltClearStatus) {
-        const haltClass = await readSeal(join(worktree, HALT_CLASS_MARKER), 'utf8').catch(() => null);
-        const classification = haltClass?.trim();
-        if (!classification) {
-          haltClearStatus = 'Halt was not cleared: it is unclassified.';
-        } else if (classification !== PROTECTED_ARTIFACT_HALT_CLASS) {
-          haltClearStatus = `Halt was not cleared: its class is ${classification}.`;
-        } else {
-          try {
-            await clearHalt(worktree);
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            haltClearStatus = `Halt was not fully cleared: ${message}.`;
-          }
-        }
-      }
-    }
   } catch (error) {
     await refuse(error instanceof Error ? error.message : String(error));
     return 1;
+  }
+
+  const priorFingerprints = new Map(
+    seal.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]),
+  );
+  const nextFingerprints = new Map(
+    resealed.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]),
+  );
+  await events.emitOrThrow({
+    type: 'protected_artifact_reseal',
+    paths: command.paths.map((path) => ({
+      path,
+      priorFingerprint: priorFingerprints.get(path) ?? '',
+      newFingerprint: nextFingerprints.get(path) ?? '',
+    })),
+    reason: command.reason,
+    fromCommit: seal.baselineCommit,
+    toCommit: resealed.baselineCommit,
+  });
+
+  if (command.clearHalt) {
+    try {
+      await ensureAccessible(join(worktree, HALT_MARKER));
+    } catch {
+      haltClearStatus = 'No halt to clear.';
+    }
+
+    if (!haltClearStatus) {
+      const haltClass = await readSeal(join(worktree, HALT_CLASS_MARKER), 'utf8').catch(() => null);
+      const classification = haltClass?.trim();
+      if (!classification) {
+        haltClearStatus = 'Halt was not cleared: it is unclassified.';
+      } else if (classification !== PROTECTED_ARTIFACT_HALT_CLASS) {
+        haltClearStatus = `Halt was not cleared: its class is ${classification}.`;
+      } else {
+        try {
+          await clearHalt(worktree);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          haltClearStatus = `Halt was not fully cleared: ${message}.`;
+        }
+      }
+    }
   }
 
   out(`Resealed protected artifacts: ${command.paths.join(', ')}`);

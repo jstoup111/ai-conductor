@@ -568,6 +568,41 @@ describe('dispatchResealCommand', () => {
     }
   });
 
+  it('surfaces a performed-reseal audit failure without recording a false refusal', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const events = new ConductorEventEmitter();
+    const refused = vi.fn();
+    events.on('protected_artifact_reseal', () => {
+      throw new Error('durable audit sink failed');
+    });
+    events.on('protected_artifact_reseal_refused', refused);
+
+    await expect(dispatchResealCommand(command, {
+      cwd: '/project',
+      isInteractive: true,
+      access: vi.fn().mockResolvedValue(undefined),
+      readFile: vi.fn().mockResolvedValue(JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      })),
+      resolveHead: vi.fn().mockResolvedValue('target'),
+      reseal: vi.fn().mockResolvedValue({
+        baselineCommit: 'target',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+        rebaselines: [],
+        version: 2,
+      }),
+      events,
+    })).rejects.toThrow('durable audit sink failed');
+
+    expect(refused).not.toHaveBeenCalled();
+  });
+
   it('refuses to reseal from a non-interactive terminal without changing the seal', async () => {
     const command = detectResealCommand(
       argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
@@ -587,6 +622,7 @@ describe('dispatchResealCommand', () => {
         readFile,
         resolveHead: vi.fn().mockResolvedValue('target'),
         reseal,
+        events: new ConductorEventEmitter(),
       }),
     ).resolves.toBe(1);
 
@@ -618,7 +654,9 @@ describe('dispatchResealCommand', () => {
         // piped stdin, so a nested CLI sees no TTY.
         isInteractive: false,
         err,
+        access: vi.fn().mockResolvedValue(undefined),
         reseal,
+        events: new ConductorEventEmitter(),
       }),
     ).resolves.toBe(1);
 
@@ -767,6 +805,47 @@ describe('dispatchResealCommand', () => {
     expect(err).toHaveBeenCalledWith("reseal: unknown feature worktree 'missing'.");
   });
 
+  it('does not create an audit-trail directory for an unknown feature worktree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-unknown-worktree-'));
+    const command = detectResealCommand(
+      argv('--slug', 'missing', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        err: vi.fn(),
+        isInteractive: true,
+      })).resolves.toBe(1);
+
+      await expect(access(join(root, '.worktrees', 'missing'))).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('surfaces an audit persistence failure for a known worktree refusal', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-audit-write-failure-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+
+    try {
+      await mkdir(join(worktree, '.pipeline', 'audit-trail', 'events.jsonl'), { recursive: true });
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        err: vi.fn(),
+        isInteractive: false,
+      })).rejects.toThrow(/failed to append audit record/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('refuses a known worktree without a protected artifact seal', async () => {
     const command = detectResealCommand(
       argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
@@ -781,6 +860,7 @@ describe('dispatchResealCommand', () => {
         isInteractive: true,
         access: vi.fn().mockResolvedValue(undefined),
         readFile: vi.fn().mockRejectedValue(new Error('missing')),
+        events: new ConductorEventEmitter(),
       }),
     ).resolves.toBe(1);
 

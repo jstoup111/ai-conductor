@@ -136,6 +136,17 @@ describe('engine/audit-trail', () => {
     expect(marker).not.toBeNull();
   });
 
+  it('throws after recording diagnostics when configured to fail a caller closed', async () => {
+    const auditDir = join(dir, '.pipeline', 'audit-trail');
+    await mkdir(join(auditDir, 'events.jsonl'), { recursive: true });
+
+    const writer = new AuditTrailWriter(dir, { throwOnWriteFailure: true });
+
+    expect(() => writer.record({ origin: 'operator', event: 'reseal_refused' }))
+      .toThrow(/failed to append audit record/);
+    await expect(readFile(join(auditDir, 'WRITE-FAILED'), 'utf8')).resolves.toContain('reseal_refused');
+  });
+
   it('preserves every record with no corruption when two writers append concurrently without coordination', async () => {
     const writer1 = new AuditTrailWriter(dir);
     const writer2 = new AuditTrailWriter(dir);

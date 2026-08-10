@@ -55,6 +55,15 @@ export type AuditRecord = {
 /** Input to `AuditTrailWriter.record` — `phase` and `at` are derived, not supplied. */
 export type AuditRecordInput = Omit<AuditRecord, 'phase' | 'at'>;
 
+export type AuditTrailWriterOptions = {
+  /**
+   * Fail the immediate caller after writing the usual diagnostics. This is
+   * for operator commands whose requested action is not complete without its
+   * audit entry; normal pipeline subscribers remain best-effort.
+   */
+  throwOnWriteFailure?: boolean;
+};
+
 /**
  * Appends audit-trail events as whole-line JSON to
  * `<projectRoot>/.pipeline/audit-trail/events.jsonl`.
@@ -64,6 +73,7 @@ export type AuditRecordInput = Omit<AuditRecord, 'phase' | 'at'>;
  */
 export class AuditTrailWriter {
   private readonly projectRoot: string;
+  private readonly throwOnWriteFailure: boolean;
 
   /**
    * Steps for which a `gate_verdict` has already been observed. Used by
@@ -72,8 +82,9 @@ export class AuditTrailWriter {
    */
   private readonly stepsWithVerdicts = new Set<StepName>();
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, options: AuditTrailWriterOptions = {}) {
     this.projectRoot = projectRoot;
+    this.throwOnWriteFailure = options.throwOnWriteFailure === true;
   }
 
   private eventsPath(): string {
@@ -101,7 +112,7 @@ export class AuditTrailWriter {
       );
 
       // Best-effort marker so operators can detect silent audit-trail loss.
-      // Deliberately not rethrown — audit-trail failures must never break the caller.
+      // Normal subscribers remain best-effort; fail-closed callers rethrow below.
       try {
         mkdirSync(auditDir, { recursive: true });
         appendFileSync(
@@ -111,6 +122,13 @@ export class AuditTrailWriter {
         );
       } catch {
         // Marker write also failed; nothing more we can do without throwing.
+      }
+
+      if (this.throwOnWriteFailure) {
+        throw new Error(
+          `[audit-trail] failed to append audit record ` +
+            `(origin=${input.origin}, event=${input.event}): ${message}`,
+        );
       }
     }
   }
@@ -127,7 +145,7 @@ export class AuditTrailWriter {
     for (const type of auditedEventTypes()) {
       events.on(type, (event: ConductorEvent) => {
         const input = this.toRecordInput(event);
-        if (input) this.record(input);
+        if (input) return this.record(input);
       });
     }
   }
