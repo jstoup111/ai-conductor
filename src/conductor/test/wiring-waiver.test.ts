@@ -146,6 +146,61 @@ describe('checkInertContractContradiction — waived-but-wired', () => {
     expect(gaps.length).toBe(0);
   });
 
+  it('does not report a gap when the only outside reference is a documentation file', async () => {
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '24',
+        files: ['src/foo.ts'],
+        parseResult: { kind: 'inert', ref: { form: 'path', path: 'docs/plan.md' } },
+      },
+    ];
+    const newExports: NewExport[] = [{ file: 'src/foo.ts', symbol: 'doStuff' }];
+    // `searchReferences` is a repo-wide `git grep`, so the feature's own plan
+    // document — which necessarily names the symbol it plans — comes back as a
+    // "reference". Prose is not a call site (#1390).
+    const searchReferences: ReferenceSearchRunner = async (symbol) =>
+      symbol === 'doStuff'
+        ? ['src/foo.ts', '.docs/plans/some-feature.md', 'docs/reference/cli.md']
+        : [];
+
+    const gaps = await checkInertContractContradiction(
+      tasks,
+      newExports,
+      searchReferences,
+      fileExists,
+      gh,
+      '/repo',
+    );
+
+    expect(gaps.length).toBe(0);
+  });
+
+  it('still reports a gap when a source reference accompanies documentation mentions', async () => {
+    const tasks: TaskWiringContract[] = [
+      {
+        taskId: '25',
+        files: ['src/foo.ts'],
+        parseResult: { kind: 'inert', ref: { form: 'path', path: 'docs/plan.md' } },
+      },
+    ];
+    const newExports: NewExport[] = [{ file: 'src/foo.ts', symbol: 'doStuff' }];
+    const searchReferences: ReferenceSearchRunner = async (symbol) =>
+      symbol === 'doStuff' ? ['src/foo.ts', '.docs/plans/some-feature.md', 'src/bar.ts'] : [];
+
+    const gaps = await checkInertContractContradiction(
+      tasks,
+      newExports,
+      searchReferences,
+      fileExists,
+      gh,
+      '/repo',
+    );
+
+    expect(gaps.length).toBe(1);
+    expect(gaps[0]).toContain('src/bar.ts');
+    expect(gaps[0]).not.toContain('.docs/plans/some-feature.md');
+  });
+
   it('does not double-report when the waiver itself fails to resolve', async () => {
     const missingFileExists: FileExistsChecker = async () => false;
     const tasks: TaskWiringContract[] = [

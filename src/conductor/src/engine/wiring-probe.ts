@@ -373,6 +373,27 @@ function isTestPath(path: string): boolean {
 }
 
 /**
+ * Documentation-path exclusion: a prose file that merely names a symbol is not
+ * a call site. `ReferenceSearchRunner` is a repo-wide `git grep`, so it returns
+ * Markdown alongside source — and a feature's own plan/PRD necessarily spells
+ * out the symbols it plans. Counting those as wiring produced a self-reinforcing
+ * false positive in `checkInertContractContradiction`: the gate ordered plan
+ * rewrites, each rewrite wrote more symbol names into the plan for the next scan
+ * to find, and `build_review` flagged the rewrites as unauthorized scope
+ * ([#1390](https://github.com/jstoup111/ai-conductor/issues/1390)).
+ *
+ * Deliberately a denylist of documentation shapes rather than an allowlist of
+ * source extensions: the gate runs in consumer projects of unknown language, and
+ * an allowlist would silently stop counting real references in any extension it
+ * failed to enumerate. Every code file keeps its existing classification.
+ */
+function isDocumentationPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  if (lower.endsWith('.md') || lower.endsWith('.markdown') || lower.endsWith('.mdx')) return true;
+  return path.split('/').includes('.docs');
+}
+
+/**
  * Orphan backstop: a newly-added export must have at least one non-test
  * reference outside its own defining file, or it's a wiring gap. This is a
  * blunt safety net behind declared-site verification (`verifyDeclaredSites`)
@@ -716,7 +737,9 @@ export async function resolveWaiverRef(
  *
  * Uses the same non-test/outside-defining-file reference shape as
  * `orphanBackstop`/`verifyDeclaredSites` (via the injected
- * `ReferenceSearchRunner` and `isTestPath`).
+ * `ReferenceSearchRunner` and `isTestPath`), plus documentation exclusion
+ * (`isDocumentationPath`): a plan, PRD, or reference page that names the symbol
+ * in prose is not a call site and never contradicts an inert declaration.
  */
 export async function checkInertContractContradiction(
   tasks: TaskWiringContract[],
@@ -740,7 +763,7 @@ export async function checkInertContractContradiction(
     for (const exp of taskExports) {
       const referencingFiles = await searchReferences(exp.symbol);
       const productionReferences = referencingFiles.filter(
-        (file) => file !== exp.file && !isTestPath(file),
+        (file) => file !== exp.file && !isTestPath(file) && !isDocumentationPath(file),
       );
 
       if (productionReferences.length > 0) {
