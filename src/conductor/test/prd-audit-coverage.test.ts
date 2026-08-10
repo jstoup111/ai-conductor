@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  checkStepCompletion,
   findFrIdsWithoutRows,
   prdAuditCoverageGap,
   resolveFeaturePrdPaths,
@@ -168,5 +169,55 @@ describe('prdAuditCoverageGap', () => {
     await setup();
 
     await expect(prdAuditCoverageGap(root, featureContext, report)).resolves.toContain(expectedGap);
+  });
+});
+
+describe('prd_audit completion predicate coverage', () => {
+  let root: string;
+  const featureContext = context({ activePlanPath: '.docs/plans/current-feature.md' });
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'prd-audit-predicate-coverage-'));
+    await mkdir(join(root, '.docs/specs'), { recursive: true });
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/specs/current-feature.md'),
+      '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('keeps a fresh fully-covered ALIGNED report done and blocks a report with an uncovered FR', async () => {
+    const allAligned = [
+      '| FR | Verdict | Gap-class | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| FR-1 | ALIGNED | — | Covered |',
+      '| FR-2 | ALIGNED | — | Covered |',
+    ].join('\n');
+    const onlyFirstFr = [
+      '| FR | Verdict | Gap-class | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| FR-1 | ALIGNED | — | Covered |',
+    ].join('\n');
+
+    const reportPath = join(root, '.pipeline/prd-audit.md');
+    await writeFile(reportPath, allAligned);
+    const covered = await checkStepCompletion(root, 'prd_audit', {
+      artifactResolution: featureContext,
+    });
+
+    await writeFile(reportPath, onlyFirstFr);
+    const incomplete = await checkStepCompletion(root, 'prd_audit', {
+      artifactResolution: featureContext,
+    });
+
+    expect(covered.done).toBe(true);
+    expect(incomplete).toEqual({
+      done: false,
+      reason: 'PRD audit report is missing verdict rows for FR-2.',
+    });
   });
 });

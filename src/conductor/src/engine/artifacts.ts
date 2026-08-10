@@ -2344,6 +2344,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
     const passF = fresh[0];
+    const artifactResolution =
+      ctx.artifactResolution ??
+      (await buildArtifactResolutionContext(dir, {
+        planPath: ctx.planPath,
+        featureDesc: ctx.featureDesc,
+        git: ctx.git,
+      }));
+    const coverageGap = await prdAuditCoverageGap(
+      dir,
+      artifactResolution,
+      await readFile(passF, 'utf-8'),
+    );
+    if (coverageGap) return { done: false, reason: coverageGap };
     const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
     await writePrdAuditCodeStamp(dir, ctx);
     return {
