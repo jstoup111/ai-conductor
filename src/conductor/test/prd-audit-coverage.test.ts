@@ -328,7 +328,7 @@ describe('prd_audit code-validity coverage rechecks', () => {
     ).resolves.toMatchObject({ done: true });
   });
 
-  it('does not spare a stale partial report with a code-valid sidecar', async () => {
+  it('does not spare a stale partial report with a code-valid sidecar when only the caller has feature identity', async () => {
     await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
     await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
     await execa('git', ['config', 'user.name', 'Test'], { cwd: root });
@@ -338,12 +338,10 @@ describe('prd_audit code-validity coverage rechecks', () => {
     const reportPath = join(root, '.pipeline/prd-audit.md');
     await writeFile(reportPath, partialReport);
     await writeFile(join(root, '.pipeline/prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: baseline }));
-    await writeFile(
-      join(root, '.pipeline/engine-state.json'),
-      JSON.stringify({ activePlanPath: '.docs/plans/current-feature.md' }),
-    );
     await utimes(reportPath, 1, 1);
 
-    await expect(sweepStaleReviewArtifacts(root, 'prd_audit', Date.now())).resolves.toEqual([reportPath]);
+    await expect(
+      sweepStaleReviewArtifacts(root, 'prd_audit', Date.now(), undefined, featureContext),
+    ).resolves.toEqual([reportPath]);
   });
 });

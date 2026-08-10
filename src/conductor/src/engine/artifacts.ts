@@ -679,6 +679,7 @@ async function sweptArtifactStillValid(
   dir: string,
   step: StepName,
   config?: HarnessConfig,
+  artifactResolution?: ArtifactResolutionContext,
 ): Promise<boolean> {
   if (!resolveGateCodeValidityConfig(config).enabled) return false;
   const git = makeGitRunner(dir);
@@ -715,7 +716,7 @@ async function sweptArtifactStillValid(
       if (findUnalignedFrRows(report).length > 0) return false;
       return (await prdAuditCoverageGap(
         dir,
-        await buildArtifactResolutionContext(dir, { git }),
+        artifactResolution ?? (await buildArtifactResolutionContext(dir, { git })),
         report,
       )) === null;
     }
@@ -769,12 +770,13 @@ export async function sweepStaleReviewArtifacts(
   step: StepName,
   sessionStartedAt: number | undefined,
   config?: HarnessConfig,
+  artifactResolution?: ArtifactResolutionContext,
 ): Promise<string[]> {
   if (!STALE_SWEEP_STEPS.has(step) || sessionStartedAt === undefined) return [];
   const removed: string[] = [];
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
-    if (await sweptArtifactStillValid(dir, step, config)) continue; // still code-valid → spare
+    if (await sweptArtifactStillValid(dir, step, config, artifactResolution)) continue; // still code-valid → spare
     try {
       await rm(f);
       removed.push(f);

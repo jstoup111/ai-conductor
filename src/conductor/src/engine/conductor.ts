@@ -4380,6 +4380,23 @@ export class Conductor {
                 `start ${builtinGroup.name} verification group`,
                 roundChanges,
               );
+              if (builtinGroup.name !== BUILD_VERIFICATION_GROUP.name) {
+                await Promise.all(
+                  members.map((member) =>
+                    sweepStaleReviewArtifacts(
+                      this.projectRoot,
+                      member.name as StepName,
+                      state.session_started_at,
+                      this.config,
+                      {
+                        featureDesc: state.feature_desc,
+                        featureIdentities: [],
+                        changedPaths: new Set(),
+                      },
+                    ),
+                  ),
+                );
+              }
               return runWithConcurrency(
                 members.map((member) => () => {
                   if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
@@ -4409,9 +4426,6 @@ export class Conductor {
                     state,
                     {
                       stepRunner: this.stepRunner,
-                      // Task 8 (#817): threaded so sweepStaleReviewArtifacts's
-                      // gate_code_validity kill-switch is honored on this
-                      // parallel-branch sweep path too.
                       config: this.config,
                       // Shared rate-limit episode: a rate-limited branch waits
                       // on the coordinator WITHOUT blocking its siblings'
@@ -5320,6 +5334,11 @@ export class Conductor {
             step.name,
             state.session_started_at,
             this.config,
+            {
+              featureDesc: state.feature_desc,
+              featureIdentities: [],
+              changedPaths: new Set(),
+            },
           );
         }
 
@@ -8906,6 +8925,22 @@ export class Conductor {
       skill: branch.skill ?? '',
       outcome: { kind: 'no-verdict', reason: 'not-run' },
     }));
+
+    await Promise.all(
+      members.map((member) =>
+        sweepStaleReviewArtifacts(
+          this.projectRoot,
+          member.name as StepName,
+          state.session_started_at,
+          this.config,
+          {
+            featureDesc: state.feature_desc,
+            featureIdentities: [],
+            changedPaths: new Set(),
+          },
+        ),
+      ),
+    );
 
     const outcomes: BranchOutcome[] = await runWithConcurrency(
       members.map((member) => async () => {

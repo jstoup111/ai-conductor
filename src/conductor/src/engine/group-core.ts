@@ -516,7 +516,17 @@ async function runGroupBranchInner(
   // the member's step is outside STALE_SWEEP_STEPS / the artifact is fresh
   // (see sweepStaleReviewArtifacts, artifacts.ts).
   if (deps.projectRoot !== undefined) {
-    await sweepStaleReviewArtifacts(deps.projectRoot, member.name as StepName, deps.sessionStartedAt, deps.config);
+    await sweepStaleReviewArtifacts(
+      deps.projectRoot,
+      member.name as StepName,
+      deps.sessionStartedAt,
+      deps.config,
+      {
+        featureDesc: state.feature_desc,
+        featureIdentities: [],
+        changedPaths: new Set(),
+      },
+    );
   }
 
   let lastOutput = "";
