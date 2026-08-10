@@ -1485,4 +1485,85 @@ describe('runCoherenceGate ADR pool (Task 7)', () => {
       }),
     ).rejects.toThrow('fabricated-id "adr-deleted"');
   });
+
+  it('passes a deletion-only ADR change set with the ADR layer engaged over an empty pool', async () => {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-adr-deletion-only-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await mkdir(join(canonicalPath, '.docs/decisions'), { recursive: true });
+    await writeFile(join(canonicalPath, '.docs/decisions/adr-removed.md'), '# Removed ADR\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed ADR']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await unlink(join(worktreePath, '.docs/decisions/adr-removed.md'));
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "ship widgets" |
+| outcome | outcome-2 | story-2 | covered | "support returns" |
+| fr | FR-1 | story-1 | covered | "FR-1: widgets" |
+| fr | FR-2 | story-2 | covered | "FR-2: widgets" |
+| story | story-1 | task-1, task-2 | covered | "As a user..." |
+| story | story-2 | task-2 | covered | "As a user..." |
+| task | task-1 | story-1 | covered | "Task 1: build widget" |
+| task | task-2 | story-2 | covered | "Task 2: ship widget" |
+`,
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'remove ADR']);
+
+    const ideaFiles = new Set(['.docs/coherence/idea.md', '.docs/decisions/adr-removed.md']);
+    const required = resolveRequiredLayers(worktreePath, 'M', 'product', ['- Ship widgets reliably.'], ideaFiles);
+    expect(required.engaged && required.layers.has('adr')).toBe(true);
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath,
+        tier: 'M',
+        track: 'product',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1
+
+## Story 2: Widget returns
+**Requirement:** FR-2
+`,
+        planText: `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/widget.ts
+
+### Task 2: Return widget
+**Story:** Story 2 (FR-2)
+**Type:** happy-path
+**Files:** src/ship.ts
+`,
+        prdText: `# PRD
+
+## Functional Requirements
+
+- FR-1: Widgets can be shipped.
+- FR-2: Widgets can be returned.
+`,
+        outcomeBullets: ['- Ship widgets reliably.', '- Support returns.'],
+        ideaFiles,
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).resolves.toBeUndefined();
+  });
 });
