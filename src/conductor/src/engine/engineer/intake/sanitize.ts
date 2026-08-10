@@ -151,7 +151,7 @@ const RULES: Rule[] = [
 /**
  * Redact credentials and operator-identifying paths from intake text.
  *
- * Pure and idempotent: running it on its own output replaces nothing further,
+ * Pure and repeat-safe: running it on its own output replaces nothing further,
  * because every placeholder is inert under all the rules above.
  */
 export function sanitizeIntakeText(input: string): SanitizeResult {
