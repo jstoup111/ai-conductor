@@ -125,8 +125,8 @@ const RULES: Rule[] = [
     category: 'assigned-secret',
     // The `(?!\[redacted:)` guard keeps placeholders inert: a more specific rule
     // above may already have replaced this value, and without the guard this
-    // rule would relabel its output — breaking idempotency and losing the more
-    // precise category the reader needs.
+    // rule would relabel its output — breaking repeat-safety and losing the
+    // more precise category the reader needs.
     pattern:
       /\b([A-Za-z0-9_.-]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?)[A-Za-z0-9_.-]*)(\s*[:=]\s*)(["']?)((?!\[redacted:)[^\s"']{8,})\3/gi,
     replace: (_m: string, key: string, sep: string, quote: string) =>

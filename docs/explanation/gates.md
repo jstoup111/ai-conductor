@@ -316,6 +316,19 @@ The graded diff excludes paths the **engine** authors rather than the builder â€
 `.pipeline/`. No plan task can describe harness machinery output, so grading it guarantees a scope
 finding the builder cannot legitimately act on.
 
+`build_review` also receives a third engine-recorded context section: prior `wiring_check` â†’
+`build` kickbacks from this feature's `.pipeline/events.jsonl` ledger. Each entry preserves the
+issuing gate, target, retry count, and verbatim evidence, so the grader can judge whether an
+otherwise out-of-plan plan hunk directly implements the gate instruction that required it. The
+reader admits only `kickback` records whose `from` is `wiring_check` and whose `to` is `build`;
+instructions from other gates or to other targets do not become grading context.
+
+Like rebase-repair context and accepted scope widenings, a recorded gate instruction is evidence,
+not an exemption. A matching plan hunk may be treated as in scope, but unrelated work remains
+subject to every rubric item. The ledger reader fails open: a missing or unreadable ledger yields
+no instructions, and malformed lines are ignored while well-formed qualifying records remain
+available. Ledger degradation therefore cannot prevent `build_review` from running.
+
 When `test_suite` exposes a repair needed only after a base advance, the engine accumulates the
 sanitized failure in `.pipeline/build-review-rebase-repairs.json`. The ledger is outside rewritten
 Git history, so repeated rebases retain earlier entries without treating commit trailers as

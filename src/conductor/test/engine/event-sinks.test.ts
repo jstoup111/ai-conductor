@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
+import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import {
   EVENT_SINKS,
   auditedEventTypes,
@@ -9,6 +14,7 @@ import {
 } from '../../src/engine/event-sinks.js';
 import type { SchedulingUnitRef } from '../../src/engine/conductor.js';
 import type { ConductorEvent } from '../../src/types/events.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_started',
@@ -67,6 +73,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'finish_publication_transition',
   'finish_publication_blocked',
   'finish_publication_disposition',
+  'kickback',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -163,6 +170,64 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('persists a kickback to the event ledger without changing its audit record', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'kickback-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const auditTrail = new AuditTrailWriter(projectRoot);
+    const kickback = {
+      type: 'kickback' as const,
+      from: 'wiring_check' as const,
+      to: 'build' as const,
+      evidence: 'Task 1: replace stale anchor.',
+      count: 1,
+    };
+
+    try {
+      persister.start();
+      auditTrail.subscribe(events);
+      await events.emit(kickback);
+      persister.stop();
+
+      const ledger = JSON.parse((await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')).trim());
+      const auditRecord = JSON.parse((await readFile(join(projectRoot, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf-8')).trim());
+
+      expect({ ledger, auditRecord }).toMatchObject({
+        ledger: { ...kickback, ts: expect.any(String) },
+        auditRecord: {
+          step: 'build',
+          event: 'kickback',
+          cause: 'wiring_check evidence: Task 1: replace stale anchor.',
+        },
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists an evidence-less kickback as JSON without an evidence field', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'kickback-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+
+    try {
+      persister.start();
+      await events.emit({ type: 'kickback', from: 'wiring_check', to: 'build', count: 1 });
+      persister.stop();
+
+      const record = JSON.parse((await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')).trim());
+      expect(record).toEqual({
+        type: 'kickback',
+        from: 'wiring_check',
+        to: 'build',
+        count: 1,
+        ts: expect.any(String),
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('keeps probe-failure progress persisted and rendered without widening audit persistence', () => {
     const progress = {
       type: 'credentials_park_progress',

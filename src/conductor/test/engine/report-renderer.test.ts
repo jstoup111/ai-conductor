@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { renderReport, ReportError, parseEvents, aggregateKickbacks } from '../../src/engine/report-renderer.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
+import { computeCostRollup } from '../../src/engine/cost-rollup.js';
 
 // Helper: build a JSONL line from event + timestamp offset in ms
 function makeEvent(event: Record<string, unknown>, ts: string): string {
@@ -24,6 +26,36 @@ describe('report-renderer', () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('ignores persisted kickback lines in report, timing, and cost rollups', async () => {
+    const baselineDir = join(tempDir, 'baseline');
+    const kickbackDir = join(tempDir, 'with-kickback');
+    const baseline = makeLines([
+      { event: { type: 'step_started', step: 'build', activeInterval: { start: 0, end: 1_000 } }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'step_completed', step: 'build', activeInterval: { start: 0, end: 1_000 }, tokenUsage: { input: 100, output: 50, costUsd: 0.01 } }, ts: '2026-01-01T00:00:01.000Z' },
+    ]);
+    const withKickback = `${baseline}${makeLines([
+      { event: { type: 'kickback', from: 'build_review', to: 'build', evidence: 'rerun build', count: 1 }, ts: '2026-01-01T00:00:02.000Z' },
+    ])}`;
+
+    await Promise.all([baselineDir, kickbackDir].map(async (dir, index) => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'events.jsonl'), index === 0 ? baseline : withKickback, 'utf-8');
+    }));
+
+    const baselineResults = [
+      renderReport(join(baselineDir, '.pipeline', 'events.jsonl')),
+      await computeTimingRollup(baselineDir),
+      await computeCostRollup(baselineDir),
+    ];
+    const kickbackResults = [
+      renderReport(join(kickbackDir, '.pipeline', 'events.jsonl')),
+      await computeTimingRollup(kickbackDir),
+      await computeCostRollup(kickbackDir),
+    ];
+
+    expect(kickbackResults).toEqual(baselineResults);
   });
 
   // ─── Task 9: step durations table ─────────────────────────────────────────

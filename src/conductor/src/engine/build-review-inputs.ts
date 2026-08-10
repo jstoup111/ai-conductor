@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import {
   readTestSuiteRemediations,
@@ -45,6 +45,60 @@ export interface BuildReviewInputs {
   repairContext?: TestSuiteRemediationRecord[];
   /** Commit-local scope widenings accepted by the containment evaluator. */
   acceptedWidenings?: AcceptedScopeWidening[];
+  /** Wiring-check feedback from prior kickbacks in this feature's event ledger.
+   * These instructions retain the event's evidence and retry count verbatim so
+   * the grader can judge whether the current diff closes the reported gap. */
+  gateInstructions?: BuildReviewGateInstruction[];
+}
+
+/** A wiring_check → build kickback preserved for build-review context. */
+export interface BuildReviewGateInstruction {
+  from: 'wiring_check';
+  to: 'build';
+  evidence: string;
+  count: number;
+}
+
+function isBuildReviewGateInstruction(value: unknown): value is BuildReviewGateInstruction {
+  if (typeof value !== 'object' || value === null) return false;
+
+  const event = value as Record<string, unknown>;
+  return event.type === 'kickback'
+    && event.from === 'wiring_check'
+    && event.to === 'build'
+    && typeof event.evidence === 'string'
+    && typeof event.count === 'number';
+}
+
+/** Read wiring-check kickbacks from the feature's canonical event spine. */
+async function readBuildReviewGateInstructions(featureRoot: string): Promise<BuildReviewGateInstruction[]> {
+  let ledger: string;
+  try {
+    ledger = await readFile(join(featureRoot, '.pipeline', 'events.jsonl'), 'utf-8');
+  } catch {
+    return [];
+  }
+  const instructions: BuildReviewGateInstruction[] = [];
+
+  for (const line of ledger.split('\n')) {
+    if (!line.trim()) continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (isBuildReviewGateInstruction(event)) {
+      instructions.push({
+        from: event.from,
+        to: event.to,
+        evidence: event.evidence,
+        count: event.count,
+      });
+    }
+  }
+
+  return instructions;
 }
 
 /**
@@ -122,6 +176,10 @@ export async function assembleBuildReviewInputs(
 
   const planBody = await readFile(planPath, 'utf-8');
 
+  const featureRoot = dirname(dirname(dirname(planPath)));
+  const planIsInFeatureRoot =
+    basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs';
+
   return {
     diff: diffResult.stdout,
     planBody,
@@ -132,8 +190,11 @@ export async function assembleBuildReviewInputs(
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
     repairContext:
-      basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs'
-        ? await readTestSuiteRemediations(dirname(dirname(dirname(planPath))))
+      planIsInFeatureRoot
+        ? await readTestSuiteRemediations(featureRoot)
         : [],
+    gateInstructions: planIsInFeatureRoot
+      ? await readBuildReviewGateInstructions(featureRoot)
+      : [],
   };
 }
