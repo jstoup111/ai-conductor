@@ -129,6 +129,15 @@ set behind. Only after that preflight may the task atomically write each declare
 source content transformed by the rename map. It consumes zero LLM turns or dispatches for the
 copy itself.
 
+**Failure branches:**
+
+- If the `**Files:**` declaration omits a rename-map-implied target, fail the copy task and name
+  that undeclared target. Do not write it or any other path outside the declaration.
+- If a source is unreadable at copy time, fail closed and name that source. Because preflight
+  completes before any write, write no copy target and leave no partially copied target set.
+- If a copy task has no resolved `**Pattern-source:**` / `**Rename-map:**` declaration, fail the
+  copy task naming the absent declaration; do not infer a source or proceed with a copy.
+
 The copy task remains an ordinary declared plan task: it retains its `Task: <id>` attribution and
 commit ownership, and existing scoped verification, build review, and all lifecycle gates remain
 enabled. The copy establishes a baseline only; each subsequent task retains its complete scope and
