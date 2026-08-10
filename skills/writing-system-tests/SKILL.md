@@ -96,10 +96,20 @@ layout. For each source spec, apply the ordered Rename-map to both its relative 
 the filename) and its content, then write the resulting target spec. Run those copied specs at
 `acceptance_specs` time before continuing.
 
+Before writing, enumerate the source acceptance-spec glob and all derived target paths. If the
+source acceptance spec set is empty, fail closed: report the declared Pattern-source and the
+acceptance-spec glob that found no specs, and never fall back to derivation. If two source specs
+derive the same target-path collision, fail closed before any write rather than overwriting either
+target. These are declaration-copy failures, not reasons to resume the ordinary derivation path.
+
 The copied run earns RED only when its failure includes at least one copied spec failing because
 the target does not yet exist, with a non-zero failure count and zero errors and zero skips. Record
 that real result using the existing §6 RED-evidence contract. Never fall back to derivation after a
 declaration has resolved: copied specs are the feature's acceptance coverage for this step.
+
+If all copied specs pass, fail closed and report the passing specs by path. A fully passing copied
+set establishes neither the required missing-target RED failure nor evidence that the copied tests
+exercise the new target; do not treat it as successful RED evidence.
 
 **Skip specs for already-tested behavior:** Before generating, grep the existing test suite
 for overlap. For each acceptance criterion, search test files for keywords from the criterion

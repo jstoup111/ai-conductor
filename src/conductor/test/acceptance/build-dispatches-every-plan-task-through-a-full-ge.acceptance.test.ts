@@ -119,6 +119,24 @@ describe('Story 2: acceptance_specs copies declared source specs and earns RED',
     expect(contract).toMatch(/(?:failed|failure)[^\n]*(?:at least one|non-zero)[\s\S]{0,180}zero (?:errors|skips)/i);
     expect(contract).toMatch(/(?:never|no|does not)[^\n]*fall back[^\n]*deriv/i);
   });
+
+  it('fails closed when the declared source glob finds no specs', async () => {
+    const contract = await readContract('skills/writing-system-tests/SKILL.md');
+
+    expect(contract).toMatch(/source acceptance spec[\s\S]{0,120}empty[\s\S]{0,220}(?:fail|halt|reject)[\s\S]{0,220}(?:Pattern-source|source)[\s\S]{0,180}glob[\s\S]{0,220}(?:never|do not|must not)[^\n]*deriv/i);
+  });
+
+  it('fails closed on a derived target-path collision instead of overwriting', async () => {
+    const contract = await readContract('skills/writing-system-tests/SKILL.md');
+
+    expect(contract).toMatch(/(?:target.?path|target)[\s-]*collision[\s\S]{0,220}(?:fail|halt|reject)[\s\S]{0,220}(?:overwrite|write)/i);
+  });
+
+  it('rejects an all-passing copied run and names the passing specs', async () => {
+    const contract = await readContract('skills/writing-system-tests/SKILL.md');
+
+    expect(contract).toMatch(/all[^\n]*pass[\s\S]{0,220}(?:fail|halt|reject)[\s\S]{0,220}passing spec/i);
+  });
 });
 
 describe('Story 3: pipeline performs one atomic declared copy task without an LLM', () => {
