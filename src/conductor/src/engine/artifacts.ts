@@ -33,6 +33,7 @@ import {
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
+import { extractPrdFrIds } from './prd-fr-ids.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -3271,6 +3272,21 @@ export function findFrIdsWithoutRows(content: string, expectedIds: ReadonlySet<s
     if (row) present.add(row.fr);
   }
   return [...expectedIds].filter((id) => !present.has(id.toUpperCase()));
+}
+
+/** Return a diagnostic when a resolved PRD requirement lacks an audit verdict row. */
+export async function prdAuditCoverageGap(
+  projectRoot: string,
+  context: ArtifactResolutionContext,
+  reportContent: string,
+): Promise<string | null> {
+  const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
+  const expectedIds = new Set(
+    (await Promise.all(prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8')))))
+      .flatMap((ids) => [...ids]),
+  );
+  const missing = findFrIdsWithoutRows(reportContent, expectedIds);
+  return missing.length === 0 ? null : `PRD audit report is missing verdict rows for ${missing.join(', ')}.`;
 }
 
 /**

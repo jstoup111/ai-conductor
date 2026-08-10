@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   findFrIdsWithoutRows,
+  prdAuditCoverageGap,
   resolveFeaturePrdPaths,
   type ArtifactResolutionContext,
 } from '../src/engine/artifacts.js';
@@ -88,5 +89,47 @@ describe('findFrIdsWithoutRows', () => {
 
   it('returns every expected id when the report is empty', () => {
     expect(findFrIdsWithoutRows('', new Set(['FR-1', 'FR-2A']))).toEqual(['FR-1', 'FR-2A']);
+  });
+});
+
+describe('prdAuditCoverageGap', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'prd-audit-coverage-'));
+    await mkdir(join(root, '.docs/specs'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('returns a gap only when a resolved PRD requirement has no report verdict row', async () => {
+    const featureContext = context({ activePlanPath: '.docs/plans/current-feature.md' });
+    const reportWithAllRows = [
+      '| FR | Verdict | Gap-class | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| FR-1 | ALIGNED | — | Covered |',
+      '| FR-2 | ALIGNED | — | Covered |',
+    ].join('\n');
+    const reportWithPartialRows = [
+      '| FR | Verdict | Gap-class | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| FR-1 | ALIGNED | — | Covered |',
+    ].join('\n');
+
+    await writeFile(
+      join(root, '.docs/specs/current-feature.md'),
+      '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2',
+    );
+    const coverageResults = await Promise.all([
+      prdAuditCoverageGap(root, featureContext, reportWithAllRows),
+      prdAuditCoverageGap(root, featureContext, reportWithPartialRows),
+    ]);
+
+    await writeFile(join(root, '.docs/specs/current-feature.md'), '# PRD\n\nNo enumerated requirements.');
+    coverageResults.push(await prdAuditCoverageGap(root, featureContext, reportWithPartialRows));
+
+    expect(coverageResults).toEqual([null, expect.stringContaining('FR-2'), null]);
   });
 });
