@@ -224,13 +224,14 @@ describe('engine/audit-trail', () => {
     });
   });
 
-  it('subscribe() records a refused operator reseal with its condition and offending path', async () => {
+  it('subscribe() records a refused operator reseal with its rationale, condition, and offending path', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();
     writer.subscribe(emitter);
 
     await emitter.emit({
       type: 'protected_artifact_reseal_refused',
+      reason: 'The corrected plan is ready for review.',
       condition: 'Protected artifact changed: .docs/stories/feature.md',
       path: '.docs/stories/feature.md',
     });
@@ -240,6 +241,7 @@ describe('engine/audit-trail', () => {
     expect(JSON.parse(line) as AuditRecord).toMatchObject({
       origin: 'operator',
       event: 'reseal_refused',
+      reason: 'The corrected plan is ready for review.',
       condition: 'Protected artifact changed: .docs/stories/feature.md',
       path: '.docs/stories/feature.md',
     });

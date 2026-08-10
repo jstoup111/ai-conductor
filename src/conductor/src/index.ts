@@ -524,7 +524,7 @@ export async function validateWiredIntoCommand(
 
 // --- Main ---
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const buildTailCmd = detectBuildTailCommand(process.argv);
   if (buildTailCmd) {
     process.exitCode = await dispatchBuildTailCommand(buildTailCmd);

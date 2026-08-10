@@ -323,6 +323,7 @@ describe('event sink subscriptions', () => {
       },
       {
         type: 'protected_artifact_reseal_refused',
+        reason: 'operator rationale',
         condition: 'unlisted-drift',
         path: '.docs/stories/feature.md',
       },

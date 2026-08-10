@@ -8,6 +8,22 @@ BIN_DIR="$(dirname "$REAL_PATH")"
 CONDUCTOR_DIR="${BIN_DIR}/../src/conductor"
 DIST_LINK="${CONDUCTOR_DIR}/dist"
 DIST="${DIST_LINK}/index.js"
+SOURCE="${CONDUCTOR_DIR}/src/cli-entry.ts"
+TSX="${CONDUCTOR_DIR}/node_modules/.bin/tsx"
+TSX_LOADER="${CONDUCTOR_DIR}/node_modules/tsx/dist/loader.mjs"
+
+# In a checked-out harness with its local development dependencies installed,
+# execute the current TypeScript source directly. This intentionally performs
+# no build or filesystem writes: acceptance and operator commands must not
+# silently run a stale dist bundle merely because the source has changed.
+# Published installations without the development loader retain the pinned
+# dist-version path below.
+if [ -x "$TSX" ] && [ -f "$TSX_LOADER" ] && [ -f "$SOURCE" ]; then
+  # A test runner can export a Node preload into descendants. It is not part
+  # of the conductor runtime and can prevent the source entry point from
+  # owning its own process lifecycle, so do not inherit it into this CLI.
+  exec env -u NODE_OPTIONS node --import "$TSX_LOADER" "$SOURCE" "$@"
+fi
 
 if [ ! -e "$DIST_LINK" ] && [ ! -L "$DIST_LINK" ]; then
   echo "conduct-ts: missing ${DIST}" >&2

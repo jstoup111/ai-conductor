@@ -38,6 +38,8 @@ export interface ProtectedArtifactRebaseline {
   toCommit: string;
   trigger: string;
   paths: string[];
+  /** Verbatim rationale for an operator-initiated scoped reseal. */
+  reason?: string;
 }
 
 export interface ProtectedArtifactSeal {
@@ -131,6 +133,8 @@ export interface RotateProtectedArtifactSealOptions {
 }
 
 export interface ResealProtectedArtifactSealOptions extends RotateProtectedArtifactSealOptions {
+  /** Verbatim operator-supplied rationale persisted with this reseal. */
+  reason?: string;
   featureDesc?: string;
   baseBranch?: string;
 }
@@ -361,7 +365,8 @@ function parseSeal(serialized: string): ProtectedArtifactSeal {
           typeof entry?.toCommit === 'string' &&
           typeof entry?.trigger === 'string' &&
           Array.isArray(entry?.paths) &&
-          entry.paths.every((path: unknown) => typeof path === 'string'),
+          entry.paths.every((path: unknown) => typeof path === 'string') &&
+          (entry.reason === undefined || typeof entry.reason === 'string'),
       );
     if (
       (value.version !== 1 && !validRebaselines) ||
@@ -1002,6 +1007,7 @@ export async function resealProtectedArtifactSeal({
   paths,
   fileOperations = { writeFile, rename, rm },
   onRebaseline,
+  reason,
   featureDesc,
   baseBranch,
 }: ResealProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
@@ -1014,6 +1020,7 @@ export async function resealProtectedArtifactSeal({
     recomputed: { ...recomputed, baselineCommit: toCommit },
     trigger,
     paths,
+    reason,
     fileOperations,
     onRebaseline,
   });
@@ -1025,6 +1032,7 @@ interface PersistProtectedArtifactSealRotationOptions {
   recomputed: ProtectedArtifactSeal;
   trigger: string;
   paths: string[];
+  reason?: string;
   fileOperations: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
@@ -1035,6 +1043,7 @@ async function persistProtectedArtifactSealRotation({
   recomputed,
   trigger,
   paths,
+  reason,
   fileOperations,
   onRebaseline,
 }: PersistProtectedArtifactSealRotationOptions): Promise<ProtectedArtifactSeal> {
@@ -1042,7 +1051,13 @@ async function persistProtectedArtifactSealRotation({
     ...recomputed,
     rebaselines: [
       ...seal.rebaselines,
-      { fromCommit: seal.baselineCommit, toCommit: recomputed.baselineCommit, trigger, paths },
+      {
+        fromCommit: seal.baselineCommit,
+        toCommit: recomputed.baselineCommit,
+        trigger,
+        paths,
+        ...(reason === undefined ? {} : { reason }),
+      },
     ],
   };
   const sealPath = join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH);

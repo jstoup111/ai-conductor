@@ -222,6 +222,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   protected_artifact_reseal_refused: {
     type: 'protected_artifact_reseal_refused',
+    reason: 'operator rationale',
     condition: 'unlisted-drift',
     path: '.docs/stories/feature.md',
   },

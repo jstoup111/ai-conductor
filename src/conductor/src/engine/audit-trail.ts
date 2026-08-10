@@ -205,6 +205,7 @@ export class AuditTrailWriter {
         return {
           origin: 'operator',
           event: 'reseal_refused',
+          reason: event.reason,
           condition: event.condition,
           ...(event.path ? { path: event.path } : {}),
         };

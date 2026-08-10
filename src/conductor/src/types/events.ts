@@ -281,6 +281,8 @@ export type ConductorEvent =
   | {
       /** An operator reseal was refused before it could change the seal. */
       type: 'protected_artifact_reseal_refused';
+      /** Verbatim operator-supplied rationale for the refused request. */
+      reason: string;
       condition: string;
       /** Present when a specific protected artifact caused the refusal. */
       path?: string;

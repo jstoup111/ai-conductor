@@ -1,4 +1,5 @@
 import { access, readFile } from 'node:fs/promises';
+import { writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import {
@@ -10,6 +11,7 @@ import {
 import { AuditTrailWriter } from './audit-trail.js';
 import { clearMarker } from './daemon-rekick.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, PROTECTED_ARTIFACT_HALT_CLASS } from './halt-marker.js';
+import { makeGitRunner, originDefaultBranch } from './rebase.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 
 export interface ResealDispatch {
@@ -66,6 +68,7 @@ export interface ResealCommandDependencies {
   access?: (path: string) => Promise<void>;
   readFile?: (path: string, encoding: BufferEncoding) => Promise<string>;
   resolveHead?: (projectRoot: string) => Promise<string>;
+  resolveBaseBranch?: (projectRoot: string) => Promise<string>;
   reseal?: (options: ResealProtectedArtifactSealOptions) => Promise<ProtectedArtifactSeal>;
   clearHalt?: (worktreePath: string) => Promise<void>;
   events?: ConductorEventEmitter;
@@ -82,7 +85,10 @@ export async function dispatchResealCommand(
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
   const out = deps.out ?? console.log;
-  const err = deps.err ?? console.error;
+  // The command is commonly invoked as a short-lived child process with
+  // stderr piped. Write synchronously so a refusal is observable before the
+  // source entry point finishes and Node closes that pipe.
+  const err = deps.err ?? ((line: string) => writeSync(process.stderr.fd, `${line}\n`));
   // Autonomous steps reach providers via DefaultStepRunner.runAutonomous
   // (step-runners.ts:1088). The built-in provider subprocesses do not inherit
   // an operator terminal there: Claude writes its prompt through `input`
@@ -110,6 +116,7 @@ export async function dispatchResealCommand(
     const path = refusalPath(condition);
     await events.emitOrThrow({
       type: 'protected_artifact_reseal_refused',
+      reason: command.reason,
       condition,
       ...(path ? { path } : {}),
     });
@@ -137,6 +144,8 @@ export async function dispatchResealCommand(
 
   const resolveHead = deps.resolveHead ?? (async (projectRoot: string): Promise<string> =>
     (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim());
+  const resolveBaseBranch = deps.resolveBaseBranch ?? (async (projectRoot: string): Promise<string> =>
+    (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main');
 
   let resealed: ProtectedArtifactSeal;
   try {
@@ -146,6 +155,9 @@ export async function dispatchResealCommand(
       toCommit: await resolveHead(worktree),
       trigger: 'operator-reseal',
       paths: command.paths,
+      reason: command.reason,
+      featureDesc: command.slug,
+      baseBranch: await resolveBaseBranch(worktree),
     });
   } catch (error) {
     await refuse(error instanceof Error ? error.message : String(error));

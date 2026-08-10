@@ -209,6 +209,7 @@ describe('dispatchResealCommand', () => {
           version: 2,
         })),
         resolveHead: vi.fn().mockResolvedValue('target'),
+        resolveBaseBranch: vi.fn().mockResolvedValue('trunk'),
         reseal,
         events: new ConductorEventEmitter(),
       }),
@@ -229,9 +230,47 @@ describe('dispatchResealCommand', () => {
         toCommit: 'target',
         trigger: 'operator-reseal',
         paths: ['.docs/plans/repair.md'],
+        reason: 'Corrected after review.',
+        featureDesc: 'repair',
+        baseBranch: 'trunk',
       }]],
       out: [['Resealed protected artifacts: .docs/plans/repair.md']],
     });
+  });
+
+  it('passes the operator rationale and resolved provenance through the public dispatcher', async () => {
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', ' Keep exact whitespace. '),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const reseal = vi.fn().mockResolvedValue({
+      baselineCommit: 'target',
+      protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:after' }],
+      rebaselines: [],
+      version: 2,
+    });
+
+    await expect(dispatchResealCommand(command, {
+      cwd: '/project',
+      access: vi.fn().mockResolvedValue(undefined),
+      isInteractive: true,
+      readFile: vi.fn().mockResolvedValue(JSON.stringify({
+        baselineCommit: 'base',
+        protectedArtifacts: [{ path: '.docs/plans/repair.md', fingerprint: 'sha256:before' }],
+        rebaselines: [],
+        version: 2,
+      })),
+      resolveHead: vi.fn().mockResolvedValue('target'),
+      resolveBaseBranch: vi.fn().mockResolvedValue('main'),
+      reseal,
+      events: new ConductorEventEmitter(),
+    })).resolves.toBe(0);
+
+    expect(reseal).toHaveBeenCalledWith(expect.objectContaining({
+      reason: ' Keep exact whitespace. ',
+      featureDesc: 'repair',
+      baseBranch: 'main',
+    }));
   });
 
   it('preserves and clears a protected-artifact halt after a successful reseal with --clear-halt', async () => {
@@ -735,6 +774,7 @@ describe('dispatchResealCommand', () => {
 
     expect(refused).toHaveBeenCalledWith({
       type: 'protected_artifact_reseal_refused',
+      reason: 'Corrected after review.',
       condition: 'Protected artifact changed: .docs/stories/unlisted.md',
       path: '.docs/stories/unlisted.md',
     });
