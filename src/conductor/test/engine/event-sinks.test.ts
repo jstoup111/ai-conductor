@@ -124,6 +124,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'protected_artifact_rebaseline',
   'protected_artifact_rebaseline_refused',
+  ...RESEAL_EVENT_TYPES,
   'parallel_started',
   'parallel_completed',
   'rebase_mergeable_skip',
@@ -333,8 +334,8 @@ describe('event sink subscriptions', () => {
       refused: EVENT_SINKS.protected_artifact_reseal_refused,
     }).toEqual({
       events,
-      performed: { render: false, persist: false, audit: true },
-      refused: { render: false, persist: false, audit: true },
+      performed: { render: true, persist: false, audit: true },
+      refused: { render: true, persist: false, audit: true },
     });
   });
 

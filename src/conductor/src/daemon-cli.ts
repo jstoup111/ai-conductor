@@ -2321,6 +2321,16 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'protected_artifact_reseal': {
+      const paths = event.paths.map(({ path }) => path).join(', ');
+      log(`${dot} ${chalk.green(`protected artifacts resealed: ${paths}`)}`);
+      break;
+    }
+    case 'protected_artifact_reseal_refused': {
+      const path = event.path ? ` ${event.path}` : '';
+      log(`${dot} ${chalk.yellow(`protected artifact reseal refused${path} — ${event.condition}`)}`);
+      break;
+    }
     case 'remediation_sealed_artifact_redirect': {
       log(
         `${dot} ${chalk.yellow(
