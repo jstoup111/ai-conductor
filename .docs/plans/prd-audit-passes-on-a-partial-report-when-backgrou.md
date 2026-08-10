@@ -93,7 +93,7 @@ CLI surface changes, so no migration block is required.
 **Files:** `src/conductor/src/engine/artifacts.ts`,
 `src/conductor/test/prd-audit-coverage.test.ts`
 
-**Wired-into:** none (inert until `src/conductor/src/engine/artifacts.ts`)
+**Wired-into:** `src/conductor/src/engine/artifacts.ts#prdAuditCoverageGap`
 
 **Dependencies:** Task 1
 
@@ -115,7 +115,7 @@ CLI surface changes, so no migration block is required.
 **Files:** `src/conductor/src/engine/artifacts.ts`,
 `src/conductor/test/prd-audit-coverage.test.ts`
 
-**Wired-into:** none (inert until `src/conductor/src/engine/artifacts.ts`)
+**Wired-into:** `src/conductor/src/engine/artifacts.ts#prdAuditCoverageGap`
 
 **Dependencies:** none
 
@@ -136,7 +136,7 @@ CLI surface changes, so no migration block is required.
 **Files:** `src/conductor/src/engine/artifacts.ts`,
 `src/conductor/test/prd-audit-coverage.test.ts`
 
-**Wired-into:** none (inert until `src/conductor/src/engine/artifacts.ts`)
+**Wired-into:** `src/conductor/src/engine/artifacts.ts#checkStepCompletion`
 
 **Dependencies:** Task 2, Task 3
 
@@ -158,7 +158,7 @@ CLI surface changes, so no migration block is required.
 **Files:** `src/conductor/src/engine/artifacts.ts`,
 `src/conductor/test/prd-audit-coverage.test.ts`
 
-**Wired-into:** none (inert until `src/conductor/src/engine/artifacts.ts`)
+**Wired-into:** `src/conductor/src/engine/artifacts.ts#checkStepCompletion`
 
 **Dependencies:** Task 4
 
