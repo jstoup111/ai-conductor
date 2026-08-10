@@ -36,7 +36,12 @@ bin/migrate [--yes|-y] [--dry-run]
 
 Runs `bin/install --update`, then, from a consumer project, finds runnable `bash migration` fences in
 each release through the installed target version. If it cannot read the installed-version
-configuration, it exits non-zero before selecting migrations. On a project's first run, the lower
+configuration, it exits non-zero before selecting migrations, naming `bin/install --update` as the
+repair. That ordering is load-bearing, not incidental: the install refresh is the only step that
+rebuilds `conduct-ts`, and `conduct-ts` serves the very `config read` the installed-version lookup
+needs. Reading first made the repair depend on the thing it repairs — a bundle predating the
+`config read` subcommand failed the read, migrate exited, and the refresh that would have rebuilt it
+never ran. On a project's first run, the lower
 bound is the recorded `currentVersion` (or the target version itself, if `currentVersion` is an
 unparsable channel identity such as `main@<sha>`); that bound is then pinned into the ledger as its
 `candidateBaseline` and used on every later run, so it stays fixed even as `currentVersion` advances.

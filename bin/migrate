@@ -657,15 +657,26 @@ run_project_migrations() {
 # shellcheck source=bin/lib/harness-common.sh
 source "${HARNESS_DIR}/bin/lib/harness-common.sh"
 
+# The install refresh runs FIRST, before any configuration is read. It is the
+# only step that rebuilds conduct-ts, and conduct-ts is what serves the
+# `config read` that read_from_version needs — so reading first made the
+# repair depend on the thing it repairs. An installed bundle predating the
+# `config read` subcommand failed that read, migrate exited here, and the
+# refresh that would have rebuilt the bundle never ran, leaving the install
+# unable to migrate itself forward by any automatic path. run_install_update
+# needs no version input, so ordering it first costs nothing and breaks the
+# cycle. Block selection below still fails closed on an unreadable version.
+run_install_update || exit 1
+
 if ! FROM_VERSION=$(read_from_version); then
   fail "Cannot continue: installed-version config read failed"
+  fail "Repair the installation first: ${HARNESS_DIR}/bin/install --update"
   exit 1
 fi
 TO_VERSION=$(read_to_version)
 
 info "Migrating harness: ${FROM_VERSION:-<unknown>} → ${TO_VERSION:-<unknown>}"
 
-run_install_update || exit 1
 run_project_migrations || exit 1
 
 ok "Migration to ${TO_VERSION} complete"

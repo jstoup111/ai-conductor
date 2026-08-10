@@ -237,6 +237,12 @@ dispatch_update_channel() {
   local channel
   if ! channel=$(conductor_cfg_get updateChannel tagged); then
     warn "Update check declined: conductor configuration could not be read."
+    # Naming the repair matters more here than anywhere else: the most common
+    # cause is an installed conduct-ts too old to serve `config read`, and the
+    # update flow is exactly the path that would otherwise replace it. Without
+    # this line the operator is told only that the check declined, with no way
+    # to tell a stale bundle apart from a genuinely broken config.
+    warn "If conduct-ts is stale, repair it first: ${HARNESS_DIR}/bin/install --update"
     return 1
   fi
   case "$channel" in
