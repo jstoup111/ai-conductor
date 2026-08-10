@@ -311,6 +311,7 @@ import {
 } from './halt-pr-rehabilitation.js';
 import { computeCostRollup, toFeatureUsageTotals, type CostRollup } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
+import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 
@@ -1457,6 +1458,40 @@ export class Conductor {
       log(
         `[ship-draft-pr] retained PR presentation repair failed for ${prUrl} (advisory): ${err}`,
       );
+    }
+  }
+
+  /**
+   * Copy the originating issue's criticality (`priority: <band>`) labels onto
+   * the implementation PR, so a reviewer scanning the PR list sees the same
+   * urgency the daemon dispatched on without opening the linked issue.
+   *
+   * ADVISORY, exactly like the presentation repair above: never throws, and a
+   * feature with no intake linkage simply no-ops. Idempotent — re-entering SHIP
+   * re-applies labels the PR already carries, which GitHub accepts unchanged.
+   */
+  private async mirrorShipPrCriticalityLabels(
+    prUrl: string,
+    state: ConductState,
+  ): Promise<void> {
+    const log = this.log ?? console.warn;
+    try {
+      let planPath: string | undefined;
+      try {
+        planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc);
+      } catch {
+        planPath = undefined;
+      }
+      const sourceRef = await this.resolveIntakeSourceRef(state.feature_desc, planPath);
+      await mirrorIssueCriticalityLabels({
+        gh: this.gh,
+        cwd: this.projectRoot,
+        prUrl,
+        sourceRef,
+        log,
+      });
+    } catch (err) {
+      log(`[pr-criticality] mirroring failed for ${prUrl} (advisory): ${err}`);
     }
   }
 
@@ -4053,6 +4088,9 @@ export class Conductor {
               state,
               firstShipConsumer(steps)?.name,
             );
+
+            // Carry the intake issue's criticality onto the PR that delivers it.
+            await this.mirrorShipPrCriticalityLabels(draftPr.prUrl, state);
           }
         }
 
