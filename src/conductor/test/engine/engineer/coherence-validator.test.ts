@@ -1287,6 +1287,15 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     expect(result.reason).toBe('tier-exempt');
   });
 
+  it('disengages tier S before deriving ADR requirements', () => {
+    expect(
+      resolveRequiredLayers('/wt', 'S', 'product', [], [
+        '.docs/coherence/foo.md',
+        '.docs/decisions/adr-foo.md',
+      ]),
+    ).toEqual({ engaged: false, reason: 'tier-exempt' });
+  });
+
   it('technical track marker skips the FR layer but keeps story/orphan-task/coverage-table enforced', () => {
     const result = resolveRequiredLayers('/wt', 'M', 'technical', [], WITH_COHERENCE);
     expect(result.engaged).toBe(true);
@@ -1329,6 +1338,12 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
   it('a legacy change set (no .docs/coherence/ path) disengages the gate entirely', () => {
     const result = resolveRequiredLayers('/wt', 'M', 'product', ['Desired outcome: X'], LEGACY);
     expect(result).toEqual({ engaged: false, reason: 'legacy-change-set' });
+  });
+
+  it('disengages legacy change sets before deriving ADR requirements', () => {
+    expect(
+      resolveRequiredLayers('/wt', 'M', 'product', [], ['.docs/decisions/adr-foo.md']),
+    ).toEqual({ engaged: false, reason: 'legacy-change-set' });
   });
 
   it('accepts a changeSet as a Set<string> as well as an array', () => {
