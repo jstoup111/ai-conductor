@@ -337,6 +337,18 @@ goes in the PR body.
 1. Write failing test: a malformed line in either ledger yields `partial` without throwing; an obligation with no event reports `unrecorded` and `unrecorded` is not equal to a zero duration in the output type; a closeout event whose end precedes its start yields `partial`; an unterminated window yields `partial` without corrupting neighbouring windows; no `build` window at all yields `unavailable`.
 2. Verify test fails (RED)
 3. Implement: the degradation paths, following `timing-rollup.ts`'s fail-closed `parseLedger` policy.
+
+> **Amended 2026-08-10 by operator:** step 1's "no `build` window at all yields `unavailable`"
+> contradicts the approved ADR. `adr-2026-08-08-pipeline-owned-closeout-timestamps.md` D4 states
+> that on an inline run there is no engine ledger and therefore no `build` window boundaries, so
+> the result is `partial` carrying the closeout timeline only — "An inline run is a supported mode,
+> **not** an error." The ADR governs. Revised requirement: when sibling `pipeline_closeout` records
+> exist but no engine build-window boundaries do, return `partial` with a closeout-timeline payload
+> and retain those records; reserve `unavailable` for inputs carrying neither usable windows nor
+> closeout records. `build-tail-cli.ts` computes and renders the closeout-bearing partial rather
+> than short-circuiting it, keeping the `unavailable` rendering for truly empty input. Cover both
+> in `build-tail-rollup.test.ts` and `build-tail-cli.test.ts`: an inline sibling-ledger case
+> requiring a closeout-only partial with a rendered timeline, and a distinct truly-empty case.
 4. Verify test passes (GREEN)
 5. Commit: "feat(engine): fail-closed degradation for the build tail rollup"
 
