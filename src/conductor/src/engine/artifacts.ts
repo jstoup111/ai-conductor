@@ -3314,6 +3314,13 @@ export async function prdAuditCoverageGap(
   context: ArtifactResolutionContext,
   reportContent: string,
 ): Promise<string | null> {
+  // Direct predicate callers from before feature-scoped artifact resolution
+  // existed have no way to identify a PRD. Preserve their established
+  // presence/freshness-only contract; once any feature identity is available,
+  // resolution is authoritative and an absent PRD must fail closed.
+  const hasFeatureIdentity = Boolean(context.activePlanPath || context.featureDesc || context.featureIdentities.length > 0);
+  if (!hasFeatureIdentity) return null;
+
   const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
   if (prdPaths.length === 0) {
     return 'PRD audit coverage is unresolvable: no approved PRD could be resolved for the feature.';

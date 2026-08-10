@@ -448,7 +448,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     it('manual_test FAIL kicks back to build, re-dispatches it, and writes no HALT/HALT.class', async () => {
       await git('init', '-q', '-b', 'main');
       await git('commit', '--allow-empty', '-q', '-m', 'init');
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
 
       let fixed = false;
       const ran: StepName[] = [];
@@ -519,7 +519,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
   describe('S3: the daemon flag is the discriminator, at both call sites', () => {
     it('interactive (daemon: false): a DECIDE kickback re-opens plan and dispatches it (happy path)', async () => {
       await seedStoriesAndPlan();
-      await writeState(statePath, { ...FRONT_DONE });
+      await writeState(statePath, { ...FRONT_DONE, track: 'technical' });
 
       const ran: StepName[] = [];
       const kicks: Array<{ from: string; to: string }> = [];

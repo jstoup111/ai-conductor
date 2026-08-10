@@ -987,7 +987,7 @@ describe('integration/gate-loop', () => {
       await initRepo();
       // rebase seeded skipped: the engine-native rebase step needs an origin
       // this fixture doesn't have; skipping it keeps the tail converging.
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
 
       let fixed = false;
       const ran: string[] = [];
@@ -1067,7 +1067,7 @@ describe('integration/gate-loop', () => {
 
     it('FAIL → kickback → build commits nothing → PASS rewrite is refused (whitewash) and the run HALTs', async () => {
       await initRepo();
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
 
       let kicked = false;
       const runner: StepRunner = {
@@ -1744,7 +1744,7 @@ describe('integration/gate-loop', () => {
     });
 
     it('the build_review counter is independent of manualTestSelfHeals', async () => {
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
       let buildRuns = 0;
       let manualTestRuns = 0;
       const runner: StepRunner = {
@@ -1814,6 +1814,7 @@ describe('integration/gate-loop', () => {
         fromStep: 'build',
         maxRetries: 1,
         config,
+        baseBranch: 'main',
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
       });
@@ -1975,7 +1976,7 @@ describe('integration/gate-loop', () => {
         if (args[0] === 'show') return { stdout: planText } as never;
         return { stdout: '' } as never;
       });
-      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
+      await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped', track: 'technical' } as ConductState);
 
       const config = { build_review: { enabled: true } };
       let buildRuns = 0;
