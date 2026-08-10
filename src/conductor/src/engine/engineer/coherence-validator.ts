@@ -933,8 +933,9 @@ export function checkCoverageTableConsistency(planText: string | null): Coverage
 
 // --- Aggregated deterministic gap report (Task 12) ---
 
-/** The seven coverage/consistency layers a gap can originate from, in fixed report order. */
+/** The eight coverage/consistency layers a gap can originate from, in fixed report order. */
 export type CoherenceGapLayer =
+  | 'adr'
   | 'outcome'
   | 'fr'
   | 'story-fr'
@@ -945,6 +946,7 @@ export type CoherenceGapLayer =
 
 /** Fixed layer ordering used to sort an aggregated gap list before rendering. */
 const GAP_LAYER_ORDER: readonly CoherenceGapLayer[] = [
+  'adr',
   'outcome',
   'fr',
   'story-fr',
@@ -1032,8 +1034,7 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
     if (!adrResult.ok) {
       for (const gap of adrResult.gaps) {
         gaps.push({
-          // Task 10 adds `adr` to the fixed report-layer union and ordering.
-          layer: 'adr' as CoherenceGapLayer,
+          layer: 'adr',
           gapId: gap.gapId,
           artifact: 'ADRs',
           item: `${gap.gapId} has no affirmative adjudication row`,

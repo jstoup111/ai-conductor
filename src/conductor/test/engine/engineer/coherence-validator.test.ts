@@ -1204,6 +1204,26 @@ No tasks yet.
     expect(storyIdx).toBeLessThan(orphanIdx);
   });
 
+  it('renders ADR gaps first in a fixed order across multi-layer reports', () => {
+    const gaps: CoherenceGap[] = [
+      { layer: 'story', gapId: 'story-2', artifact: 'stories', item: 'Ship the gizmo' },
+      { layer: 'adr', gapId: 'adr-payment-terms', artifact: 'ADRs', item: 'payment terms are unadjudicated' },
+      { layer: 'outcome', gapId: 'outcome-1', artifact: 'intake outcomes', item: 'Reduce latency' },
+      { layer: 'adr', gapId: 'adr-retry-policy', artifact: 'ADRs', item: 'retry policy has failed' },
+    ];
+
+    const first = renderGapReport(gaps);
+    const second = renderGapReport([...gaps]);
+
+    expect(first).toBe(second);
+    expect(first).toContain('adr-payment-terms');
+    expect(first).toContain('payment terms are unadjudicated');
+    expect(first).toContain('adr-retry-policy');
+    expect(first).toContain('retry policy has failed');
+    expect(first.indexOf('adr-payment-terms')).toBeLessThan(first.indexOf('outcome-1'));
+    expect(first.indexOf('adr-retry-policy')).toBeLessThan(first.indexOf('outcome-1'));
+  });
+
   it('renders each gap with its id, source artifact, and quoted item', () => {
     const gaps: CoherenceGap[] = [
       { layer: 'fr', gapId: 'FR-3', artifact: 'PRD', item: 'FR-3 is not cited by any story' },
