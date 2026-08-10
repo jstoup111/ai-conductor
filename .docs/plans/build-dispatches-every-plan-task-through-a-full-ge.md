@@ -63,7 +63,7 @@ service.
 **Steps:**
 1. Write failing test: a plan header containing `**Pattern-source:** src/conductor/src/engine/wired-into.ts` parses to a `resolved` result whose source path is that exact string, case preserved.
 2. Verify test fails (RED)
-3. Implement: new module with module-local header regexes and an exported resolver returning a discriminated union with a `resolved` variant.
+3. Implement: new module exporting the header regex and a resolver returning a discriminated union with a `resolved` variant.
 4. Verify test passes (GREEN)
 5. Commit with message: "feat(plan): parse Pattern-source plan-header line"
 
@@ -71,7 +71,7 @@ service.
 - `src/conductor/src/engine/plan-pattern-source.ts` — new module
 - `src/conductor/src/engine/__tests__/plan-pattern-source.test.ts` — new unit test
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
+**Wired-into:** none (inert until `src/conductor/src/engine/step-runners.ts`)
 
 **Dependencies:** none
 
@@ -90,7 +90,7 @@ service.
 
 **Files:** same as Task 1
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
+**Wired-into:** same as Task 1
 
 **Dependencies:** 1
 
@@ -109,7 +109,7 @@ service.
 
 **Files:** same as Task 1
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
+**Wired-into:** same as Task 1
 
 **Dependencies:** 1
 
@@ -128,7 +128,7 @@ service.
 
 **Files:** same as Task 1
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
+**Wired-into:** same as Task 1
 
 **Dependencies:** 3
 
@@ -149,7 +149,7 @@ service.
 - `src/conductor/src/engine/copy-equivalence.ts` — new module
 - `src/conductor/src/engine/__tests__/copy-equivalence.test.ts` — new unit test
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
+**Wired-into:** none (inert until `src/conductor/src/engine/step-runners.ts`)
 
 **Dependencies:** 4
 
@@ -168,7 +168,7 @@ service.
 
 **Files:** same as Task 5
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
+**Wired-into:** same as Task 5
 
 **Dependencies:** 5
 
@@ -189,7 +189,7 @@ service.
 - `src/conductor/src/engine/copy-equivalence.ts` — blocking verdict
 - `src/conductor/src/engine/__tests__/copy-equivalence-blocking.test.ts` — new test pinning the contrast with the advisory floor
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#runBuildReview`
+**Wired-into:** same as Task 5
 
 **Dependencies:** 6
 

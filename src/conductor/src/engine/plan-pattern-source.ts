@@ -1,7 +1,7 @@
 import { posix, win32 } from 'node:path';
 
-const PATTERN_SOURCE_HEADER = /^\s*\*\*Pattern-source:\*\*\s*(.*?)\s*$/im;
-const RENAME_MAP_HEADER = /^\s*\*\*Rename-map:\*\*\s*(.*?)\s*$/im;
+export const PATTERN_SOURCE_HEADER = /^\s*\*\*Pattern-source:\*\*\s*(.*?)\s*$/im;
+export const RENAME_MAP_HEADER = /^\s*\*\*Rename-map:\*\*\s*(.*?)\s*$/im;
 
 export type RenameMapPair = { source: string; target: string };
 export type PatternSourceFileExists = (path: string) => Promise<boolean>;
