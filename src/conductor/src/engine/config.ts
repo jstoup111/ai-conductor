@@ -48,6 +48,7 @@ const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP'])
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
 const BUILT_IN_MODEL_PROVIDERS = new Set(['claude', 'codex']);
+const VALID_ADR_CORPORA = new Set(['change_set', 'repo_wide']);
 
 function normalizeKeyedBlock(
   blockName: string,
@@ -296,9 +297,7 @@ export function validateConfig(
     'mergeable_autoresolve',
     // Opt-in judgement gate at the build → manual_test seam.
     'build_review',
-    // ADR corpus scope for conflict-check. Accepted (and ignored) ahead of the
-    // block's own validation so the deployed engine can parse a config that
-    // sets it — the self-host skew this key would otherwise cause.
+    // ADR corpus scope for conflict-check.
     'conflict_check',
     // CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
     'ci_watch',
@@ -920,6 +919,31 @@ export function validateConfig(
   if (obj.build_progress !== undefined) {
     const err = validateBuildProgressBlock(obj.build_progress);
     if (err) return { ok: false, error: err };
+  }
+
+  // conflict_check — ADR corpus scope for conflict-check. The default keeps
+  // consumer checks bounded to ADRs in the current change set.
+  if (obj.conflict_check !== undefined) {
+    if (!isPlainObject(obj.conflict_check)) {
+      return errVal('conflict_check must be an object');
+    }
+    const conflictCheck = obj.conflict_check as Record<string, unknown>;
+    for (const key of Object.keys(conflictCheck)) {
+      if (key !== 'adr_corpus') {
+        return errVal(`Unknown key in conflict_check: "${key}"`);
+      }
+    }
+    if (
+      conflictCheck.adr_corpus !== undefined &&
+      !VALID_ADR_CORPORA.has(conflictCheck.adr_corpus as string)
+    ) {
+      return errVal('conflict_check.adr_corpus must be change_set|repo_wide');
+    }
+    obj.conflict_check = {
+      adr_corpus: conflictCheck.adr_corpus ?? 'change_set',
+    };
+  } else if (materializeDefaults) {
+    obj.conflict_check = { adr_corpus: 'change_set' };
   }
 
   // build_review — default-on judgement gate at the build → manual_test seam

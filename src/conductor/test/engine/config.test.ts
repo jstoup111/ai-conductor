@@ -1754,6 +1754,41 @@ complexity:
     });
   });
 
+  describe('conflict_check config field', () => {
+    it('defaults an absent ADR corpus to change_set', () => {
+      const result = validateConfig({});
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: { conflict_check: { adr_corpus: 'change_set' } },
+        warnings: [],
+      });
+    });
+
+    it.each(['change_set', 'repo_wide'] as const)(
+      'accepts adr_corpus: %s',
+      (adr_corpus) => {
+        const result = validateConfig({ conflict_check: { adr_corpus } });
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: { conflict_check: { adr_corpus } },
+          warnings: [],
+        });
+      },
+    );
+
+    it('rejects an unrecognized ADR corpus', () => {
+      expect(validateConfig({ conflict_check: { adr_corpus: 'all_adrs' } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'conflict_check.adr_corpus must be change_set|repo_wide',
+        },
+      });
+    });
+  });
+
   describe('build_review config field', () => {
     it('resolves absent key to enabled (default-on, #773 Task 4), no warning', () => {
       const result = validateConfig({ harness_version: '>=1.0.0' });
