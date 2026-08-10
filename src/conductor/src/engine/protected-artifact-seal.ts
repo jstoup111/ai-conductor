@@ -507,6 +507,39 @@ export async function createScopedProtectedArtifactSeal({
   toCommit,
   paths,
 }: CreateScopedProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
+  if (paths.length === 0) {
+    throw new Error('Scoped protected artifact reseal requires at least one path');
+  }
+  const sealedPaths = new Set(seal.protectedArtifacts.map((artifact) => artifact.path));
+  for (const path of paths) {
+    if (!isProtectedArtifactPath(path)) {
+      throw new Error(`Protected artifact reseal target is not protected: ${path}`);
+    }
+    if (!sealedPaths.has(path)) {
+      throw new Error(`Protected artifact reseal target is not sealed: ${path}`);
+    }
+  }
+  const target = await execa('git', ['rev-parse', '--verify', '--quiet', `${toCommit}^{commit}`], {
+    cwd: projectRoot,
+    reject: false,
+  }).catch(() => undefined);
+  if (!target || target.exitCode !== 0) {
+    throw new Error(`Protected artifact reseal target commit is unresolvable: ${toCommit}`);
+  }
+  for (const path of paths) {
+    if (await readContainedProtectedArtifact(projectRoot, path) === undefined) {
+      throw new Error(`Protected artifact reseal target is deleted: ${path}`);
+    }
+    const dirty = await execa('git', ['diff', '--quiet', 'HEAD', '--', path], {
+      cwd: projectRoot,
+      reject: false,
+    }).catch(() => undefined);
+    if (!dirty || dirty.exitCode !== 0) {
+      throw new Error(
+        `Protected artifact reseal target has uncommitted changes: ${path}\nCommit the protected artifact before resealing.`,
+      );
+    }
+  }
   const scopedPaths = new Set(paths);
   const protectedArtifacts = await Promise.all(seal.protectedArtifacts.map(async (artifact) => {
     if (!scopedPaths.has(artifact.path)) return artifact;
