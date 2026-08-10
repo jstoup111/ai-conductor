@@ -425,11 +425,16 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   PRD for the design-conformance check.
 - **Outputs** — `.pipeline/audit-trail/batch-N/review.json` and the batch retro and simplification
   records; `.pipeline/progress.log`; `.pipeline/summary.json`; `.pipeline/halt-user-input-required` and
-  `.pipeline/HALT` on a stall; at least one `.memory/` entry per batch. `.pipeline/current-task` and
-  `.pipeline/task-status.json` are written by engine hooks and must not be hand-edited.
+  `.pipeline/HALT` on a stall; at least one `.memory/` entry per batch; a `pipeline_closeout` record in
+  `.pipeline/pipeline-events.jsonl` per completed evaluator gate, written via `conduct-ts
+  closeout-event`. `.pipeline/current-task` and `.pipeline/task-status.json` are written by engine
+  hooks and must not be hand-edited.
 - **Gate role** — blocking. Evaluator dispatch at each batch boundary is mandatory; a missing or empty
-  `review.json` halts and re-dispatches. `BLOCK` halts and escalates; `REQUEST_CHANGES` triggers rework
-  against a three-cycle budget. Two consecutive zero-completion attempts trip a circuit breaker.
+  `review.json` halts and re-dispatches. A missing, malformed, or non-matching `evaluator`
+  `pipeline_closeout` record is an independent second hard gate (waived for a batch already in flight
+  before the closeout-event emitter shipped) — see [`conduct-ts closeout-event`](cli.md#conduct-ts-closeout-event).
+  `BLOCK` halts and escalates; `REQUEST_CHANGES` triggers rework against a three-cycle budget. Two
+  consecutive zero-completion attempts trip a circuit breaker.
 - **Declared replication copy task** — on a plan with a resolved `**Pattern-source:**` /
   `**Rename-map:**` declaration, exactly one task is the mechanical, zero-LLM copy: it writes only the
   targets its `**Files:**` declaration lists, fails closed naming an undeclared target or an unreadable

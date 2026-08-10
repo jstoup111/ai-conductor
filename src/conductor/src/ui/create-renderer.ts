@@ -288,6 +288,14 @@ export function createRenderer(
         break;
       }
 
+      case 'pipeline_closeout':
+        region.log(
+          chalk.green(
+            `  ✓ closeout ${event.obligation} (${event.endedAt - event.startedAt}ms)`,
+          ),
+        );
+        break;
+
       case 'build_stall':
         region.log(
           chalk.bold.red(

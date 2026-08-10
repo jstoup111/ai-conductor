@@ -101,6 +101,18 @@ describe('createRenderer', () => {
     expect(stream.output()).toContain('Conductor: Add login');
   });
 
+  it('writes pipeline closeout details to the live region', async () => {
+    await renderer({
+      type: 'pipeline_closeout',
+      obligation: 'evaluator',
+      startedAt: 100,
+      endedAt: 140,
+      ts: 140,
+    });
+
+    expect(stream.output()).toContain('closeout evaluator (40ms)');
+  });
+
   it('renders step_failed with error output', async () => {
     await renderer({
       type: 'step_failed',

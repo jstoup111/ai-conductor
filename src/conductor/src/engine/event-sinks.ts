@@ -43,6 +43,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_stall: { render: true, persist: true, audit: false },
   build_progress: { render: true, persist: true, audit: false },
   build_no_progress: { render: true, persist: true, audit: false },
+  pipeline_closeout: { render: true, persist: false, audit: false },
   renderer_error: { render: false, persist: true, audit: false },
   when_skip: { render: false, persist: true, audit: false },
   parallel_started: { render: true, persist: true, audit: false },

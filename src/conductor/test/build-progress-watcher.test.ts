@@ -1,12 +1,31 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
 import { readSnapshot, BuildProgressWatcher } from '../src/engine/build-progress-watcher.js';
+import { EventPersister } from '../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { ConductorEvent } from '../src/types/index.js';
+
+const gitProbe = vi.hoisted(() => ({ throws: false }));
+
+vi.mock('../src/engine/rebase.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../src/engine/rebase.js')>();
+  return {
+    ...original,
+    makeGitRunner: (cwd: string) => {
+      const git = original.makeGitRunner(cwd);
+      return async (args: string[], opts?: { input?: string }) => {
+        if (gitProbe.throws && args[0] === 'rev-parse' && args[1] === 'HEAD') {
+          throw new Error('injected HEAD probe failure');
+        }
+        return git(args, opts);
+      };
+    },
+  };
+});
 
 describe('readSnapshot', () => {
   let dir: string;
@@ -151,6 +170,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
   });
 
   afterEach(async () => {
+    gitProbe.throws = false;
     vi.useRealTimers();
     await rm(dir, { recursive: true, force: true });
   });
@@ -161,6 +181,11 @@ describe('BuildProgressWatcher change-driven emission', () => {
       id: String(i + 1),
       status: i < resolved ? 'completed' : 'pending',
     }));
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  }
+
+  async function writeTaskStatuses(tasks: readonly { id: string; status: string }[]): Promise<void> {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
   }
 
@@ -194,6 +219,100 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.resolved).toBe(6);
     expect(last.total).toBe(21);
     expect(last.featureSlug).toBe('my-feature');
+    expect(last.tickReason).toBe('task-delta');
+  });
+
+  it('retains explicit false HEAD provenance in emitted and persisted task-delta records after an unchanged successful probe', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), emitter);
+    persister.start();
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    // The task state changes, but no commit lands: `rev-parse HEAD` succeeds
+    // with the same SHA as the baseline snapshot.
+    await writeTasks(6, 21);
+    await tick(watcher);
+    watcher.stop();
+    persister.stop();
+
+    const last = buildProgressEvents().at(-1);
+    expect(last).toMatchObject({ tickReason: 'task-delta', headMoved: false });
+    expect(last).toHaveProperty('headMoved', false);
+
+    const records = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const persisted = records.at(-1);
+    expect(persisted).toMatchObject({ type: 'build_progress', tickReason: 'task-delta', headMoved: false });
+    expect(persisted).toHaveProperty('headMoved', false);
+  });
+
+  it('uses task-delta provenance when only the in-progress task pointer advances', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+    await writeTaskStatuses([
+      { id: '1', status: 'completed' },
+      { id: '2', status: 'in_progress' },
+      { id: '3', status: 'pending' },
+    ]);
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await writeTaskStatuses([
+      { id: '1', status: 'completed' },
+      { id: '2', status: 'pending' },
+      { id: '3', status: 'in_progress' },
+    ]);
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ tickReason: 'task-delta', headMoved: false, resolved: 1, total: 3 }),
+    ]);
+  });
+
+  it('uses task-delta provenance when only no-evidence attempts advance', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+    await writeTasks(1, 3);
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await writeFile(
+      join(dir, '.pipeline', 'task-evidence.json'),
+      JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 1, migrationGrandfather: [] }),
+    );
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ tickReason: 'task-delta', headMoved: false, noEvidenceAttempts: 1 }),
+    ]);
   });
 
   it('emits build_progress with commitCount when a new HEAD commit lands with no task delta', async () => {
@@ -231,6 +350,36 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.resolved).toBe(5);
     expect(last.total).toBe(21);
     expect(last.commitCount).toBe(1);
+    expect(last.tickReason).toBe('head-moved');
+    expect(last.headMoved).toBe(true);
+  });
+
+  it('keeps task-delta provenance when HEAD and the resolved count advance together', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    await writeTasks(6, 21);
+    await writeFile(join(dir, 'note.txt'), 'more');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'second'], { cwd: dir });
+
+    await tick(watcher);
+    watcher.stop();
+
+    const events = buildProgressEvents();
+    const last = events[events.length - 1];
+    expect(last.tickReason).toBe('task-delta');
+    expect(last.headMoved).toBe(true);
   });
 
   it('emits nothing on a tick where nothing changed', async () => {
@@ -279,6 +428,40 @@ describe('BuildProgressWatcher change-driven emission', () => {
     const last = events[events.length - 1];
     expect(last.featureSlug).toBe('my-feature');
     expect(last.noEvidenceAttempts).toBe(2);
+  });
+
+  it('emits build_progress with headMoved false when the HEAD probe throws', async () => {
+    await writeTasks(5, 21);
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    gitProbe.throws = true;
+
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ type: 'build_progress', resolved: 5, total: 21, headMoved: false }),
+    ]);
+  });
+
+  it('does not emit a false head-moved tick when a later HEAD probe fails', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(1, 3);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+    gitProbe.throws = true;
+
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([]);
   });
 
   // #1086 regression: the production stall shape. Since #773 removed the
@@ -506,6 +689,9 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
     expect(events).toHaveLength(1);
     expect(events[0].resolved).toBe(5);
     expect(events[0].total).toBe(21);
+    expect(events[0].tickReason).toBe('heartbeat');
+    expect(events[0]).toHaveProperty('headMoved', false);
+    expect(events[0].commitCount).toBeUndefined();
   });
 
   it('resets the heartbeat clock on a change-driven emission (no interleaved duplicates)', async () => {

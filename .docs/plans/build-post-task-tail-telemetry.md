@@ -10,11 +10,11 @@ Tier: M
 
 ## Summary
 
-Makes the `build` step's interior measurable in 17 tasks: additive tick provenance on
+Makes the `build` step's interior measurable in 20 tasks: additive tick provenance on
 `build_progress`, a closeout `ConductorEvent` emitted by the pipeline's own process into a
 single-writer sibling ledger, an engine tail that re-emits it onto the live bus, a fail-closed
-batch-boundary gate, and an intra-step rollup plus its reporting surface and committed baseline.
-No latency reduction is in scope.
+batch-boundary gate, explicit daemon/UI/OTel subscribers, and an intra-step rollup plus its
+reporting surface and committed baseline. No latency reduction is in scope.
 
 ## Technical Approach
 
@@ -46,6 +46,11 @@ without their own file access. Lifecycle mirrors `BuildProgressWatcher` exactly 
 interval, stopped in a `finally`, same dispatch scope — which is the pattern
 adr-2026-07-10 already established for this leak hazard. Offset tracking must skip a truncated
 trailing line (a write in flight) rather than re-emitting a partial record.
+
+> **Amended 2026-08-09 by #1176:** Re-emission alone does not make a new event visible. Tasks
+> 18-20 explicitly add the existing-spine daemon-log and terminal-UI render paths plus the OTel
+> subscription, span event, and duration metric. `pipeline_closeout` remains `persist: false` in
+> `EVENT_SINKS`, preserving `EventPersister` as the sole writer of `.pipeline/events.jsonl`.
 
 **Seam 4 — gate, rollup, report (T12-T17).** The gate extension lands **after** the emitter, so
 no in-flight build can block on an event nothing yet produces. `computeBuildTailRollup` follows
@@ -170,7 +175,7 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-events.ts — new appender module
 - src/conductor/test/closeout-events.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/closeout-cli.ts)
+**Wired-into:** src/conductor/src/engine/closeout-cli.ts#dispatchCloseoutEventCommand
 **Dependencies:** Task 5
 
 ### Task 7: Expose the appender as a `conduct-ts` subcommand
@@ -188,7 +193,12 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-cli.ts — new subcommand
 - src/conductor/src/cli.ts — command-table registration
 
-**Wired-into:** src/conductor/src/cli.ts#commandTable
+> **Wired-into:** src/conductor/src/cli.ts#commandTable
+>
+> **Amended 2026-08-09 by #1176:** `commandTable` does not exist in `cli.ts`; the effective
+> production registration anchor is the real `createProgram` function below.
+
+**Wired-into:** src/conductor/src/cli.ts#createProgram
 **Dependencies:** Task 6
 
 ### Task 8: Reject an unknown or empty obligation name without writing
@@ -223,7 +233,7 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-tail.ts — new reader
 - src/conductor/test/closeout-tail.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/conductor.ts)
+**Wired-into:** src/conductor/src/engine/conductor.ts#Conductor.run
 **Dependencies:** Task 5
 
 ### Task 10: Re-emit tailed closeout events onto the live bus
@@ -241,7 +251,12 @@ goes in the PR body.
 - src/conductor/src/engine/closeout-tail.ts — polling + emit
 - src/conductor/src/engine/conductor.ts — lifecycle in the build dispatch scope
 
-**Wired-into:** src/conductor/src/engine/conductor.ts#runStep
+> **Wired-into:** src/conductor/src/engine/conductor.ts#runStep
+>
+> **Amended 2026-08-09 by #1176:** `runStep` does not exist in `conductor.ts`; the effective
+> lifecycle anchor is the real `Conductor.run` method below.
+
+**Wired-into:** src/conductor/src/engine/conductor.ts#Conductor.run
 **Dependencies:** Task 9
 
 ### Task 11: Stop the tail when the build step settles or rejects
@@ -294,7 +309,7 @@ goes in the PR body.
 - src/conductor/src/engine/build-tail-rollup.ts — new module
 - src/conductor/test/build-tail-rollup.test.ts — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/build-tail-cli.ts)
+**Wired-into:** src/conductor/src/engine/build-tail-cli.ts#dispatchBuildTailCommand
 **Dependencies:** Task 5
 
 ### Task 14: Decompose each window and classify first-pass vs re-entry
@@ -311,7 +326,7 @@ goes in the PR body.
 **Files likely touched:**
 - src/conductor/src/engine/build-tail-rollup.ts — decomposition and classification
 
-**Wired-into:** same as Task 13
+**Wired-into:** src/conductor/src/engine/build-tail-cli.ts#dispatchBuildTailCommand
 **Dependencies:** Task 13
 
 ### Task 15: Degrade to `partial`/`unavailable` instead of lying or throwing
@@ -322,13 +337,25 @@ goes in the PR body.
 1. Write failing test: a malformed line in either ledger yields `partial` without throwing; an obligation with no event reports `unrecorded` and `unrecorded` is not equal to a zero duration in the output type; a closeout event whose end precedes its start yields `partial`; an unterminated window yields `partial` without corrupting neighbouring windows; no `build` window at all yields `unavailable`.
 2. Verify test fails (RED)
 3. Implement: the degradation paths, following `timing-rollup.ts`'s fail-closed `parseLedger` policy.
+
+> **Amended 2026-08-10 by operator:** step 1's "no `build` window at all yields `unavailable`"
+> contradicts the approved ADR. `adr-2026-08-08-pipeline-owned-closeout-timestamps.md` D4 states
+> that on an inline run there is no engine ledger and therefore no `build` window boundaries, so
+> the result is `partial` carrying the closeout timeline only — "An inline run is a supported mode,
+> **not** an error." The ADR governs. Revised requirement: when sibling `pipeline_closeout` records
+> exist but no engine build-window boundaries do, return `partial` with a closeout-timeline payload
+> and retain those records; reserve `unavailable` for inputs carrying neither usable windows nor
+> closeout records. `build-tail-cli.ts` computes and renders the closeout-bearing partial rather
+> than short-circuiting it, keeping the `unavailable` rendering for truly empty input. Cover both
+> in `build-tail-rollup.test.ts` and `build-tail-cli.test.ts`: an inline sibling-ledger case
+> requiring a closeout-only partial with a rendered timeline, and a distinct truly-empty case.
 4. Verify test passes (GREEN)
 5. Commit: "feat(engine): fail-closed degradation for the build tail rollup"
 
 **Files likely touched:**
 - src/conductor/src/engine/build-tail-rollup.ts — degradation handling
 
-**Wired-into:** same as Task 13
+**Wired-into:** src/conductor/src/engine/build-tail-cli.ts#dispatchBuildTailCommand
 **Dependencies:** Task 14
 
 ### Task 16: Expose the rollup as a deterministic reporting subcommand
@@ -346,7 +373,12 @@ goes in the PR body.
 - src/conductor/src/engine/build-tail-cli.ts — new subcommand and renderer
 - src/conductor/src/cli.ts — command-table registration
 
-**Wired-into:** src/conductor/src/cli.ts#commandTable
+> **Wired-into:** src/conductor/src/cli.ts#commandTable
+>
+> **Amended 2026-08-09 by #1176:** `commandTable` does not exist in `cli.ts`; the effective
+> production registration anchor is the real `createProgram` function below.
+
+**Wired-into:** src/conductor/src/cli.ts#createProgram
 **Dependencies:** Task 15
 
 ### Task 17: Commit the baseline with its coverage stated
@@ -365,6 +397,74 @@ goes in the PR body.
 **Wired-into:** none (no new production surface)
 **Dependencies:** Task 16
 
+### Task 18: Render re-emitted closeout events in daemon and terminal UI paths
+**Story:** Story 3 — existing live subscribers handle the re-emitted event
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: `pipeline_closeout` is in the rendered sink set but not the persisted set; the daemon renderer logs the obligation and duration; `TerminalSubscriber` forwards the event; and `createRenderer` writes the same closeout detail to its live region.
+2. Verify tests fail (RED)
+3. Implement: set only `EVENT_SINKS.pipeline_closeout.render` to `true`, keep `persist: false`, add the event to `TerminalSubscriber.start()`, and add explicit daemon and terminal renderer cases with obligation and elapsed milliseconds.
+4. Verify tests pass (GREEN)
+5. Commit: "feat(ui): render pipeline closeout events on live subscribers"
+
+**Files likely touched:**
+- src/conductor/src/engine/event-sinks.ts — enable render routing while retaining `persist: false`
+- src/conductor/src/daemon-cli.ts — daemon-log rendering case
+- src/conductor/src/ui/subscriber.ts — terminal subscription
+- src/conductor/src/ui/create-renderer.ts — terminal live-region rendering case
+- src/conductor/test/engine/event-sinks.test.ts — sink routing assertions
+- src/conductor/test/engine/daemon-cli.test.ts — daemon rendering assertion
+- src/conductor/test/ui/subscriber.test.ts — terminal subscription assertion
+- src/conductor/test/ui/create-renderer.test.ts — terminal rendering assertion
+
+**Wired-into:** src/conductor/src/daemon-cli.ts#renderedEventTypes, src/conductor/src/ui/subscriber.ts#TerminalSubscriber.start, src/conductor/src/ui/create-renderer.ts#createRenderer
+**Dependencies:** Task 10
+
+### Task 19: Export closeout obligations through the OTel visualizer
+**Story:** Story 3 — `otel/otel-visualizer.ts` handles the re-emitted event through its normal path
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: after `OtelVisualizer.start()`, emitting `pipeline_closeout` adds a `pipeline_closeout` event with obligation/timing attributes to the active build span and records its duration in a closeout histogram tagged by obligation.
+2. Verify tests fail (RED)
+3. Implement: subscribe to `pipeline_closeout` in `OtelVisualizer.start()`, dispatch it synchronously in `handleEvent()`, add a `SpanManager` handler that targets the active build span or run span, and add a `MetricsRecorder` closeout-duration histogram. Do not await exporters on the event path.
+4. Verify tests pass (GREEN)
+5. Commit: "feat(otel): export pipeline closeout telemetry"
+
+**Files likely touched:**
+- src/conductor/src/engine/otel/otel-visualizer.ts — subscription and synchronous dispatch
+- src/conductor/src/engine/otel/span-manager.ts — closeout span-event handler
+- src/conductor/src/engine/otel/metrics.ts — closeout duration histogram
+- src/conductor/test/engine/otel/otel-visualizer.test.ts — subscription/export assertion
+- src/conductor/test/engine/otel/span-manager.test.ts — span-event attributes and orphan fallback
+- src/conductor/test/engine/otel/metrics.test.ts — duration metric and obligation tag
+
+**Wired-into:** src/conductor/src/engine/otel/otel-visualizer.ts#OtelVisualizer.start
+**Dependencies:** Task 10
+
+### Task 20: Prove the tail reaches every production live consumer without a second writer
+**Story:** Story 3 — end-to-end live-consumer acceptance path and durable-ledger negative path
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing production-wiring tests: a real `CloseoutEventTail` re-emission reaches the daemon-render set, terminal subscriber/renderer, and OTel visualizer; the same test proves `pipeline_closeout` remains excluded from `persistedEventTypes()` and `.pipeline/events.jsonl` stays unchanged.
+2. Verify tests fail (RED)
+3. Implement only the test seams needed to exercise the named production subscribers together; do not add a second persister or bypass `ConductorEventEmitter`.
+4. Verify tests pass (GREEN)
+5. Commit: "test(engine): cover closeout tail production subscribers"
+
+**Files likely touched:**
+- src/conductor/test/closeout-tail.test.ts — tail-to-bus integration coverage
+- src/conductor/test/engine/daemon-cli.test.ts — daemon subscriber wiring coverage
+- src/conductor/test/ui/subscriber.test.ts — terminal forwarding coverage
+- src/conductor/test/ui/create-renderer.test.ts — terminal output coverage
+- src/conductor/test/engine/otel/otel-visualizer.test.ts — OTel subscriber coverage
+- src/conductor/test/engine/event-sinks.test.ts — single-writer routing regression assertion
+
+**Wired-into:** none (no new production surface)
+**Dependencies:** Task 18, Task 19
+
 ## Task Dependency Graph
 
 ```
@@ -373,7 +473,9 @@ Task 1 ──┬─▶ Task 2 ──┐
 
 Task 5 ──┬─▶ Task 6 ──▶ Task 7 ──▶ Task 8 ──▶ Task 12   (Stories 2, 4)
          │
-         ├─▶ Task 9 ──▶ Task 10 ──▶ Task 11             (Story 3)
+         ├─▶ Task 9 ──▶ Task 10 ──┬─▶ Task 11            (Story 3 lifecycle)
+         │                         ├─▶ Task 18 ──┐
+         │                         └─▶ Task 19 ──┴─▶ Task 20  (Story 3 consumers)
          │
          └─▶ Task 13 ──▶ Task 14 ──▶ Task 15 ──▶ Task 16 ──▶ Task 17  (Stories 5, 6)
 ```
@@ -388,8 +490,10 @@ may run first or in parallel.
   ambiguity is gone end-to-end for new builds.
 - **After Task 8:** an inline `pipeline` run with no conductor produces a complete closeout
   timeline in the sibling ledger.
-- **After Task 11:** closeout obligations are visible live in the daemon log and OTel export.
+- **After Task 11:** closeout events are re-emitted exactly once and the tail has bounded lifecycle.
 - **After Task 16:** the full decomposition is runnable against any worktree.
+- **After Task 20:** re-emitted closeout obligations are visible in the daemon log, terminal UI,
+  and OTel span/metric export without adding a second persistence writer.
 
 ## Verification
 
@@ -401,4 +505,6 @@ may run first or in parallel.
 - [ ] No task appends to `.pipeline/events.jsonl`
 - [ ] Edits to `types/events.ts` and `build-progress-watcher.ts` are additive only
 - [ ] No task references intake #1176's ≥50% p95 reduction
+- [ ] Story 3 live-consumer coverage maps to Tasks 18-20
+- [ ] `pipeline_closeout` remains excluded from `persistedEventTypes()`
 - [ ] No terminal catch-all validation task

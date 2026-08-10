@@ -101,6 +101,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'unattributed_progress',
   'build_no_progress',
   'build_stall',
+  'pipeline_closeout',
   'provider_attempt',
   'feature_usage_total',
   'provider_fallback',
@@ -246,6 +247,18 @@ describe('event sink subscriptions', () => {
     });
   });
 
+  it('renders pipeline closeouts without persisting the pipeline-owned ledger event', () => {
+    expect({
+      sinks: EVENT_SINKS.pipeline_closeout,
+      rendered: renderedEventTypes().includes('pipeline_closeout'),
+      persisted: persistedEventTypes().includes('pipeline_closeout'),
+    }).toEqual({
+      sinks: { render: true, persist: false, audit: false },
+      rendered: true,
+      persisted: false,
+    });
+  });
+
   it('defines provider-neutral operator park boundary telemetry without completion authority', () => {
     const boundaries = [
       { kind: 'step', name: 'memory' },
@@ -275,8 +288,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 69 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(69);
+  it('is total over all 70 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(70);
   });
 
   it('routes verdict_freshness to every sink', () => {

@@ -429,6 +429,7 @@ To clear a halt safely, use the procedure in
 | `session-hooks/` | `pre-dispatch.sh`, `docs-guard.sh` | Written mode 0755 during worktree preparation; retired no-op assets are removed; see [settings and hooks](settings-and-hooks.md) |
 | `git-hooks/` | `prepare-commit-msg`, `commit-msg` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
+| `pipeline-events.jsonl` | Pipeline-owned closeout timing events | Separate single-writer ledger — see below |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. Append-only, unbounded |
 | `conduct.log` | Session narrative | Written only by the legacy bash CLI; `conduct-ts` never writes it. Read by `rate-limit-wait.sh` |
@@ -638,6 +639,33 @@ No dashboard and no `kpi` path reads it.
 > `aggregateKickbacks` and `aggregateHalts` always return `[]`, so `--report` shows no kickbacks and no
 > halts however many occurred. Read halts from `.pipeline/HALT` and the daemon log instead.
 > Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+
+`build_progress` events carry an additional `tickReason` (`task-delta` | `head-moved` |
+`heartbeat`) and an explicit `headMoved` boolean, letting a reader distinguish "HEAD did not
+move" from the older heartbeat ticks that hard-coded an absent `commitCount`.
+
+The `pipeline_closeout` event type is declared on `ConductorEvent` but is never written here —
+`EVENT_SINKS.pipeline_closeout` sets `persist: false`, so it stays a single-writer event confined
+to `.pipeline/pipeline-events.jsonl` (below). It is rendered (`render: true`) when a running
+`build` step's `CloseoutEventTail` re-emits it onto the live bus, so it still reaches the daemon
+log, the terminal UI, and the OTel visualizer without a second writer to this file.
+
+### `.pipeline/pipeline-events.jsonl`
+
+The pipeline's own closeout timing ledger, written by `conduct-ts closeout-event` — see
+[`conduct-ts closeout-event`](cli.md#conduct-ts-closeout-event). One JSON `pipeline_closeout`
+`ConductorEvent` per line: `obligation` (one of `evaluator`, `simplify`, `architecture-diagram`,
+`micro-retro`, `memory`, `summary`), `startedAt`/`endedAt` epoch milliseconds, and a
+pipeline-stamped `ts`. Append-only, gitignored, never committed.
+
+This is a deliberate second single-writer ledger, not a duplicate of `events.jsonl`: the pipeline
+process that runs closeout obligations may have no conductor or daemon attached (an inline run),
+so it cannot depend on `EventPersister` to observe its own completions. When a `build` step is
+running under the engine, `CloseoutEventTail` tails this file incrementally (skipping partial
+trailing lines) and re-emits each complete record onto the live bus exactly once; an inline run
+produces the same records with no tail and no re-emission. `computeBuildTailRollup` (see
+[`conduct-ts build-tail`](cli.md#conduct-ts-build-tail)) merges this ledger with `events.jsonl` by
+`ts` to decompose a `build` window into task execution, remediation, and closeout segments.
 
 ### `.pipeline/audit-trail/events.jsonl`
 

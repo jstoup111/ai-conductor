@@ -841,6 +841,53 @@ citation-quality sampling now runs as a non-blocking spot audit. The command sur
 resolves to a clear message instead of an unrecognized-command error. Any argument form prints the
 retirement notice and exits **2**. The help string does not mention the non-zero exit.
 
+## `conduct-ts closeout-event`
+
+```bash
+conduct-ts closeout-event <obligation> <started-at> <ended-at>
+```
+
+Records one pipeline closeout timing event. `<obligation>` must be one of `evaluator`,
+`simplify`, `architecture-diagram`, `micro-retro`, `memory`, `summary`; `<started-at>` and
+`<ended-at>` are millisecond epoch timestamps. An unrecognized obligation prints the valid list
+to stderr and exits 1; otherwise it appends a `pipeline_closeout` event to the pipeline-owned
+sibling ledger, `.pipeline/pipeline-events.jsonl`, and exits 0.
+
+This command is called by a closeout obligation itself (for example the `evaluator` gate in the
+[pipeline skill](skills.md)), not typed by an operator, so it never starts a
+conductor or daemon and works identically whether `pipeline` is running under the engine or
+invoked inline in a bare session. The sibling ledger is a separate single-writer file from
+`.pipeline/events.jsonl` — when a `build` step is running under the engine, a tail reader
+re-emits each recorded event onto the live bus for the daemon log, terminal UI, and OTel export,
+but `pipeline_closeout` is never persisted a second time into `.pipeline/events.jsonl`.
+
+## `conduct-ts build-tail`
+
+```bash
+conduct-ts build-tail [worktree]
+```
+
+Renders a read-only task/remediation/closeout timing rollup for one `build` step, decomposing
+its single opaque provider session into task execution, kickback remediation, and closeout
+ceremony. `[worktree]` defaults to the current working directory. Always exits 0.
+
+The rollup reads and merges the engine ledger (`.pipeline/events.jsonl`) and the pipeline-owned
+sibling ledger (`.pipeline/pipeline-events.jsonl`) for the given worktree, and reports one of
+three states:
+
+| State | Meaning |
+| --- | --- |
+| `measured` | At least one complete `build` window (`step_started`/`step_completed`) was decomposed. Reports, per window, its classification (`first-pass` or `re-entry`), task execution duration, post-resolution tick counts split into remediation and closeout, and closeout duration with a per-obligation breakdown — plus an aggregate across all windows. |
+| `partial` | The ledgers are readable but a window is unterminated, malformed, or an inline pipeline run (no engine) produced closeout events with no engine window boundaries. When closeout events exist, the closeout-only timeline is still rendered. |
+| `unavailable` | No `build` window and no closeout events were found. |
+
+A window's first tick determines its classification: if it already reads `resolved == total`,
+the window is a re-entry (the task graph was complete on entry); otherwise its task-execution
+segment ends at the first tick where `resolved == total`. Post-resolution ticks with
+`headMoved: true` classify as remediation; closeout classification comes from the merged
+`pipeline_closeout` timeline. See `.docs/architecture/build-post-task-tail-telemetry.md` for the
+full model.
+
 ## Internal commands, invoked by the engine
 
 These are dispatched by skills, hooks, and the daemon rather than typed by an operator. None appear in

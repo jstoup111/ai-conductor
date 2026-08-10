@@ -425,6 +425,36 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
   });
 });
 
+// ── Task 19: pipeline closeout span events ──────────────────────────────────
+
+describe('Task 19: pipeline_closeout span event', () => {
+  it('falls back to the active run span when no build step span is open', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await emitter.emit({
+      type: 'pipeline_closeout',
+      obligation: 'summary',
+      startedAt: 300,
+      endedAt: 375,
+      ts: 380,
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const runSpan = spanExporter.getFinishedSpans().find((span) => !span.parentSpanId)!;
+    const closeout = runSpan.events.find((event) => event.name === 'pipeline_closeout');
+    expect(closeout?.attributes).toMatchObject({
+      obligation: 'summary',
+      startedAt: 300,
+      endedAt: 375,
+      durationMs: 75,
+    });
+  });
+});
+
 // ── T20: Incomplete-span close (unit-level coverage for FR-9) ─────────────────
 //
 // FR-9 passes at the acceptance level via OtelVisualizer.stop() → forceCloseAll().

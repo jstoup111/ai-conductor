@@ -344,6 +344,8 @@ export type ConductorEvent =
       /** Consecutive gate-verdict misses with no supporting evidence, if tracked. */
       noEvidenceAttempts?: number;
       featureSlug?: string;
+      tickReason?: 'task-delta' | 'head-moved' | 'heartbeat';
+      headMoved?: boolean;
     }
   | {
       /**
@@ -362,6 +364,23 @@ export type ConductorEvent =
       /** Epoch ms of the last observed commit, if tracked. */
       lastCommitAt?: number;
       featureSlug?: string;
+    }
+  | {
+      /** A pipeline-owned closeout obligation completed during a build. */
+      type: 'pipeline_closeout';
+      obligation:
+        | 'evaluator'
+        | 'simplify'
+        | 'architecture-diagram'
+        | 'micro-retro'
+        | 'memory'
+        | 'summary';
+      /** Epoch milliseconds when the obligation began. */
+      startedAt: number;
+      /** Epoch milliseconds when the obligation completed. */
+      endedAt: number;
+      /** Epoch milliseconds when the pipeline recorded this event. */
+      ts: number;
     }
   | {
       type: 'renderer_error';

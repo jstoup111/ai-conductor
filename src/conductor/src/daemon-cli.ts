@@ -2361,6 +2361,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'pipeline_closeout':
+      log(`${dot} ${chalk.green('✓')} closeout ${event.obligation} (${event.endedAt - event.startedAt}ms)`);
+      break;
     case 'build_stall':
       log(
         `${dot} ${chalk.red('✋')} ${chalk.red(`${event.step} stall: ${event.reason} (${event.resolvedBefore} → ${event.resolvedAfter})`)}`,

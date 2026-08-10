@@ -147,6 +147,14 @@ import {
 } from './engine/scoped-run-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
 import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
+import {
+  detectCloseoutEventCommand,
+  dispatchCloseoutEventCommand,
+} from './engine/closeout-cli.js';
+import {
+  detectBuildTailCommand,
+  dispatchBuildTailCommand,
+} from './engine/build-tail-cli.js';
 import { detectBuildAuthStatusCommand, dispatchBuildAuthStatus } from './engine/build-auth-cli.js';
 import {
   detectHaltIssuesSweepCommand,
@@ -516,6 +524,18 @@ export async function validateWiredIntoCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  const buildTailCmd = detectBuildTailCommand(process.argv);
+  if (buildTailCmd) {
+    process.exitCode = await dispatchBuildTailCommand(buildTailCmd);
+    return;
+  }
+
+  const closeoutEventCmd = detectCloseoutEventCommand(process.argv);
+  if (closeoutEventCmd) {
+    process.exitCode = await dispatchCloseoutEventCommand(closeoutEventCmd);
+    return;
+  }
+
   const scopedRunCmd = detectScopedRunCommand(process.argv);
   if (scopedRunCmd) {
     const code = await dispatchScopedRunCommand(scopedRunCmd, {
