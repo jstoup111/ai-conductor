@@ -110,6 +110,30 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
+### Declared Replication Copy Task
+
+When the plan has a resolved `**Pattern-source:**` / `**Rename-map:**` declaration, it MUST
+contain exactly one declared copy task. That task is mechanical: it establishes the declared
+source as the target's baseline and identifies the target's remaining delta; it does not decide
+that a later task is complete or take ownership of that later task's acceptance criteria.
+
+Before writing anything, derive every source-to-target pair from the resolved declaration and
+validate the copy task's `**Files:**` declaration. It MUST list every target path the rename map
+implies, and the copy task MUST write only those declared targets. An implied but undeclared path
+is a failure: halt the task naming the undeclared path rather than writing outside its scope. A
+copy task on a plan with no declaration likewise fails closed, naming the absent declaration.
+
+Read every source and prepare every renamed target before modifying the worktree. If any source is
+unreadable or any preparation fails, fail closed naming that file and leave no partial copied target
+set behind. Only after that preflight may the task atomically write each declared target with the
+source content transformed by the rename map. It consumes zero LLM turns or dispatches for the
+copy itself.
+
+The copy task remains an ordinary declared plan task: it retains its `Task: <id>` attribution and
+commit ownership, and existing scoped verification, build review, and all lifecycle gates remain
+enabled. The copy establishes a baseline only; each subsequent task retains its complete scope and
+ownership unless its whole task is independently proven satisfied by the existing completion rules.
+
 **Pre-completion scan (at pipeline start):** Before dispatching any tasks, check each task's
 acceptance criteria against existing code and test coverage (git log, test files). Mark tasks
 as `pre-completed` if criteria are already satisfied. Batch-verify in one pass — do not
