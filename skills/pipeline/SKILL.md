@@ -143,6 +143,24 @@ commit ownership, and existing scoped verification, build review, and all lifecy
 enabled. The copy establishes a baseline only; each subsequent task retains its complete scope and
 ownership unless its whole task is independently proven satisfied by the existing completion rules.
 
+### Delta-only Execution and Whole-Task Satisfaction
+
+After the declared copy commits, evaluate each later task against **every acceptance criterion** as
+one task. When the copied commit satisfies the whole task, including its scoped verification, close
+it with the existing empty-commit form `Evidence: satisfied-by <copy-sha>` plus `Task: <id>`; the
+normal completeness rubric still evaluates that task against the plan.
+
+This is not a new evidence form or a shortcut around evidence derivation. The cited SHA must
+resolve to an existing commit and be an ancestor of `HEAD`. A nonexistent or unresolvable SHA, or
+a SHA that is not an ancestor of `HEAD`, fails derivation: the task remains incomplete and cannot
+close through `Evidence: satisfied-by`.
+
+If the copy satisfies only part of a task, or whether it satisfies a criterion is ambiguous, the
+whole task is a delta task. Do not split its satisfied and unsatisfied criteria into separate
+build-time tasks, and do not close any portion with `Evidence: satisfied-by`; run the complete,
+unmodified TDD cycle — RED → DOMAIN → GREEN → DOMAIN → COMMIT — for that task. Ambiguity always
+resolves toward the full cycle.
+
 **Pre-completion scan (at pipeline start):** Before dispatching any tasks, check each task's
 acceptance criteria against existing code and test coverage (git log, test files). Mark tasks
 as `pre-completed` if criteria are already satisfied. Batch-verify in one pass — do not
