@@ -58,7 +58,7 @@ function applyRenameMap(source: string, renameMap: ResolvedPlanPatternSource['re
  * ordered rename map. Filesystem access stays injected so the primitive can be
  * used at an engine boundary without coupling its verdict to a filesystem root.
  */
-export async function verifyCopyEquivalence(
+async function verifyCopyEquivalence(
   declaration: ResolvedPlanPatternSource,
   targetPath: string,
   readFile: CopyEquivalenceFileReader,

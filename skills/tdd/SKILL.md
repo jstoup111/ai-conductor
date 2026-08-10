@@ -43,8 +43,7 @@ RED → DOMAIN → GREEN → DOMAIN → COMMIT
 ### Declared Replication Does Not Change the Cycle
 
 A declared replication's copy task establishes a baseline; it never shortens or changes the
-cycle for a later delta task. A task that introduces behavior the source lacks runs the identical
-RED → DOMAIN → GREEN → DOMAIN → COMMIT cycle, with the same scoped verification and review gates,
+cycle for a later delta task. A task that introduces behavior the source lacks runs the full RED → DOMAIN → GREEN → DOMAIN → COMMIT cycle, with the same scoped verification and review gates,
 whether the plan declares replication or not.
 
 `Evidence: satisfied-by <copy-sha>` may close a later task only when the copied commit satisfies
@@ -54,8 +53,8 @@ a task that introduces behavior absent from the source. Do not split a partly co
 copy-satisfied portion and a delta portion. If whole-task satisfaction is ambiguous, resolve the
 ambiguity toward the full cycle.
 
-For a delta task, a first test that passes immediately is never permission to advance to GREEN or
-implementation. Investigate whether the test only restates copied behavior or is otherwise wrong;
+For a delta task, a first test that passes immediately does not permit implementation. Investigate
+whether the test only restates copied behavior or is otherwise wrong;
 then write a failing test for the task's uncovered behavior. Only a separate proof that the copy
 satisfies the whole task may use the existing `Evidence: satisfied-by` closure.
 
