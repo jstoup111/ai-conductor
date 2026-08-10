@@ -77,15 +77,19 @@ describe('openSpecPr — spec PR issue linkage (FR-2)', () => {
     expect(getBody()).not.toMatch(/\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b/i);
   });
 
-  it('does NOT edit the PR body when no sourceRef is supplied (unchanged behavior)', async () => {
-    const { runner, calls } = makeRunner();
+  it('adds NO issue-linking line when no sourceRef is supplied', async () => {
+    // Narrowed from "does not edit the body at all": the body is now always
+    // edited to supply the required release-metadata block, which every PR owes
+    // regardless of issue linkage. The linkage contract this file guards is
+    // unchanged — with no sourceRef there is no `Refs` line to add.
+    const { runner, getBody } = makeRunner();
     const result = await openSpecPr(target(), 'spec/dep-bump', {
       runner,
       gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
     });
     expect(result.kind).toBe('pr-opened');
-    expect(calls.some((c) => c.args[1] === 'edit')).toBe(false);
+    expect(getBody()).not.toMatch(/^Refs /m);
   });
 
   it('is idempotent — re-running does not duplicate the Refs line', async () => {

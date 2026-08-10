@@ -176,7 +176,10 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
       worktree,
     }, optsWithGit);
 
-    expect(trace).toEqual([
+    // Ordering is the guarantee: push, then create. Post-create body patch-ups
+    // (release metadata, `Refs`) share this runner, so only the ordered prefix
+    // is pinned.
+    expect(trace.slice(0, 2)).toEqual([
       { command: 'git', args: ['push', '-u', 'origin', branch], cwd: worktree },
       {
         command: 'gh',
@@ -184,6 +187,7 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
         cwd: worktree,
       },
     ]);
+    expect(trace.slice(2).some((c) => c.command === 'git')).toBe(false);
   });
 
   it('TEST 1: remote PR publication failure exits 1, retains worktree, and records branch evidence', async () => {

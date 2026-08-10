@@ -109,7 +109,10 @@ describe('runHandoff — remote path (PR opened)', () => {
 
     await runHandoff(target, branch, deps).catch(() => undefined);
 
-    expect(trace).toEqual([
+    // Ordering is the guarantee: push, then create. Post-create body patch-ups
+    // (release metadata, `Refs`) share this runner, so only the ordered prefix
+    // is pinned.
+    expect(trace.slice(0, 2)).toEqual([
       { command: 'git', args: ['push', '-u', 'origin', branch], cwd: tempDir },
       {
         command: 'gh',
@@ -117,6 +120,7 @@ describe('runHandoff — remote path (PR opened)', () => {
         cwd: tempDir,
       },
     ]);
+    expect(trace.slice(2).some((c) => c.command === 'git')).toBe(false);
   });
 
   // A-3: the remote branch is reached only via an explicit gh-present guard,
