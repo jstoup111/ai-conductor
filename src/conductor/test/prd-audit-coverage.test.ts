@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -182,7 +182,7 @@ describe('prd_audit completion predicate coverage', () => {
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await writeFile(
       join(root, '.docs/specs/current-feature.md'),
-      '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2',
+      '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2\nFR-3\nFR-4\nFR-5',
     );
   });
 
@@ -190,17 +190,15 @@ describe('prd_audit completion predicate coverage', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('keeps a fresh fully-covered ALIGNED report done and blocks a report with an uncovered FR', async () => {
+  it('keeps a fresh fully-covered ALIGNED report done', async () => {
     const allAligned = [
       '| FR | Verdict | Gap-class | Evidence |',
       '| --- | --- | --- | --- |',
       '| FR-1 | ALIGNED | — | Covered |',
       '| FR-2 | ALIGNED | — | Covered |',
-    ].join('\n');
-    const onlyFirstFr = [
-      '| FR | Verdict | Gap-class | Evidence |',
-      '| --- | --- | --- | --- |',
-      '| FR-1 | ALIGNED | — | Covered |',
+      '| FR-3 | ALIGNED | — | Covered |',
+      '| FR-4 | ALIGNED | — | Covered |',
+      '| FR-5 | ALIGNED | — | Covered |',
     ].join('\n');
 
     const reportPath = join(root, '.pipeline/prd-audit.md');
@@ -209,15 +207,61 @@ describe('prd_audit completion predicate coverage', () => {
       artifactResolution: featureContext,
     });
 
-    await writeFile(reportPath, onlyFirstFr);
-    const incomplete = await checkStepCompletion(root, 'prd_audit', {
-      artifactResolution: featureContext,
-    });
-
     expect(covered.done).toBe(true);
-    expect(incomplete).toEqual({
+  });
+
+  it('blocks missing FR-3 and FR-5 without writing a code stamp', async () => {
+    await writeFile(
+      join(root, '.pipeline/prd-audit.md'),
+      [
+        '| FR | Verdict | Gap-class | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| FR-1 | ALIGNED | — | Covered |',
+        '| FR-2 | ALIGNED | — | Covered |',
+        '| FR-4 | ALIGNED | — | Covered |',
+      ].join('\n'),
+    );
+
+    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
       done: false,
-      reason: 'PRD audit report is missing verdict rows for FR-2.',
+      reason: 'PRD audit report is missing verdict rows for FR-3, FR-5.',
+    });
+    await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('blocks an empty report naming every missing FR without writing a code stamp', async () => {
+    await writeFile(join(root, '.pipeline/prd-audit.md'), '');
+
+    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
+      done: false,
+      reason: 'PRD audit report is missing verdict rows for FR-1, FR-2, FR-3, FR-4, FR-5.',
+    });
+    await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('reports both blocking verdict rows and omitted verdict rows without writing a code stamp', async () => {
+    await writeFile(
+      join(root, '.pipeline/prd-audit.md'),
+      [
+        '| FR | Verdict | Gap-class | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| FR-1 | ALIGNED | — | Covered |',
+        '| FR-2 | MISSING | impl-gap | Not implemented |',
+        '| FR-4 | ALIGNED | — | Covered |',
+      ].join('\n'),
+    );
+
+    await expect(checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext })).resolves.toEqual({
+      done: false,
+      reason:
+        'prd-audit found un-ALIGNED FRs: FR-2 — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit; PRD audit report is missing verdict rows for FR-3, FR-5.',
+    });
+    await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
     });
   });
 });

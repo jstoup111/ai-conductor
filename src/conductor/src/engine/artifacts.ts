@@ -2332,15 +2332,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         verdictFreshness: await verdictFreshnessFor(f, ctx, 'stale_invalidated'),
       };
     }
+    let blockingReason: string | undefined;
     for (const f of fresh) {
       const blocking = findUnalignedFrRows(await readFile(f, 'utf-8'));
       if (blocking.length > 0) {
         const shown = blocking.slice(0, 3).join('; ');
         const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
-        return {
-          done: false,
-          reason: `prd-audit found un-ALIGNED FRs: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`,
-        };
+        blockingReason = `prd-audit found un-ALIGNED FRs: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
+        break;
       }
     }
     const passF = fresh[0];
@@ -2356,7 +2355,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       artifactResolution,
       await readFile(passF, 'utf-8'),
     );
-    if (coverageGap) return { done: false, reason: coverageGap };
+    if (blockingReason || coverageGap) {
+      return {
+        done: false,
+        reason: [blockingReason, coverageGap].filter((reason): reason is string => Boolean(reason)).join('; '),
+      };
+    }
     const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
     await writePrdAuditCodeStamp(dir, ctx);
     return {
