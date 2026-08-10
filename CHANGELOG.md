@@ -11,6 +11,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.102.0] - 2026-08-10
+
+### Added
+
+- A plan can declare that a task replicates an existing source file under a rename map, and BUILD mechanically copies and verifies that replication with a new blocking `build_review` gate instead of relying on an LLM to reproduce it from scratch. ([implementation PR #1451](https://github.com/jstoup111/ai-conductor/pull/1451)).
+
 ## [0.101.1] - 2026-08-10
 
 ### Fixed
