@@ -48,7 +48,7 @@ Check 5b additionally needs `jq` on `PATH`; without it you get
 
 ## The checks
 
-In file order. Sections 1, 5, and 9 carry lettered sub-checks, and three checks are unnumbered in the script.
+In file order. Sections 1, 5, and 9 carry lettered sub-checks, and four checks are unnumbered in the script.
 
 | # | Verifies | Fails when | Fix |
 | --- | --- | --- | --- |
@@ -74,6 +74,7 @@ In file order. Sections 1, 5, and 9 carry lettered sub-checks, and three checks 
 | 9c | Every `git tag -l 'v*.*.*'` has a matching `^## \[<version>\]` section in `CHANGELOG.md`. Runs only when `.git` is a directory and `CHANGELOG.md` exists. | A released tag has no changelog section. | Add the section. |
 | 10 | No write to `.pipeline/task-status.json` outside the engine. Greps `task-status` in `hooks/` and `bin/` (`*.sh`, `*.ts`, `*.js`), drops comment/console/log/`readFile` lines and quoted literals, then flags anything matching `writeFile`, `.write`, `fs.write`, `fs.appendFile`, `>>`, or `>`. | A non-engine writer is found. | Route the write through `src/conductor/src/engine/`. The engine is the sole authority on task-completion state. |
 | — | `skills/pipeline/SKILL.md` does **not** match `(^\|[^\`])Run \`conduct-ts task (start\|done)`. | Imperative per-task CLI stamping text is present. | Rewrite descriptively — the skill documents session-hook machinery, not an imperative step. Mentions of the CLI as operator or recovery machinery are fine. |
+| — | `skills/pipeline/SKILL.md` still states the batch-boundary evaluator closeout-event gate as a full semantic contract, exercised against fixtures that each corrupt one clause: the required `pipeline_closeout` obligation match text, the "an event for another obligation does not satisfy this check" clause, the independent `review.json` hard-gate clause, the exact `Batch N blocked: missing recorded closeout event for evaluator` halt message, and the two "cannot cure" non-substitutability clauses. | Any corrupted-fixture case still reads as passing (the predicate degraded into a keyword-presence check), or the real file fails one of the seven clauses. | Restore the exact clause the diagnostic names in `skills/pipeline/SKILL.md`; keep both the `review.json` gate and the evaluator closeout-event gate independently stated so neither can cure the other. |
 | 11 | Every `.github/ISSUE_TEMPLATE/*.yml` and `*.yaml` parses as YAML, and `config.yml`'s `blank_issues_enabled` is not `false`. Parses with python3 + pyyaml, falling back to node + js-yaml; WARN-skips when neither is available. | A template is invalid YAML, or `blank_issues_enabled: false` is set. | Fix the YAML. Leave `blank_issues_enabled` unset or true. |
 | — | Every `.docs/intake/*.md` matches `^Owner:[[:space:]]*[^[:space:]]+`. | A hand-authored intake doc lacks an `Owner:` line. | Stamp `Owner:`. Authoring normally does this at write time; this is a belt on hand-written docs. |
 | 12 | `skills/plan/SKILL.md` contains `conduct-ts overlap-scan` and, case-insensitively, `advisory`. | Either is missing. | Restore the overlap-scan step and its advisory wording. |
@@ -89,7 +90,7 @@ In file order. Sections 1, 5, and 9 carry lettered sub-checks, and three checks 
 | 22 | Update-flow configuration ownership, plus the fixtures that keep the check honest. `test/check_update_flow_config_ownership.sh` extracts the allowed `conductor` keys from `validateConductorBlock`, then verifies the legacy JSON path appears under `bin/` only in `bin/lib/harness-common.sh`, and that direct keys, accessor-map outputs, and static accessor fields are schema-allowed. `test/test_harness_integrity_update_flow.sh` then drives that checker against disposable copies through its two seams (`HARNESS_INTEGRITY_UPDATE_FLOW_BIN_DIR`, `HARNESS_INTEGRITY_CONDUCTOR_SCHEMA_FILE`), proving it still rejects an injected legacy path, an unknown schema key, and an undeterminable allowlist. The spec calls the checker directly, never this suite, so nothing recurses. | The schema allowlist cannot be determined, the legacy path appears elsewhere under `bin/`, an update-flow key is not in the schema, a scan cannot run, or a fixture case stops failing. Diagnostics identify the offending file and line. | Keep the legacy JSON only as the one-time seed in `bin/lib/harness-common.sh`; route update state through `conductor:` and add any new key to `validateConductorBlock` before using it. If a fixture case stops failing, the guard has degraded — repair the checker, never the fixture. Scans use `grep`, whose exit codes separate "no matches" from "the scan failed"; a scan error fails closed, so an absent scanner can no longer read as a clean tree. |
 
 Note the ordering: the release-artifact sub-checks run `9a, 9b, 9d, 9e, 9f, 9g, 9c` — `9c` is last,
-not third. Three checks carry no number at all.
+not third. Four checks carry no number at all.
 
 `AGENT_INSTRUCTIONS.md` (and therefore `CLAUDE.md` and `AGENTS.md`, which symlink to it) spells out only
 the first seven checks in detail and names this page as the canonical enumeration.
