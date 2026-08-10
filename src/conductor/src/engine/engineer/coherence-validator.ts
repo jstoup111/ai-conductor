@@ -1219,6 +1219,7 @@ export type CoherenceRequiredLayer =
   | 'outcome'
   | 'fr'
   | 'story'
+  | 'adr'
   | 'orphan-task'
   | 'coverage-table';
 
@@ -1291,6 +1292,10 @@ export function resolveRequiredLayers(
 
   if (outcomes.length > 0) {
     layers.add('outcome');
+  }
+
+  if ([...changed].some((p) => p.startsWith('.docs/decisions/adr-'))) {
+    layers.add('adr');
   }
 
   return { engaged: true, layers };

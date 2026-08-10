@@ -1341,6 +1341,22 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     expect(result.engaged).toBe(true);
   });
 
+  it('requires the ADR layer when a product coherence change set includes an ADR', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], [
+      '.docs/coherence/foo.md',
+      '.docs/decisions/adr-something.md',
+    ]);
+    expect(result.engaged && result.layers.has('adr')).toBe(true);
+  });
+
+  it('omits the ADR layer when an engaged M-tier product change set has no ADR path', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], ['.docs/coherence/foo.md']);
+    expect(result).toEqual({
+      engaged: true,
+      layers: new Set(['fr', 'story', 'orphan-task', 'coverage-table']),
+    });
+  });
+
   it('L-tier engages normally too', () => {
     const result = resolveRequiredLayers('/wt', 'L', 'product', [], WITH_COHERENCE);
     expect(result.engaged).toBe(true);
