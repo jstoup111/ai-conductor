@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { createProgram } from '../../src/cli.js';
 import { detectResealCommand } from '../../src/engine/reseal-cli.js';
 
 // argv is process.argv: [node, entry, subcommand, ...arguments].
 const argv = (...arguments_: string[]) => ['node', 'conduct', 'reseal', ...arguments_];
+
+describe('CLI surface — conduct reseal', () => {
+  it('exposes the reseal command with its planned flags', () => {
+    expect(
+      createProgram()
+        .commands.find((command) => command.name() === 'reseal')
+        ?.options.map((option) => option.long),
+    ).toEqual(['--slug', '--path', '--reason', '--clear-halt']);
+  });
+});
 
 describe('detectResealCommand', () => {
   it('parses a valid reseal invocation for dispatch', () => {
