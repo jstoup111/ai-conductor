@@ -217,9 +217,11 @@ than a text search. Until then the mechanical half stays the only blocking autho
 The coherence gate is itself layered. It disengages entirely at tier S, and it does not apply retroactively:
 a change set with no coherence artifact path in it is treated as a legacy change, not a violation. Once
 engaged, the story, orphan-task, and coverage-table layers are always required; the functional-requirement
-layer only on the product track; the outcome layer only when outcomes exist; and the ADR layer only when
-the current spec change set contains a non-deleted `.docs/decisions/adr-*` file. It aggregates every gap rather than stopping at the first, and reports
-them as one error. See [engineer loop](../guides/engineer-loop.md).
+layer only on the product track; the outcome layer only when outcomes exist; and the ADR layer whenever
+the current spec change set contains a `.docs/decisions/adr-*` path, including a deletion. The ADR row
+pool itself contains only non-deleted ADRs, so a deletion-only change engages the layer but passes with
+no ADR row. It aggregates every gap rather than stopping at the first, and reports them as one error.
+See [engineer loop](../guides/engineer-loop.md).
 
 The functional-requirement layer checks both directions, because coverage alone is only half of a tie-out.
 Forward, a PRD requirement no story cites — or whose only citing stories no task covers — is a gap.
@@ -233,9 +235,9 @@ belong to `conflict-check` earlier in DECIDE; this gate compares each story agai
 Earlier in DECIDE, `conflict_check` also compares each relevant story with the selected approved ADR
 corpus. The default `change_set` corpus is bounded to the current spec's ADRs; `repo_wide` narrows all
 approved ADRs to overlapping subjects and records the ADRs it examined and excluded. That judgment resolves
-ADR-versus-story conflicts before planning. This is separate from the coherence gate, which requires ADR
-traceability rows only for non-deleted ADR files in the current spec change set; no conceptual applicability
-judgment expands that row set.
+ADR-versus-story conflicts before planning. This is separate from the coherence gate: any current-change-set
+ADR path engages its ADR layer, while only non-deleted ADR files enter the traceability-row pool; no
+conceptual applicability judgment expands that row set.
 
 ### Self-host gates
 

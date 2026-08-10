@@ -16,6 +16,10 @@ and every plan task to its counterpart ids with a per-row verdict. This artifact
 traceability record the operator (and the land-time coherence validator) reads instead
 of trusting self-reported "everything's covered" prose in a spec PR.
 
+Any current-change-set `.docs/decisions/adr-*` path, including a deletion, engages the ADR
+layer. That engagement is distinct from the ADR row pool: deleted ADRs produce no row, so a
+deletion-only change has no ADR row to author.
+
 **Correctness gate:** a row's verdict (`covered` / `gap` / `fail`) is a judgment call, not
 a mechanical grep. Coverage and consistency are separate questions: a counterpart can
 exist and still contradict what it implements (§4d). Per the `/verify-claims` protocol, ground every verdict in the actual
@@ -265,7 +269,8 @@ per row and must never assert "covered" that it has not actually confirmed.
 3. Do not stage or commit a coherence artifact for a technical-track spec's `fr` row
    class, a chat-origin spec's `outcome` row class, or an `adr` row class when the current
    spec change set has no non-deleted `.docs/decisions/adr-*.md` file — omission is
-   correct there, not a gap.
+   correct there, not a gap. A deleted ADR path still engages the ADR layer, but it does
+   not enter that row pool.
 
 ## Verification
 
