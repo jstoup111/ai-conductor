@@ -368,6 +368,34 @@ describe('createScopedProtectedArtifactSeal', () => {
     ]);
   });
 
+  it('keeps an unresealed protected path subject to violation detection', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/resealed.md': 'incorrect plan\n',
+      '.docs/plans/untouched.md': 'approved plan\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/resealed.md', 'corrected plan\n');
+    await git(repo, ['add', '.docs/plans/resealed.md']);
+    await git(repo, ['commit', '-q', '-m', 'correct one protected plan']);
+
+    await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/resealed.md'],
+    });
+    await writeProjectFile(repo, '.docs/plans/untouched.md', 'tampered plan\n');
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/plans/untouched.md',
+    });
+  });
+
   it('permits an unlisted artifact inherited from the base tip without replacing its seal entry', async () => {
     const repo = await makeRepo({
       '.docs/plans/p1.md': 'incorrect plan\n',

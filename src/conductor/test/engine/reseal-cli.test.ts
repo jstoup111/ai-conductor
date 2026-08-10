@@ -631,6 +631,41 @@ describe('dispatchResealCommand', () => {
     });
   });
 
+  it('refuses an autonomous-step reseal attempt without clearing its protected-artifact violation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'reseal-cli-in-step-violation-'));
+    const worktree = join(root, '.worktrees', 'repair');
+    const command = detectResealCommand(
+      argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.', '--clear-halt'),
+    );
+    if (!command) throw new Error('expected valid reseal command');
+    const err = vi.fn();
+    const reseal = vi.fn();
+
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeFile(join(worktree, '.pipeline', 'HALT'), 'Protected artifact changed: .docs/plans/repair.md\n');
+      await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'protected-artifact');
+
+      await expect(dispatchResealCommand(command, {
+        cwd: root,
+        err,
+        isInteractive: false,
+        reseal,
+      })).resolves.toBe(1);
+
+      await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toBe(
+        'Protected artifact changed: .docs/plans/repair.md\n',
+      );
+      await expect(readFile(join(worktree, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('protected-artifact');
+      expect({ err: err.mock.calls, reseal: reseal.mock.calls }).toEqual({
+        err: [['reseal: requires an interactive terminal.']],
+        reseal: [],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('emits a refusal event for unlisted protected-artifact drift', async () => {
     const command = detectResealCommand(
       argv('--slug', 'repair', '--path', '.docs/plans/repair.md', '--reason', 'Corrected after review.'),
