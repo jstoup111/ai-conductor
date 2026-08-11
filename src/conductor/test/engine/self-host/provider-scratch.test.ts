@@ -86,6 +86,7 @@ describe('provider scratch homes', () => {
         files.set(path, content);
       },
       readFile: async (path) => files.get(path) ?? null,
+      rm: async () => {},
     };
 
     const home = await acquireScratchHome({
@@ -117,6 +118,31 @@ describe('provider scratch homes', () => {
     ]);
   });
 
+  it('removes a partial home when writing its owner lease fails', async () => {
+    const directories = new Set<string>();
+    const fs: ScratchFs = {
+      mkdir: async (path) => { directories.add(path); },
+      writeFile: async () => { throw new Error('lease write failed'); },
+      readFile: async () => null,
+      rm: async (path) => { directories.delete(path); },
+    };
+
+    const acquisition = acquireScratchHome({
+      worktreeRoot: '/wt',
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      provider: 'codex',
+      ownerPid: 1234,
+      now: () => new Date('2026-08-11T12:34:56.000Z'),
+      fs,
+    });
+
+    await expect(acquisition).rejects.toThrow('lease write failed');
+    expect(directories).toEqual(new Set());
+  });
+
   it.each([
     ['absent', null, { kind: 'missing' }],
     ['invalid', '{', { kind: 'malformed' }],
@@ -132,6 +158,7 @@ describe('provider scratch homes', () => {
       mkdir: async () => {},
       writeFile: async () => {},
       readFile: async () => content,
+      rm: async () => {},
     };
 
     await expect(readScratchLease('/wt/.daemon/scratch/R/2-codex', { fs })).resolves.toStrictEqual(expected);

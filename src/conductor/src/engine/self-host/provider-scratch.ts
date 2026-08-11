@@ -16,12 +16,14 @@ export interface ScratchFs {
   mkdir(path: string, options: { recursive: true }): Promise<void>;
   writeFile(path: string, content: string): Promise<void>;
   readFile(path: string): Promise<string | null>;
+  rm(path: string, options: { recursive: true; force: true }): Promise<void>;
 }
 
 export const realScratchFs: ScratchFs = {
   mkdir: (path, options) => fsp.mkdir(path, options).then(() => {}),
   writeFile: (path, content) => fsp.writeFile(path, content, 'utf8'),
   readFile: (path) => fsp.readFile(path, 'utf8').then((content) => content, () => null),
+  rm: (path, options) => fsp.rm(path, options),
 };
 
 export interface ScratchLease {
@@ -60,7 +62,12 @@ export async function acquireScratchHome(options: AcquireScratchHomeOptions): Pr
   };
 
   await fs.mkdir(home, { recursive: true });
-  await fs.writeFile(join(home, OWNER_LEASE_FILE), JSON.stringify(lease));
+  try {
+    await fs.writeFile(join(home, OWNER_LEASE_FILE), JSON.stringify(lease));
+  } catch (error) {
+    await fs.rm(home, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
   return home;
 }
 
