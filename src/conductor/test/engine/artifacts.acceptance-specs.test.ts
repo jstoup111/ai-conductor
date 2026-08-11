@@ -63,6 +63,7 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
     skipped: 0,
     errors: 0,
     failingTests: [{ name: 'test_x', reason: 'expected result was absent' }],
+    ranAt: '2026-08-10T12:00:00.000Z',
   };
 
   it('performs no subprocess exec when the RED marker is missing (miss path)', async () => {
@@ -118,6 +119,7 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
     skipped: 0,
     errors: 0,
     failingTests: [{ name: 'test_x', reason: 'expected result was absent' }],
+    ranAt: '2026-08-10T12:00:00.000Z',
   };
 
   it('classifies a missing command as a shape refusal', () => {
@@ -169,6 +171,21 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
       ok: false,
       class: 'shape',
       reason: expect.stringContaining('failingTests'),
+    });
+  });
+
+  it('refuses absent or unparseable ranAt as a shape failure', () => {
+    const { ranAt: _ranAt, ...evidenceWithoutRanAt } = validEvidence;
+
+    expect(validateAcceptanceRedEvidence(evidenceWithoutRanAt)).toMatchObject({
+      ok: false,
+      class: 'shape',
+      reason: expect.stringContaining('ranAt'),
+    });
+    expect(validateAcceptanceRedEvidence({ ...validEvidence, ranAt: 'not a timestamp' })).toMatchObject({
+      ok: false,
+      class: 'shape',
+      reason: expect.stringContaining('ranAt'),
     });
   });
 });

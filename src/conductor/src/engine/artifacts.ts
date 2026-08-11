@@ -1261,6 +1261,8 @@ export interface AcceptanceRedEvidence {
   errors: number;
   /** Identifies the tests whose failures established RED. */
   failingTests: Array<{ name: string; reason: string }>;
+  /** Timestamp when the RED command ran. */
+  ranAt: string;
   /** Raw runner summary line, e.g. pytest's "5 failed in 12.3s". */
   summary?: string;
 }
@@ -1328,6 +1330,13 @@ export function validateAcceptanceRedEvidence(
       ok: false,
       class: 'shape',
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list non-empty "failingTests" with a name and reason that established RED`,
+    };
+  }
+  if (typeof e.ranAt !== 'string' || Number.isNaN(Date.parse(e.ranAt))) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a parseable "ranAt" timestamp for the RED run`,
     };
   }
   if (errors > 0) {
