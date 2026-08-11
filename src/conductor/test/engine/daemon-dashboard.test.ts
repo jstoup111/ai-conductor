@@ -250,6 +250,30 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     );
   });
 
+  it('renders child work as unknown and degrades when the event ledger is unavailable', async () => {
+    await makeStateful('missing-ledger', { acceptance_specs: 'in_progress' });
+    await makeStateful('unreadable-ledger', { acceptance_specs: 'in_progress' });
+    // A directory at the ledger path makes readFile fail portably, including
+    // when tests run as a user that can bypass ordinary file permissions.
+    await mkdir(join(worktreeBase, 'unreadable-ledger', '.pipeline', 'events.jsonl'));
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+    expect(state).toMatchObject({
+      inProgress: expect.arrayContaining([
+        { slug: 'missing-ledger', step: 'acceptance_specs' },
+        { slug: 'unreadable-ledger', step: 'acceptance_specs' },
+      ]),
+    });
+
+    const out = renderDashboard(state);
+    expect(out).toContain('children: unknown');
+    expect(out).not.toContain('children: 0');
+  });
+
   it('reads the current lifecycle phase and attempt evidence for an in-progress feature', async () => {
     await makeStateful('preparing', { build: 'in_progress' });
     await makeStateful('running', { build: 'in_progress' });
