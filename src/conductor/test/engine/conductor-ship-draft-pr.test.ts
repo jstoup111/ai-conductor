@@ -534,3 +534,95 @@ describe('the retained SHIP PR is presentable before the first SHIP consumer', (
     expect(ghCalls.filter((c) => c[1] === 'edit' && c.includes('--title'))).toHaveLength(1);
   });
 });
+
+describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
+  let dir: string;
+  let statePath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'resume-halt-boundary-'));
+    statePath = join(dir, 'conduct-state.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('clears before BUILD and does not repeat a confirmed clear on a later dispatch in this process', async () => {
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        plan: 'done',
+        acceptance_specs: 'done',
+        build: 'pending',
+        track: 'technical',
+        feature_desc: 'widget import flow',
+        worktree_branch: BRANCH,
+        pr_url: PR_URL,
+      }),
+      'utf8',
+    );
+
+    const pr = {
+      body: `halted\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      isDraft: true,
+      labels: ['needs-remediation'],
+    };
+    const ghCalls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      ghCalls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            body: pr.body,
+            isDraft: pr.isDraft,
+            labels: pr.labels.map((name) => ({ name })),
+          }),
+        };
+      }
+      if (args[0] === 'api' && args[2] === 'DELETE') {
+        pr.labels = pr.labels.filter((name) => name !== 'needs-remediation');
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        pr.body = args[args.indexOf('--body') + 1] ?? pr.body;
+        return { stdout: '' };
+      }
+      return { stdout: '' };
+    };
+
+    const viewCallsAtDispatch: number[] = [];
+    const runner: StepRunner = {
+      run: async (step): Promise<StepRunResult> => {
+        expect(step).toBe('build');
+        viewCallsAtDispatch.push(ghCalls.filter((call) => call[1] === 'view').length);
+        expect(pr.labels).not.toContain('needs-remediation');
+        expect(pr.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+        expect(pr.isDraft).toBe(true);
+        return { success: false, output: 'sentinel: stop after BUILD observes the clear' };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      config: {} as never,
+      fromStep: 'build',
+      mode: 'default',
+      gh,
+      git: async () => ({ stdout: '' }),
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+    await conductor.run();
+
+    expect(viewCallsAtDispatch).toHaveLength(2);
+    expect(viewCallsAtDispatch[0]).toBeGreaterThan(0);
+    expect(viewCallsAtDispatch[1]).toBe(viewCallsAtDispatch[0]);
+    expect(ghCalls.filter((call) => call[0] === 'api' && call[2] === 'DELETE')).toHaveLength(1);
+    expect(ghCalls.filter((call) => call[0] === 'pr' && call[1] === 'edit')).toHaveLength(1);
+  });
+});
