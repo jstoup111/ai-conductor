@@ -305,6 +305,16 @@ failed or interrupted build cannot contaminate later work.
 - **HP-1:** Given a self-host run provisioned isolated provider state, when it completes, fails,
   is cancelled, times out, is interrupted, exhausts retries, or is replaced, then feature-created
   provider state and child-only environment changes are absent afterward.
+
+> **Amended 2026-08-10 by #1223:** for the **interruption** case only, absence is *eventual*, not
+> immediate. Abrupt termination — `SIGKILL`, OOM, power loss — ends the process before any
+> handler, `finally`, or exit hook can run, so no in-process mechanism can make feature-created
+> state absent afterward; #1223 reports fifteen orphaned `self-host-codex-*` directories as
+> evidence that it did not. Absence on that path is discharged by the reclamation path in
+> `adr-2026-08-09-worktree-local-provider-scratch`: a dead-owner sweep at the daemon dispatch
+> boundary, with worktree removal as the final backstop. Every other terminal path listed above —
+> completes, fails, is cancelled, times out, exhausts retries, is replaced — continues to assert
+> immediate absence via the existing teardown, unchanged.
 - **HP-2:** Given cleanup is invoked more than once for the same run, when terminal handling repeats,
   then cleanup is idempotent and unrelated live configuration remains unchanged.
 
