@@ -6,6 +6,41 @@ import { provisionProviderHome } from '../../../src/engine/self-host/provider-ho
 import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 
 describe('provider-aware self-host homes', () => {
+  it('provisions a Codex home from the worktree scratch root unless baseDir is explicit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-scratch-'));
+    const worktree = join(root, 'worktree');
+    const explicitBaseDir = join(root, 'explicit-homes');
+    await Promise.all([
+      mkdir(join(worktree, 'skills'), { recursive: true }),
+      mkdir(explicitBaseDir, { recursive: true }),
+    ]);
+
+    const home = await provisionProviderHome({
+      provider: { id: 'codex' },
+      worktreeRoot: worktree,
+      runId: 'run-11',
+      attempt: 2,
+    });
+    const explicitHome = await provisionProviderHome({
+      provider: { id: 'codex' },
+      worktreeRoot: worktree,
+      runId: 'run-11',
+      attempt: 2,
+      baseDir: explicitBaseDir,
+    });
+    try {
+      const scratchRoot = join(worktree, '.daemon', 'scratch', 'run-11', '2-codex');
+      expect([home.homeDir, home.childEnv().CODEX_HOME, explicitHome.homeDir]).toEqual([
+        expect.stringMatching(new RegExp(`^${scratchRoot}/self-host-codex-`)),
+        home.homeDir,
+        expect.stringMatching(new RegExp(`^${explicitBaseDir}/self-host-codex-`)),
+      ]);
+    } finally {
+      await Promise.all([home.teardown(), explicitHome.teardown()]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['claude', 'CLAUDE_CONFIG_DIR'],
     ['codex', 'CODEX_HOME'],

@@ -4,9 +4,9 @@
 
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
+import { resolveScratchHome } from './provider-scratch.js';
 
 export type SelfHostProviderId = 'claude' | 'codex';
 
@@ -63,6 +63,9 @@ export interface ProvisionProviderHomeOptions {
   /** The actual candidate selected for this attempt, not a preferred provider. */
   provider: ResolvedSelfHostProvider;
   worktreeRoot: string;
+  /** Attempt identity supplied by the conductor when available. */
+  runId?: string;
+  attempt?: number;
   baseDir?: string;
   parentEnv?: NodeJS.ProcessEnv;
   fs?: ProviderHomeFs;
@@ -126,12 +129,18 @@ export async function provisionProviderHome(
   options: ProvisionProviderHomeOptions,
 ): Promise<ProviderHome> {
   const fs = options.fs ?? realProviderHomeFs;
-  const baseDir = options.baseDir ?? tmpdir();
+  const baseDir = options.baseDir ?? resolveScratchHome({
+    worktreeRoot: options.worktreeRoot,
+    runId: options.runId ?? 'provider-home',
+    attempt: options.attempt ?? 0,
+    provider: options.provider.id,
+  });
   const parentEnv = options.parentEnv ?? process.env;
   const assets = options.worktreeAssets ?? DEFAULT_WORKTREE_ASSETS;
   let homeDir: string | undefined;
 
   try {
+    await fs.mkdir(baseDir);
     homeDir = await fs.mkdtemp(join(baseDir, `self-host-${options.provider.id}-`));
     const context: ProviderHomeContext = { provider: options.provider.id, homeDir };
 
