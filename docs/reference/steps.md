@@ -81,11 +81,12 @@ completion evidence in `.pipeline/release-disposition-pass`. The later `finish` 
 metadata while supplying the reader-facing PR body.
 
 Both configured gates read the **retained SHIP PR**, which the engine adopts at SHIP-phase entry. If
-that PR is a reused `needs-remediation` halt placeholder, the engine makes it presentable at
-adoption — before the first SHIP-phase step in the resolved registry is dispatched, custom or
-built-in — so a SHIP step scheduled ahead of `finish` never reads a remediation placeholder. The
-draft→ready flip remains finish-only. See
-[running the daemon](../guides/running-the-daemon.md#a-reused-halt-pr-is-made-presentable-at-ship-entry-not-at-finish).
+that PR is a reused `needs-remediation` halt placeholder, the engine makes it presentable whenever
+that identity is resolved — at adoption, at the pre-finish snapshot, or at the finish-time
+restore — so a SHIP step scheduled ahead of `finish` never reads a remediation placeholder. A
+lighter clear also runs once at the start of every dispatch, regardless of phase, so a resumed
+`BUILD` step is not left holding the placeholder either. The draft→ready flip remains finish-only.
+See [running the daemon](../guides/running-the-daemon.md#a-reused-halt-pr-is-made-presentable-at-resolution-and-at-the-dispatch-boundary-not-only-at-finish).
 
 ## Out-of-band steps
 

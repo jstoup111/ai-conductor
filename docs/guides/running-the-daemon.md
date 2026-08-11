@@ -820,7 +820,7 @@ it by hand. The check is fail-closed in both directions: it reads the committed 
 torn-down worktree cannot hide the record), and it refuses to guess a slug for any branch the daemon
 did not cut, so a hand-authored PR is never touched.
 
-### A reused halt PR is made presentable at SHIP entry, not at finish
+### A reused halt PR is made presentable at resolution and at the dispatch boundary, not only at finish
 
 The conductor opens the implementation PR as a draft at SHIP-phase entry, and that publisher adopts
 whatever OPEN PR already exists for the branch rather than opening a second one. A feature that
@@ -828,25 +828,37 @@ halted earlier already has one: the `needs-remediation` placeholder the halt-PR 
 opened. So the placeholder silently becomes the **retained SHIP PR** that every later ship step
 reads.
 
-The deterministic presentation repair therefore runs at that adoption point — before the first
-SHIP-phase step is dispatched — rather than only at `finish`. It clears the `needs-remediation`
-label and body marker, rewrites a `needs-remediation:` title to `feat: <feature>`, strips the halt
-banner from the body, and preserves the remediation narrative as a single PR comment. Whichever step
-the resolved step registry puts first in the SHIP phase — a built-in or a config-declared custom
-step — sees a real implementation PR.
+Two independent repairs keep that PR usable, at two different points in the run:
 
-Two properties are deliberate:
+- **Resolution-time presentation repair.** Whatever resolves the retained SHIP PR's identity —
+  SHIP-phase adoption, the pre-finish snapshot, or the finish-time restore — repairs it first. It
+  clears the `needs-remediation` label and body marker, rewrites a `needs-remediation:` title to
+  `feat: <feature>`, strips the halt banner from the body, and preserves the remediation narrative
+  as a single PR comment. This is no longer bound to the SHIP-entry `published` outcome: any later
+  consumer that resolves the same retained PR triggers the same repair, so a custom SHIP step
+  scheduled ahead of `finish` never reads a remediation placeholder regardless of which resolver
+  reaches it first.
+- **Dispatch-boundary halt-state clear.** Before the first step of *any* run — not gated on
+  phase — the conductor also runs a lighter clear that removes the `needs-remediation` label and
+  body marker and supersedes the halt comment, while preserving draft status. This reaches a
+  feature that resumes into `BUILD`, where the PR is resolved through `gh` directly rather than
+  through the conductor's own resolver, so a BUILD-phase halt no longer leaves the branch's PR
+  permanently occupied by the remediation placeholder.
+
+Both repairs share the same properties:
 
 - **The PR stays a draft.** Only `finish` flips it ready-for-review, after the ship gates have run.
-  Nothing else in the repair touches draft status.
-- **The repair is advisory and idempotent.** It never throws into the build loop, a PR with no halt
-  signal costs one read and zero mutations, and the finish-time repair still runs — repairing twice
-  leaves one repaired PR and one halt-history comment.
+  Neither repair touches draft status.
+- **Each repair is advisory and idempotent.** Neither throws into the build loop, a PR with no halt
+  signal costs one read and zero mutations, and repairing the same PR more than once leaves one
+  repaired PR and one halt-history comment.
 
 Before this, every repair was bound to the `finish` step, which runs last. Any SHIP step scheduled
 ahead of finish was handed the placeholder and could only refuse — a step that writes release
 metadata into the retained PR, for instance, would correctly decline to write it into a remediation
-placeholder and then fail its own completion artifact on every retry.
+placeholder and then fail its own completion artifact on every retry. A halt raised during `BUILD`
+was worse: the branch had no SHIP-phase entry to repair it at all, so its PR stayed a remediation
+placeholder until someone cleared it by hand.
 
 ### Kickback-cap halt
 
