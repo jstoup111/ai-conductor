@@ -63,12 +63,23 @@ export async function acquireScratchHome(options: AcquireScratchHomeOptions): Pr
 
   await fs.mkdir(home, { recursive: true });
   try {
-    await fs.writeFile(join(home, OWNER_LEASE_FILE), JSON.stringify(lease));
+    await fs.writeFile(join(home, OWNER_LEASE_FILE), serializeScratchLease(lease));
   } catch (error) {
     await fs.rm(home, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
   return home;
+}
+
+function serializeScratchLease(lease: ScratchLease): string {
+  return JSON.stringify({
+    repository: lease.repository,
+    featureSlug: lease.featureSlug,
+    runId: lease.runId,
+    attempt: lease.attempt,
+    ownerPid: lease.ownerPid,
+    startedAt: lease.startedAt,
+  });
 }
 
 export async function readScratchLease(home: string, options: { fs?: ScratchFs } = {}): Promise<ScratchLeaseReadResult> {

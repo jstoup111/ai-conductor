@@ -118,6 +118,41 @@ describe('provider scratch homes', () => {
     ]);
   });
 
+  it('serializes only the six scratch-home identity fields into an owner lease', async () => {
+    const files = new Map<string, string>();
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async (path, content) => { files.set(path, content); },
+      readFile: async (path) => files.get(path) ?? null,
+      rm: async () => {},
+    };
+
+    const home = await acquireScratchHome({
+      worktreeRoot: '/wt',
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      provider: 'codex',
+      ownerPid: 1234,
+      now: () => new Date('2026-08-11T12:34:56.000Z'),
+      token: 'secret-token',
+      apiKey: 'secret-api-key',
+      credentials: { password: 'secret-password' },
+      environment: { CODEX_HOME: '/sensitive/home' },
+      fs,
+    } as Parameters<typeof acquireScratchHome>[0]);
+
+    expect(Object.keys(JSON.parse(files.get(join(home, 'owner.json'))!))).toStrictEqual([
+      'repository',
+      'featureSlug',
+      'runId',
+      'attempt',
+      'ownerPid',
+      'startedAt',
+    ]);
+  });
+
   it('removes a partial home when writing its owner lease fails', async () => {
     const directories = new Set<string>();
     const fs: ScratchFs = {
