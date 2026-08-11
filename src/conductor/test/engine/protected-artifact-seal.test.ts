@@ -513,7 +513,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     expect(result).toEqual({ permitted: true, paths: [addedPath, deletedPath] });
   });
 
-  it('refuses each unresolved or unexplained rotation condition with its failing path', () => {
+  it('characterizes the pre-provenance rotation decision table', () => {
     const path = '.docs/plans/changed.md';
     const sealedBytes = Buffer.from('sealed\n');
     const workspaceBytes = Buffer.from('workspace\n');
@@ -536,26 +536,31 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       baseTipArtifacts: new Map([[path, workspaceBytes]]),
     };
 
-    expect([
-      evaluateProtectedArtifactSealRotation({ ...input, baselineAncestry: 'unresolvable' }),
-      evaluateProtectedArtifactSealRotation({ ...input, baselineAncestry: 'ancestor' }),
-      evaluateProtectedArtifactSealRotation({ ...input, baseTipArtifacts: undefined }),
-      evaluateProtectedArtifactSealRotation({ ...input, headArtifacts: new Map([[path, headBytes]]) }),
-      evaluateProtectedArtifactSealRotation({ ...input, baseTipArtifacts: new Map([[path, baseBytes]]) }),
-      evaluateProtectedArtifactSealRotation({
+    const decisionTable = {
+      baselineUnresolvable: evaluateProtectedArtifactSealRotation({ ...input, baselineAncestry: 'unresolvable' }),
+      sameHistoryAncestor: evaluateProtectedArtifactSealRotation({ ...input, baselineAncestry: 'ancestor' }),
+      baseTipUnresolved: evaluateProtectedArtifactSealRotation({ ...input, baseTipArtifacts: undefined }),
+      workspaceDiffersFromHead: evaluateProtectedArtifactSealRotation({
+        ...input,
+        headArtifacts: new Map([[path, headBytes]]),
+      }),
+      headDiffersFromBase: evaluateProtectedArtifactSealRotation({ ...input, baseTipArtifacts: new Map([[path, baseBytes]]) }),
+      missingWorkspaceArtifactDiffersFromHead: evaluateProtectedArtifactSealRotation({
         ...input,
         workspaceArtifacts: new Map(),
         headArtifacts: new Map([[path, headBytes]]),
         baseTipArtifacts: new Map([[path, headBytes]]),
       }),
-    ]).toEqual([
-      { permitted: false, condition: 'baseline-unresolvable' },
-      { permitted: false, condition: 'same-history-ancestor' },
-      { permitted: false, condition: 'base-tip-unresolved' },
-      { permitted: false, condition: 'workspace-differs-from-head', path },
-      { permitted: false, condition: 'head-differs-from-base', path },
-      { permitted: false, condition: 'workspace-differs-from-head', path },
-    ]);
+    };
+
+    expect(decisionTable).toEqual({
+      baselineUnresolvable: { permitted: false, condition: 'baseline-unresolvable' },
+      sameHistoryAncestor: { permitted: false, condition: 'same-history-ancestor' },
+      baseTipUnresolved: { permitted: false, condition: 'base-tip-unresolved' },
+      workspaceDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
+      headDiffersFromBase: { permitted: false, condition: 'head-differs-from-base', path },
+      missingWorkspaceArtifactDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
+    });
   });
 
   it('fails closed distinctly when the sealed baseline object cannot resolve', async () => {
