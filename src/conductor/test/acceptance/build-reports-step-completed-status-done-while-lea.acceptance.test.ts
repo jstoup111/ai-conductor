@@ -8,6 +8,7 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { Conductor } from '../test-conductor.js';
@@ -72,6 +73,19 @@ async function writePlanAndStatus(
   await writeFile(
     join(dir, '.pipeline/task-status.json'),
     JSON.stringify({ tasks: [{ id: 1, status }] }),
+  );
+  const resolvedBeforeBuild = Object.fromEntries(
+    ALL_STEPS
+      .slice(0, ALL_STEPS.findIndex((step) => step.name === 'build'))
+      .map((step) => [step.name, 'done']),
+  );
+  await writeFile(
+    join(dir, '.pipeline/conduct-state.json'),
+    JSON.stringify({
+      ...resolvedBeforeBuild,
+      complexity_tier: 'M',
+      track: 'technical',
+    }),
   );
   await execa('git', ['add', '.docs', 'spec'], { cwd: dir });
   await execa('git', ['commit', '-m', 'docs: approve decide artifacts'], { cwd: dir });
@@ -161,6 +175,7 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       daemon: true,
       verifyArtifacts: true,
       maxRetries,
+      fromStep: 'build',
       escalateBuildFailure: async () => ({}),
       git,
     });

@@ -178,6 +178,13 @@ describe('acceptance_specs RED-evidence determinism — real Conductor.run entry
       failed: 1,
       skipped: 0,
       errors: 0,
+      failingTests: [
+        {
+          name: 'feature acceptance spec',
+          reason: 'the feature is not implemented',
+        },
+      ],
+      intentRationale: 'This expected feature-spec failure establishes RED.',
       summary: '1 failed',
     });
 
