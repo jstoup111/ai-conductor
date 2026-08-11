@@ -900,7 +900,8 @@ function rotationRefusalPreservesInspection(
   rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
   inspection: ProtectedArtifactSealVerdict,
 ): boolean {
-  return inspection.ok && (
+  if (!inspection.ok) return true;
+  return (
     rotation.condition === 'same-history-ancestor'
     || rotation.condition === 'base-tip-unresolved'
     || rotation.condition === 'head-unresolvable'

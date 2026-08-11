@@ -1866,7 +1866,7 @@ describe('verifyProtectedArtifactSeal', () => {
       ]);
     });
 
-    it('REFUSES rotation when a differing path is feature-authored, naming the path and the condition', async () => {
+    it('preserves a failed inspection instead of replacing it with a feature-authored rotation refusal', async () => {
       const { repo } = await makeRewrittenRepo({
         initial: { '.docs/plans/other-feature.md': 'approved plan\n' },
         baseAdvance: { 'unrelated.ts': 'main advance\n' },
@@ -1881,8 +1881,7 @@ describe('verifyProtectedArtifactSeal', () => {
       });
 
       expect(verdict.ok).toBe(false);
-      expect((verdict as { reason: string }).reason).toContain('.docs/plans/other-feature.md');
-      expect((verdict as { reason: string }).reason).toMatch(/feature-authored/i);
+      expect((verdict as { reason: string }).reason).toBe('Protected artifact changed: .docs/plans/other-feature.md');
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
       ).toBe(before);
@@ -2010,6 +2009,60 @@ describe('verifyProtectedArtifactSeal', () => {
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
       ).toBe(before);
+    });
+
+    it('escalates a workspace-versus-HEAD refusal after a passing inspection', async () => {
+      const path = '.docs/plans/mine.md';
+      const { repo } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work\n' },
+      });
+      await writeProjectFile(repo, path, 'uncommitted edit\n');
+
+      await expect(verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      })).resolves.toEqual({
+        ok: false,
+        reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
+      });
+    });
+
+    it('escalates a provenance-confirmed feature-authored refusal after a passing inspection', async () => {
+      const path = '.docs/plans/mine.md';
+      const { repo } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work\n' },
+        featureCommit: { [path]: 'feature-authored edit\n' },
+      });
+
+      await expect(verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      })).resolves.toEqual({
+        ok: false,
+        reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
+      });
+    });
+
+    it('preserves a failed inspection rather than replacing it with a workspace-versus-HEAD refusal', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const { repo } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work\n' },
+      });
+      await writeProjectFile(repo, path, 'uncommitted edit\n');
+
+      await expect(verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      })).resolves.toEqual({
+        ok: false,
+        reason: `Protected artifact changed: ${path}`,
+      });
     });
 
     it('is an INDETERMINATE fail-closed refusal, with its own reason, when the baseline object cannot be resolved', async () => {
