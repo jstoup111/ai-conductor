@@ -303,6 +303,17 @@ describe('provider scratch homes', () => {
     }
   });
 
+  it('keeps reclamation platform-neutral and scheduler-free', async () => {
+    const source = await readFile(new URL('../../../src/engine/self-host/provider-scratch.ts', import.meta.url), 'utf8');
+
+    expect([
+      /process\.platform/.test(source),
+      /scheduler/i.test(source),
+      /service[- ]manager/i.test(source),
+      /cron/i.test(source),
+    ]).toStrictEqual([false, false, false, false]);
+  });
+
   it('reports a failed home removal without throwing', async () => {
     const fs: ScratchFs = {
       mkdir: async () => {},
