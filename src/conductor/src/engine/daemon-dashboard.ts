@@ -7,7 +7,12 @@ import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
 import type { GatedItem } from './daemon-backlog.js';
-import { readStepHeartbeat, formatHeartbeatAge } from './step-heartbeat.js';
+import {
+  classifyHeartbeatAge,
+  formatHeartbeatAge,
+  heartbeatBelongsToDispatch,
+  readStepHeartbeat,
+} from './step-heartbeat.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -63,9 +68,18 @@ export interface InProgressEntry {
    * activity pulse never renders as "stalled" (see `step-heartbeat.ts`).
    */
   heartbeatAgeMs?: number;
+  /**
+   * `working` is backed by fresh telemetry from this dispatch; `waiting` is
+   * backed by a returned dispatch whose completion gate remains unsatisfied.
+   * Undefined deliberately means neither conclusion is supported yet.
+   */
+  activityState?: 'working' | 'waiting';
   /** Current provider preparation/running/recovery phase, if persisted. */
   lifecycle?: ProviderLifecycleDiagnostic;
 }
+
+/** A dashboard observation needs only a short current-activity window. */
+const DASHBOARD_HEARTBEAT_FRESH_MS = 60_000;
 
 export interface EligibleEntry {
   slug: string;
@@ -349,6 +363,50 @@ async function readProviderLifecycleDiagnostic(
   return latest;
 }
 
+/**
+ * Extract the minimum dispatch lifecycle evidence needed to classify an
+ * in-progress row. The latest `step_started` starts a new logical dispatch;
+ * only an acceptance-RED refusal after that boundary proves the dispatch has
+ * returned while its completion gate remains unmet.
+ */
+async function readDispatchActivity(
+  wt: string,
+  step: string,
+): Promise<{ startedAtMs?: number; completionUnmet: boolean }> {
+  let content: string;
+  try {
+    content = await readFile(join(wt, '.pipeline/events.jsonl'), 'utf-8');
+  } catch {
+    return { completionUnmet: false };
+  }
+
+  let startedAtMs: number | undefined;
+  let completionUnmet = false;
+  for (const line of content.split('\n')) {
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(event) || event.step !== step) continue;
+    const timestamp = typeof event.ts === 'string' ? Date.parse(event.ts) : Number.NaN;
+    if (event.type === 'step_started' && Number.isFinite(timestamp)) {
+      startedAtMs = timestamp;
+      completionUnmet = false;
+      continue;
+    }
+    if (
+      startedAtMs !== undefined
+      && event.type === 'acceptance_red'
+      && (event.state === 'pending' || event.state === 'rejected')
+    ) {
+      completionUnmet = true;
+    }
+  }
+  return { startedAtMs, completionUnmet };
+}
+
 function parseProviderLifecycleDiagnostic(
   line: string,
   step: string | undefined,
@@ -523,6 +581,16 @@ export async function scanInheritedState(
         const ageMs = Date.now() - Date.parse(heartbeat.ts);
         if (Number.isFinite(ageMs)) entry.heartbeatAgeMs = Math.max(0, ageMs);
       }
+      const activity = await readDispatchActivity(wt, entry.step);
+      if (activity.completionUnmet) {
+        entry.activityState = 'waiting';
+      } else if (
+        activity.startedAtMs !== undefined
+        && heartbeatBelongsToDispatch(heartbeat, entry.step, activity.startedAtMs)
+        && classifyHeartbeatAge(heartbeat, Date.now(), DASHBOARD_HEARTBEAT_FRESH_MS).kind === 'fresh'
+      ) {
+        entry.activityState = 'working';
+      }
       const lifecycle = await readProviderLifecycleDiagnostic(wt, entry.step);
       if (lifecycle?.phase !== 'halted') entry.lifecycle = lifecycle;
       inProgress.push(entry);
@@ -617,6 +685,10 @@ function prSuffix(prUrl?: string): string {
 function heartbeatSuffix(heartbeatAgeMs?: number): string {
   if (heartbeatAgeMs === undefined) return '';
   return ` (activity telemetry: ${formatHeartbeatAge(heartbeatAgeMs)} ago)`;
+}
+
+function activityStateSuffix(activityState?: InProgressEntry['activityState']): string {
+  return activityState ? ` (${activityState})` : '';
 }
 
 function lifecycleSuffix(lifecycle?: ProviderLifecycleDiagnostic): string {
@@ -750,7 +822,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p.activityState)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(

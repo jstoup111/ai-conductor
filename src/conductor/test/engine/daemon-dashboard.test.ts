@@ -157,6 +157,66 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(entry?.heartbeatAgeMs).toBeUndefined();
   });
 
+  it('classifies fresh current-dispatch activity as working, a refused completion as waiting, and a prior-dispatch heartbeat as neither', async () => {
+    const now = Date.now();
+    await makeStateful('working', { acceptance_specs: 'in_progress' });
+    await makeStateful('waiting', { acceptance_specs: 'in_progress' });
+    await makeStateful('leftover', { acceptance_specs: 'in_progress' });
+
+    await writeFile(
+      join(worktreeBase, 'working', '.pipeline', 'events.jsonl'),
+      `${JSON.stringify({
+        type: 'step_started', step: 'acceptance_specs', index: 11,
+        ts: new Date(now - 10_000).toISOString(),
+      })}\n`,
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeBase, 'working', '.pipeline', 'step-heartbeat'),
+      JSON.stringify({ step: 'acceptance_specs', ts: new Date(now - 1_000).toISOString() }),
+      'utf-8',
+    );
+
+    await writeFile(
+      join(worktreeBase, 'waiting', '.pipeline', 'events.jsonl'),
+      [
+        JSON.stringify({
+          type: 'step_started', step: 'acceptance_specs', index: 11,
+          ts: new Date(now - 10_000).toISOString(),
+        }),
+        JSON.stringify({
+          type: 'acceptance_red', step: 'acceptance_specs', state: 'rejected',
+          ts: new Date(now - 1_000).toISOString(),
+        }),
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+
+    await writeFile(
+      join(worktreeBase, 'leftover', '.pipeline', 'events.jsonl'),
+      `${JSON.stringify({
+        type: 'step_started', step: 'acceptance_specs', index: 11,
+        ts: new Date(now - 10_000).toISOString(),
+      })}\n`,
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeBase, 'leftover', '.pipeline', 'step-heartbeat'),
+      JSON.stringify({ step: 'acceptance_specs', ts: new Date(now - 20_000).toISOString() }),
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.inProgress.find((entry) => entry.slug === 'working')?.activityState).toBe('working');
+    expect(state.inProgress.find((entry) => entry.slug === 'waiting')?.activityState).toBe('waiting');
+    expect(state.inProgress.find((entry) => entry.slug === 'leftover')?.activityState).toBeUndefined();
+  });
+
   it('reads the current lifecycle phase and attempt evidence for an in-progress feature', async () => {
     await makeStateful('preparing', { build: 'in_progress' });
     await makeStateful('running', { build: 'in_progress' });
