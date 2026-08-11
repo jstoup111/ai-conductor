@@ -101,16 +101,39 @@ describe('provider scratch homes', () => {
     });
 
     await expect(readScratchLease(home, { fs })).resolves.toEqual({
-      repository: 'owner/repository',
-      featureSlug: 'provider-scratch',
-      runId: 'R',
-      attempt: 2,
-      ownerPid: 1234,
-      startedAt: '2026-08-11T12:34:56.000Z',
+      kind: 'present',
+      lease: {
+        repository: 'owner/repository',
+        featureSlug: 'provider-scratch',
+        runId: 'R',
+        attempt: 2,
+        ownerPid: 1234,
+        startedAt: '2026-08-11T12:34:56.000Z',
+      },
     });
     expect(events).toEqual([
       `mkdir:${home}`,
       `write:${join(home, 'owner.json')}`,
     ]);
+  });
+
+  it.each([
+    ['absent', null, { kind: 'missing' }],
+    ['invalid', '{', { kind: 'malformed' }],
+    ['without a pid', JSON.stringify({
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      startedAt: '2026-08-11T12:34:56.000Z',
+    }), { kind: 'incomplete' }],
+  ])('reads a %s lease without throwing or defaulting its pid', async (_case, content, expected) => {
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => content,
+    };
+
+    await expect(readScratchLease('/wt/.daemon/scratch/R/2-codex', { fs })).resolves.toStrictEqual(expected);
   });
 });

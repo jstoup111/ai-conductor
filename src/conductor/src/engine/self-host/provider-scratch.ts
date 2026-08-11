@@ -33,6 +33,12 @@ export interface ScratchLease {
   readonly startedAt: string;
 }
 
+export type ScratchLeaseReadResult =
+  | { readonly kind: 'present'; readonly lease: ScratchLease }
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'malformed' }
+  | { readonly kind: 'incomplete' };
+
 export interface AcquireScratchHomeOptions extends ResolveScratchHomeOptions {
   readonly repository: string;
   readonly featureSlug: string;
@@ -58,9 +64,34 @@ export async function acquireScratchHome(options: AcquireScratchHomeOptions): Pr
   return home;
 }
 
-export async function readScratchLease(home: string, options: { fs?: ScratchFs } = {}): Promise<ScratchLease | null> {
-  const content = await (options.fs ?? realScratchFs).readFile(join(home, OWNER_LEASE_FILE));
-  return content === null ? null : JSON.parse(content) as ScratchLease;
+export async function readScratchLease(home: string, options: { fs?: ScratchFs } = {}): Promise<ScratchLeaseReadResult> {
+  let content: string | null;
+  try {
+    content = await (options.fs ?? realScratchFs).readFile(join(home, OWNER_LEASE_FILE));
+  } catch {
+    return { kind: 'malformed' };
+  }
+  if (content === null) return { kind: 'missing' };
+
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    return { kind: 'malformed' };
+  }
+  if (!isScratchLease(value)) return { kind: 'incomplete' };
+  return { kind: 'present', lease: value };
+}
+
+function isScratchLease(value: unknown): value is ScratchLease {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const lease = value as Record<string, unknown>;
+  return typeof lease.repository === 'string' &&
+    typeof lease.featureSlug === 'string' &&
+    typeof lease.runId === 'string' &&
+    typeof lease.attempt === 'number' &&
+    typeof lease.ownerPid === 'number' &&
+    typeof lease.startedAt === 'string';
 }
 
 export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
