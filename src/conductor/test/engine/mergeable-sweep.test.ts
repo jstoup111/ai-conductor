@@ -947,23 +947,6 @@ describe('sweepMergeableLabels — FR-12: needs-remediation → mergeable must b
 });
 
 describe('sweepMergeableLabels — FR-10: green open PR → add mergeable label', () => {
-  it('adds mergeable after remediation is cleared and the PR is ready', async () => {
-    const { gh, addLabelCalls } = makeFakeGh({
-      [PR_URL]: prViewJson(
-        'OPEN',
-        'MERGEABLE',
-        [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
-        [],
-        false,
-      ),
-    });
-    await enrollWatch(tmpDir, entry());
-
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-
-    expect(addLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'mergeable' });
-  });
-
   it('adds mergeable label to an open, conflict-free PR with passing checks', async () => {
     const { gh, addLabelCalls, ensureLabelCalls } = makeFakeGh({
       [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], []),
