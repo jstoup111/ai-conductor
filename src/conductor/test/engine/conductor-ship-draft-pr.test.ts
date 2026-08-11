@@ -574,6 +574,7 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
       if (args[0] === 'pr' && args[1] === 'view') {
         return {
           stdout: JSON.stringify({
+            state: 'OPEN',
             body: pr.body,
             isDraft: pr.isDraft,
             labels: pr.labels.map((name) => ({ name })),
@@ -625,4 +626,122 @@ describe('conductor clears a resumed halt PR at the dispatch boundary', () => {
     expect(ghCalls.filter((call) => call[0] === 'api' && call[2] === 'DELETE')).toHaveLength(1);
     expect(ghCalls.filter((call) => call[0] === 'pr' && call[1] === 'edit')).toHaveLength(1);
   });
+
+  it.each(['not-halted', 'gh-unavailable'] as const)(
+    'attempts the resume clear only once per run after a %s outcome',
+    async (outcome) => {
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          plan: 'done',
+          acceptance_specs: 'done',
+          build: 'pending',
+          track: 'technical',
+          feature_desc: 'widget import flow',
+          worktree_branch: BRANCH,
+          pr_url: PR_URL,
+        }),
+        'utf8',
+      );
+
+      const ghCalls: string[][] = [];
+      let clearReadCount = 0;
+      const gh: GhRunner = async (args) => {
+        ghCalls.push([...args]);
+        if (args[0] !== 'pr' || args[1] !== 'view') return { stdout: '' };
+        if (args.includes('state')) return { stdout: JSON.stringify({ state: 'OPEN' }) };
+        clearReadCount += 1;
+        if (outcome === 'gh-unavailable') throw new Error('gh: unavailable after open-state check');
+        return { stdout: JSON.stringify({ body: '', isDraft: true, labels: [] }) };
+      };
+      const runner: StepRunner = {
+        run: async (): Promise<StepRunResult> => ({
+          success: false,
+          output: 'sentinel: stop after BUILD observes resume clear',
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        projectRoot: dir,
+        config: {} as never,
+        fromStep: 'build',
+        mode: 'default',
+        gh,
+        git: async () => ({ stdout: '' }),
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+      await conductor.run();
+
+      expect(ghCalls.filter((call) => call[1] === 'view')).toHaveLength(2);
+      expect(clearReadCount).toBe(1);
+    },
+  );
+
+  it.each(['CLOSED', 'MERGED'] as const)(
+    'does not mutate a persisted %s PR during resume clear',
+    async (state) => {
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          plan: 'done',
+          acceptance_specs: 'done',
+          build: 'pending',
+          track: 'technical',
+          feature_desc: 'widget import flow',
+          worktree_branch: BRANCH,
+          pr_url: PR_URL,
+        }),
+        'utf8',
+      );
+
+      const ghCalls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        ghCalls.push([...args]);
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              state,
+              body: `halted\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+              isDraft: true,
+              labels: [{ name: 'needs-remediation' }],
+            }),
+          };
+        }
+        return { stdout: '' };
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (): Promise<StepRunResult> => ({
+            success: false,
+            output: 'sentinel: stop after BUILD observes resume clear',
+          }),
+        },
+        events: new ConductorEventEmitter(),
+        projectRoot: dir,
+        config: {} as never,
+        fromStep: 'build',
+        mode: 'default',
+        gh,
+        git: async () => ({ stdout: '' }),
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      expect(ghCalls).toHaveLength(1);
+      expect(ghCalls[0]).toEqual(['pr', 'view', PR_URL, '--json', 'state']);
+      expect(
+        ghCalls.some(
+          (call) =>
+            call[0] === 'api' ||
+            (call[0] === 'pr' && ['edit', 'ready', 'comment'].includes(call[1] ?? '')),
+        ),
+      ).toBe(false);
+    },
+  );
 });

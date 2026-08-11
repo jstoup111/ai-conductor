@@ -399,6 +399,7 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
         if (args[0] === 'pr' && args[1] === 'view') {
           return {
             stdout: JSON.stringify({
+              state: 'OPEN',
               body: pr.body,
               isDraft: pr.isDraft,
               labels: pr.labels.map((name) => ({ name })),
