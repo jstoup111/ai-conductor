@@ -29,6 +29,7 @@ import {
   defaultSleep,
   HALT_PR_BANNER_SENTINEL,
   HALT_PR_BANNER_LINES,
+  NEEDS_REMEDIATION_BODY_MARKER,
 } from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
 
@@ -122,6 +123,48 @@ export async function rehabilitateHaltPr(
   await injectIssueRef({ gh, prUrl, keyword: 'Closes', sourceRef, cwd, log });
 
   return anyFailed ? 'partial' : 'rehabilitated';
+}
+
+export type ClearHaltStateForResumeOutcome = 'cleared' | 'not-halted' | 'partial' | 'gh-unavailable';
+
+/**
+ * Clear the machine-owned halt state before a resumed feature dispatches.
+ *
+ * The PR remains a draft while the label and body marker are removed, so a
+ * resumed BUILD task can reuse its implementation PR without exposing it for
+ * review early. Writes are delegated to the verified cleanup seam.
+ */
+export async function clearHaltStateForResume(
+  gh: GhRunner,
+  cwd: string,
+  prUrl: string,
+  log: (msg: string) => void = () => {},
+  sleep: (ms: number) => Promise<void> = defaultSleep,
+): Promise<ClearHaltStateForResumeOutcome> {
+  let view: PrViewState;
+  try {
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'isDraft,labels,body'], { cwd });
+    view = parsePrView(stdout);
+  } catch (err) {
+    log(`[halt-pr-rehab] resume clear state read failed for ${prUrl}: ${err}`);
+    return 'gh-unavailable';
+  }
+
+  const hasLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
+  const hasMarker = (view.body ?? '').includes(NEEDS_REMEDIATION_BODY_MARKER);
+  if (!hasLabel && !hasMarker) {
+    log(`[halt-pr-rehab] resume clear found no halt state for ${prUrl}`);
+    return 'not-halted';
+  }
+
+  const cleanup = await cleanupHaltPresentation(gh, cwd, prUrl, log, sleep, { preserveDraft: true });
+  if (cleanup === 'confirmed') {
+    log(`[halt-pr-rehab] resume clear confirmed for ${prUrl}`);
+    return 'cleared';
+  }
+
+  log(`[halt-pr-rehab] resume clear was partial for ${prUrl}`);
+  return 'partial';
 }
 
 export type RetitleFloorOutcome = 'not-halt-pr' | 'resolved';

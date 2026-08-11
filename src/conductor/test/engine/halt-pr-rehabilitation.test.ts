@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   retitleFloor,
   ensureShipReady,
+  clearHaltStateForResume,
   rehabilitateHaltPr,
   bodyFloor,
   readStaleHaltBanner,
@@ -182,6 +183,45 @@ describe('ensureShipReady (Task 7)', () => {
     const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep);
 
     expect(result).toBe('partial');
+  });
+});
+
+describe('clearHaltStateForResume (Task 1)', () => {
+  it('clears the remediation label and body marker from a halted PR', async () => {
+    const halted = {
+      title: 'feat: widget import flow',
+      isDraft: true,
+      labels: [{ name: 'needs-remediation' }],
+      body: `## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->`,
+    };
+    const cleared = {
+      ...halted,
+      labels: [],
+      body: '## Summary\n\nWidget import flow.',
+    };
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify(halted) }, // resume-clear state read
+      { stdout: JSON.stringify(halted) }, // cleanupHaltPresentation state read
+      { stdout: '' }, // REST label removal
+      { stdout: JSON.stringify({ ...halted, labels: [] }) }, // label verification
+      { stdout: '' }, // marker-removing body edit
+      { stdout: JSON.stringify(cleared) }, // final verification
+    ]);
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+    const labelRemoval = calls.find((call) => call[0] === 'api' && call.includes('DELETE'));
+    const bodyEdit = calls.find((call) => call[0] === 'pr' && call[1] === 'edit');
+
+    expect({ outcome, labelRemoval, bodyEdit }).toEqual({
+      outcome: 'cleared',
+      labelRemoval: [
+        'api',
+        '--method',
+        'DELETE',
+        'repos/acme/repo/issues/7/labels/needs-remediation',
+      ],
+      bodyEdit: ['pr', 'edit', PR_URL, '--body', cleared.body],
+    });
   });
 });
 
