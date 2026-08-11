@@ -1,5 +1,5 @@
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-bound
 import {
   acquireScratchHome,
   readScratchLease,
+  releaseScratchHome,
   resolveScratchHome,
   type ScratchFs,
 } from '../../../src/engine/self-host/provider-scratch.js';
@@ -87,6 +88,7 @@ describe('provider scratch homes', () => {
       },
       readFile: async (path) => files.get(path) ?? null,
       rm: async () => {},
+      rmdir: async () => {},
     };
 
     const home = await acquireScratchHome({
@@ -125,6 +127,7 @@ describe('provider scratch homes', () => {
       writeFile: async (path, content) => { files.set(path, content); },
       readFile: async (path) => files.get(path) ?? null,
       rm: async () => {},
+      rmdir: async () => {},
     };
 
     const home = await acquireScratchHome({
@@ -160,6 +163,7 @@ describe('provider scratch homes', () => {
       writeFile: async () => { throw new Error('lease write failed'); },
       readFile: async () => null,
       rm: async (path) => { directories.delete(path); },
+      rmdir: async () => {},
     };
 
     const acquisition = acquireScratchHome({
@@ -178,6 +182,38 @@ describe('provider scratch homes', () => {
     expect(directories).toEqual(new Set());
   });
 
+  it('releases each home without deleting a sibling attempt, then prunes its empty run directory', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-release-'));
+    const first = {
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      provider: 'codex' as const,
+    };
+
+    try {
+      const [firstHome, siblingHome] = await Promise.all([
+        acquireScratchHome({ ...first, attempt: 1 }),
+        acquireScratchHome({ ...first, attempt: 2 }),
+      ]);
+      const runDirectory = join(worktreeRoot, '.daemon', 'scratch', first.runId);
+
+      await releaseScratchHome({ ...first, attempt: 1 });
+
+      await expect(readdir(firstHome)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(firstHome, 'owner.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(siblingHome, 'owner.json'), 'utf8')).resolves.toBeTypeOf('string');
+      await expect(readdir(runDirectory)).resolves.toContain('2-codex');
+
+      await releaseScratchHome({ ...first, attempt: 2 });
+
+      await expect(readdir(runDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['absent', null, { kind: 'missing' }],
     ['invalid', '{', { kind: 'malformed' }],
@@ -194,6 +230,7 @@ describe('provider scratch homes', () => {
       writeFile: async () => {},
       readFile: async () => content,
       rm: async () => {},
+      rmdir: async () => {},
     };
 
     await expect(readScratchLease('/wt/.daemon/scratch/R/2-codex', { fs })).resolves.toStrictEqual(expected);

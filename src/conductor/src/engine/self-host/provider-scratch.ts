@@ -1,4 +1,4 @@
-import { join, normalize } from 'node:path';
+import { dirname, join, normalize } from 'node:path';
 import * as fsp from 'node:fs/promises';
 import type { SelfHostProviderId } from './provider-home.js';
 
@@ -16,7 +16,8 @@ export interface ScratchFs {
   mkdir(path: string, options: { recursive: true }): Promise<void>;
   writeFile(path: string, content: string): Promise<void>;
   readFile(path: string): Promise<string | null>;
-  rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+  rm(path: string, options: { recursive: boolean; force: true }): Promise<void>;
+  rmdir(path: string): Promise<void>;
 }
 
 export const realScratchFs: ScratchFs = {
@@ -24,6 +25,7 @@ export const realScratchFs: ScratchFs = {
   writeFile: (path, content) => fsp.writeFile(path, content, 'utf8'),
   readFile: (path) => fsp.readFile(path, 'utf8').then((content) => content, () => null),
   rm: (path, options) => fsp.rm(path, options),
+  rmdir: (path) => fsp.rmdir(path),
 };
 
 export interface ScratchLease {
@@ -49,6 +51,10 @@ export interface AcquireScratchHomeOptions extends ResolveScratchHomeOptions {
   readonly fs?: ScratchFs;
 }
 
+export interface ReleaseScratchHomeOptions extends ResolveScratchHomeOptions {
+  readonly fs?: ScratchFs;
+}
+
 export async function acquireScratchHome(options: AcquireScratchHomeOptions): Promise<string> {
   const home = resolveScratchHome(options);
   const fs = options.fs ?? realScratchFs;
@@ -69,6 +75,20 @@ export async function acquireScratchHome(options: AcquireScratchHomeOptions): Pr
     throw error;
   }
   return home;
+}
+
+/** Removes an attempt's scratch home and its run directory once no attempts remain. */
+export async function releaseScratchHome(options: ReleaseScratchHomeOptions): Promise<void> {
+  const fs = options.fs ?? realScratchFs;
+  const home = resolveScratchHome(options);
+  await fs.rm(home, { recursive: true, force: true });
+
+  try {
+    await fs.rmdir(dirname(home));
+  } catch (error) {
+    if (isNonEmptyOrMissingDirectory(error)) return;
+    throw error;
+  }
 }
 
 function serializeScratchLease(lease: ScratchLease): string {
@@ -110,6 +130,12 @@ function isScratchLease(value: unknown): value is ScratchLease {
     typeof lease.attempt === 'number' &&
     typeof lease.ownerPid === 'number' &&
     typeof lease.startedAt === 'string';
+}
+
+function isNonEmptyOrMissingDirectory(error: unknown): boolean {
+  return typeof error === 'object' && error !== null &&
+    'code' in error &&
+    ((error as { code?: unknown }).code === 'ENOTEMPTY' || (error as { code?: unknown }).code === 'ENOENT');
 }
 
 export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
