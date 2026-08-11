@@ -71,7 +71,11 @@ export interface SweepScratchOptions {
 
 export type ScratchSweepDecision =
   | { readonly kind: 'reclaimed'; readonly home: string }
-  | { readonly kind: 'retained'; readonly home: string; readonly reason: 'live-owner' };
+  | {
+    readonly kind: 'retained';
+    readonly home: string;
+    readonly reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition';
+  };
 
 export async function acquireScratchHome(options: AcquireScratchHomeOptions): Promise<string> {
   const home = resolveScratchHome(options);
@@ -126,7 +130,14 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
     for (const attempt of await readDirectory(runDirectory, fs)) {
       const home = join(runDirectory, attempt);
       const lease = await readScratchLease(home, { fs });
-      if (lease.kind !== 'present') continue;
+      if (lease.kind !== 'present') {
+        if (lease.kind === 'missing' && (await readScratchLease(home, { fs })).kind === 'present') {
+          decisions.push({ kind: 'retained', home, reason: 'concurrent-acquisition' });
+        } else {
+          decisions.push({ kind: 'retained', home, reason: leaseReason(lease.kind) });
+        }
+        continue;
+      }
 
       switch (ownerLiveness(lease.lease.ownerPid)) {
         case 'dead':
@@ -137,6 +148,7 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
           decisions.push({ kind: 'retained', home, reason: 'live-owner' });
           break;
         case 'unknown':
+          decisions.push({ kind: 'retained', home, reason: 'unknown-owner' });
           break;
       }
     }
@@ -193,6 +205,14 @@ function isScratchLease(value: unknown): value is ScratchLease {
     typeof lease.attempt === 'number' &&
     typeof lease.ownerPid === 'number' &&
     typeof lease.startedAt === 'string';
+}
+
+function leaseReason(kind: Exclude<ScratchLeaseReadResult['kind'], 'present'>): 'no-lease' | 'malformed-lease' | 'incomplete-lease' {
+  switch (kind) {
+    case 'missing': return 'no-lease';
+    case 'malformed': return 'malformed-lease';
+    case 'incomplete': return 'incomplete-lease';
+  }
 }
 
 function isNonEmptyOrMissingDirectory(error: unknown): boolean {

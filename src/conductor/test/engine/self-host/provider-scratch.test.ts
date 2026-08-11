@@ -303,6 +303,66 @@ describe('provider scratch homes', () => {
     }
   });
 
+  it('retains every uncertain lease state with a distinct reason', async () => {
+    const scratchRoot = '/wt/.daemon/scratch';
+    const runDirectory = join(scratchRoot, 'R');
+    const files = new Map<string, string | null>([
+      [join(runDirectory, 'missing', 'owner.json'), null],
+      [join(runDirectory, 'malformed', 'owner.json'), '{'],
+      [join(runDirectory, 'incomplete', 'owner.json'), JSON.stringify({ ownerPid: 1003 })],
+      [join(runDirectory, 'unknown', 'owner.json'), JSON.stringify({
+        repository: 'owner/repository',
+        featureSlug: 'provider-scratch',
+        runId: 'R',
+        attempt: 4,
+        ownerPid: 1004,
+        startedAt: '2026-08-11T12:34:56.000Z',
+      })],
+      [join(runDirectory, 'acquired', 'owner.json'), null],
+    ]);
+    const acquiredLease = JSON.stringify({
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 5,
+      ownerPid: 1005,
+      startedAt: '2026-08-11T12:34:56.000Z',
+    });
+    let acquiredReadCount = 0;
+    const removals: string[] = [];
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async (path) => {
+        if (path === join(runDirectory, 'acquired', 'owner.json')) {
+          acquiredReadCount += 1;
+          return acquiredReadCount === 1 ? null : acquiredLease;
+        }
+        return files.get(path) ?? null;
+      },
+      readdir: async (path) => path === scratchRoot
+        ? ['R']
+        : path === runDirectory
+          ? ['missing', 'malformed', 'incomplete', 'unknown', 'acquired']
+          : [],
+      rm: async (path) => { removals.push(path); },
+      rmdir: async () => {},
+    };
+
+    await expect(sweepScratch({
+      worktreeRoot: '/wt',
+      fs,
+      ownerLiveness: () => 'unknown',
+    })).resolves.toStrictEqual([
+      { kind: 'retained', home: join(runDirectory, 'missing'), reason: 'no-lease' },
+      { kind: 'retained', home: join(runDirectory, 'malformed'), reason: 'malformed-lease' },
+      { kind: 'retained', home: join(runDirectory, 'incomplete'), reason: 'incomplete-lease' },
+      { kind: 'retained', home: join(runDirectory, 'unknown'), reason: 'unknown-owner' },
+      { kind: 'retained', home: join(runDirectory, 'acquired'), reason: 'concurrent-acquisition' },
+    ]);
+    expect(removals).toStrictEqual([]);
+  });
+
   it('keeps reclamation platform-neutral and scheduler-free', async () => {
     const source = await readFile(new URL('../../../src/engine/self-host/provider-scratch.ts', import.meta.url), 'utf8');
 
