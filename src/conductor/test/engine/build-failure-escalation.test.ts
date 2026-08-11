@@ -463,6 +463,65 @@ describe('FR-5: reuse existing OPEN PR', () => {
     const createCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'create');
     expect(createCall).toBeUndefined();
   });
+
+  it('decorates an existing draft implementation PR without reshaping its title or prose', async () => {
+    const existingUrl = 'https://github.com/foo/bar/pull/11';
+    const implementationTitle = 'feat: x';
+    const implementationBody = 'Explain the implementation choice.\n\nCloses #123.';
+    const markedBody = `${implementationBody}\n${NEEDS_REMEDIATION_MARKER}`;
+
+    const { git } = fakeGit(standardGitResps());
+    const { gh, calls: ghCalls } = fakeGh([
+      // findOrCreatePr adopts this OPEN implementation PR; it must not create or retitle it.
+      {
+        stdout: JSON.stringify({
+          url: existingUrl,
+          state: 'OPEN',
+          title: implementationTitle,
+        }),
+      },
+      // ensureHaltPresentation preserves the human-authored body prose while appending its marker.
+      { stdout: JSON.stringify({ isDraft: true, labels: [], body: implementationBody }) },
+      { stdout: '' },
+      { stdout: JSON.stringify({ isDraft: true, labels: [], body: markedBody }) },
+      { stdout: '' },
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: markedBody,
+        }),
+      },
+      {
+        stdout: JSON.stringify({
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: markedBody,
+        }),
+      },
+      { stdout: JSON.stringify({ comments: [] }) },
+      { stdout: '' },
+    ]);
+
+    await escalateBuildFailure({
+      projectRoot: '/repo',
+      failureReason: 'build failed',
+      runGit: git,
+      runGh: gh,
+    });
+
+    const bodyEdit = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'edit');
+    const labelAdd = ghCalls.find(
+      (args) => args[0] === 'api' && args.includes('POST') && args.some((arg) => /\/labels$/.test(arg)),
+    );
+    const haltComments = ghCalls.filter((args) => args[0] === 'pr' && args[1] === 'comment');
+
+    expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'create')).toBe(false);
+    expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'edit' && args.includes('--title'))).toBe(false);
+    expect(bodyEdit).toEqual(['pr', 'edit', existingUrl, '--body', markedBody]);
+    expect(labelAdd).toContain('labels[]=needs-remediation');
+    expect(haltComments).toHaveLength(1);
+  });
 });
 
 // ── No PR → no label/comment ─────────────────────────────────────────────────
