@@ -36,10 +36,21 @@ names a positively-dead owner, and retains on missing, malformed, incomplete, or
 liveness. Worktree removal is the final backstop and needs no new code — `git worktree remove
 --force` already deletes gitignored content, at all four removal sites.
 
-**Wiring.** `provisionProviderHome` and `provisionSandboxBuildEnv` default their base directory to
-the port; `token-liveness.ts` is untouched. The sweep is added as an optional best-effort daemon
-dep, invoked from `runDaemon`'s existing boundary alongside `sweepMergeableLabels`, and constructed
-in `daemon-cli.ts` where the other daemon deps are built.
+**Wiring.** `provisionProviderHome` and `provisionSandboxBuildEnv` obtain their default base
+directory by **calling `acquireScratchHome`** — not by calling the resolver and creating the
+directory themselves. This distinction is load-bearing: the resolver returns a path, only acquire
+writes the lease, and a creator that resolves-and-mkdirs produces a home no sweep can ever reclaim.
+Both creators therefore require all six lease identity fields — repository, feature slug, run id,
+attempt, owner pid, start time — as arguments, and `conductor.ts` threads the first four from the
+values it already holds. An explicit `baseDir` override still bypasses the port, for test injection
+only. `token-liveness.ts` is untouched.
+
+The sweep is added as an optional best-effort daemon dep, invoked from `runDaemon`'s existing
+boundary alongside `sweepMergeableLabels`, and constructed in `daemon-cli.ts` where the other daemon
+deps are built. It is bound to **each per-feature worktree root** — the CLI enumerates the
+directories beneath `.worktrees/` and sweeps each one. Binding it to the `.worktrees` container
+itself would make it scan `.worktrees/.daemon/scratch`, a path nothing ever creates, and the
+directory read would swallow the resulting ENOENT and return no candidates on every tick.
 
 **Sequencing.** The resolver and lease come first because everything else depends on them; the two
 creators adopt the port next; the sweep is built against the lease reader; observability and the
@@ -245,9 +256,9 @@ one-time legacy collection land last, since both consume the sweep's decisions.
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: provision a codex home for a fixture worktree and assert the returned home and the child `CODEX_HOME` both resolve beneath that worktree's scratch root, and that an explicit `baseDir` override still wins.
+1. Write failing test: provision a codex home for a fixture worktree and assert the returned home and the child `CODEX_HOME` both resolve beneath that worktree's scratch root; that `owner.json` exists inside the returned home, carrying exactly the six identity fields, **before** the call returns and without the test pre-creating it; and that an explicit `baseDir` override still wins.
 2. Verify test fails (RED)
-3. Implement: default `provisionProviderHome`'s base directory to the scratch port, threading worktree root, run id, attempt, and provider.
+3. Implement: default `provisionProviderHome`'s base directory by calling `acquireScratchHome` — never the resolver plus a direct `mkdir` — requiring repository and feature slug alongside worktree root, run id, attempt, and provider. Reject a call that cannot supply a complete identity rather than substituting a generated placeholder.
 4. Verify test passes (GREEN)
 5. Commit with message: "provision codex homes from the worktree scratch port"
 
@@ -264,9 +275,9 @@ one-time legacy collection land last, since both consume the sweep's decisions.
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: provision a claude sandbox and assert the config dir and child `CLAUDE_CONFIG_DIR` resolve beneath the worktree scratch root; assert `token-liveness.ts` is unchanged and still uses the system temporary directory.
+1. Write failing test: provision a claude sandbox and assert the config dir and child `CLAUDE_CONFIG_DIR` resolve beneath the worktree scratch root; that `owner.json` exists with its six fields before the call returns, again without the test pre-creating it, and disappears on teardown; and that `token-liveness.ts` is unchanged and still uses the system temporary directory.
 2. Verify test fails (RED)
-3. Implement: default `provisionSandboxBuildEnv`'s base directory to the scratch port with the same threading.
+3. Implement: default `provisionSandboxBuildEnv`'s base directory by calling `acquireScratchHome` with the same complete identity, on the same no-placeholder terms as Task 11.
 4. Verify test passes (GREEN)
 5. Commit with message: "provision claude sandboxes from the worktree scratch port"
 
@@ -278,14 +289,14 @@ one-time legacy collection land last, since both consume the sweep's decisions.
 
 **Dependencies:** Task 9
 
-### Task 13: Thread run id and attempt from the conductor to both creators
+### Task 13: Thread the full lease identity from the conductor to both creators
 **Story:** Story 3
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: drive `prepareCandidateSelfHost` for both providers and assert each provisioned home's lease carries the conductor's run id and the attempt index, not a generated placeholder.
+1. Write failing test: drive `prepareCandidateSelfHost` for both providers and read the `owner.json` each call actually wrote, asserting all four threaded fields — repository, feature slug, run id, attempt — carry the conductor's real values rather than generated placeholders. Assert against the lease on disk, never against the provisioning call's arguments; an argument assertion passes while production writes no lease at all. Cover the legacy sandbox path at `conductor.ts` that currently provisions with no identity.
 2. Verify test fails (RED)
-3. Implement: pass the run id already held by the step runner, plus the candidate attempt index, into both provisioning calls.
+3. Implement: pass the repository and feature slug the conductor already holds, plus the run id held by the step runner and the candidate attempt index, into both provisioning calls. Add all four to `ProvisionProviderHomeOptions` and `ProvisionOptions` as required fields, so an incomplete call fails to compile.
 4. Verify test passes (GREEN)
 5. Commit with message: "thread run id and attempt into scratch provisioning"
 
@@ -418,9 +429,9 @@ one-time legacy collection land last, since both consume the sweep's decisions.
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: assert the daemon dependency set built by the CLI carries a `sweepProviderScratch` bound to the repository's worktree base.
+1. Write failing test: build a realistic `«project»/.worktrees/«slug»/.daemon/scratch/«runId»/«attempt»-«provider»` layout holding a dead-owner lease, invoke the dep the CLI actually constructs, and assert that home is reclaimed while a live-owner and a lease-less sibling are retained. Exercise the real `sweepScratch` against a real directory layout — a regex over `daemon-cli.ts`'s source text, or a stubbed sweep, cannot detect a mis-bound root and must not be used here.
 2. Verify test fails (RED)
-3. Implement: construct the dep where the other daemon deps are built and bind it to the worktree base path.
+3. Implement: construct the dep where the other daemon deps are built, enumerating the concrete per-feature worktree directories beneath the worktree base and sweeping each one. Do not pass the `.worktrees` container itself as though it were a single worktree root.
 4. Verify test passes (GREEN)
 5. Commit with message: "wire the scratch sweep into the daemon dependency set"
 

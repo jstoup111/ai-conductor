@@ -210,7 +210,7 @@ that I can see what the harness decided without inspecting directories by hand.
 - Given event emission fails, when the sweep runs, then the cleanup itself still completes and the emission failure does not throw into the dispatch loop.
 - Given a home has no readable lease, when its retention event is emitted, then the identity fields are reported as unknown rather than fabricated or omitted.
 - Given an existing consumer that does not recognize the new event variants, when it reads the ledger, then it continues to parse the ledger without error.
-- Given cleanup runs, when the repository is searched for new telemetry sinks, then no bespoke log file, sidecar format, or second ledger schema has been introduced.
+- Given cleanup runs, when the repository is searched for new telemetry sinks, then no bespoke log file, reporting sidecar, or second ledger schema has been introduced. Story 2's `owner.json` lease is durable state, not a telemetry sink, and does not count against this check.
 
 ### Done When
 - [ ] New `ConductorEvent` union variants exist for reclaimed, retained, and failed scratch cleanup.
@@ -218,7 +218,11 @@ that I can see what the harness decided without inspecting directories by hand.
 - [ ] Events are emitted through `ConductorEventEmitter` and persisted by the existing `EventPersister` with no new persistence path.
 - [ ] A test asserts each of the five retention reasons produces a distinct, readable reason value.
 - [ ] A test asserts an emission failure does not prevent the cleanup or disrupt dispatch.
-- [ ] No new log file, sidecar, or ledger format is added.
+- [ ] No new *telemetry* sink is added — no bespoke log file, no second ledger schema, no
+      cleanup-reporting sidecar. This criterion constrains reporting channels only. Story 2's
+      `owner.json` lease is durable state read by name, not a telemetry sink, and is expressly
+      outside this criterion; a test written from this story must not assert that the lease is
+      absent.
 
 ## Story 8: Historical leaked directories are collected once
 
