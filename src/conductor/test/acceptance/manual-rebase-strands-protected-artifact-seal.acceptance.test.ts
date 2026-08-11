@@ -37,7 +37,8 @@ import {
 import { HALT_CLASS_MARKER, HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import type { ConductState } from '../../src/types/index.js';
+import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import type { ConductState, ConductorEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCb);
@@ -83,7 +84,7 @@ interface SealFile {
   rebaselines: { fromCommit: string; toCommit: string; trigger: string; paths: string[] }[];
 }
 
-type CapturedEvent = Record<string, unknown> & { type: string };
+type CapturedEvent = ConductorEvent & Record<string, unknown>;
 
 const scratches: string[] = [];
 
@@ -324,7 +325,7 @@ describe('#1229: provenance-based protected-artifact seal rotation', () => {
       await scratch.g(['add', OTHER_PLAN]);
       await scratch.g(['commit', '-q', '-m', 'feat: edit another feature plan']);
 
-      const { dispatched, events, logLines } = await runBuildGuard(scratch.repo, 2);
+      const { dispatched, events } = await runBuildGuard(scratch.repo, 2);
 
       expect(dispatched).toEqual([]);
       expect(await pathExists(join(scratch.repo, HALT_MARKER))).toBe(true);
@@ -337,7 +338,9 @@ describe('#1229: provenance-based protected-artifact seal rotation', () => {
       expect(evidence).toContain(mergeBase);
       expect(evidence).toContain(true);
 
-      const rendered = logLines.find((line) => /seal rebaseline refused/i.test(line));
+      const daemonLines: string[] = [];
+      renderDaemonEvent(refusal!, (line) => daemonLines.push(line));
+      const rendered = daemonLines.find((line) => /seal rebaseline refused/i.test(line));
       expect(rendered).toContain(mergeBase.slice(0, 12));
       expect(rendered).toMatch(/head.*(?:changed|touched)|authored/i);
     },
