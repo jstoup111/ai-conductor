@@ -740,6 +740,14 @@ describe('engine/artifacts', () => {
           failed: 3,
           skipped: 0,
           errors: 0,
+          failingTests: [
+            {
+              name: 'api/spec/integration/household_invite_spec.rb',
+              reason: 'expected the invitation workflow to be available',
+            },
+          ],
+          ranAt: '2026-08-10T00:00:00.000Z',
+          intentRationale: 'The committed acceptance spec fails because the requested workflow is unimplemented.',
         }),
       );
     }
@@ -756,7 +764,7 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'acceptance_specs', {
         config: { acceptance_spec_globs: ['*/spec/**/*', '*/__tests__/**/*'] },
       });
-      expect(result).toEqual({ done: true });
+      expect(result).toEqual({ done: true, viaException: false });
     });
 
     it('honors a literal package prefix (no wildcard) in config globs too', async () => {
@@ -765,7 +773,7 @@ describe('engine/artifacts', () => {
       const result = await checkStepCompletion(dir, 'acceptance_specs', {
         config: { acceptance_spec_globs: ['api/spec/**/*'] },
       });
-      expect(result).toEqual({ done: true });
+      expect(result).toEqual({ done: true, viaException: false });
     });
 
     it('still fails with zero spec files even when config globs are declared', async () => {
@@ -800,6 +808,14 @@ describe('engine/artifacts', () => {
       failed: 3,
       skipped: 0,
       errors: 0,
+      failingTests: [
+        {
+          name: 'spec/integration/test_x.py',
+          reason: 'expected the requested integration behavior to be implemented',
+        },
+      ],
+      ranAt: '2026-08-10T00:00:00.000Z',
+      intentRationale: 'The failing integration spec establishes that the requested behavior is still RED.',
     };
 
     it('fails when spec files exist but no RED evidence was recorded', async () => {
@@ -812,7 +828,10 @@ describe('engine/artifacts', () => {
     it('passes when the specs actually ran and failed (valid RED evidence)', async () => {
       await createFile('spec/acceptance/x_spec.rb', 'x');
       await createFile(EV, JSON.stringify(validEvidence));
-      expect(await checkStepCompletion(dir, 'acceptance_specs')).toEqual({ done: true });
+      expect(await checkStepCompletion(dir, 'acceptance_specs')).toEqual({
+        done: true,
+        viaException: false,
+      });
     });
 
     it('fails when the specs were SKIPPED (skipped > 0)', async () => {
@@ -4598,12 +4617,20 @@ Task 1 → Task 2
             failed: 1,
             skipped: 0,
             errors: 0,
+            failingTests: [
+              {
+                name: 'spec/some_feature_spec.rb',
+                reason: 'expected the feature behavior to be implemented',
+              },
+            ],
+            ranAt: '2026-08-10T00:00:00.000Z',
+            intentRationale: 'The committed feature spec fails because its behavior remains unimplemented.',
           }),
         );
         const result = await checkStepCompletion(dir, 'acceptance_specs', {
           config: { acceptance_spec_globs: ['spec/**/*'] },
         });
-        expect(result).toEqual({ done: true });
+        expect(result).toEqual({ done: true, viaException: false });
       });
     });
 
