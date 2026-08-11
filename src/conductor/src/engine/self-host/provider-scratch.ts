@@ -55,6 +55,10 @@ export interface ReleaseScratchHomeOptions extends ResolveScratchHomeOptions {
   readonly fs?: ScratchFs;
 }
 
+export type ReleaseScratchHomeResult =
+  | { readonly kind: 'released' }
+  | { readonly kind: 'failed'; readonly error: string };
+
 export async function acquireScratchHome(options: AcquireScratchHomeOptions): Promise<string> {
   const home = resolveScratchHome(options);
   const fs = options.fs ?? realScratchFs;
@@ -78,17 +82,22 @@ export async function acquireScratchHome(options: AcquireScratchHomeOptions): Pr
 }
 
 /** Removes an attempt's scratch home and its run directory once no attempts remain. */
-export async function releaseScratchHome(options: ReleaseScratchHomeOptions): Promise<void> {
+export async function releaseScratchHome(options: ReleaseScratchHomeOptions): Promise<ReleaseScratchHomeResult> {
   const fs = options.fs ?? realScratchFs;
   const home = resolveScratchHome(options);
-  await fs.rm(home, { recursive: true, force: true });
+  try {
+    await fs.rm(home, { recursive: true, force: true });
+  } catch (error) {
+    return { kind: 'failed', error: error instanceof Error ? error.message : String(error) };
+  }
 
   try {
     await fs.rmdir(dirname(home));
   } catch (error) {
-    if (isNonEmptyOrMissingDirectory(error)) return;
-    throw error;
+    if (isNonEmptyOrMissingDirectory(error)) return { kind: 'released' };
+    return { kind: 'failed', error: error instanceof Error ? error.message : String(error) };
   }
+  return { kind: 'released' };
 }
 
 function serializeScratchLease(lease: ScratchLease): string {

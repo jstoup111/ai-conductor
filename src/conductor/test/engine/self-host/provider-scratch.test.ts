@@ -214,6 +214,89 @@ describe('provider scratch homes', () => {
     }
   });
 
+  it('releases an already released home idempotently', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-idempotent-release-'));
+    const options = {
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      provider: 'codex' as const,
+    };
+    const home = resolveScratchHome(options);
+    const runDirectory = join(worktreeRoot, '.daemon', 'scratch', options.runId);
+
+    try {
+      await acquireScratchHome(options);
+
+      await expect(releaseScratchHome(options)).resolves.toStrictEqual({ kind: 'released' });
+      await expect(releaseScratchHome(options)).resolves.toStrictEqual({ kind: 'released' });
+
+      await expect(readdir(home)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readdir(runDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('releases a home after it is externally removed', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-externally-removed-'));
+    const options = {
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      provider: 'codex' as const,
+    };
+
+    try {
+      const home = await acquireScratchHome(options);
+      await rm(home, { recursive: true, force: true });
+
+      await expect(releaseScratchHome(options)).resolves.toStrictEqual({ kind: 'released' });
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a failed home removal without throwing', async () => {
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => null,
+      rm: async () => { throw new Error('home removal failed'); },
+      rmdir: async () => {},
+    };
+
+    await expect(releaseScratchHome({
+      worktreeRoot: '/wt',
+      runId: 'R',
+      attempt: 2,
+      provider: 'codex',
+      fs,
+    })).resolves.toStrictEqual({ kind: 'failed', error: 'home removal failed' });
+  });
+
+  it('reports a failed run-directory prune without throwing', async () => {
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => null,
+      rm: async () => {},
+      rmdir: async () => { throw new Error('run-directory prune failed'); },
+    };
+
+    await expect(releaseScratchHome({
+      worktreeRoot: '/wt',
+      runId: 'R',
+      attempt: 2,
+      provider: 'codex',
+      fs,
+    })).resolves.toStrictEqual({ kind: 'failed', error: 'run-directory prune failed' });
+  });
+
   it.each([
     ['absent', null, { kind: 'missing' }],
     ['invalid', '{', { kind: 'malformed' }],
