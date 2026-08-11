@@ -893,7 +893,12 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       seal,
       headCommit,
       baseTipRef,
-    })).resolves.toEqual({ permitted: false, condition: 'head-differs-from-base', path });
+    })).resolves.toMatchObject({
+      permitted: false,
+      condition: 'head-differs-from-base',
+      path,
+      headTouchedPath: 'indeterminate',
+    });
   });
 
   it('refuses rotation when a non-zero git diff makes divergent-path authorship indeterminate', async () => {
@@ -905,7 +910,13 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       seal,
       headCommit,
       baseTipRef,
-    })).resolves.toEqual({ permitted: false, condition: 'head-differs-from-base', path });
+    })).resolves.toMatchObject({
+      permitted: false,
+      condition: 'head-differs-from-base',
+      path,
+      headTouchedPath: 'indeterminate',
+      mergeBase: expect.any(String),
+    });
   });
 });
 
@@ -1939,6 +1950,7 @@ describe('verifyProtectedArtifactSeal', () => {
         },
       });
       const sealAfter = await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8');
+      const mergeBase = await git(repo, ['merge-base', 'main', 'HEAD']);
 
       expect({
         verdict,
@@ -1963,7 +1975,39 @@ describe('verifyProtectedArtifactSeal', () => {
           condition: 'feature-authored:workspace-differs-from-head',
           verdictCondition: 'workspace-differs-from-head',
           path,
+          mergeBase,
+          headTouchedPath: true,
         }],
+      });
+    });
+
+    it('records indeterminate provenance rather than claiming HEAD touched the refused path', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const { repo } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base advance\n' },
+        featureCommit: { [path]: 'feature-owned amendment\n' },
+      });
+      const events: unknown[] = [];
+      const mergeBase = await git(repo, ['merge-base', 'main', 'HEAD']);
+      failGitDiff.value = true;
+
+      await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => {
+          events.push(event);
+        },
+      });
+
+      expect(events).toContainEqual({
+        type: 'protected_artifact_rebaseline_refused',
+        condition: 'indeterminate:head-differs-from-base',
+        verdictCondition: 'head-differs-from-base',
+        path,
+        mergeBase,
+        headTouchedPath: 'indeterminate',
       });
     });
 

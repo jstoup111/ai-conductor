@@ -67,12 +67,17 @@ export interface EvaluateProtectedArtifactSealRotationInRepositoryInput {
 
 export type ProtectedArtifactSealRotationVerdict =
   | { permitted: true; paths: string[] }
-  | { permitted: false; condition: 'baseline-unresolvable' }
-  | { permitted: false; condition: 'same-history-ancestor' }
-  | { permitted: false; condition: 'head-unresolvable' }
-  | { permitted: false; condition: 'base-tip-unresolved' }
-  | { permitted: false; condition: 'workspace-differs-from-head'; path: string }
-  | { permitted: false; condition: 'head-differs-from-base'; path: string };
+  | ({ permitted: false; condition: 'baseline-unresolvable' } & ProtectedArtifactRotationEvidence)
+  | ({ permitted: false; condition: 'same-history-ancestor' } & ProtectedArtifactRotationEvidence)
+  | ({ permitted: false; condition: 'head-unresolvable' } & ProtectedArtifactRotationEvidence)
+  | ({ permitted: false; condition: 'base-tip-unresolved' } & ProtectedArtifactRotationEvidence)
+  | ({ permitted: false; condition: 'workspace-differs-from-head'; path: string } & ProtectedArtifactRotationEvidence)
+  | ({ permitted: false; condition: 'head-differs-from-base'; path: string } & ProtectedArtifactRotationEvidence);
+
+type ProtectedArtifactRotationEvidence = {
+  mergeBase?: string;
+  headTouchedPath?: boolean | 'indeterminate';
+};
 
 export type ProtectedArtifactSealRebaselineEvent =
   | {
@@ -87,6 +92,8 @@ export type ProtectedArtifactSealRebaselineEvent =
       condition: string;
       verdictCondition: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>['condition'];
       path?: string;
+      mergeBase?: string;
+      headTouchedPath?: boolean | 'indeterminate';
     };
 
 export type ProtectedArtifactSealRebaselineObserver = (
@@ -340,13 +347,13 @@ export function evaluateProtectedArtifactSealRotation({
 
   const rotationPaths: string[] = [];
   for (const path of paths) {
-    if (authorshipByPath?.get(path) === 'authored') {
-      return { permitted: false, condition: 'head-differs-from-base', path };
-    }
     const workspace = workspaceArtifacts.get(path);
     const head = headArtifacts.get(path);
     if (workspace === undefined ? head !== undefined : head === undefined || !workspace.equals(head)) {
       return { permitted: false, condition: 'workspace-differs-from-head', path };
+    }
+    if (authorshipByPath?.get(path) === 'authored') {
+      return { permitted: false, condition: 'head-differs-from-base', path };
     }
     const base = baseTipArtifacts.get(path);
     if (head === undefined ? base !== undefined : base === undefined || !head.equals(base)) {
@@ -491,13 +498,6 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
   }
 
   const workspace = await workspaceProtectedArtifacts(projectRoot);
-  if (workspace.unresolvedPath) {
-    return {
-      permitted: false,
-      condition: 'workspace-differs-from-head',
-      path: workspace.unresolvedPath,
-    };
-  }
   const headArtifacts = await protectedArtifactsAtCommit(projectRoot, headCommit).catch(() => undefined);
   if (!headArtifacts) {
     return { permitted: false, condition: 'head-unresolvable' };
@@ -506,23 +506,31 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
   if (!baseTipArtifacts) {
     return { permitted: false, condition: 'base-tip-unresolved' };
   }
-  const authorshipByPath = new Map(await Promise.all(
-    [...new Set([...headArtifacts.keys(), ...baseTipArtifacts.keys()])]
+  const provenanceByPath = new Map(await Promise.all(
+    [...new Set([...headArtifacts.keys(), ...baseTipArtifacts.keys(), workspace.unresolvedPath])]
       .filter((path) => (
-        optionalBuffersEqual(workspace.artifacts.get(path), headArtifacts.get(path))
-        && !optionalBuffersEqual(headArtifacts.get(path), baseTipArtifacts.get(path))
+        path !== undefined && (
+          path === workspace.unresolvedPath
+          || (
+            !optionalBuffersEqual(workspace.artifacts.get(path), headArtifacts.get(path))
+            || !optionalBuffersEqual(headArtifacts.get(path), baseTipArtifacts.get(path))
+          )
+        )
       ))
       .map(async (path) => {
-        const inheritance = await branchUntouchedInheritance(projectRoot, baseTipRef, path);
-        return [
-          path,
+        const resolution = await branchUntouchedInheritance(projectRoot, baseTipRef, path!);
+        return [path!, resolution] as const;
+      }),
+  ));
+  const authorshipByPath = new Map(
+    [...provenanceByPath.entries()].map(([path, { inheritance }]) => [
+      path,
           inheritance === 'inherited' ? 'not-authored'
             : inheritance === 'not-inherited' ? 'authored'
               : 'indeterminate',
-        ] as const;
-      }),
-  ));
-  return evaluateProtectedArtifactSealRotation({
+    ] as const),
+  );
+  const verdict = evaluateProtectedArtifactSealRotation({
     seal,
     baselineAncestry,
     workspaceArtifacts: workspace.artifacts,
@@ -530,6 +538,8 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
     baseTipArtifacts,
     authorshipByPath,
   });
+  if (verdict.permitted || !('path' in verdict)) return verdict;
+  return { ...verdict, ...provenanceByPath.get(verdict.path)?.provenance };
 }
 
 async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
@@ -686,29 +696,42 @@ async function branchUntouchedInheritance(
   projectRoot: string,
   baseRef: string,
   path: string,
-): Promise<'inherited' | 'not-inherited' | 'no-merge-base' | 'diff-probe-failed'> {
+): Promise<{
+  inheritance: 'inherited' | 'not-inherited' | 'no-merge-base' | 'diff-probe-failed';
+  provenance: ProtectedArtifactRotationEvidence;
+}> {
+  const mergeBase = await execa('git', ['merge-base', baseRef, 'HEAD'], {
+    cwd: projectRoot,
+    reject: false,
+  }).catch(() => undefined);
+  if (!mergeBase || mergeBase.exitCode !== 0 || mergeBase.stdout.length === 0) {
+    return {
+      inheritance: mergeBase?.exitCode === 1 ? 'no-merge-base' : 'diff-probe-failed',
+      provenance: { headTouchedPath: 'indeterminate' },
+    };
+  }
+  const provenance = { mergeBase: mergeBase.stdout, headTouchedPath: false as boolean | 'indeterminate' };
   const changed = await execa('git', ['diff', '--name-only', `${baseRef}...HEAD`, '--', path], {
     cwd: projectRoot,
     reject: false,
   }).catch(() => undefined);
   if (!changed || changed.exitCode !== 0) {
-    const mergeBase = await execa('git', ['merge-base', baseRef, 'HEAD'], {
-      cwd: projectRoot,
-      reject: false,
-    }).catch(() => undefined);
-    return mergeBase?.exitCode === 1 ? 'no-merge-base' : 'diff-probe-failed';
+    return { inheritance: 'diff-probe-failed', provenance: { ...provenance, headTouchedPath: 'indeterminate' } };
   }
-  if (changed.stdout.length !== 0) return 'not-inherited';
+  if (changed.stdout.length !== 0) return { inheritance: 'not-inherited', provenance: { ...provenance, headTouchedPath: true } };
 
   const head = await execa('git', ['show', `HEAD:${path}`], {
     cwd: projectRoot,
     stripFinalNewline: false,
     reject: false,
   }).catch(() => undefined);
-  if (!head || head.exitCode !== 0) return 'not-inherited';
+  if (!head || head.exitCode !== 0) return { inheritance: 'not-inherited', provenance };
 
   const workspace = await readContainedProtectedArtifact(projectRoot, path);
-  return workspace !== undefined && workspace === head.stdout ? 'inherited' : 'not-inherited';
+  return {
+    inheritance: workspace !== undefined && workspace === head.stdout ? 'inherited' : 'not-inherited',
+    provenance,
+  };
 }
 
 async function inspectSeal(
@@ -750,7 +773,7 @@ async function inspectSeal(
     const ref = await baseRef();
     if (ref === undefined) return 'diff-probe-failed';
     if (await matchesBaseTip(projectRoot, ref, path)) return 'inherited';
-    return branchUntouchedInheritance(projectRoot, ref, path);
+    return (await branchUntouchedInheritance(projectRoot, ref, path)).inheritance;
   };
 
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
@@ -1120,13 +1143,18 @@ async function emitRotationRefusal(
   observer: ProtectedArtifactSealRebaselineObserver | undefined,
   verdict: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
 ): Promise<void> {
-  const featureAuthored =
-    verdict.condition === 'workspace-differs-from-head' || verdict.condition === 'head-differs-from-base';
+  const featureAuthored = verdict.condition === 'workspace-differs-from-head'
+    || verdict.headTouchedPath === true;
+  const indeterminate = verdict.headTouchedPath === 'indeterminate';
   await notifyRebaselineObserver(observer, {
     type: 'protected_artifact_rebaseline_refused',
-    condition: featureAuthored ? `feature-authored:${verdict.condition}` : verdict.condition,
+    condition: indeterminate ? `indeterminate:${verdict.condition}`
+      : featureAuthored ? `feature-authored:${verdict.condition}` : verdict.condition,
     verdictCondition: verdict.condition,
     ...('path' in verdict ? { path: verdict.path } : {}),
+    ...('mergeBase' in verdict && verdict.mergeBase ? { mergeBase: verdict.mergeBase } : {}),
+    ...('headTouchedPath' in verdict && verdict.headTouchedPath !== undefined
+      ? { headTouchedPath: verdict.headTouchedPath } : {}),
   });
 }
 
