@@ -22,6 +22,8 @@ export interface ScratchFs {
   writeFile(path: string, content: string): Promise<void>;
   readFile(path: string): Promise<string | null>;
   readdir(path: string): Promise<string[]>;
+  /** Optional so pre-existing focused fixtures remain valid; absence fails closed for legacy collection. */
+  stat?(path: string): Promise<{ readonly mtime: Date; isDirectory(): boolean }>;
   rm(path: string, options: { recursive: boolean; force: true }): Promise<void>;
   rmdir(path: string): Promise<void>;
 }
@@ -31,6 +33,7 @@ export const realScratchFs: ScratchFs = {
   writeFile: (path, content) => fsp.writeFile(path, content, 'utf8'),
   readFile: (path) => fsp.readFile(path, 'utf8').then((content) => content, () => null),
   readdir: (path) => fsp.readdir(path),
+  stat: (path) => fsp.stat(path),
   rm: (path, options) => fsp.rm(path, options),
   rmdir: (path) => fsp.rmdir(path),
 };
@@ -89,11 +92,19 @@ export interface CollectLegacyScratchOptions {
   readonly tempRoot?: string;
   readonly fs?: ScratchFs;
   readonly events?: ConductorEventEmitter;
+  /** Injectable only for fixture isolation; production derives the current process start. */
+  readonly processStartedAt?: Date;
+  readonly ownerLiveness?: (ownerPid: number) => ScratchOwnerLiveness;
 }
 
 export type LegacyScratchCollectionDecision =
   | { readonly kind: 'reclaimed'; readonly home: string }
-  | { readonly kind: 'failed'; readonly home: string; readonly error: string };
+  | { readonly kind: 'failed'; readonly home: string; readonly error: string }
+  | {
+    readonly kind: 'retained';
+    readonly home: string;
+    readonly reason: 'legacy-nonmatching' | 'legacy-not-directory' | 'legacy-mtime-unavailable' | 'legacy-newer-than-process-start' | 'legacy-unreadable-lease' | 'legacy-live-owner' | 'legacy-unknown-owner';
+  };
 
 /**
  * One-time migration collector for historical provider homes created before
@@ -107,9 +118,53 @@ export async function collectLegacyScratch(options: CollectLegacyScratchOptions 
   collectedLegacyScratchRoots.add(tempRoot);
 
   const decisions: LegacyScratchCollectionDecision[] = [];
-  for (const name of [...await readDirectory(tempRoot, fs)].sort()) {
-    if (!LEGACY_SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+  let names: readonly string[];
+  try {
+    names = await fs.readdir(tempRoot);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    decisions.push({ kind: 'failed', home: tempRoot, error: reason });
+    await emitScratchCleanup(options.events, {
+      type: 'scratch_cleanup_failed',
+      ...scratchCleanupIdentity(undefined),
+      path: tempRoot,
+      reason,
+    });
+    return decisions;
+  }
+
+  const processStartedAt = options.processStartedAt ?? new Date(Date.now() - process.uptime() * 1_000);
+  const ownerLiveness = options.ownerLiveness ?? probeScratchOwnerLiveness;
+  for (const name of [...names].sort()) {
     const home = join(tempRoot, name);
+    if (!LEGACY_SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix))) {
+      await retainLegacyScratch(home, 'legacy-nonmatching', decisions, options.events);
+      continue;
+    }
+
+    let stat: { readonly mtime: Date; isDirectory(): boolean };
+    try {
+      if (fs.stat === undefined) throw new Error('mtime unavailable');
+      stat = await fs.stat(home);
+    } catch {
+      await retainLegacyScratch(home, 'legacy-mtime-unavailable', decisions, options.events);
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      await retainLegacyScratch(home, 'legacy-not-directory', decisions, options.events);
+      continue;
+    }
+    if (stat.mtime >= processStartedAt) {
+      await retainLegacyScratch(home, 'legacy-newer-than-process-start', decisions, options.events);
+      continue;
+    }
+
+    if (await retainLegacyScratchForLease(home, fs, ownerLiveness, decisions, options.events)) continue;
+
+    // A lease can appear between the first read and removal. Re-read at the
+    // authority boundary so collection never removes a newly live home.
+    if (await retainLegacyScratchForLease(home, fs, ownerLiveness, decisions, options.events)) continue;
+
     try {
       await fs.rm(home, { recursive: true, force: true });
       decisions.push({ kind: 'reclaimed', home });
@@ -131,6 +186,47 @@ export async function collectLegacyScratch(options: CollectLegacyScratchOptions 
     }
   }
   return decisions;
+}
+
+async function retainLegacyScratch(
+  home: string,
+  reason: Extract<LegacyScratchCollectionDecision, { kind: 'retained' }>['reason'],
+  decisions: LegacyScratchCollectionDecision[],
+  events: ConductorEventEmitter | undefined,
+  lease?: ScratchLease,
+): Promise<void> {
+  decisions.push({ kind: 'retained', home, reason });
+  await emitScratchCleanup(events, {
+    type: 'scratch_cleanup_retained',
+    ...scratchCleanupIdentity(lease),
+    path: home,
+    reason,
+  });
+}
+
+async function retainLegacyScratchForLease(
+  home: string,
+  fs: ScratchFs,
+  ownerLiveness: (ownerPid: number) => ScratchOwnerLiveness,
+  decisions: LegacyScratchCollectionDecision[],
+  events: ConductorEventEmitter | undefined,
+): Promise<boolean> {
+  const lease = await readScratchLease(home, { fs });
+  if (lease.kind === 'missing') return false;
+  if (lease.kind === 'malformed' || lease.kind === 'incomplete') {
+    await retainLegacyScratch(home, 'legacy-unreadable-lease', decisions, events);
+    return true;
+  }
+  const liveness = ownerLiveness(lease.lease.ownerPid);
+  if (liveness === 'dead') return false;
+  await retainLegacyScratch(
+    home,
+    liveness === 'live' ? 'legacy-live-owner' : 'legacy-unknown-owner',
+    decisions,
+    events,
+    lease.lease,
+  );
+  return true;
 }
 
 export async function acquireScratchHome(options: AcquireScratchHomeOptions): Promise<string> {

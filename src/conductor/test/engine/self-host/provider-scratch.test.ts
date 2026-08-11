@@ -21,6 +21,120 @@ import {
 const execFile = promisify(execFileCb);
 
 describe('provider scratch homes', () => {
+  it('retains legacy entries that are not provably stale while continuing after a failed removal', async () => {
+    const tempRoot = '/legacy-scratch-refusal';
+    const processStartedAt = new Date('2026-08-11T12:00:00.000Z');
+    const failedHome = join(tempRoot, 'harness-selfbuild-failed');
+    const deadHome = join(tempRoot, 'harness-selfbuild-dead');
+    const liveHome = join(tempRoot, 'self-host-live');
+    const newerHome = join(tempRoot, 'self-host-newer');
+    const unknownHome = join(tempRoot, 'self-host-unknown');
+    const sibling = join(tempRoot, 'unrelated-self-host-old');
+    const lease = JSON.stringify({
+      repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, ownerPid: 1001, startedAt: '2026-08-11T10:00:00.000Z',
+    });
+    const removed: string[] = [];
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('scratch_cleanup_retained', (event) => { emitted.push(event); });
+    events.on('scratch_cleanup_failed', (event) => { emitted.push(event); });
+    const fs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async (path: string) => path === join(liveHome, 'owner.json')
+        ? lease
+        : path === join(unknownHome, 'owner.json')
+          ? lease.replace('1001', '1002')
+          : null,
+      readdir: async (path: string) => path === tempRoot
+        ? ['unrelated-self-host-old', 'harness-selfbuild-failed', 'harness-selfbuild-dead', 'self-host-live', 'self-host-newer', 'self-host-unknown']
+        : [],
+      stat: async (path: string) => ({
+        mtime: path === newerHome ? new Date('2026-08-11T12:00:01.000Z') : new Date('2026-08-11T11:59:59.000Z'),
+        isDirectory: () => true,
+      }),
+      rm: async (path: string) => {
+        if (path === failedHome) throw new Error('removal blocked');
+        removed.push(path);
+      },
+      rmdir: async () => {},
+    } satisfies ScratchFs;
+
+    await expect(collectLegacyScratch({
+      tempRoot,
+      fs,
+      processStartedAt,
+      ownerLiveness: (pid) => pid === 1001 ? 'live' : 'unknown',
+      events,
+    })).resolves.toStrictEqual([
+      { kind: 'reclaimed', home: deadHome },
+      { kind: 'failed', home: failedHome, error: 'removal blocked' },
+      { kind: 'retained', home: liveHome, reason: 'legacy-live-owner' },
+      { kind: 'retained', home: newerHome, reason: 'legacy-newer-than-process-start' },
+      { kind: 'retained', home: unknownHome, reason: 'legacy-unknown-owner' },
+      { kind: 'retained', home: sibling, reason: 'legacy-nonmatching' },
+    ]);
+    expect(removed).toStrictEqual([deadHome]);
+    expect(emitted).toStrictEqual([
+      { type: 'scratch_cleanup_failed', repository: 'unknown', featureSlug: 'unknown', runId: 'unknown', attempt: 'unknown', path: failedHome, reason: 'removal blocked' },
+      { type: 'scratch_cleanup_retained', repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, path: liveHome, reason: 'legacy-live-owner' },
+      { type: 'scratch_cleanup_retained', repository: 'unknown', featureSlug: 'unknown', runId: 'unknown', attempt: 'unknown', path: newerHome, reason: 'legacy-newer-than-process-start' },
+      { type: 'scratch_cleanup_retained', repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, path: unknownHome, reason: 'legacy-unknown-owner' },
+      { type: 'scratch_cleanup_retained', repository: 'unknown', featureSlug: 'unknown', runId: 'unknown', attempt: 'unknown', path: sibling, reason: 'legacy-nonmatching' },
+    ]);
+  });
+
+  it('reports an unlistable legacy temp root without throwing', async () => {
+    const tempRoot = '/legacy-scratch-unlistable';
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('scratch_cleanup_failed', (event) => { emitted.push(event); });
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => null,
+      readdir: async () => { throw new Error('temp root unavailable'); },
+      rm: async () => {},
+      rmdir: async () => {},
+    };
+
+    await expect(collectLegacyScratch({ tempRoot, fs, events })).resolves.toStrictEqual([
+      { kind: 'failed', home: tempRoot, error: 'temp root unavailable' },
+    ]);
+    expect(emitted).toStrictEqual([
+      { type: 'scratch_cleanup_failed', repository: 'unknown', featureSlug: 'unknown', runId: 'unknown', attempt: 'unknown', path: tempRoot, reason: 'temp root unavailable' },
+    ]);
+  });
+
+  it('rechecks a legacy lease immediately before removal', async () => {
+    const tempRoot = '/legacy-scratch-racing-acquisition';
+    const home = join(tempRoot, 'self-host-racing-acquisition');
+    const liveLease = JSON.stringify({
+      repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, ownerPid: 1001, startedAt: '2026-08-11T10:00:00.000Z',
+    });
+    let leaseReads = 0;
+    const removed: string[] = [];
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async () => ++leaseReads === 1 ? null : liveLease,
+      readdir: async () => ['self-host-racing-acquisition'],
+      stat: async () => ({ mtime: new Date('2026-08-11T11:59:59.000Z'), isDirectory: () => true }),
+      rm: async (path) => { removed.push(path); },
+      rmdir: async () => {},
+    };
+
+    await expect(collectLegacyScratch({
+      tempRoot,
+      fs,
+      processStartedAt: new Date('2026-08-11T12:00:00.000Z'),
+      ownerLiveness: () => 'live',
+    })).resolves.toStrictEqual([
+      { kind: 'retained', home, reason: 'legacy-live-owner' },
+    ]);
+    expect(removed).toStrictEqual([]);
+  });
+
   it('collects historical temporary-provider homes once at the daemon boundary', async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-legacy-root-'));
     const legacyHomes = [
@@ -39,7 +153,10 @@ describe('provider scratch homes', () => {
 
       const sortedLegacyHomes = [...legacyHomes].sort();
       await expect(collectLegacyScratch({ tempRoot, events })).resolves.toStrictEqual(
-        sortedLegacyHomes.map((home) => ({ kind: 'reclaimed', home })),
+        [
+          { kind: 'retained', home: unrelatedHome, reason: 'legacy-nonmatching' },
+          ...sortedLegacyHomes.map((home) => ({ kind: 'reclaimed' as const, home })),
+        ],
       );
       await expect(Promise.all(legacyHomes.map((path) => readdir(path).then(() => 'present', () => 'missing')))).resolves.toStrictEqual([
         'missing',

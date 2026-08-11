@@ -192,7 +192,7 @@ export type ConductorEvent =
       runId: ScratchCleanupIdentityValue;
       attempt: ScratchCleanupAttempt;
       path: string;
-      reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition';
+      reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition' | 'legacy-nonmatching' | 'legacy-not-directory' | 'legacy-mtime-unavailable' | 'legacy-newer-than-process-start' | 'legacy-unreadable-lease' | 'legacy-live-owner' | 'legacy-unknown-owner';
     }
   | {
       /** A provider scratch home could not be removed during a daemon sweep or legacy collection. */
