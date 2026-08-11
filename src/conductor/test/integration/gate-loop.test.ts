@@ -2344,9 +2344,23 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
     const { ConductorEventEmitter: RealEvents } = await import('../../src/ui/events.js');
     const { writeState: writeRealState, readState: readRealState } = await import('../../src/engine/state.js');
     const { createProtectedArtifactSeal } = await import('../../src/engine/protected-artifact-seal.js');
+    const { PRD_AUDIT_CODE_STAMP } = await import('../../src/engine/artifacts.js');
 
     const { stdout: baselineCommit } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
     await createProtectedArtifactSeal({ projectRoot: repoDir, baselineCommit: baselineCommit.trim() });
+
+    // This is a stale, previously stamped partial pass: Task 8's sweep-spare
+    // recheck must remove it before the new audit dispatch. The runner below
+    // then writes the same coverage-incomplete shape as fresh evidence, so the
+    // gate's normal predicate — rather than an un-ALIGNED row — is the only
+    // source of the kickback.
+    const auditPath = join(repoDir, '.pipeline/prd-audit.md');
+    await writeFile(
+      auditPath,
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | ALIGNED | | implemented.ts:1 | yes |\n',
+    );
+    await writeFile(join(repoDir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ codeStamp: baselineCommit.trim() }));
+    await utimes(auditPath, new Date(0), new Date(0));
 
     const realStatePath = join(repoDir, 'conduct-state.json');
     await writeRealState(realStatePath, {
@@ -2354,6 +2368,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
       feature_desc: 'current feature',
       architecture_review: 'skipped',
       rebase: 'skipped',
+      prd_audit: 'stale',
     } as ConductState);
 
     const realEvents = new RealEvents();
@@ -2363,6 +2378,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
     });
     let auditRuns = 0;
     let buildRuns = 0;
+    let staleReportWasPresentBeforeAudit = false;
     const runner: StepRunner = {
       run: async (step, _artifacts, options) => {
         if (step === 'build') {
@@ -2374,17 +2390,42 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
           if (options?.retryReason) {
             await writeFile(join(repoDir, 'implemented.ts'), 'export const fixed = true;\n');
             await git('add', '.');
-            await git('commit', '-q', '-m', 'fix: cover the second PRD requirement');
+            await git('commit', '-q', '-m', 'fix: cover the omitted PRD requirement');
           }
           return { success: true };
         }
         if (step === 'prd_audit') {
           auditRuns += 1;
+          if (auditRuns === 1) {
+            try {
+              await access(auditPath);
+              staleReportWasPresentBeforeAudit = true;
+            } catch {
+              // Task 8 removed the stale, coverage-incomplete prior report.
+            }
+          }
           await writeFile(
-            join(repoDir, '.pipeline/prd-audit.md'),
-            auditRuns === 1
-              ? '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | MISSING | impl-gap | implemented.ts:1 | no |\n'
+            auditPath,
+            buildRuns === 0
+              ? '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | ALIGNED | | implemented.ts:1 | yes |\n'
               : '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | ALIGNED | | implemented.ts:1 | yes |\n| FR-3 | ALIGNED | | implemented.ts:1 | yes |\n',
+          );
+          return { success: true };
+        }
+        if (step === 'remediate') {
+          await writeFile(
+            join(repoDir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'FR-3-coverage',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'add the omitted FR-3 audit verdict',
+                  tasks: [{ id: 'FR-3-coverage-fix', title: 'Record an FR-3 audit verdict' }],
+                },
+              ],
+            }),
           );
           return { success: true };
         }
@@ -2416,10 +2457,11 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
 
     expect(kicks).toContainEqual({ from: 'prd_audit', to: 'build' });
     expect(buildRuns).toBeGreaterThan(0);
+    expect(staleReportWasPresentBeforeAudit).toBe(false);
 
-    // The kickback has already re-run BUILD and its native verifier group.
-    // Resume the SHIP tail with that deterministic BUILD evidence recorded so
-    // the second production dispatch demonstrates the repaired report's path.
+    // The coverage-only failure routed through /remediate into BUILD. Resume
+    // the real SHIP tail after recording BUILD's deterministic native evidence;
+    // this dispatch adds FR-3's ALIGNED row and is the convergence proof.
     const afterBuild = await readRealState(realStatePath);
     if (!afterBuild.ok) throw new Error(afterBuild.error.message);
     await writeRealState(realStatePath, {
