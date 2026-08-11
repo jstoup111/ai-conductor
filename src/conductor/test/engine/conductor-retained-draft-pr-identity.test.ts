@@ -205,6 +205,24 @@ describe('retained SHIP draft PR identity', () => {
     expect(calls.some((c) => c[1] === 'view')).toBe(false);
   });
 
+  it('does not repair CLOSED then MERGED PR rows while resolving a retained draft', async () => {
+    const { gh, calls } = makeGh({
+      [`${BRANCH}->${BASE}`]: [
+        { url: 'https://github.com/acme/repo/pull/900', state: 'CLOSED' },
+        { url: 'https://github.com/acme/repo/pull/901', state: 'MERGED' },
+      ],
+    });
+    const conductor = makeConductor(gh, { worktreeBranch: BRANCH });
+    const resolve = (conductor as unknown as {
+      resolveRetainedShipDraftPrUrl(branch: string): Promise<string | undefined>;
+    }).resolveRetainedShipDraftPrUrl.bind(conductor);
+
+    await expect(resolve(BRANCH)).resolves.toBeUndefined();
+    // The OPEN predicate must reject stale rows before rehabilitation can read or mutate either PR.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.slice(0, 2)).toEqual(['pr', 'list']);
+  });
+
   it('does not pick up an open PR belonging to another branch', async () => {
     const { gh } = makeGh({ [`feat/unrelated->${BASE}`]: [{ url: PR_URL, state: 'OPEN' }] });
     const conductor = makeConductor(gh);
