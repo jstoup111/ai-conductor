@@ -32,6 +32,7 @@ import {
 } from './engine/resolved-config.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
+import { sweepScratch } from './engine/self-host/provider-scratch.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
@@ -1457,6 +1458,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      sweepProviderScratch: async () => {
+        await sweepScratch({ worktreeRoot: worktreeBase });
+      },
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls
       // back to polling alone. Otherwise, the daemon uses event-driven re-kick

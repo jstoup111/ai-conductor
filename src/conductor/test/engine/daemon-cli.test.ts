@@ -447,6 +447,14 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     // Verify wiring to runDaemon deps (should appear in the deps object)
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
   });
+
+  it('wires the provider scratch sweep to the daemon worktree base', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+
+    expect(src).toMatch(
+      /await runDaemon\(\s*\{[\s\S]*?sweepProviderScratch:\s*async\s*\(\)\s*=>\s*\{\s*await sweepScratch\(\{\s*worktreeRoot:\s*worktreeBase\s*\}\);\s*\},/,
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
