@@ -23,12 +23,14 @@
 import type { GhRunner } from './pr-labels.js';
 import {
   cleanupHaltPresentation,
+  upsertComment,
   readHaltPresentation,
   setReady,
   comment,
   defaultSleep,
   HALT_PR_BANNER_SENTINEL,
   HALT_PR_BANNER_LINES,
+  NEEDS_REMEDIATION_MARKER,
   NEEDS_REMEDIATION_BODY_MARKER,
 } from './pr-labels.js';
 import { injectIssueRef } from './engineer/issue-ref.js';
@@ -159,6 +161,14 @@ export async function clearHaltStateForResume(
 
   const cleanup = await cleanupHaltPresentation(gh, cwd, prUrl, log, sleep, { preserveDraft: true });
   if (cleanup === 'confirmed') {
+    await upsertComment(
+      gh,
+      cwd,
+      prUrl,
+      NEEDS_REMEDIATION_MARKER,
+      'Halt resolved — the feature resumed and its remediation state was cleared automatically.',
+      log,
+    );
     log(`[halt-pr-rehab] resume clear confirmed for ${prUrl}`);
     return 'cleared';
   }
