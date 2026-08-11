@@ -10,6 +10,7 @@ import {
   readScratchLease,
   releaseScratchHome,
   resolveScratchHome,
+  sweepScratch,
   type ScratchFs,
 } from '../../../src/engine/self-host/provider-scratch.js';
 
@@ -87,6 +88,7 @@ describe('provider scratch homes', () => {
         files.set(path, content);
       },
       readFile: async (path) => files.get(path) ?? null,
+      readdir: async () => [],
       rm: async () => {},
       rmdir: async () => {},
     };
@@ -126,6 +128,7 @@ describe('provider scratch homes', () => {
       mkdir: async () => {},
       writeFile: async (path, content) => { files.set(path, content); },
       readFile: async (path) => files.get(path) ?? null,
+      readdir: async () => [],
       rm: async () => {},
       rmdir: async () => {},
     };
@@ -162,6 +165,7 @@ describe('provider scratch homes', () => {
       mkdir: async (path) => { directories.add(path); },
       writeFile: async () => { throw new Error('lease write failed'); },
       readFile: async () => null,
+      readdir: async () => [],
       rm: async (path) => { directories.delete(path); },
       rmdir: async () => {},
     };
@@ -261,11 +265,50 @@ describe('provider scratch homes', () => {
     }
   });
 
+  it('reclaims a dead-owner home while retaining and reporting a live-owner home', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-sweep-'));
+    const options = {
+      worktreeRoot,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      provider: 'codex' as const,
+    };
+
+    try {
+      const [deadHome, liveHome] = await Promise.all([
+        acquireScratchHome({ ...options, attempt: 1, ownerPid: 1001 }),
+        acquireScratchHome({ ...options, attempt: 2, ownerPid: 1002 }),
+      ]);
+
+      const decisions = await sweepScratch({
+        worktreeRoot,
+        ownerLiveness: (pid) => pid === 1001 ? 'dead' : 'live',
+      });
+
+      await expect(Promise.all([
+        readdir(deadHome).then(() => 'present', () => 'missing'),
+        readdir(liveHome).then(() => 'present', () => 'missing'),
+        Promise.resolve(decisions),
+      ])).resolves.toStrictEqual([
+        'missing',
+        'present',
+        [
+          { kind: 'reclaimed', home: deadHome },
+          { kind: 'retained', home: liveHome, reason: 'live-owner' },
+        ],
+      ]);
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   it('reports a failed home removal without throwing', async () => {
     const fs: ScratchFs = {
       mkdir: async () => {},
       writeFile: async () => {},
       readFile: async () => null,
+      readdir: async () => [],
       rm: async () => { throw new Error('home removal failed'); },
       rmdir: async () => {},
     };
@@ -284,6 +327,7 @@ describe('provider scratch homes', () => {
       mkdir: async () => {},
       writeFile: async () => {},
       readFile: async () => null,
+      readdir: async () => [],
       rm: async () => {},
       rmdir: async () => { throw new Error('run-directory prune failed'); },
     };
@@ -312,6 +356,7 @@ describe('provider scratch homes', () => {
       mkdir: async () => {},
       writeFile: async () => {},
       readFile: async () => content,
+      readdir: async () => [],
       rm: async () => {},
       rmdir: async () => {},
     };

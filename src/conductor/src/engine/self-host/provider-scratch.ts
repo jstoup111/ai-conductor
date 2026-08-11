@@ -16,6 +16,7 @@ export interface ScratchFs {
   mkdir(path: string, options: { recursive: true }): Promise<void>;
   writeFile(path: string, content: string): Promise<void>;
   readFile(path: string): Promise<string | null>;
+  readdir(path: string): Promise<string[]>;
   rm(path: string, options: { recursive: boolean; force: true }): Promise<void>;
   rmdir(path: string): Promise<void>;
 }
@@ -24,6 +25,7 @@ export const realScratchFs: ScratchFs = {
   mkdir: (path, options) => fsp.mkdir(path, options).then(() => {}),
   writeFile: (path, content) => fsp.writeFile(path, content, 'utf8'),
   readFile: (path) => fsp.readFile(path, 'utf8').then((content) => content, () => null),
+  readdir: (path) => fsp.readdir(path),
   rm: (path, options) => fsp.rm(path, options),
   rmdir: (path) => fsp.rmdir(path),
 };
@@ -58,6 +60,18 @@ export interface ReleaseScratchHomeOptions extends ResolveScratchHomeOptions {
 export type ReleaseScratchHomeResult =
   | { readonly kind: 'released' }
   | { readonly kind: 'failed'; readonly error: string };
+
+export type ScratchOwnerLiveness = 'dead' | 'live' | 'unknown';
+
+export interface SweepScratchOptions {
+  readonly worktreeRoot: string;
+  readonly fs?: ScratchFs;
+  readonly ownerLiveness?: (ownerPid: number) => ScratchOwnerLiveness;
+}
+
+export type ScratchSweepDecision =
+  | { readonly kind: 'reclaimed'; readonly home: string }
+  | { readonly kind: 'retained'; readonly home: string; readonly reason: 'live-owner' };
 
 export async function acquireScratchHome(options: AcquireScratchHomeOptions): Promise<string> {
   const home = resolveScratchHome(options);
@@ -98,6 +112,46 @@ export async function releaseScratchHome(options: ReleaseScratchHomeOptions): Pr
     return { kind: 'failed', error: error instanceof Error ? error.message : String(error) };
   }
   return { kind: 'released' };
+}
+
+/** Reclaims only scratch homes whose owner lease names a process known to be dead. */
+export async function sweepScratch(options: SweepScratchOptions): Promise<readonly ScratchSweepDecision[]> {
+  const fs = options.fs ?? realScratchFs;
+  const ownerLiveness = options.ownerLiveness ?? probeScratchOwnerLiveness;
+  const scratchRoot = join(normalize(options.worktreeRoot), '.daemon', 'scratch');
+  const decisions: ScratchSweepDecision[] = [];
+
+  for (const runId of await readDirectory(scratchRoot, fs)) {
+    const runDirectory = join(scratchRoot, runId);
+    for (const attempt of await readDirectory(runDirectory, fs)) {
+      const home = join(runDirectory, attempt);
+      const lease = await readScratchLease(home, { fs });
+      if (lease.kind !== 'present') continue;
+
+      switch (ownerLiveness(lease.lease.ownerPid)) {
+        case 'dead':
+          await fs.rm(home, { recursive: true, force: true });
+          decisions.push({ kind: 'reclaimed', home });
+          break;
+        case 'live':
+          decisions.push({ kind: 'retained', home, reason: 'live-owner' });
+          break;
+        case 'unknown':
+          break;
+      }
+    }
+  }
+  return decisions;
+}
+
+export function probeScratchOwnerLiveness(ownerPid: number): ScratchOwnerLiveness {
+  if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) return 'unknown';
+  try {
+    process.kill(ownerPid, 0);
+    return 'live';
+  } catch (error) {
+    return isNoSuchProcessError(error) ? 'dead' : 'unknown';
+  }
 }
 
 function serializeScratchLease(lease: ScratchLease): string {
@@ -145,6 +199,19 @@ function isNonEmptyOrMissingDirectory(error: unknown): boolean {
   return typeof error === 'object' && error !== null &&
     'code' in error &&
     ((error as { code?: unknown }).code === 'ENOTEMPTY' || (error as { code?: unknown }).code === 'ENOENT');
+}
+
+async function readDirectory(path: string, fs: ScratchFs): Promise<readonly string[]> {
+  try {
+    return await fs.readdir(path);
+  } catch {
+    return [];
+  }
+}
+
+function isNoSuchProcessError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null &&
+    'code' in error && (error as { code?: unknown }).code === 'ESRCH';
 }
 
 export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
