@@ -22,7 +22,7 @@ import {
   HALT_HISTORY_COMMENT_MARKER,
 } from '../../src/engine/halt-pr-rehabilitation.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
+import { HALT_PR_BANNER_SENTINEL, NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
 
 function fakeGh(responses: Array<{ stdout: string } | Error>): { gh: GhRunner; calls: string[][] } {
   const calls: string[][] = [];
@@ -187,6 +187,60 @@ describe('ensureShipReady (Task 7)', () => {
 });
 
 describe('clearHaltStateForResume (Tasks 1, 4)', () => {
+  it('supersedes the halt comment in place with one resolution note across successive clears (Task 5)', async () => {
+    const state = {
+      labelPresent: true,
+      bodyMarkerPresent: true,
+      comments: [
+        {
+          body: `${NEEDS_REMEDIATION_MARKER}\n## Build halted\n\nManual remediation is required.`,
+          url: 'https://github.com/acme/repo/pull/7#issuecomment-42',
+        },
+      ],
+    };
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        if (args.includes('isDraft,labels,body')) {
+          return {
+            stdout: JSON.stringify({
+              isDraft: true,
+              labels: state.labelPresent ? [{ name: 'needs-remediation' }] : [],
+              body: state.bodyMarkerPresent ? '<!-- conductor:needs-remediation -->' : '',
+            }),
+          };
+        }
+        if (args.includes('comments')) return { stdout: JSON.stringify({ comments: state.comments }) };
+      }
+      if (args[0] === 'api' && args.includes('DELETE')) {
+        state.labelPresent = false;
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        state.bodyMarkerPresent = false;
+        return { stdout: '' };
+      }
+      if (args[0] === 'api' && args.includes('PATCH')) {
+        state.comments[0] = {
+          ...state.comments[0],
+          body: args[args.indexOf('-f') + 1].slice('body='.length),
+        };
+        return { stdout: '' };
+      }
+      return { stdout: '' };
+    };
+
+    await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+    await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+
+    const remediationComments = state.comments.filter((comment) => comment.body.includes(NEEDS_REMEDIATION_MARKER));
+    expect(remediationComments).toEqual([
+      expect.objectContaining({
+        body: expect.stringContaining('Halt resolved'),
+      }),
+    ]);
+    expect(remediationComments[0].body).not.toContain('Manual remediation is required.');
+  });
+
   it('returns gh-unavailable without throwing when the initial read rejects', async () => {
     const { gh } = fakeGh([new Error('gh: network error')]);
 
