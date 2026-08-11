@@ -519,12 +519,15 @@ conduct-ts config write <markdown_viewer|mermaid_renderer> <preset> <command> <a
 conduct-ts config set conductor.<key> <scalar>
 ```
 
-Read and write user-scoped `~/.ai-conductor/config.yml` — the config `bin/install` uses to persist
-the chosen markdown viewer and mermaid renderer, plus the update flow's `conductor:` block.
+`read` resolves the effective configuration at `<dotted.path>`. From a directory with a project
+`.ai-conductor/config.yml`, it deep-merges user config with project config and lets the project value
+win; when there is no project config, it reads user config only. `write` remains user-scoped
+`~/.ai-conductor/config.yml` behavior for the markdown viewer and mermaid renderer, while `set`
+updates the user-scoped update flow's `conductor:` block.
 
 `read` prints the value at `<dotted.path>` (e.g. `markdown_viewer.command`) to stdout, joining an
 array value with spaces, and prints an empty line for a missing key. It exits 1 and prints the
-config path and parse error to stderr when the file exists but fails to parse.
+relevant project or user config read error to stdout when parsing fails.
 
 `write` sets `markdown_viewer` or `mermaid_renderer` to `{preset, command, args, mode}` — `<args>`
 is a single space-separated argument, split on whitespace — preserving every other top-level key

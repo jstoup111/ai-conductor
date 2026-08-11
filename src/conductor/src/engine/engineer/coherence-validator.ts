@@ -27,8 +27,8 @@ import {
 } from './coherence-waiver.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 
-/** The four row classes a coherence artifact row may belong to. */
-export type CoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task';
+/** The five row classes a coherence artifact row may belong to. */
+export type CoherenceRowClass = 'outcome' | 'fr' | 'story' | 'task' | 'adr';
 
 /** A single parsed row of the coherence mapping table. */
 export interface CoherenceRow {
@@ -49,7 +49,7 @@ export type CoherenceParseResult =
   | { ok: true; rows: CoherenceRow[] }
   | { ok: false; reason: CoherenceParseFailureReason };
 
-const ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task']);
+const ROW_CLASSES: ReadonlySet<string> = new Set(['outcome', 'fr', 'story', 'task', 'adr']);
 
 /**
  * Strip surrounding whitespace and a single pair of matching straight/curly
@@ -166,6 +166,8 @@ export interface CrossCheckInputs {
   prdText: string | null;
   /** Number of staged/committed intake outcome bullets (0 when none staged). */
   outcomeCount: number;
+  /** ADR stems available to the coherence artifact (empty until supplied by the caller). */
+  adrIds?: ReadonlySet<string>;
 }
 
 export type CrossCheckResult =
@@ -226,14 +228,16 @@ export function crossCheckIds(
   const taskIds = extractTaskIds(inputs.planText);
   const frIds = extractPrdFrIds(inputs.prdText);
   const outcomeIds = extractOutcomeIds(inputs.outcomeCount);
+  const adrIds = inputs.adrIds ?? new Set<string>();
 
-  const knownIds = new Set<string>([...storyIds, ...taskIds, ...frIds, ...outcomeIds]);
+  const knownIds = new Set<string>([...storyIds, ...taskIds, ...frIds, ...outcomeIds, ...adrIds]);
 
-  const poolByClass: Record<CoherenceRowClass, Set<string>> = {
+  const poolByClass: Record<CoherenceRowClass, ReadonlySet<string>> = {
     outcome: outcomeIds,
     fr: frIds,
     story: storyIds,
     task: taskIds,
+    adr: adrIds,
   };
 
   for (const row of rows) {
@@ -325,6 +329,60 @@ export function checkOutcomeCoverage(
   }
 
   if (gaps.length > 0) return { ok: false, reason: 'outcome-gap', gaps };
+  return { ok: true };
+}
+
+// --- ADR-coverage layer (Task 9) ---
+
+/** A single ADR in the pool without an affirmative adjudication row. */
+export interface AdrGapFinding {
+  /** The ADR filename stem, e.g. `adr-2026-08-09-coherence-check`. */
+  gapId: string;
+}
+
+export type AdrCoverageResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'adr-gap';
+      /** Every unadjudicated or negatively adjudicated ADR, not just the first. */
+      gaps: AdrGapFinding[];
+    };
+
+/**
+ * Every non-deleted ADR in the supplied pool must have at least one `adr`
+ * row with a non-empty counterpart citation and none of its adjudication rows
+ * may carry a negative verdict or lack a counterpart citation. The
+ * pool is empty for a deletion-only change set, which therefore passes
+ * without demanding a row for the removed decision.
+ */
+export function checkAdrCoverage(
+  rows: CoherenceRow[],
+  adrIds: ReadonlySet<string>,
+): AdrCoverageResult {
+  const rowsByAdrId = new Map<string, CoherenceRow[]>();
+  for (const row of rows) {
+    if (row.rowClass !== 'adr') continue;
+    const matches = rowsByAdrId.get(row.id) ?? [];
+    matches.push(row);
+    rowsByAdrId.set(row.id, matches);
+  }
+
+  const gaps: AdrGapFinding[] = [];
+  for (const adrId of adrIds) {
+    const adjudications = rowsByAdrId.get(adrId) ?? [];
+    if (
+      adjudications.length === 0 ||
+      adjudications.some(
+        (row) =>
+          NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase()) || row.citedIds.length === 0,
+      )
+    ) {
+      gaps.push({ gapId: adrId });
+    }
+  }
+
+  if (gaps.length > 0) return { ok: false, reason: 'adr-gap', gaps };
   return { ok: true };
 }
 
@@ -861,8 +919,9 @@ export function checkCoverageTableConsistency(planText: string | null): Coverage
 
 // --- Aggregated deterministic gap report (Task 12) ---
 
-/** The seven coverage/consistency layers a gap can originate from, in fixed report order. */
+/** The eight coverage/consistency layers a gap can originate from, in fixed report order. */
 export type CoherenceGapLayer =
+  | 'adr'
   | 'outcome'
   | 'fr'
   | 'story-fr'
@@ -874,6 +933,7 @@ export type CoherenceGapLayer =
 /** Fixed layer ordering used to sort an aggregated gap list before rendering. */
 const GAP_LAYER_ORDER: readonly CoherenceGapLayer[] = [
   'outcome',
+  'adr',
   'fr',
   'story-fr',
   'story',
@@ -925,6 +985,10 @@ export function renderGapReport(gaps: CoherenceGap[]): string {
 export interface ValidateCoherenceInputs {
   /** Parsed coherence artifact rows (Task 5), used by the outcome-coverage layer. */
   rows: CoherenceRow[];
+  /** Non-deleted ADR filename stems in this change set's ADR pool. */
+  adrIds?: ReadonlySet<string>;
+  /** Layers this land requires; ADR coverage is inert unless this includes `adr`. */
+  requiredLayers?: ReadonlySet<CoherenceRequiredLayer>;
   /** Verbatim staged/committed intake outcome bullets, in order. */
   outcomeBullets: string[];
   /** PRD file contents, or null on the technical track. */
@@ -950,6 +1014,20 @@ export type ValidateCoherenceResult =
  */
 export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCoherenceResult {
   const gaps: CoherenceGap[] = [];
+
+  if (inputs.requiredLayers?.has('adr')) {
+    const adrResult = checkAdrCoverage(inputs.rows, inputs.adrIds ?? new Set<string>());
+    if (!adrResult.ok) {
+      for (const gap of adrResult.gaps) {
+        gaps.push({
+          layer: 'adr',
+          gapId: gap.gapId,
+          artifact: 'ADRs',
+          item: `${gap.gapId} has no affirmative adjudication row`,
+        });
+      }
+    }
+  }
 
   const outcomeResult = checkOutcomeCoverage(
     inputs.rows,
@@ -1197,6 +1275,7 @@ export type CoherenceRequiredLayer =
   | 'outcome'
   | 'fr'
   | 'story'
+  | 'adr'
   | 'orphan-task'
   | 'coverage-table';
 
@@ -1269,6 +1348,10 @@ export function resolveRequiredLayers(
 
   if (outcomes.length > 0) {
     layers.add('outcome');
+  }
+
+  if ([...changed].some((p) => p.startsWith('.docs/decisions/adr-'))) {
+    layers.add('adr');
   }
 
   return { engaged: true, layers };
@@ -1401,6 +1484,17 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
     );
   }
 
+  const git = makeGitRunner(worktreePath);
+  const changedFiles = await resolveChangedFilesForWaiver(worktreePath, canonicalPath, git);
+  const adrIds = new Set(
+    changedFiles
+      .filter(
+        ({ path, status }) =>
+          path.startsWith('.docs/decisions/adr-') && !status.startsWith('D'),
+      )
+      .map(({ path }) => path.slice('.docs/decisions/'.length).replace(/\.md$/, '')),
+  );
+
   // Fabricated-citation fail-closed reject — never waivable (an evidentiary
   // defect, not a coverage gap).
   const crossCheck = crossCheckIds(parsed.rows, {
@@ -1408,6 +1502,7 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
     planText,
     prdText,
     outcomeCount: outcomeBullets.length,
+    adrIds,
   });
   if (!crossCheck.ok) {
     throw new Error(
@@ -1423,6 +1518,8 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
 
   const coverage = validateCoherence({
     rows: parsed.rows,
+    adrIds,
+    requiredLayers: required.layers,
     outcomeBullets: [...effectiveOutcomeBullets],
     prdText: effectivePrdText,
     storiesText,
@@ -1431,7 +1528,6 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
 
   const gaps: CoherenceGap[] = coverage.ok ? [] : [...coverage.gaps];
 
-  const git = makeGitRunner(worktreePath);
   const defaultBranch = await deriveDefaultBranch(canonicalPath);
   const duplicate = await scanDuplicateClaim(worktreePath, defaultBranch, sourceRef, {
     git,
@@ -1473,7 +1569,6 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
 
   if (gaps.length === 0) return;
 
-  const changedFiles = await resolveChangedFilesForWaiver(worktreePath, canonicalPath, git);
   const readText = async (path: string): Promise<string | null> => {
     try {
       return await readFile(path, 'utf-8');

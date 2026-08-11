@@ -91,6 +91,9 @@ test_suite:
 # an OLDER engine rejects this key as "Cannot disable gating step".
 llm_provider: [codex, claude]
 
+conflict_check:
+  adr_corpus: repo_wide
+
 steps:
   explore:
     llm_provider: claude

@@ -7,10 +7,16 @@
 //   - corrupted/unparseable table → 'unparseable-coherence-artifact'
 //   - three distinct error kinds, never collapsed into one generic error
 
-import { describe, it, expect, vi } from 'vitest';
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdtemp, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   parseCoherenceArtifact,
   crossCheckIds,
+  checkAdrCoverage,
   checkOutcomeCoverage,
   checkFrCoverage,
   checkStoryFrTieOut,
@@ -22,13 +28,26 @@ import {
   scanDuplicateClaim,
   advisoryDuplicateClaimWarn,
   resolveRequiredLayers,
+  runCoherenceGate,
   type CrossCheckInputs,
   type CoherenceGap,
   type ValidateCoherenceInputs,
 } from '../../../src/engine/engineer/coherence-validator.js';
 import { evaluateCoherenceWaiver } from '../../../src/engine/engineer/coherence-waiver.js';
+import { AuthoringGuard } from '../../../src/engine/engineer/authoring-guard.js';
 import type { GitRunner, GitResult } from '../../../src/engine/rebase.js';
 import type { RunOverlapScanArgs } from '../../../src/engine/overlap-scan.js';
+
+const execFile = promisify(execFileCallback);
+const temporaryRepositories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryRepositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+async function runGit(cwd: string, args: string[]): Promise<void> {
+  await execFile('git', args, { cwd });
+}
 
 // A scripted GitRunner: matches argv prefixes to canned results, and records
 // every invocation so tests can assert zero-network-call behavior.
@@ -104,6 +123,35 @@ describe('parseCoherenceArtifact', () => {
       verdict: 'covered',
       quote: 'Task 1: build widget',
     });
+  });
+
+  it('parses an adr row class', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-2026-08-10 | story-1 | covered | "records the decision" |
+`);
+
+    expect(result).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'adr',
+          id: 'adr-2026-08-10',
+          citedIds: ['story-1'],
+          verdict: 'covered',
+          quote: 'records the decision',
+        },
+      ],
+    });
+  });
+
+  it('rejects the unknown decision row class after allowing adr', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| decision | adr-2026-08-10 | story-1 | covered | "records the decision" |
+`),
+    ).toEqual({ ok: false, reason: 'unparseable-coherence-artifact' });
   });
 
   it('rejects a missing file (null input) as missing-coherence-artifact', () => {
@@ -228,6 +276,34 @@ describe('crossCheckIds', () => {
     expect(result).toEqual({ ok: true });
   });
 
+  it('accepts an ADR row whose id resolves against the supplied ADR pool', () => {
+    const withAdr = `${WELL_FORMED_REAL}| adr | adr-2026-08-10-coherence-pool | story-1 | covered | "records the decision" |\n`;
+
+    expect(
+      crossCheckIds(
+        parsedRows(withAdr),
+        inputsFor({ adrIds: new Set(['adr-2026-08-10-coherence-pool']) }),
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it('rejects an ADR row whose id is absent from the supplied ADR pool', () => {
+    const withFabricatedAdr = `${WELL_FORMED_REAL}| adr | adr-2026-08-10-fabricated | story-1 | covered | "records the decision" |\n`;
+
+    expect(
+      crossCheckIds(
+        parsedRows(withFabricatedAdr),
+        inputsFor({ adrIds: new Set(['adr-2026-08-10-real']) }),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'fabricated-id',
+      rowClass: 'adr',
+      rowId: 'adr-2026-08-10-fabricated',
+      fabricatedId: 'adr-2026-08-10-fabricated',
+    });
+  });
+
   it('rejects a row citing a fabricated story id, naming the row', () => {
     const withFabrication = WELL_FORMED_REAL.replace(
       '| task | task-1 | story-1 | covered | "Task 1: build widget" |',
@@ -294,6 +370,107 @@ describe('crossCheckIds', () => {
     expect(result.rowClass).toBe('task');
     expect(result.rowId).toBe('task-2');
     expect(result.fabricatedId).toBe('ghost-id');
+  });
+});
+
+describe('checkAdrCoverage', () => {
+  function rowsFrom(text: string) {
+    const result = parseCoherenceArtifact(text);
+    if (!result.ok) throw new Error('fixture must parse');
+    return result.rows;
+  }
+
+  it('reports an ADR pool member that has no matching adjudication row', () => {
+    expect(checkAdrCoverage([], new Set(['adr-decision']))).toEqual({
+      ok: false,
+      reason: 'adr-gap',
+      gaps: [{ gapId: 'adr-decision' }],
+    });
+  });
+
+  it.each(['gap', 'fail'])('blocks an ADR row with the negative %s verdict', (verdict) => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision | story-1 | ${verdict} | "not adjudicated" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'adr-gap',
+      gaps: [{ gapId: 'adr-decision' }],
+    });
+  });
+
+  it('blocks a covered ADR row without a counterpart citation', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision |  | covered | "decision recorded" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'adr-gap',
+      gaps: [{ gapId: 'adr-decision' }],
+    });
+  });
+
+  it('treats an ADR row with an unrecognized verdict affirmatively', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision | story-1 | needs-human-review | "decision recorded" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it('blocks an unknown-verdict ADR row without a counterpart citation', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision |  | needs-human-review | "decision recorded" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: 'adr-gap',
+      gaps: [{ gapId: 'adr-decision' }],
+    });
+  });
+
+  it('passes a covered ADR row with a counterpart citation', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-decision | story-1 | covered | "decision recorded" |
+`),
+        new Set(['adr-decision']),
+      ),
+    ).toEqual({ ok: true });
+  });
+
+  it('passes when every ADR in the pool has a covered row', () => {
+    expect(
+      checkAdrCoverage(
+        rowsFrom(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| adr | adr-first | story-1 | covered | "first decision" |
+| adr | adr-second | story-1 | covered | "second decision" |
+`),
+        new Set(['adr-first', 'adr-second']),
+      ),
+    ).toEqual({ ok: true });
   });
 });
 
@@ -1045,6 +1222,23 @@ No tasks yet.
     expect(validateCoherence(inputs)).toEqual({ ok: true });
   });
 
+  it('runs ADR coverage only when the ADR layer is required', () => {
+    const inputs: ValidateCoherenceInputs = {
+      rows: [],
+      outcomeBullets: [],
+      prdText: null,
+      storiesText: `## Story 1: Ship the widget\n`,
+      planText: `### Task 1: Build the widget\n**Story:** Story 1\n`,
+      adrIds: new Set(['adr-decision']),
+      requiredLayers: new Set(['adr']),
+    };
+
+    const result = validateCoherence(inputs);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.gaps.map((gap) => gap.gapId)).toEqual(['adr-decision']);
+  });
+
   it('produces byte-identical reports for identical gap input, twice', () => {
     const gaps: CoherenceGap[] = [
       { layer: 'story', gapId: 'story-2', artifact: 'stories', item: 'Ship the gizmo' },
@@ -1064,6 +1258,27 @@ No tasks yet.
     expect(outcomeIdx).toBeGreaterThan(-1);
     expect(outcomeIdx).toBeLessThan(storyIdx);
     expect(storyIdx).toBeLessThan(orphanIdx);
+  });
+
+  it('renders ADR gaps after outcome gaps in a fixed order across multi-layer reports', () => {
+    const gaps: CoherenceGap[] = [
+      { layer: 'story', gapId: 'story-2', artifact: 'stories', item: 'Ship the gizmo' },
+      { layer: 'adr', gapId: 'adr-payment-terms', artifact: 'ADRs', item: 'payment terms are unadjudicated' },
+      { layer: 'outcome', gapId: 'outcome-1', artifact: 'intake outcomes', item: 'Reduce latency' },
+      { layer: 'adr', gapId: 'adr-retry-policy', artifact: 'ADRs', item: 'retry policy has failed' },
+    ];
+
+    const first = renderGapReport(gaps);
+    const second = renderGapReport([...gaps]);
+
+    expect(first).toBe(second);
+    expect(first).toContain('adr-payment-terms');
+    expect(first).toContain('payment terms are unadjudicated');
+    expect(first).toContain('adr-retry-policy');
+    expect(first).toContain('retry policy has failed');
+    expect(first.indexOf('outcome-1')).toBeLessThan(first.indexOf('adr-payment-terms'));
+    expect(first.indexOf('adr-payment-terms')).toBeLessThan(first.indexOf('story-2'));
+    expect(first.indexOf('adr-retry-policy')).toBeLessThan(first.indexOf('story-2'));
   });
 
   it('renders each gap with its id, source artifact, and quoted item', () => {
@@ -1177,6 +1392,28 @@ describe('scanDuplicateClaim (Task 14, offline)', () => {
   });
 });
 
+describe('ADR coherence waiver integration (Task 12)', () => {
+  it.each([
+    ['waives', 'adr-payment-terms', true],
+    ['does not waive with a different id', 'adr-other-decision', false],
+  ])('%s an ADR gap only when its exact id is named', async (_case, waivedId, expectedOk) => {
+    const verdict = await evaluateCoherenceWaiver({
+      gaps: [
+        {
+          layer: 'adr',
+          gapId: 'adr-payment-terms',
+          artifact: 'ADRs',
+          item: 'adr-payment-terms has no affirmative adjudication row',
+        },
+      ],
+      changedFiles: [{ status: 'A', path: '.docs/coherence-waivers/payment-terms.md' }],
+      readText: async () => `Waives: ${waivedId}\nRationale: documented exception.\n`,
+    });
+
+    expect(verdict.ok).toBe(expectedOk);
+  });
+});
+
 describe('advisoryDuplicateClaimWarn (fail-open, reuses overlap-scan.ts)', () => {
   it('is fail-open on a network/scan error: the warn is skipped, never throwing', async () => {
     const throwingGit: GitRunner = async () => {
@@ -1230,6 +1467,15 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     expect(result.reason).toBe('tier-exempt');
   });
 
+  it('disengages tier S before deriving ADR requirements', () => {
+    expect(
+      resolveRequiredLayers('/wt', 'S', 'product', [], [
+        '.docs/coherence/foo.md',
+        '.docs/decisions/adr-foo.md',
+      ]),
+    ).toEqual({ engaged: false, reason: 'tier-exempt' });
+  });
+
   it('technical track marker skips the FR layer but keeps story/orphan-task/coverage-table enforced', () => {
     const result = resolveRequiredLayers('/wt', 'M', 'technical', [], WITH_COHERENCE);
     expect(result.engaged).toBe(true);
@@ -1274,6 +1520,12 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     expect(result).toEqual({ engaged: false, reason: 'legacy-change-set' });
   });
 
+  it('disengages legacy change sets before deriving ADR requirements', () => {
+    expect(
+      resolveRequiredLayers('/wt', 'M', 'product', [], ['.docs/decisions/adr-foo.md']),
+    ).toEqual({ engaged: false, reason: 'legacy-change-set' });
+  });
+
   it('accepts a changeSet as a Set<string> as well as an array', () => {
     const result = resolveRequiredLayers('/wt', 'M', 'product', [], new Set(WITH_COHERENCE));
     expect(result.engaged).toBe(true);
@@ -1284,8 +1536,196 @@ describe('resolveRequiredLayers (Task 15: tier gating, layer degradation, no-ret
     expect(result.engaged).toBe(true);
   });
 
+  it('requires the ADR layer when a product coherence change set includes an ADR', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], [
+      '.docs/coherence/foo.md',
+      '.docs/decisions/adr-something.md',
+    ]);
+    expect(result.engaged && result.layers.has('adr')).toBe(true);
+  });
+
+  it('does not require the ADR layer for exact non-ADR decision filenames', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], [
+      '.docs/coherence/foo.md',
+      '.docs/decisions/architecture-review-something.md',
+      '.docs/decisions/review-something.md',
+    ]);
+    expect(result.engaged && result.layers.has('adr')).toBe(false);
+  });
+
+  it('omits the ADR layer when an engaged M-tier product change set has no ADR path', () => {
+    const result = resolveRequiredLayers('/wt', 'M', 'product', [], ['.docs/coherence/foo.md']);
+    expect(result).toEqual({
+      engaged: true,
+      layers: new Set(['fr', 'story', 'orphan-task', 'coverage-table']),
+    });
+  });
+
   it('L-tier engages normally too', () => {
     const result = resolveRequiredLayers('/wt', 'L', 'product', [], WITH_COHERENCE);
     expect(result.engaged).toBe(true);
+  });
+});
+
+describe('runCoherenceGate ADR pool (Task 7)', () => {
+  it('keeps a deleted ADR out of the status-bearing ADR pool', async () => {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-adr-pool-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await mkdir(join(canonicalPath, '.docs/decisions'), { recursive: true });
+    await writeFile(join(canonicalPath, '.docs/decisions/adr-deleted.md'), '# Deleted ADR\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed ADR']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await unlink(join(worktreePath, '.docs/decisions/adr-deleted.md'));
+    await writeFile(join(worktreePath, '.docs/decisions/adr-added.md'), '# Added ADR\n');
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "ship widgets" |
+| outcome | outcome-2 | story-2 | covered | "support returns" |
+| fr | FR-1 | story-1 | covered | "FR-1: widgets" |
+| fr | FR-2 | story-2 | covered | "FR-2: widgets" |
+| story | story-1 | task-1, task-2 | covered | "As a user..." |
+| story | story-2 | task-1 | covered | "As a user..." |
+| task | task-1 | story-1 | covered | "Task 1: build widget" |
+| task | task-2 | story-1 | covered | "Task 2: ship widget" |
+| adr | adr-added | story-1 | covered | "records the new decision" |
+| adr | adr-deleted | story-1 | covered | "records the removed decision" |
+`,
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'replace ADR']);
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath,
+        tier: 'M',
+        track: 'product',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1
+
+## Story 2: Widget returns
+**Requirement:** FR-2
+`,
+        planText: `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/widget.ts
+
+### Task 2: Ship widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/ship.ts
+`,
+        prdText: `# PRD
+
+## Functional Requirements
+
+- FR-1: Widgets can be shipped.
+- FR-2: Widgets can be returned.
+`,
+        outcomeBullets: ['- Ship widgets reliably.', '- Support returns.'],
+        ideaFiles: new Set(['.docs/coherence/idea.md', '.docs/decisions/adr-added.md']),
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).rejects.toThrow('fabricated-id "adr-deleted"');
+  });
+
+  it('passes a deletion-only ADR change set with the ADR layer engaged over an empty pool', async () => {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-adr-deletion-only-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await mkdir(join(canonicalPath, '.docs/decisions'), { recursive: true });
+    await writeFile(join(canonicalPath, '.docs/decisions/adr-removed.md'), '# Removed ADR\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed ADR']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await unlink(join(worktreePath, '.docs/decisions/adr-removed.md'));
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `# Coherence Map
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| outcome | outcome-1 | story-1 | covered | "ship widgets" |
+| outcome | outcome-2 | story-2 | covered | "support returns" |
+| fr | FR-1 | story-1 | covered | "FR-1: widgets" |
+| fr | FR-2 | story-2 | covered | "FR-2: widgets" |
+| story | story-1 | task-1, task-2 | covered | "As a user..." |
+| story | story-2 | task-2 | covered | "As a user..." |
+| task | task-1 | story-1 | covered | "Task 1: build widget" |
+| task | task-2 | story-2 | covered | "Task 2: ship widget" |
+`,
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'remove ADR']);
+
+    const ideaFiles = new Set(['.docs/coherence/idea.md', '.docs/decisions/adr-removed.md']);
+    const required = resolveRequiredLayers(worktreePath, 'M', 'product', ['- Ship widgets reliably.'], ideaFiles);
+    expect(required.engaged && required.layers.has('adr')).toBe(true);
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath,
+        tier: 'M',
+        track: 'product',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: `# Stories
+
+## Story 1: Widget shipping
+**Requirement:** FR-1
+
+## Story 2: Widget returns
+**Requirement:** FR-2
+`,
+        planText: `# Plan
+
+### Task 1: Build widget
+**Story:** Story 1 (FR-1)
+**Type:** happy-path
+**Files:** src/widget.ts
+
+### Task 2: Return widget
+**Story:** Story 2 (FR-2)
+**Type:** happy-path
+**Files:** src/ship.ts
+`,
+        prdText: `# PRD
+
+## Functional Requirements
+
+- FR-1: Widgets can be shipped.
+- FR-2: Widgets can be returned.
+`,
+        outcomeBullets: ['- Ship widgets reliably.', '- Support returns.'],
+        ideaFiles,
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).resolves.toBeUndefined();
   });
 });

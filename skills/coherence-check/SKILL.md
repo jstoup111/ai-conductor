@@ -10,10 +10,15 @@ requires: [verify-claims]
 ## Purpose
 
 Authors `.docs/coherence/<plan-stem>.md`: a single committed artifact mapping every
-intake outcome bullet, every PRD FR (product track), every story, and every plan task
-to its counterpart ids with a per-row verdict. This artifact is the auditable
+intake outcome bullet, every PRD FR (product track), every non-deleted ADR file in the
+current spec change set when the coherence gate engages, every story,
+and every plan task to its counterpart ids with a per-row verdict. This artifact is the auditable
 traceability record the operator (and the land-time coherence validator) reads instead
 of trusting self-reported "everything's covered" prose in a spec PR.
+
+Any current-change-set `.docs/decisions/adr-*` path, including a deletion, engages the ADR
+layer. That engagement is distinct from the ADR row pool: deleted ADRs produce no row, so a
+deletion-only change has no ADR row to author.
 
 **Correctness gate:** a row's verdict (`covered` / `gap` / `fail`) is a judgment call, not
 a mechanical grep. Coverage and consistency are separate questions: a counterpart can
@@ -61,6 +66,9 @@ Load, in order:
    ids.
 4. The plan — `.docs/plans/<plan-stem>.md`, for `**Story:**` lines, task ids, and the
    plan's own `## Coverage Check` table if present.
+5. The ADR files in the current spec change set — each non-deleted
+   `.docs/decisions/adr-*.md` file. This is the row set when the coherence gate engages;
+   do not expand it to every decision that conceptually constrains the stories.
 
 ## 4. Mapping-Artifact Format
 
@@ -73,7 +81,7 @@ The artifact is a Markdown table (or one table per row class) with these columns
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
 |---|---|---|---|---|
 
-### 4a. Row Classes (exactly four)
+### 4a. Row Classes (exactly five)
 
 1. **outcome** — one row per intake Desired-outcome bullet (skip this class entirely
    if no outcomes were staged/committed — an empty outcome layer is "not required,"
@@ -88,6 +96,10 @@ The artifact is a Markdown table (or one table per row class) with these columns
    Counterpart: the story id it serves, OR — for `infrastructure`/`refactor`-typed
    tasks — a non-empty supporting-purpose statement from the task's `**Story:**` line
    in place of a story id.
+5. **adr** — when the coherence gate engages, one row per non-deleted
+   `.docs/decisions/adr-*.md` file in the current spec change set. Cited id:
+   `adr-<stem>`. Counterpart: the story id(s) that implement or are constrained by the
+   decision.
 
 ### 4b. Verdict Vocabulary
 
@@ -121,11 +133,16 @@ forms — this is the vocabulary a `.docs/coherence-waivers/<plan-stem>.md` waiv
 to be recognized (waivers are validated by a separate mechanism; this skill only needs
 to emit the ids in the correct form so a later waiver can cite them):
 
+For the `adr` row class, the cited id form and the canonical gap-id form are both
+`adr-<stem>`, where `<stem>` is the ADR filename stem.
+
 - `outcome-<n>` — unmapped or negative-verdict outcome bullet
 - `fr-<N>` — FR cited by no story, or only by a story that itself maps to no task
 - `story-<id>` — story cited by no task, or a story that does not tie out to the PRD
   (cites an `FR-N` the PRD never declares, or cites no FR at all — §4e)
 - `task-<id>` — task with no valid story citation and no supporting-purpose exemption
+- `adr-<stem>` — non-deleted ADR file in the current spec change set cited by no story,
+  or only by a story that does not implement or honor the decision
 - `claim-<row>` — the plan's own `## Coverage Check` table cites a phantom id or
   contradicts the parsed task tree (row number within that table)
 - `duplicate:<ref>` — a second spec claiming an already-claimed `Source-Ref` (emitted
@@ -137,14 +154,15 @@ Gap ids are opaque strings to downstream consumers (the validator, the waiver pa
 against the real artifact files (Section 5) is possible.
 
 A **fail** row uses the same id form as its row class (`outcome-<n>`, `fr-<N>`,
-`story-<id>`, `task-<id>`) — the id identifies *which* row, and the verdict says what
-is wrong with it. Prefix its Notes with `CONTRADICTS:` and name the counterpart id and
-the specific opposing text, so a reader can adjudicate without re-deriving the finding.
+`story-<id>`, `task-<id>`, `adr-<stem>`) — the id identifies *which* row, and the
+verdict says what is wrong with it. Prefix its Notes with `CONTRADICTS:` and name the
+counterpart id and the specific opposing text, so a reader can adjudicate without
+re-deriving the finding.
 
 ### 4d. Consistency Pass — Contradiction and Oscillation
 
 Coverage and consistency are different questions, and this artifact is the only place
-both are visible: it is the one view holding outcomes, FRs, stories, and tasks at once.
+both are visible: it is the one view holding outcomes, FRs, ADRs, stories, and tasks at once.
 A row where the counterpart exists but *opposes* what it implements is **`fail`**, not
 `covered` — the mapping is complete and wrong.
 
@@ -167,7 +185,7 @@ Detection heuristic: for each pair of requirements touching the same behavior, e
 field, or gate, ask **"if I fully satisfy A, does B still hold?"** Then ask it in the
 other direction. Two "no" answers is an oscillation regardless of how reasonable each
 requirement reads alone. Pairs worth checking first are the ones sharing a subject
-across *different* layers — an outcome and a task, an FR and a story — because same-layer
+across *different* layers — an outcome and a task, an FR and a story, an ADR and a story — because same-layer
 contradictions are what `/conflict-check` already sweeps for, and cross-layer ones are
 what nothing else sees.
 
@@ -249,15 +267,17 @@ per row and must never assert "covered" that it has not actually confirmed.
 2. Ensure the file renders as valid Markdown (a real table, not fenced prose) — it
    must be readable directly in the spec PR diff (Story 2).
 3. Do not stage or commit a coherence artifact for a technical-track spec's `fr` row
-   class, or for a chat-origin spec's `outcome` row class — omission is correct there,
-   not a gap.
+   class, a chat-origin spec's `outcome` row class, or an `adr` row class when the current
+   spec change set has no non-deleted `.docs/decisions/adr-*.md` file — omission is
+   correct there, not a gap. A deleted ADR path still engages the ADR layer, but it does
+   not enter that row pool.
 
 ## Verification
 
 - [ ] Tier read from `.docs/complexity/`; skill does not run at all for tier S
 - [ ] Tier L dispatch is pinned to opus; tier M inherits the session/step default
 - [ ] `.docs/coherence/<plan-stem>.md` filename stem matches the plan's filename stem exactly
-- [ ] All four row classes present where applicable (outcome/fr omitted only when genuinely not required)
+- [ ] All five row classes present where applicable (outcome/fr/adr omitted only when genuinely not required)
 - [ ] Every verdict is exactly `covered`, `gap`, or `fail` — no invented verdict strings
       (an invented string is treated as affirmative by the validator and silently passes)
 - [ ] §4d consistency pass run over every covered row; contradictions recorded as `fail`
@@ -267,7 +287,7 @@ per row and must never assert "covered" that it has not actually confirmed.
 - [ ] Every story's cited FR confirmed to be actually delivered by that story's scenarios —
       a correct citation that the acceptance criteria contradict is `fail`, not `covered`
 - [ ] Story-vs-story conflicts left to `/conflict-check`; this artifact reports story-vs-PRD only
-- [ ] Cross-layer pairs (outcome↔task, FR↔story) checked in both directions for
+- [ ] Cross-layer pairs (outcome↔task, FR↔story, ADR↔story) checked in both directions for
       oscillation — same-layer pairs are `/conflict-check`'s sweep, cross-layer are this skill's
 - [ ] Every `gap` row's Notes column restates its gap id in the canonical form (Section 4c)
 - [ ] Every `covered` verdict was confirmed against the real counterpart artifact file, not inferred

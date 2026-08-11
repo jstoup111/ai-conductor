@@ -292,9 +292,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Frontmatter** — `enforcement: gating`, `phase: decide`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `conflict_check` (index 8, DECIDE, prerequisite `stories`, skipped at tier S).
-- **Inputs** — all `.docs/stories/*.md`; active `.docs/specs/`; prior `.docs/conflicts/` reports.
+- **Inputs** — all `.docs/stories/*.md`; active `.docs/specs/`; prior `.docs/conflicts/` reports; and
+  approved ADRs. `conflict_check.adr_corpus` defaults to `change_set`; `repo_wide` narrows all approved
+  ADRs to the stories' subject and records the ADRs examined and narrowed out.
 - **Outputs** — `.docs/conflicts/<date>-<description>.md`, overwritten on re-run; in-place edits to
-  affected story files; superseding ADRs.
+  affected story files; superseding ADRs. An ADR-versus-story conflict quotes both opposing sentences
+  verbatim; multi-sentence excerpts use `[…]` for every omitted span.
 - **Gate role** — blocking. It loops until zero blocking conflicts remain. Kickback routing is by root
   cause: contradictory FRs go to `prd`, incompatible design goes to `architecture_review`, pure phrasing
   is resolved in `stories`. In an unattended run a blocking conflict HALTs for a human — never a silent
@@ -345,9 +348,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `coherence_check` (index 10, DECIDE, prerequisite `plan`, skipped at tier S).
 - **Inputs** — `.docs/complexity/` for the tier; staged outcomes or `.docs/intake/<plan-stem>.md`;
-  `.docs/specs/<plan-stem>.md` for FRs; `.docs/stories/<plan-stem>.md`; `.docs/plans/<plan-stem>.md`.
+  `.docs/specs/<plan-stem>.md` for FRs; `.docs/stories/<plan-stem>.md`; `.docs/plans/<plan-stem>.md`;
+  and accepted ADRs that constrain the stories.
 - **Outputs** — `.docs/coherence/<plan-stem>.md`. The stem must match the plan filename stem exactly or
-  the land validator rejects it as a missing coherence artifact.
+  the land validator rejects it as a missing coherence artifact. Applicable `adr` rows trace each
+  accepted decision to the stories that implement or must honor it.
 - **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
   §4e). Forward: no PRD `FR-N` without a citing story that a task covers. Reverse: no story citing an
   `FR-N` the PRD never declares, and no story citing no FR at all. Both directions are re-derived

@@ -121,6 +121,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `engine_refresh_min_interval_seconds` | number | `300` | [engine_refresh_min_interval_seconds](#engine_refresh_min_interval_seconds) |
 | `codex_doctor_timeout_seconds` | number | `10` | [codex_doctor_timeout_seconds](#codex_doctor_timeout_seconds) |
 | `mergeable_autoresolve` | object | disabled | [mergeable_autoresolve](#mergeable_autoresolve) |
+| `conflict_check` | object | `{ adr_corpus: change_set }` | [conflict_check](#conflict_check) |
 | `build_review` | object | `{ enabled: true }` | [build_review](#build_review) |
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
@@ -834,6 +835,21 @@ unchanged, and no attempt counter is burned.
 > callers; the daemon reads the raw config directly. Nothing breaks, but the resolver is not the
 > authority the name implies. Tracked in
 > [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
+
+## conflict_check
+
+Sets the ADR corpus used by the DECIDE `conflict_check` step. The block accepts only
+`adr_corpus`; any other nested key is a configuration error.
+
+| Key | Type | Allowed values | Default |
+| --- | --- | --- | --- |
+| `conflict_check.adr_corpus` | string | `change_set`, `repo_wide` | `change_set` |
+
+`change_set` compares stories with the approved ADRs in the current spec's change set. It does not
+narrow that corpus or parse ADR supersession status. `repo_wide` first considers all approved ADRs,
+then narrows them to subjects that overlap the current stories and records both the examined and
+narrowed-out ADRs in the conflict report. At that scope only, an unambiguously fully superseded ADR
+is excluded; partial or ambiguous supersession remains in scope.
 
 ## build_review
 
