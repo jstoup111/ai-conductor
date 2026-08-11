@@ -313,6 +313,7 @@ import {
   ensureShipReady,
   postHaltHistoryComment,
   makeRetainedPrPresentable,
+  clearHaltStateForResume,
 } from './halt-pr-rehabilitation.js';
 import { computeCostRollup, toFeatureUsageTotals, type CostRollup } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
@@ -1302,6 +1303,8 @@ export class Conductor {
    * a single push + `gh pr view` rather than repeating them at every SHIP step.
    */
   private shipDraftPrAttempted = false;
+  /** Prevents repeat resume-clear work across dispatches in this process. */
+  private resumeHaltStateClearAttempted = false;
   /** Stable identity of the draft opened at SHIP entry, retained until finish. */
   private shipDraftPrUrl: string | undefined;
   /** Exact repository-local release metadata captured before finish dispatches. */
@@ -3218,6 +3221,53 @@ export class Conductor {
     }
   }
 
+  /**
+   * Clear a retained halt PR before the first step consumes its branch. This
+   * remains advisory: absent/unavailable GitHub identity never blocks work.
+   */
+  private async clearRetainedHaltStateForDispatch(state: ConductState): Promise<void> {
+    if (this.resumeHaltStateClearAttempted) return;
+    this.resumeHaltStateClearAttempted = true;
+
+    let prUrl = state.pr_url;
+    if (!prUrl && state.worktree_branch && this.baseBranch) {
+      try {
+        const { stdout } = await this.runGh(
+          [
+            'pr', 'list',
+            '--head', state.worktree_branch,
+            '--base', this.baseBranch,
+            '--state', 'open',
+            '--json', 'url,state',
+            '--limit', '10',
+          ],
+          { cwd: this.projectRoot },
+        );
+        const rows: unknown = JSON.parse(stdout);
+        if (Array.isArray(rows)) {
+          prUrl = rows.find(
+            (row): row is { url: string; state: string } =>
+              typeof row === 'object' &&
+              row !== null &&
+              (row as { state?: unknown }).state === 'OPEN' &&
+              typeof (row as { url?: unknown }).url === 'string',
+          )?.url;
+        }
+      } catch (err) {
+        (this.log ?? console.warn)(`[halt-pr-rehab] resume clear branch lookup failed: ${err}`);
+      }
+    }
+    if (!prUrl) return;
+
+    await clearHaltStateForResume(
+      this.gh,
+      this.projectRoot,
+      prUrl,
+      this.log ?? console.warn,
+      this.sleep,
+    );
+  }
+
   /** Capture only a valid, re-readable release block before finish can replace the body. */
   private async snapshotFinishReleaseMetadata(branch?: string): Promise<void> {
     this.releaseMetadataSnapshot = undefined;
@@ -4086,6 +4136,8 @@ export class Conductor {
             return;
           }
         }
+
+        await this.clearRetainedHaltStateForDispatch(state);
 
         // SHIP-phase entry: open the implementation PR as a DRAFT.
         //
