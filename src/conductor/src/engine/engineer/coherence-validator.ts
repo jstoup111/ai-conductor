@@ -950,8 +950,8 @@ export type CoherenceGapLayer =
 
 /** Fixed layer ordering used to sort an aggregated gap list before rendering. */
 const GAP_LAYER_ORDER: readonly CoherenceGapLayer[] = [
-  'adr',
   'outcome',
+  'adr',
   'fr',
   'story-fr',
   'story',

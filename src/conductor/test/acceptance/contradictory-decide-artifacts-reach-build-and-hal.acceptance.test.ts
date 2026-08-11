@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { AuthoringGuard } from '../../src/engine/engineer/authoring-guard.js';
-import { runCoherenceGate } from '../../src/engine/engineer/coherence-validator.js';
+import { resolveRequiredLayers, runCoherenceGate } from '../../src/engine/engineer/coherence-validator.js';
 
 const execFile = promisify(execFileCb);
 
@@ -235,6 +235,10 @@ describe('Stories 5 and 7 — committed signals preserve compatibility', () => {
       },
     });
 
+    const required = resolveRequiredLayers(worktreePath, 'M', 'technical', [], ideaFiles);
+    expect(required.engaged).toBe(true);
+    if (!required.engaged) return;
+    expect(required.layers.has('adr')).toBe(false);
     await expect(runGate(ideaFiles)).resolves.toBeUndefined();
   });
 
@@ -242,6 +246,8 @@ describe('Stories 5 and 7 — committed signals preserve compatibility', () => {
     const ideaFiles = await seedFeature({ deleteBaseAdr: true });
 
     expect(ideaFiles.has('.docs/decisions/adr-retired.md')).toBe(true);
+    const required = resolveRequiredLayers(worktreePath, 'M', 'technical', [], ideaFiles);
+    expect(required.engaged && required.layers.has('adr')).toBe(true);
     await expect(runGate(ideaFiles)).resolves.toBeUndefined();
   });
 
@@ -250,11 +256,19 @@ describe('Stories 5 and 7 — committed signals preserve compatibility', () => {
       adrFiles: { '.docs/decisions/adr-warning-once.md': APPROVED_ADR },
       coherenceText: 'not a parseable coherence artifact',
     });
+    expect(resolveRequiredLayers(worktreePath, 'S', 'technical', [], tierSIdeaFiles)).toEqual({
+      engaged: false,
+      reason: 'tier-exempt',
+    });
     await expect(runGate(tierSIdeaFiles, 'S')).resolves.toBeUndefined();
 
     const legacyIdeaFiles = new Set(
       [...tierSIdeaFiles].filter((path) => !path.startsWith('.docs/coherence/')),
     );
+    expect(resolveRequiredLayers(worktreePath, 'M', 'technical', [], legacyIdeaFiles)).toEqual({
+      engaged: false,
+      reason: 'legacy-change-set',
+    });
     await expect(runGate(legacyIdeaFiles)).resolves.toBeUndefined();
   });
 });
