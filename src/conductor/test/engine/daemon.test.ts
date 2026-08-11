@@ -105,6 +105,24 @@ describe('engine/daemon — runDaemon', () => {
     expect([...calls.values()]).toEqual([1, 1, 1, 1]);
   });
 
+  it('continues dispatching when the provider scratch sweep rejects', async () => {
+    const logs: string[] = [];
+    const runFeature = vi.fn(async (item: BacklogItem) => ({ slug: item.slug, status: 'done' as const }));
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      runFeature,
+      sweepProviderScratch: async () => {
+        throw new Error('scratch sweep failed');
+      },
+      log: (line) => logs.push(line),
+    };
+
+    await runDaemon(deps, { concurrency: 1, once: true });
+
+    expect(runFeature).toHaveBeenCalledOnce();
+    expect(logs).toContain('[daemon] sweepProviderScratch error: scratch sweep failed');
+  });
+
   it('exposes live feature ownership to mergeable sweeps', async () => {
     let resolveFeature: ((outcome: FeatureOutcome) => void) | undefined;
     const featureRun = new Promise<FeatureOutcome>((resolve) => {
