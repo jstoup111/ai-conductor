@@ -79,6 +79,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   dashboard_refresh: 'not-audited-by-design',
   protected_artifact_rebaseline: 'not-audited-by-design',
   protected_artifact_rebaseline_refused: 'not-audited-by-design',
+  // Operator-initiated reseals and refusals are auditable friction events.
+  protected_artifact_reseal: 'friction-mapped',
+  protected_artifact_reseal_refused: 'friction-mapped',
   auto_heal: 'not-audited-by-design',
   remediation_sealed_artifact_redirect: 'not-audited-by-design',
   verdict_freshness: 'friction-mapped',
@@ -205,6 +208,23 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     condition: 'feature-authored:head-differs-from-base',
     verdictCondition: 'head-differs-from-base',
     path: '.docs/plans/feature.md',
+  },
+  protected_artifact_reseal: {
+    type: 'protected_artifact_reseal',
+    paths: [{
+      path: '.docs/plans/feature.md',
+      priorFingerprint: 'old-fingerprint',
+      newFingerprint: 'new-fingerprint',
+    }],
+    reason: 'correct an accepted plan',
+    fromCommit: 'abc123',
+    toCommit: 'def456',
+  },
+  protected_artifact_reseal_refused: {
+    type: 'protected_artifact_reseal_refused',
+    reason: 'operator rationale',
+    condition: 'unlisted-drift',
+    path: '.docs/stories/feature.md',
   },
   auto_heal: { type: 'auto_heal', step: 'build', healed: 1, skipped: 0 },
   remediation_sealed_artifact_redirect: {
@@ -395,7 +415,7 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     expect(stepsRun).not.toContain('architecture_diagram');
 
     const records = await readRecords(dir);
-    const recordedSteps = new Set(records.map((r) => r.step));
+    const recordedSteps = new Set(records.map((r) => r.origin));
 
     // executed ⊆ recorded
     const uniqueExecuted = new Set(stepsRun);
@@ -441,9 +461,9 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     await conductor.run();
 
     const records = await readRecords(dir);
-    expect(records.some((r) => r.step === flakyStep && r.event === 'retry')).toBe(true);
+    expect(records.some((r) => r.origin === flakyStep && r.event === 'retry')).toBe(true);
     expect(
-      records.some((r) => r.step === flakyStep && r.event === 'gate_pass'),
+      records.some((r) => r.origin === flakyStep && r.event === 'gate_pass'),
       'the eventually-successful step must leave positive evidence, not only its retry record',
     ).toBe(true);
   });

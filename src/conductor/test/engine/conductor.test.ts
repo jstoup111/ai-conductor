@@ -11622,12 +11622,12 @@ describe('build-step stall circuit breaker', () => {
     const records = contents
       .split('\n')
       .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as { event: string; cause?: string; step: string });
+      .map((line) => JSON.parse(line) as { event: string; cause?: string; origin: string });
 
     const haltClearedRecord = records.find((r) => r.event === 'halt_cleared');
     expect(haltClearedRecord).toBeDefined();
     expect(haltClearedRecord?.cause).toBe('operator');
-    expect(haltClearedRecord?.step).toBe('build');
+    expect(haltClearedRecord?.origin).toBe('build');
   });
 
   it('captures halt marker content to evidence file before clearing the marker', async () => {

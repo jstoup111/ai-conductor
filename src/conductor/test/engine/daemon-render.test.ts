@@ -228,6 +228,31 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders each protected-artifact reseal event as one human-readable line', () => {
+    expect([
+      lines({
+        type: 'protected_artifact_reseal',
+        paths: [{
+          path: '.docs/plans/feature.md',
+          priorFingerprint: 'old-fingerprint',
+          newFingerprint: 'new-fingerprint',
+        }],
+        reason: 'correct an accepted plan',
+        fromCommit: 'abc123',
+        toCommit: 'def456',
+      }),
+      lines({
+        type: 'protected_artifact_reseal_refused',
+        reason: 'operator rationale',
+        condition: 'unlisted-drift',
+        path: '.docs/stories/feature.md',
+      }),
+    ]).toEqual([
+      [expect.stringMatching(/reseal.*\.docs\/plans\/feature\.md/i)],
+      [expect.stringMatching(/reseal.*\.docs\/stories\/feature\.md/i)],
+    ]);
+  });
+
   it('shows only UNSATISFIED gate verdicts (satisfied ones are routine)', () => {
     expect(lines({ type: 'gate_verdict', step: 'plan', satisfied: true })).toEqual([]);
     expect(

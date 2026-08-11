@@ -159,9 +159,11 @@ plan from assigning the same mutation to BUILD, and the land gate independently 
 plan.
 
 An operator-approved plan or architecture amendment committed after first BUILD leaves this
-baseline stale by design. The amendment must be reviewed and then resealed through the engine-owned
-rotation function before the feature is re-queued. The audited rotation records the old and new
-commits, trigger, and reviewed paths; editing the JSON directly is never a valid reseal.
+baseline stale by design. Review the amendment, then reseal the reviewed paths with
+[`conduct-ts reseal`](cli.md#conduct-ts-reseal) before the feature is re-queued — it runs only from an
+interactive operator terminal, refuses the whole reseal if any unlisted protected path has also
+drifted, and records the old and new fingerprints, trigger, and rationale in both the seal's
+`rebaselines` entry and the audit trail. Editing the JSON directly is never a valid reseal.
 
 Verification also tolerates these cases without halting:
 
@@ -673,16 +675,24 @@ A separate ledger with a different shape. Do not confuse it with the run event l
 
 ```ts
 type AuditRecord = {
-  step: StepName; phase: Phase; event: string; reason?: string;
+  origin: StepName | 'operator'; phase?: Phase; event: string; reason?: string;
   cause?: string; attempt?: number; at: number; kickback_outcome?: string;
+  paths?: { path: string; priorFingerprint: string; newFingerprint: string }[];
+  condition?: string; path?: string; fromCommit?: string; toCommit?: string;
 };
 ```
 
 `at` is epoch milliseconds, not the ISO `ts` used by `events.jsonl`, and `event` is a derived string,
-not a raw event type. It subscribes to six source events (`gate_verdict`, `step_retry`, `kickback`,
-`loop_halt`, `step_completed`, `halt_cleared`) and emits six strings (`gate_pass`, `gate_fail`, `retry`,
-`kickback`, `intervention`, `halt_cleared`). A write failure drops a `WRITE-FAILED` marker beside it.
-No TypeScript reader exists; only the `retro` skill consults it, by prose.
+not a raw event type. `phase` is omitted for an `operator`-origin record — an interactive reseal runs
+outside any step's phase. It subscribes to eight source events (`gate_verdict`, `step_retry`,
+`kickback`, `loop_halt`, `step_completed`, `halt_cleared`, `protected_artifact_reseal`,
+`protected_artifact_reseal_refused`) and emits eight strings (`gate_pass`, `gate_fail`, `retry`,
+`kickback`, `intervention`, `halt_cleared`, `reseal`, `reseal_refused`). A write failure drops a
+`WRITE-FAILED` marker beside it and, for
+[`conduct-ts reseal`](cli.md#conduct-ts-reseal) specifically, fails the reseal itself — its writer is
+constructed fail-closed, unlike every step-attributed writer, because a reseal whose audit record was
+lost must not be treated as complete. No TypeScript reader exists; only the `retro` skill consults it,
+by prose.
 
 ### Daemon logs
 

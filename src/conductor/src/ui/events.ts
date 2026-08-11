@@ -42,6 +42,35 @@ export class ConductorEventEmitter {
     if (pending.length > 0) await Promise.all(pending);
   }
 
+  /**
+   * Dispatch like `emit()`, but preserve subscriber failures for callers that
+   * cannot report success without durable event handling (for example an
+   * operator-audited reseal). Normal engine rendering remains best-effort via
+   * `emit()`.
+   */
+  async emitOrThrow(event: ConductorEvent): Promise<void> {
+    const handlers = this.handlers.get(event.type);
+    if (!handlers || handlers.size === 0) return;
+
+    const failures: unknown[] = [];
+    const pending: Promise<void>[] = [];
+    for (const handler of [...handlers]) {
+      try {
+        const out = handler(event);
+        if (out && typeof (out as Promise<void>).then === 'function') {
+          pending.push((out as Promise<void>).catch((error: unknown) => {
+            failures.push(error);
+          }));
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    await Promise.all(pending);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, 'Conductor event handlers failed');
+  }
+
   on(type: ConductorEvent['type'], handler: EventHandler): void {
     let set = this.handlers.get(type);
     if (!set) {

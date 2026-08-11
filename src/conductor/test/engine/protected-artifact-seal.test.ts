@@ -14,6 +14,7 @@ import {
   isActiveStepArtifactException,
   isProtectedArtifactPath,
   namesOwnFeature,
+  resealProtectedArtifactSeal,
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
@@ -174,6 +175,317 @@ describe('createProtectedArtifactSeal', () => {
   });
 });
 
+describe('resealProtectedArtifactSeal', () => {
+  it.each([
+    ['an empty path set', [], undefined, undefined,
+      'Scoped protected artifact reseal requires at least one path'],
+    ['a path outside protected directories', ['README.md'], undefined, undefined,
+      'Protected artifact reseal target is not protected: README.md'],
+    ['a protected path absent from the current seal', ['.docs/plans/missing.md'], undefined, undefined,
+      'Protected artifact reseal target is not sealed: .docs/plans/missing.md'],
+    ['an unresolvable target commit', ['.docs/plans/p1.md'], undefined,
+      'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      'Protected artifact reseal target commit is unresolvable: deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
+    ['a target-deleted path', ['.docs/plans/p1.md'], async (repo: string) => {
+      await rm(join(repo, '.docs/plans/p1.md'));
+    }, undefined, 'Protected artifact reseal target is deleted: .docs/plans/p1.md'],
+    ['a path with uncommitted changes', ['.docs/plans/p1.md'], async (repo: string) => {
+      await writeProjectFile(repo, '.docs/plans/p1.md', 'dirty correction\n');
+    }, undefined,
+    'Protected artifact reseal target has uncommitted changes: .docs/plans/p1.md\nCommit the protected artifact before resealing.'],
+  ] as const)('refuses %s without changing the persisted seal bytes', async (
+    _name,
+    paths,
+    mutate,
+    targetCommit,
+    message,
+  ) => {
+    const repo = await makeRepo({ '.docs/plans/p1.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const originalBytes = await readFile(sealPath, 'utf8');
+    await mutate?.(repo);
+
+    await expect(resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: targetCommit ?? baselineCommit,
+      trigger: 'operator-reseal',
+      paths: [...paths],
+    })).rejects.toThrow(message);
+
+    await expect(readFile(sealPath, 'utf8')).resolves.toBe(originalBytes);
+  });
+
+  it('advances the baseline, records scoped lineage, and verifies every sealed entry', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/p2.md': 'approved plan two\n',
+    });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [
+        {
+          path: '.docs/plans/p1.md',
+          fingerprint: `sha256:${createHash('sha256').update('incorrect plan\n').digest('hex')}`,
+        },
+        {
+          path: '.docs/plans/p2.md',
+          fingerprint: `sha256:${createHash('sha256').update('approved plan two\n').digest('hex')}`,
+        },
+      ],
+      rebaselines: [],
+    };
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal, null, 2)}\n`);
+    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+    await git(repo, ['add', '.docs/plans/p1.md']);
+    await git(repo, ['commit', '-q', '-m', 'correct protected plan']);
+    const toCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit,
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+    });
+    const persisted = JSON.parse(await readFile(sealPath, 'utf8'));
+    const verification = await verifyProtectedArtifactSeal({ projectRoot: repo });
+
+    expect({ resealed, persisted, verification }).toEqual({
+      resealed: {
+        version: 2,
+        baselineCommit: toCommit,
+        protectedArtifacts: [
+          {
+            path: '.docs/plans/p1.md',
+            fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
+          },
+          seal.protectedArtifacts[1],
+        ],
+        rebaselines: [{
+          fromCommit: baselineCommit,
+          toCommit,
+          trigger: 'operator-reseal',
+          paths: ['.docs/plans/p1.md'],
+        }],
+      },
+      persisted: resealed,
+      verification: {
+        ok: true,
+        seal: resealed,
+        selfAmendments: [],
+      },
+    });
+  });
+
+  it('permits only the enumerated artifact to differ', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/p2.md': 'approved plan two\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+    await git(repo, ['add', '.docs/plans/p1.md']);
+    await git(repo, ['commit', '-q', '-m', 'correct protected plan']);
+
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+    });
+
+    expect(resealed.protectedArtifacts).toEqual([
+      {
+        path: '.docs/plans/p1.md',
+        fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
+      },
+      seal.protectedArtifacts[1],
+    ]);
+  });
+
+  it('keeps an unresealed protected path subject to violation detection', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/resealed.md': 'incorrect plan\n',
+      '.docs/plans/untouched.md': 'approved plan\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/resealed.md', 'corrected plan\n');
+    await git(repo, ['add', '.docs/plans/resealed.md']);
+    await git(repo, ['commit', '-q', '-m', 'correct one protected plan']);
+
+    await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/resealed.md'],
+    });
+    await writeProjectFile(repo, '.docs/plans/untouched.md', 'tampered plan\n');
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/plans/untouched.md',
+    });
+  });
+
+  it('permits an unlisted artifact inherited from the base tip without replacing its seal entry', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/p2.md': 'approved plan two\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await git(repo, ['checkout', '-q', '-b', 'feature']);
+    await git(repo, ['checkout', '-q', 'main']);
+    await writeProjectFile(repo, '.docs/plans/p2.md', 'base-tip plan two\n');
+    await git(repo, ['add', '.docs/plans/p2.md']);
+    await git(repo, ['commit', '-q', '-m', 'base updates plan two']);
+    await git(repo, ['checkout', '-q', 'feature']);
+    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+    await writeProjectFile(repo, '.docs/plans/p2.md', 'base-tip plan two\n');
+    await git(repo, ['add', '.docs']);
+    await git(repo, ['commit', '-q', '-m', 'rebase inherited plan and correct p1']);
+    gitInvocations.length = 0;
+
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+      baseBranch: 'main',
+    });
+
+    expect({
+      protectedArtifacts: resealed.protectedArtifacts,
+      gitInvocations,
+    }).toEqual({
+      protectedArtifacts: [
+        {
+          path: '.docs/plans/p1.md',
+          fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
+        },
+        seal.protectedArtifacts[1],
+      ],
+      gitInvocations: expect.arrayContaining([
+        ['show', 'main:.docs/plans/p2.md'],
+      ]),
+    });
+  });
+
+  it('permits a tolerated unlisted self-amendment without replacing its seal entry', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/feature.md': 'approved feature plan\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+    await writeProjectFile(repo, '.docs/plans/feature.md', 'self-amended feature plan\n');
+    await git(repo, ['add', '.docs']);
+    await git(repo, ['commit', '-q', '-m', 'correct p1 and amend feature plan']);
+
+    const resealed = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: await git(repo, ['rev-parse', 'HEAD']),
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+      featureDesc: 'feature',
+    });
+
+    expect(resealed.protectedArtifacts).toEqual([
+      seal.protectedArtifacts[0],
+      {
+        path: '.docs/plans/p1.md',
+        fingerprint: `sha256:${createHash('sha256').update('corrected plan\n').digest('hex')}`,
+      },
+    ]);
+  });
+
+  it.each([
+    ['a feature-authored committed change', async (repo: string) => {
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+      await writeProjectFile(repo, '.docs/plans/p2.md', 'feature-authored plan two\n');
+      await git(repo, ['add', '.docs']);
+      await git(repo, ['commit', '-q', '-m', 'correct p1 and change p2']);
+    }, 'main', 'Protected artifact changed: .docs/plans/p2.md'],
+    ['a deleted unlisted artifact', async (repo: string) => {
+      await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+      await rm(join(repo, '.docs/plans/p2.md'));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'correct p1 and delete p2']);
+    }, undefined, 'Protected artifact deleted: .docs/plans/p2.md'],
+    ['a non-inherited added artifact', async (repo: string) => {
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+      await writeProjectFile(repo, '.docs/plans/p3.md', 'unexpected plan three\n');
+      await git(repo, ['add', '.docs']);
+      await git(repo, ['commit', '-q', '-m', 'correct p1 and add p3']);
+    }, 'main', 'Protected artifact added: .docs/plans/p3.md'],
+    ['an unresolvable base reference', async (repo: string) => {
+      await writeProjectFile(repo, '.docs/plans/p1.md', 'corrected plan\n');
+      await writeProjectFile(repo, '.docs/plans/p2.md', 'changed plan two\n');
+      await git(repo, ['add', '.docs']);
+      await git(repo, ['commit', '-q', '-m', 'correct p1 and change p2']);
+    }, 'missing-base', 'Protected artifact provenance undeterminable: .docs/plans/p2.md\nMissing base ref: neither origin/missing-base nor missing-base resolves.\nProvide the base ref, then rebase onto it.'],
+  ] as const)('refuses the entire reseal for %s without changing the seal', async (_name, mutate, baseBranch, reason) => {
+    const repo = await makeRepo({
+      '.docs/plans/p1.md': 'incorrect plan\n',
+      '.docs/plans/p2.md': 'approved plan two\n',
+    });
+    const seal = await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const originalBytes = await readFile(sealPath, 'utf8');
+    await mutate(repo);
+    const toCommit = await git(repo, ['rev-parse', 'HEAD']);
+    gitInvocations.length = 0;
+
+    const rejection = await resealProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit,
+      trigger: 'operator-reseal',
+      paths: ['.docs/plans/p1.md'],
+      ...(baseBranch ? { baseBranch } : {}),
+    }).then(() => 'resolved', (error: Error) => error.message);
+
+    expect({
+      rejection,
+      persistedBytes: await readFile(sealPath, 'utf8'),
+      gitInvocations,
+    }).toEqual({
+      rejection: reason,
+      persistedBytes: originalBytes,
+      gitInvocations: expect.not.arrayContaining([
+        ['show', `${toCommit}:.docs/plans/p1.md`],
+      ]),
+    });
+  });
+});
+
 describe('evaluateProtectedArtifactSealRotation', () => {
   it('permits a non-ancestor rotation when every workspace and HEAD path is inherited from the base tip', () => {
     const deletedPath = '.docs/plans/deleted.md';
@@ -268,6 +580,78 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 });
 
 describe('rotateProtectedArtifactSeal', () => {
+  it('pins the persisted snapshot and notification produced by a permitted rotation', async () => {
+    const repo = await makeRepo({
+      '.docs/plans/feature.md': 'approved plan\n',
+      '.docs/specs/feature.md': 'approved prd\n',
+    });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [],
+    };
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal, null, 2)}\n`);
+    await writeProjectFile(repo, '.docs/plans/feature.md', 'rebased plan\n');
+    await writeProjectFile(repo, '.docs/specs/feature.md', 'rebased prd\n');
+    await git(repo, ['add', '.docs']);
+    await git(repo, ['commit', '-q', '-m', 'rebase inherited decide artifacts']);
+    const toCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const notifications: unknown[] = [];
+
+    const rotated = await rotateProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit,
+      trigger: 'history-rewrite',
+      paths: ['.docs/plans/feature.md'],
+      onRebaseline: async (event) => { notifications.push(event); },
+    });
+
+    expect({
+      rotated,
+      persisted: JSON.parse(await readFile(sealPath, 'utf8')),
+      sealDirectoryEntries: await readdir(dirname(sealPath)),
+      notifications,
+    }).toEqual({
+      rotated: {
+        version: 2,
+        baselineCommit: toCommit,
+        protectedArtifacts: [
+          {
+            path: '.docs/plans/feature.md',
+            fingerprint: `sha256:${createHash('sha256').update('rebased plan\n').digest('hex')}`,
+          },
+          {
+            path: '.docs/specs/feature.md',
+            fingerprint: `sha256:${createHash('sha256').update('rebased prd\n').digest('hex')}`,
+          },
+        ],
+        rebaselines: [{
+          fromCommit: baselineCommit,
+          toCommit,
+          trigger: 'history-rewrite',
+          paths: ['.docs/plans/feature.md'],
+        }],
+      },
+      persisted: rotated,
+      sealDirectoryEntries: ['protected-artifact-seal.json'],
+      notifications: [{
+        type: 'protected_artifact_rebaseline',
+        fromCommit: baselineCommit,
+        toCommit,
+        trigger: 'history-rewrite',
+        paths: ['.docs/plans/feature.md'],
+      }],
+    });
+  });
+
   it('atomically persists the toCommit snapshot while preserving and appending rebaseline lineage', async () => {
     const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
     const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);

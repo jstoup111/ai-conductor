@@ -793,6 +793,47 @@ The matching grant is consumed immediately before the provider dispatches the na
 malformed, mismatched, or already-consumed grant authorizes nothing and the run remains fail-closed.
 Clearing `.pipeline/HALT` or `.pipeline/HALT.class` is not an authorization; use the
 [DECIDE-entry recovery procedure](../runbooks/stalled-or-stuck-feature.md#the-halt-refused-a-decide-entry).
+
+## `conduct-ts reseal`
+
+```bash
+conduct-ts reseal --slug <slug> --path <path> [--path <path> ...] --reason "<rationale>" [--clear-halt]
+```
+
+Re-fingerprints named protected DECIDE artifacts against the current commit after an operator has
+reviewed and approved an amendment committed after first BUILD entry — the audited alternative to
+hand-editing `.pipeline/protected-artifact-seal.json`. Run it from the main repository checkout, not
+from inside the feature worktree.
+
+| Flag | Required | Effect |
+| --- | --- | --- |
+| `--slug <slug>` | yes | Feature worktree slug (`.worktrees/<slug>`). A slash, `.`, or `..` is rejected. |
+| `--path <path>` | yes, repeatable | A protected artifact path to reseal. Every occurrence reseals one more path; at least one is required. |
+| `--reason <reason>` | yes | Operator rationale for the reseal. A missing or blank rationale is refused and audited. |
+| `--clear-halt` | no | Also clear a resolved protected-artifact HALT in the worktree after resealing. |
+
+**Interactive-operator only.** The command refuses with `requires an interactive terminal` unless
+`process.stdin.isTTY` is true, so it cannot be reached from a `build`/`SHIP` step subprocess, an
+autonomous provider session, or a script piping stdin — only a human at a terminal can reseal.
+
+**Scoped, not a full rebaseline.** Only the listed paths are re-fingerprinted; every other protected
+path must still match its existing baseline or the whole reseal is refused — an operator cannot use
+`--path` to launder unrelated drift into the seal. Each listed path must already be protected and
+sealed, resolvable at the current commit, not deleted, and free of uncommitted changes (commit the
+amendment first). Refusal conditions — unknown worktree, missing rationale, non-interactive terminal,
+missing seal, an unlisted-path violation, or an invalid reseal target — are each written to the audit
+trail as `protected_artifact_reseal_refused` before the command exits 1; a successful reseal writes
+`protected_artifact_reseal` with the resealed paths' prior and new fingerprints. Both are audited with
+an `operator` origin, distinct from step-attributed records. See
+[artifacts](artifacts.md#write-guards) for the seal format and
+[the stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#the-halt-is-a-protected-artifact-violation)
+for the full recovery procedure.
+
+On success the command prints `Resealed protected artifacts: <paths>` and exits 0. With
+`--clear-halt`, it additionally clears the worktree's `HALT`/`HALT.class` markers when a halt is
+present and its class is the protected-artifact class, and reports the outcome (`No halt to clear.`,
+or why a present halt was not cleared) on a second line.
+
 ## `conduct-ts validate-wired-into`
 
 ```bash

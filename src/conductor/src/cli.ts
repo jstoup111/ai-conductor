@@ -566,6 +566,16 @@ export function createProgram(): Command {
     .description('Resolve a plan\'s **Wired-into:** anchors against the real wiring machinery; exits 1 on any anchor that cannot resolve')
     .option('--cwd <dir>', 'Repository directory the plan\'s repo-relative paths resolve against (default: process.cwd())');
 
+  // Reseal is an operator-driven, non-interactive command. It is declared here
+  // for discoverability; index.ts adds its pre-boot dispatch separately.
+  program
+    .command('reseal')
+    .description('Re-fingerprint named protected DECIDE artifacts after operator review')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--path <path>', 'Protected artifact path to reseal (repeatable)')
+    .requiredOption('--reason <reason>', 'Operator rationale for the reseal')
+    .option('--clear-halt', 'Clear a resolved protected-artifact halt after resealing');
+
   registerCommands(program);
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:

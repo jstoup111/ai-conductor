@@ -265,6 +265,28 @@ export type ConductorEvent =
         | 'head-differs-from-base';
       path?: string;
     }
+  | {
+      /** An interactive operator resealed the enumerated protected artifacts. */
+      type: 'protected_artifact_reseal';
+      paths: Array<{
+        path: string;
+        priorFingerprint: string;
+        newFingerprint: string;
+      }>;
+      /** Verbatim operator-supplied rationale. */
+      reason: string;
+      fromCommit: string;
+      toCommit: string;
+    }
+  | {
+      /** An operator reseal was refused before it could change the seal. */
+      type: 'protected_artifact_reseal_refused';
+      /** Verbatim operator-supplied rationale for the refused request. */
+      reason: string;
+      condition: string;
+      /** Present when a specific protected artifact caused the refusal. */
+      path?: string;
+    }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
   | {
       /** A foreign sealed DECIDE artifact redirected remediation back to DECIDE. */

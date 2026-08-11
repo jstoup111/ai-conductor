@@ -11,16 +11,33 @@ import { auditedEventTypes } from './event-sinks.js';
 import { phaseForStep } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
+/** The source of an audit record: a pipeline step or an interactive operator action. */
+export type AuditRecordOrigin = StepName | 'operator';
+
+export type AuditResealPath = {
+  path: string;
+  priorFingerprint: string;
+  newFingerprint: string;
+};
+
 /**
  * A single audit-trail event. `phase` and `at` are derived by the writer —
  * callers supply everything else.
  */
 export type AuditRecord = {
-  step: StepName;
-  phase: Phase;
+  origin: AuditRecordOrigin;
+  phase?: Phase;
   event: string;
   reason?: string;
   cause?: string;
+  /** Present for an operator-performed protected-artifact reseal. */
+  paths?: AuditResealPath[];
+  /** Present when an operator protected-artifact reseal is refused. */
+  condition?: string;
+  /** Present when a specific protected artifact caused a reseal refusal. */
+  path?: string;
+  fromCommit?: string;
+  toCommit?: string;
   attempt?: number;
   artifact?: string;
   outcome?: VerdictFreshnessOutcome;
@@ -38,6 +55,15 @@ export type AuditRecord = {
 /** Input to `AuditTrailWriter.record` — `phase` and `at` are derived, not supplied. */
 export type AuditRecordInput = Omit<AuditRecord, 'phase' | 'at'>;
 
+export type AuditTrailWriterOptions = {
+  /**
+   * Fail the immediate caller after writing the usual diagnostics. This is
+   * for operator commands whose requested action is not complete without its
+   * audit entry; normal pipeline subscribers remain best-effort.
+   */
+  throwOnWriteFailure?: boolean;
+};
+
 /**
  * Appends audit-trail events as whole-line JSON to
  * `<projectRoot>/.pipeline/audit-trail/events.jsonl`.
@@ -47,6 +73,7 @@ export type AuditRecordInput = Omit<AuditRecord, 'phase' | 'at'>;
  */
 export class AuditTrailWriter {
   private readonly projectRoot: string;
+  private readonly throwOnWriteFailure: boolean;
 
   /**
    * Steps for which a `gate_verdict` has already been observed. Used by
@@ -55,8 +82,9 @@ export class AuditTrailWriter {
    */
   private readonly stepsWithVerdicts = new Set<StepName>();
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, options: AuditTrailWriterOptions = {}) {
     this.projectRoot = projectRoot;
+    this.throwOnWriteFailure = options.throwOnWriteFailure === true;
   }
 
   private eventsPath(): string {
@@ -69,7 +97,7 @@ export class AuditTrailWriter {
 
     const record: AuditRecord = {
       ...input,
-      phase: phaseForStep(input.step),
+      ...(input.origin === 'operator' ? {} : { phase: phaseForStep(input.origin) }),
       at: Date.now(),
     };
 
@@ -80,20 +108,27 @@ export class AuditTrailWriter {
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(
         `[audit-trail] WRITE-FAILED: failed to append audit record ` +
-          `(step=${input.step}, event=${input.event}): error: ${message}\n`
+          `(origin=${input.origin}, event=${input.event}): error: ${message}\n`
       );
 
       // Best-effort marker so operators can detect silent audit-trail loss.
-      // Deliberately not rethrown — audit-trail failures must never break the caller.
+      // Normal subscribers remain best-effort; fail-closed callers rethrow below.
       try {
         mkdirSync(auditDir, { recursive: true });
         appendFileSync(
           join(auditDir, 'WRITE-FAILED'),
-          `${new Date().toISOString()} step=${input.step} event=${input.event} error=${message}\n`,
+          `${new Date().toISOString()} origin=${input.origin} event=${input.event} error=${message}\n`,
           { flag: 'a' }
         );
       } catch {
         // Marker write also failed; nothing more we can do without throwing.
+      }
+
+      if (this.throwOnWriteFailure) {
+        throw new Error(
+          `[audit-trail] failed to append audit record ` +
+            `(origin=${input.origin}, event=${input.event}): ${message}`,
+        );
       }
     }
   }
@@ -110,7 +145,7 @@ export class AuditTrailWriter {
     for (const type of auditedEventTypes()) {
       events.on(type, (event: ConductorEvent) => {
         const input = this.toRecordInput(event);
-        if (input) this.record(input);
+        if (input) return this.record(input);
       });
     }
   }
@@ -124,38 +159,55 @@ export class AuditTrailWriter {
         // the verdict is computed before this handler runs.
         this.stepsWithVerdicts.add(event.step);
         return {
-          step: event.step,
+          origin: event.step,
           event: event.satisfied ? 'gate_pass' : 'gate_fail',
           reason: event.reason,
         };
       case 'step_retry':
         return {
-          step: event.step,
+          origin: event.step,
           event: 'retry',
           reason: event.reason || 'step retry',
           attempt: event.attempt,
         };
       case 'kickback':
         return {
-          step: event.to,
+          origin: event.to,
           event: event.type,
           cause: `${event.from} evidence: ${event.evidence}`,
           ...(event.kickback_outcome ? { kickback_outcome: event.kickback_outcome } : {}),
         };
       case 'loop_halt':
-        return { step: 'build', event: 'intervention', cause: event.reason };
+        return { origin: 'build', event: 'intervention', cause: event.reason };
       case 'halt_cleared':
         return {
-          step: event.step ?? 'build',
+          origin: event.step ?? 'build',
           event: 'halt_cleared',
           cause: event.cause,
         };
       case 'verdict_freshness':
         return {
-          step: event.step,
+          origin: event.step,
           event: 'verdict_freshness',
           artifact: event.artifact,
           outcome: event.outcome,
+        };
+      case 'protected_artifact_reseal':
+        return {
+          origin: 'operator',
+          event: 'reseal',
+          paths: event.paths,
+          reason: event.reason,
+          fromCommit: event.fromCommit,
+          toCommit: event.toCommit,
+        };
+      case 'protected_artifact_reseal_refused':
+        return {
+          origin: 'operator',
+          event: 'reseal_refused',
+          reason: event.reason,
+          condition: event.condition,
+          ...(event.path ? { path: event.path } : {}),
         };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict
@@ -163,7 +215,7 @@ export class AuditTrailWriter {
         // for this step, that verdict wins — skip to avoid a duplicate
         // pass record.
         if (this.stepsWithVerdicts.has(event.step)) return null;
-        return { step: event.step, event: 'gate_pass', reason: 'step completed' };
+        return { origin: event.step, event: 'gate_pass', reason: 'step completed' };
       default:
         return null;
     }

@@ -124,7 +124,7 @@ describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry p
     expect(stepsRun).not.toContain('explore'); // front-half never re-executed
 
     const records = await readRecords(dir);
-    const recordedSteps = new Set(records.map((r) => r.step));
+    const recordedSteps = new Set(records.map((r) => r.origin));
     for (const step of new Set(stepsRun)) {
       expect(recordedSteps.has(step), `expected a daemon-mode record for "${step}"`).toBe(true);
     }
@@ -159,7 +159,7 @@ describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry p
     await conductor.run();
 
     const records = await readRecords(dir);
-    const recordedSteps = new Set(records.map((r) => r.step));
+    const recordedSteps = new Set(records.map((r) => r.origin));
     for (const step of DAEMON_RESOLVED_FRONT_HALF) {
       expect(recordedSteps.has(step), `pre-resolved "${step}" must not fabricate a record`).toBe(false);
     }

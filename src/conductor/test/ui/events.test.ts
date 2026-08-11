@@ -87,6 +87,19 @@ describe('ConductorEventEmitter', () => {
     expect(handler2).toHaveBeenCalledOnce();
   });
 
+  it('emitOrThrow surfaces a subscriber failure after notifying other listeners', async () => {
+    const emitter = new ConductorEventEmitter();
+    const delivered = vi.fn();
+    emitter.on('step_started', () => {
+      throw new Error('durable sink failed');
+    });
+    emitter.on('step_started', delivered);
+
+    await expect(emitter.emitOrThrow({ type: 'step_started', step: 'explore', index: 0 }))
+      .rejects.toThrow('durable sink failed');
+    expect(delivered).toHaveBeenCalledOnce();
+  });
+
   it('multiple listeners on same event type all fire', async () => {
     const emitter = new ConductorEventEmitter();
     const handler1 = vi.fn();
