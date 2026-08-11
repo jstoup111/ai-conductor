@@ -75,6 +75,11 @@ adopts it, which is what tasks 5 and 13 prove.
 - `src/conductor/test/engine/halt-pr-rehabilitation.test.ts` — new describe block
 
 **Wired-into:** none (inert until src/conductor/src/engine/conductor.ts)
+> **Amended 2026-08-10 by #1415:** The primitive is now called by the dispatch-boundary
+> wrapper, so Tasks 1–5 have a reachable production surface. The original inert declaration
+> remains as the historical pre-wiring assertion.
+
+**Wired-into:** src/conductor/src/engine/conductor.ts#clearRetainedHaltStateForDispatch
 **Dependencies:** none
 
 ### Task 2: Preserve draft status through the clear
