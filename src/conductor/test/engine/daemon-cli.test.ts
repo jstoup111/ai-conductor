@@ -116,6 +116,34 @@ describe('daemon closeout rendering', () => {
   });
 });
 
+describe('protected artifact rotation rendering', () => {
+  it('renders each rotation variant with its provenance evidence', () => {
+    const lines: string[] = [];
+
+    renderDaemonEvent({
+      type: 'protected_artifact_rebaseline',
+      trigger: 'defensive-history-rewrite',
+      fromCommit: '1234567890abcdef',
+      toCommit: 'fedcba0987654321',
+      paths: ['.docs/plans/feature.md'],
+      excludedBaseAheadPaths: ['.docs/specs/upstream.md'],
+    }, (line) => lines.push(line));
+    renderDaemonEvent({
+      type: 'protected_artifact_rebaseline_refused',
+      condition: 'feature-authored:head-differs-from-base',
+      verdictCondition: 'head-differs-from-base',
+      path: '.docs/plans/feature.md',
+      mergeBase: 'abcdef1234567890',
+      headTouchedPath: true,
+    }, (line) => lines.push(line));
+
+    expect(lines).toEqual([
+      '· seal rebaselined 1234567890ab..fedcba098765 (defensive-history-rewrite) — 1 path(s); excluded base-ahead paths: .docs/specs/upstream.md',
+      '· seal rebaseline refused .docs/plans/feature.md — head-differs-from-base (feature-authored:head-differs-from-base); merge base: abcdef123456; HEAD touched path: true',
+    ]);
+  });
+});
+
 let daemonDir: string;
 let root: string;
 
