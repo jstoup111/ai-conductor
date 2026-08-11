@@ -158,8 +158,8 @@ steps:
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
   release-disposition:
-    llm_provider: codex
-    model: gpt-5.6-terra
+    llm_provider: claude
+    model: sonnet
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
@@ -170,9 +170,9 @@ steps:
 puts `codex` first, so `build` and the mechanical steps dispatch there with `claude` behind them.
 The design, review, audit, documentation, and finish steps that remain pinned to
 `llm_provider: claude` still fall back to `codex`, because a step-level selection is prepended to
-the run-level list rather than replacing it. `coherence_check`, `rebase`, and
-`release-disposition` deliberately use Codex. See
-[multiprovider](multiprovider.md).
+the run-level list rather than replacing it. `coherence_check` deliberately uses Codex. `rebase`
+and `release-disposition` are pinned back to Claude — conflict resolution and release judgement
+both proved to need it. See [multiprovider](multiprovider.md).
 
 **`manual_test` is disabled.** The harness's own features are engine and CLI changes covered by the
 vitest suite and the integrity script, so a dispatched manual-test session costs tokens without

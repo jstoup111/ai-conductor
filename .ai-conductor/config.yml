@@ -108,15 +108,13 @@ steps:
     llm_provider: claude
   architecture_review_as_built:
     llm_provider: claude
-  # Routed to codex (operator order, 2026-08-10). Conflict resolution is
-  # mechanical pattern-matching rather than the judgement the other claude pins
-  # protect, and a bad resolution cannot pass silently: the rebase step HALTs on
-  # failure and the protected-artifact seal independently rejects any DECIDE
-  # artifact the resolution disturbs. Telemetry motivating the move: rebase was
-  # the only non-zero claude spend outside build_review ($2.81 of $41.10 across
-  # the sampled worktrees) and originated 5 of 12 observed kickbacks.
+  # Pinned to claude (operator order, 2026-08-10), reverting #1471. Conflict
+  # resolution was rerouted to codex on the theory that it is mechanical
+  # pattern-matching; in practice codex does not resolve rebases acceptably, so
+  # the cost argument does not apply. The HALT-on-failure and protected-artifact
+  # seal remain true but catch only the resolutions that fail loudly.
   rebase:
-    llm_provider: codex
+    llm_provider: claude
   finish:
     llm_provider: claude
   manual_test:
@@ -130,11 +128,10 @@ steps:
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
-  # Provider pinned explicitly because release disposition is a deliberate
-  # Codex judgement lane rather than an inherited routing choice.
+  # Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
   release-disposition:
-    llm_provider: codex
-    model: gpt-5.6-terra
+    llm_provider: claude
+    model: sonnet
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
