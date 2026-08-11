@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.102.0] - 2026-08-10
+## [0.102.0] - 2026-08-11
 
 ### Added
 
@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Fixed
 
 - Spec PRs opened into a repository that requires a release disposition now always declare one, so its required release-metadata check no longer fails on every landed spec. ([implementation PR #1448](https://github.com/jstoup111/ai-conductor/pull/1448)).
+- `Wired-into:` inert waivers accept `Task N` (a task in the same plan) and bare `#N` issue refs, and an unrecognized ref is now rejected at authoring time instead of failing the build as a missing file. ([implementation PR #1469](https://github.com/jstoup111/ai-conductor/pull/1469)).
 
 ## [0.101.1] - 2026-08-10
 
