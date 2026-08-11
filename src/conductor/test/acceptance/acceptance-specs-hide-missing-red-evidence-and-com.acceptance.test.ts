@@ -45,6 +45,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
 import { Conductor } from '../../src/engine/conductor.js';
 import type { ConductorOptions, StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { validateAcceptanceRedEvidence } from '../../src/engine/artifacts.js';
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -210,6 +211,39 @@ describe('acceptance_specs provenance and RED lifecycle use the real Conductor s
     expect(redEvents.find((event) => event.state === 'rejected')?.reason).toMatch(
       /failingTests|ranAt|intentRationale/,
     );
+  });
+
+  it('keeps a legacy marker invalid and reports the unchanged run-contract-missing reason when recovery has no contract', async () => {
+    const legacyMarker = {
+      command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+      targetSpecs: [FEATURE_SPEC],
+      executed: 1,
+      passed: 0,
+      failed: 1,
+      skipped: 0,
+      errors: 0,
+    };
+    expect(validateAcceptanceRedEvidence(legacyMarker)).toMatchObject({
+      ok: false,
+      class: 'shape',
+    });
+    await writeFile(
+      join(root, '.pipeline', 'acceptance-specs-red.json'),
+      JSON.stringify(legacyMarker),
+      'utf-8',
+    );
+    const exec = vi.fn();
+    let haltReason: string | undefined;
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReason = event.reason;
+    });
+
+    await conductor({ acceptanceRedExec: exec }).run();
+
+    expect(exec).not.toHaveBeenCalled();
+    expect(haltReason).toBe(`run contract missing: ${join(root, '.pipeline', 'acceptance-specs-run.json')}`);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.acceptance_specs).not.toBe('done');
   });
 
   it('refuses a green run with the unchanged reason and never emits a satisfied lifecycle event', async () => {
