@@ -3294,15 +3294,65 @@ export class Conductor {
     if (outcome !== 'partial') this.resumeHaltStateClearAttempted = true;
   }
 
+  /** Path of the durable pre-finish capture, readable by a re-dispatched process. */
+  private releaseMetadataSnapshotPath(): string {
+    return join(this.projectRoot, '.pipeline', 'release-metadata-snapshot.json');
+  }
+
+  /** Read the persisted capture, ignoring anything that is not a valid canonical block. */
+  private async readPersistedReleaseMetadataSnapshot(): Promise<
+    { prUrl: string; block: string } | undefined
+  > {
+    try {
+      const raw = await readFile(this.releaseMetadataSnapshotPath(), 'utf-8');
+      const value = JSON.parse(raw) as { prUrl?: unknown; block?: unknown };
+      if (typeof value.prUrl !== 'string' || typeof value.block !== 'string') return undefined;
+      // A capture that no longer round-trips is not restorable; treat it as absent
+      // so the caller re-derives from the PR body rather than merging garbage.
+      if (snapshotReleaseMetadataBlock(value.block) !== value.block) return undefined;
+      return { prUrl: value.prUrl, block: value.block };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Drop the capture so the next finish dispatch re-derives it. Called before
+   * `release-disposition` dispatches: whatever that step writes supersedes any
+   * earlier capture, and restoring the superseded block would ship the wrong note.
+   */
+  private async clearFinishReleaseMetadataSnapshot(): Promise<void> {
+    this.releaseMetadataSnapshot = undefined;
+    await unlinkFile(this.releaseMetadataSnapshotPath()).catch(() => {});
+  }
+
   /** Capture only a valid, re-readable release block before finish can replace the body. */
   private async snapshotFinishReleaseMetadata(branch?: string): Promise<void> {
-    this.releaseMetadataSnapshot = undefined;
-    if (!this.releaseDispositionFlowActive()) return;
+    if (!this.releaseDispositionFlowActive()) {
+      this.releaseMetadataSnapshot = undefined;
+      return;
+    }
 
     const prUrl = await this.resolveRetainedShipDraftPrUrl(branch);
     if (!prUrl) {
       throw new Error('pre-finish snapshot unavailable: retained draft PR identity is absent');
     }
+
+    // FINISH advances one publication transition per dispatch, so this hook fires
+    // again after `author_pr_prose` has legitimately rewritten the body without the
+    // metadata. Re-deriving the capture from that body finds nothing and halts the
+    // feature on its last step. An existing capture for this same PR is therefore
+    // authoritative and is never re-derived from a body finish has already touched;
+    // the persisted copy carries it across a re-dispatch in a fresh process.
+    const retained =
+      this.releaseMetadataSnapshot?.prUrl === prUrl
+        ? this.releaseMetadataSnapshot
+        : await this.readPersistedReleaseMetadataSnapshot();
+    if (retained && retained.prUrl === prUrl) {
+      this.releaseMetadataSnapshot = retained;
+      return;
+    }
+    this.releaseMetadataSnapshot = undefined;
 
     try {
       const { stdout } = await this.gh(
@@ -3314,6 +3364,12 @@ export class Conductor {
       const block = snapshotReleaseMetadataBlock(body);
       if (block === null) throw new Error('release metadata is malformed or non-canonical');
       this.releaseMetadataSnapshot = { prUrl, block };
+      await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+      await writeFile(
+        this.releaseMetadataSnapshotPath(),
+        `${JSON.stringify({ prUrl, block }, null, 2)}\n`,
+        'utf-8',
+      ).catch(() => {});
     } catch (error) {
       throw new Error(
         `pre-finish snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`,
@@ -5664,6 +5720,14 @@ export class Conductor {
           // before finish dispatches, because finish may replace the body.
           if (step.name === 'finish') {
             await this.snapshotFinishReleaseMetadata(state.worktree_branch);
+          }
+          // Whatever this dispatch writes supersedes any earlier capture — a
+          // kickback that re-runs the gate must not have its old block restored
+          // over the freshly authored one.
+          // `release-disposition` is a repository-local custom step, so it is
+          // outside the built-in `StepName` union and compared as a plain string.
+          if ((step.name as string) === 'release-disposition') {
+            await this.clearFinishReleaseMetadataSnapshot();
           }
 
           let result: StepRunResult;

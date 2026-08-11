@@ -80,6 +80,14 @@ writes the authoritative structured metadata to the retained SHIP draft PR, and 
 completion evidence in `.pipeline/release-disposition-pass`. The later `finish` step preserves that
 metadata while supplying the reader-facing PR body.
 
+`finish` captures the exact metadata block before it dispatches and restores it after the prose
+author has rewritten the body. Because `finish` advances one publication transition per dispatch,
+that capture is taken **once** per retained PR and persisted to
+`.pipeline/release-metadata-snapshot.json`: a later dispatch — including one in a fresh process after
+a daemon re-dispatch — reuses it instead of re-reading a body the prose author has already replaced.
+Dispatching `release-disposition` discards the capture, so a kickback that rewrites the disposition
+never has its superseded block restored over the new one.
+
 Both configured gates read the **retained SHIP PR**, which the engine adopts at SHIP-phase entry. If
 that PR is a reused `needs-remediation` halt placeholder, the engine makes it presentable whenever
 that identity is resolved — at adoption, at the pre-finish snapshot, or at the finish-time
