@@ -175,14 +175,14 @@ export type ConductorEvent =
     }
   | ProviderAttemptEvent
   | {
-      /** A dead-owner provider scratch home was removed during a daemon sweep. */
+      /** A provider scratch home was removed during a daemon sweep or legacy collection. */
       type: 'scratch_cleanup_reclaimed';
-      repository: string;
-      featureSlug: string;
-      runId: string;
-      attempt: number;
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
       path: string;
-      reason: 'dead-owner';
+      reason: 'dead-owner' | 'legacy-preexisting';
     }
   | {
       /** A provider scratch home was retained during a daemon sweep. */
@@ -195,12 +195,12 @@ export type ConductorEvent =
       reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition';
     }
   | {
-      /** A dead-owner provider scratch home could not be removed during a daemon sweep. */
+      /** A provider scratch home could not be removed during a daemon sweep or legacy collection. */
       type: 'scratch_cleanup_failed';
-      repository: string;
-      featureSlug: string;
-      runId: string;
-      attempt: number;
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
       path: string;
       reason: string;
     }

@@ -1,5 +1,5 @@
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -10,6 +10,7 @@ import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import {
   acquireScratchHome,
+  collectLegacyScratch,
   readScratchLease,
   releaseScratchHome,
   resolveScratchHome,
@@ -20,6 +21,48 @@ import {
 const execFile = promisify(execFileCb);
 
 describe('provider scratch homes', () => {
+  it('collects historical temporary-provider homes once at the daemon boundary', async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-legacy-root-'));
+    const legacyHomes = [
+      join(tempRoot, 'self-host-interrupted-run'),
+      join(tempRoot, 'harness-selfbuild-interrupted-run'),
+    ];
+    const unrelatedHome = join(tempRoot, 'another-tool-interrupted-run');
+    const events = new ConductorEventEmitter();
+    const emitted: ConductorEvent[] = [];
+    events.on('scratch_cleanup_reclaimed', (event) => { emitted.push(event); });
+
+    try {
+      await Promise.all([...legacyHomes, unrelatedHome].map((path) => mkdir(path)));
+      const beforeProcessStart = new Date(Date.now() - (process.uptime() * 1_000) - 1_000);
+      await Promise.all(legacyHomes.map((path) => utimes(path, beforeProcessStart, beforeProcessStart)));
+
+      const sortedLegacyHomes = [...legacyHomes].sort();
+      await expect(collectLegacyScratch({ tempRoot, events })).resolves.toStrictEqual(
+        sortedLegacyHomes.map((home) => ({ kind: 'reclaimed', home })),
+      );
+      await expect(Promise.all(legacyHomes.map((path) => readdir(path).then(() => 'present', () => 'missing')))).resolves.toStrictEqual([
+        'missing',
+        'missing',
+      ]);
+      await expect(readdir(unrelatedHome)).resolves.toEqual([]);
+      expect(emitted).toEqual(sortedLegacyHomes.map((path) => ({
+        type: 'scratch_cleanup_reclaimed',
+        repository: 'unknown',
+        featureSlug: 'unknown',
+        runId: 'unknown',
+        attempt: 'unknown',
+        path,
+        reason: 'legacy-preexisting',
+      })));
+
+      await expect(collectLegacyScratch({ tempRoot, events })).resolves.toStrictEqual([]);
+      expect(emitted).toHaveLength(2);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('resolves beneath the owning worktree', () => {
     expect(resolveScratchHome({ worktreeRoot: '/wt', runId: 'R', attempt: 2, provider: 'codex' })).toBe(
       '/wt/.daemon/scratch/R/2-codex',

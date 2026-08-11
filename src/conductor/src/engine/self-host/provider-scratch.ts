@@ -1,10 +1,13 @@
 import { dirname, join, normalize } from 'node:path';
 import * as fsp from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import type { SelfHostProviderId } from './provider-home.js';
 import type { ConductorEvent } from '../../types/events.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 
 const OWNER_LEASE_FILE = 'owner.json';
+const LEGACY_SCRATCH_PREFIXES = ['self-host-', 'harness-selfbuild-'] as const;
+const collectedLegacyScratchRoots = new Set<string>();
 
 export interface ResolveScratchHomeOptions {
   readonly worktreeRoot: string;
@@ -80,6 +83,55 @@ export type ScratchSweepDecision =
     readonly home: string;
     readonly reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition';
   };
+
+export interface CollectLegacyScratchOptions {
+  /** Injectable only for fixture isolation; production uses the system temporary directory. */
+  readonly tempRoot?: string;
+  readonly fs?: ScratchFs;
+  readonly events?: ConductorEventEmitter;
+}
+
+export type LegacyScratchCollectionDecision =
+  | { readonly kind: 'reclaimed'; readonly home: string }
+  | { readonly kind: 'failed'; readonly home: string; readonly error: string };
+
+/**
+ * One-time migration collector for historical provider homes created before
+ * scratch became worktree-local. The daemon invokes it beside the regular
+ * sweep; a root guard makes subsequent dispatch boundaries a no-op.
+ */
+export async function collectLegacyScratch(options: CollectLegacyScratchOptions = {}): Promise<readonly LegacyScratchCollectionDecision[]> {
+  const fs = options.fs ?? realScratchFs;
+  const tempRoot = normalize(options.tempRoot ?? tmpdir());
+  if (collectedLegacyScratchRoots.has(tempRoot)) return [];
+  collectedLegacyScratchRoots.add(tempRoot);
+
+  const decisions: LegacyScratchCollectionDecision[] = [];
+  for (const name of [...await readDirectory(tempRoot, fs)].sort()) {
+    if (!LEGACY_SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
+    const home = join(tempRoot, name);
+    try {
+      await fs.rm(home, { recursive: true, force: true });
+      decisions.push({ kind: 'reclaimed', home });
+      await emitScratchCleanup(options.events, {
+        type: 'scratch_cleanup_reclaimed',
+        ...scratchCleanupIdentity(undefined),
+        path: home,
+        reason: 'legacy-preexisting',
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      decisions.push({ kind: 'failed', home, error: reason });
+      await emitScratchCleanup(options.events, {
+        type: 'scratch_cleanup_failed',
+        ...scratchCleanupIdentity(undefined),
+        path: home,
+        reason,
+      });
+    }
+  }
+  return decisions;
+}
 
 export async function acquireScratchHome(options: AcquireScratchHomeOptions): Promise<string> {
   const home = resolveScratchHome(options);
