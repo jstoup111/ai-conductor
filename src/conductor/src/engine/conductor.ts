@@ -152,7 +152,6 @@ import {
   FINISH_CHOICE_MARKER,
   type RemediationGap,
   type CompletionContext,
-  ACCEPTANCE_SPECS_RED_EVIDENCE,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
 } from './artifacts.js';
@@ -5509,13 +5508,12 @@ export class Conductor {
             await this.completionCtx(state),
           );
           this.currentAttemptStartedAt = undefined;
-          const marker = ACCEPTANCE_SPECS_RED_EVIDENCE;
-          const namesMissingOrInvalidRedMarker =
+          const hasRepairableRedEvidenceRefusal =
             !preCheck.done &&
-            typeof preCheck.reason === 'string' &&
-            (preCheck.reason.includes(`${marker} is missing`) ||
-              preCheck.reason.includes(`invalid JSON in ${marker}`));
-          if (namesMissingOrInvalidRedMarker) {
+            (preCheck.acceptanceRedRefusalClass === 'missing' ||
+              preCheck.acceptanceRedRefusalClass === 'unparseable' ||
+              preCheck.acceptanceRedRefusalClass === 'shape');
+          if (hasRepairableRedEvidenceRefusal) {
             const specFiles = await findArtifactFilesForStep(
               this.projectRoot,
               'acceptance_specs',

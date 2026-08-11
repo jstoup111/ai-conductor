@@ -143,6 +143,35 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     if (result.ok) expect(result.value.acceptance_specs).toBe('done');
   });
 
+  it('invokes selfHealAcceptanceRed for a shape-class marker refusal, not only missing or invalid JSON', async () => {
+    // This marker is valid JSON and has a real observed RED outcome, but is
+    // incomplete evidence because it lacks the required intentRationale.
+    // The completion predicate classifies that as a repairable shape defect.
+    await writeFile(
+      join(dir, '.pipeline', 'acceptance-specs-red.json'),
+      JSON.stringify({
+        command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+        targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errors: 0,
+        failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+        ranAt: new Date().toISOString(),
+      }),
+      'utf-8',
+    );
+    selfHealAcceptanceRedMock.mockResolvedValue({ healed: true });
+
+    const { conductor, log, reasons } = runConductor();
+    await conductor.run();
+
+    expect(selfHealAcceptanceRedMock).toHaveBeenCalledTimes(1);
+    expect(log).not.toContain('run:acceptance_specs');
+    expect(reasons).toEqual([]);
+  });
+
   it('falls through to the existing retry/HALT behavior unchanged when the heal fails', async () => {
     selfHealAcceptanceRedMock.mockResolvedValue({ healed: false, reason: 'run contract missing: x' });
 

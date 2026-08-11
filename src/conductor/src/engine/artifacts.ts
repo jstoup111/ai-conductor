@@ -826,6 +826,12 @@ export interface CompletionResult {
    * `done:true` and on predicates that don't classify.
    */
   routeClass?: 'named-route' | 'absent';
+  /**
+   * Why acceptance_specs RED evidence was refused. The conductor uses this
+   * machine-readable class to decide whether its bounded pre-heal can repair
+   * missing or malformed recording without re-running a real observed result.
+   */
+  acceptanceRedRefusalClass?: 'missing' | 'unparseable' | 'shape' | 'outcome';
 }
 
 async function verdictFreshnessFor(
@@ -1922,6 +1928,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     } catch {
       return {
         done: false,
+        acceptanceRedRefusalClass: 'missing',
         reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is missing — the writing-system-tests skill must run the new specs and record the RED result (a spec that is never executed does not establish RED)`,
       };
     }
@@ -1929,10 +1936,16 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return { done: false, reason: `invalid JSON in ${ACCEPTANCE_SPECS_RED_EVIDENCE}` };
+      return {
+        done: false,
+        acceptanceRedRefusalClass: 'unparseable',
+        reason: `invalid JSON in ${ACCEPTANCE_SPECS_RED_EVIDENCE}`,
+      };
     }
     const verdict = validateAcceptanceRedEvidence(parsed);
-    if (!verdict.ok) return { done: false, reason: verdict.reason };
+    if (!verdict.ok) {
+      return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
+    }
     return { done: true };
   },
 
