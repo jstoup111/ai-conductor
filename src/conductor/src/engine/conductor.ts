@@ -3200,6 +3200,11 @@ export class Conductor {
           (row as { url: string }).url.length > 0,
       );
       if (!match) return undefined;
+      await this.makeRetainedShipPrPresentable(
+        match.url,
+        { worktree_branch: head },
+        undefined,
+      );
       this.shipDraftPrUrl = match.url;
       (this.log ?? console.warn)(
         `[ship-draft-pr] recovered retained draft PR identity for ${head} from origin: ${match.url}`,
