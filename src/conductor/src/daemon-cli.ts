@@ -2303,9 +2303,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // bookkeeping on a rebased feature, so it stays dim.
       const from = event.fromCommit.slice(0, 12);
       const to = event.toCommit.slice(0, 12);
+      const excludedBaseAheadPaths = event.excludedBaseAheadPaths?.length
+        ? `; excluded base-ahead paths: ${event.excludedBaseAheadPaths.join(', ')}`
+        : '';
       log(
         `${dot} ${chalk.dim(
-          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)`,
+          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)${excludedBaseAheadPaths}`,
         )}`,
       );
       break;
@@ -2314,9 +2317,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // Rebaselining was refused: the seal difference is the feature's own work,
       // i.e. a genuine DECIDE-artifact change. Operator-relevant, so not dim.
       const path = event.path ? ` ${event.path}` : '';
+      const provenance = [
+        event.mergeBase ? `merge base: ${event.mergeBase.slice(0, 12)}` : undefined,
+        event.headTouchedPath === undefined ? undefined : `HEAD touched path: ${event.headTouchedPath}`,
+      ].filter((value): value is string => value !== undefined).join('; ');
       log(
         `${dot} ${chalk.yellow(
-          `seal rebaseline refused${path} — ${event.verdictCondition} (${event.condition})`,
+          `seal rebaseline refused${path} — ${event.verdictCondition} (${event.condition})${provenance ? `; ${provenance}` : ''}`,
         )}`,
       );
       break;

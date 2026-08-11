@@ -143,8 +143,12 @@ The seal is written at first BUILD entry. BUILD and SHIP agents cannot replace i
 engine rebaselines it after a proven history rewrite. A clean engine rebase rotates it after
 post-rebase evidence translation. Verification also rotates a seal stranded by an earlier rebase
 when its baseline is no longer an ancestor of `HEAD`. Both paths require every changed workspace
-artifact to equal the blob at `HEAD` and every `HEAD` blob to equal the base-branch tip. The engine
-records each rotation in `rebaselines` and logs the trigger, old and new commits, and paths.
+artifact to equal the blob at `HEAD`. A `HEAD` blob that still differs from the base-branch tip only
+blocks rotation when this feature authored that divergence; a path git-provably not touched by this
+feature since the merge-base is excluded from the rotation instead (`excludedBaseAheadPaths`), and
+rotation proceeds for the rest. An indeterminate authorship probe still fails closed and refuses
+rotation. The engine records each rotation in `rebaselines` and logs the trigger, old and new
+commits, and paths.
 
 An accepted-artifact correction belongs to DECIDE, before that first BUILD entry. DECIDE writes the
 additive note beside the original assertion:

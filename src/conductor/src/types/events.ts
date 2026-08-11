@@ -252,6 +252,8 @@ export type ConductorEvent =
       fromCommit: string;
       toCommit: string;
       paths: string[];
+      /** Base-ahead paths excluded after provenance proved they were not feature-authored. */
+      excludedBaseAheadPaths?: string[];
     }
   | {
       type: 'protected_artifact_rebaseline_refused';
@@ -264,6 +266,10 @@ export type ConductorEvent =
         | 'workspace-differs-from-head'
         | 'head-differs-from-base';
       path?: string;
+      /** Merge-base used to classify a named path, when provenance resolved far enough to obtain one. */
+      mergeBase?: string;
+      /** Whether HEAD changed the named path since `mergeBase`; degraded probes stay explicit. */
+      headTouchedPath?: boolean | 'indeterminate';
     }
   | {
       /** An interactive operator resealed the enumerated protected artifacts. */

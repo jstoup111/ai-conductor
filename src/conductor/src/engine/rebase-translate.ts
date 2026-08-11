@@ -5,6 +5,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { rekeyMemoAfterRebase } from './attribution-lane.js';
 import {
   createProtectedArtifactSeal,
+  PROTECTED_ARTIFACT_DIRECTORIES,
   PROTECTED_ARTIFACT_SEAL_PATH,
   rotateProtectedArtifactSeal,
   type ProtectedArtifactSealRebaselineObserver,
@@ -456,10 +457,7 @@ export async function translateAfterRebase(
       origHead,
       head,
       '--',
-      '.docs/architecture',
-      '.docs/plans',
-      '.docs/specs',
-      '.docs/stories',
+      ...PROTECTED_ARTIFACT_DIRECTORIES,
     ]);
     const paths = changed.exitCode === 0
       ? [...new Set(changed.stdout.split('\n').map((path) => path.trim()).filter(Boolean))]
