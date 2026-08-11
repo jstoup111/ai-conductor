@@ -231,7 +231,7 @@ describe('provider scratch homes', () => {
         writeFile(join(worktreeRoot, '.gitignore'), gitignore),
         mkdir(home, { recursive: true }),
       ]);
-      await execFile('git', ['init', '--quiet', worktreeRoot]);
+      await execFile('git', ['init', '--quiet', '-b', 'main', worktreeRoot]);
 
       const relativeHome = relative(worktreeRoot, home);
       await expect(execFile('git', ['-C', worktreeRoot, 'check-ignore', '--quiet', '--', relativeHome])).resolves.toBeDefined();

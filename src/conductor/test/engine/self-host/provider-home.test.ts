@@ -194,7 +194,7 @@ describe('provider-aware self-host homes', () => {
       writeFile(join(worktree, '.gitignore'), '.daemon/\n'),
       writeFile(join(worktree, 'skills', 'SKILL.md'), 'skill\n'),
     ]);
-    await execFile('git', ['init', '--quiet', worktree]);
+    await execFile('git', ['init', '--quiet', '-b', 'main', worktree]);
     await execFile('git', ['-C', worktree, 'config', 'user.email', 'task14@example.test']);
     await execFile('git', ['-C', worktree, 'config', 'user.name', 'Task Fourteen']);
     await execFile('git', ['-C', worktree, 'add', '.']);

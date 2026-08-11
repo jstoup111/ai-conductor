@@ -92,7 +92,7 @@ describe('Stories 3/4 — build-path homes are worktree-local and self-cleaning'
     } as unknown as Parameters<typeof provisionProviderHome>[0]);
 
     const path = home.homeDir;
-    expect(path).toBe(expectedHome(worktree, 'codex'));
+    expect(path).toMatch(new RegExp(`^${expectedHome(worktree, 'codex')}/self-host-codex-`));
     expect(home.childEnv().CODEX_HOME).toBe(path);
     expect(relative(worktree, path).split(sep)[0]).toBe('.daemon');
     expect(await git('status', '--porcelain')).toBe('');
@@ -116,7 +116,7 @@ describe('Stories 3/4 — build-path homes are worktree-local and self-cleaning'
     } as unknown as Parameters<typeof provisionSandboxBuildEnv>[0]);
 
     const path = sandbox.configDir;
-    expect(path).toBe(expectedHome(worktree, 'claude'));
+    expect(path).toMatch(new RegExp(`^${expectedHome(worktree, 'claude')}/harness-selfbuild-`));
     expect(sandbox.childEnv().CLAUDE_CONFIG_DIR).toBe(path);
     expect(relative(worktree, path).split(sep)[0]).toBe('.daemon');
     expect(await git('status', '--porcelain')).toBe('');

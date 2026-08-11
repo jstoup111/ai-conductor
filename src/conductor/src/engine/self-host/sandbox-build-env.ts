@@ -139,6 +139,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     readonly configDir: string,
     private readonly parentEnv: NodeJS.ProcessEnv,
     private readonly fs: SandboxFs,
+    private readonly releaseScratch?: () => Promise<void>,
   ) {}
 
   childEnv(): NodeJS.ProcessEnv {
@@ -159,6 +160,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     this.tornDown = true;
     // force: true → ENOENT is not an error, so double teardown is a no-op.
     await this.fs.rm(this.configDir, { recursive: true, force: true });
+    if (this.releaseScratch) await this.releaseScratch();
   }
 }
 
@@ -242,7 +244,19 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
         'The build was NOT launched.',
     );
   }
-  return new ThrowawaySandbox(configDir, parentEnv, fs);
+  return new ThrowawaySandbox(
+    configDir,
+    parentEnv,
+    fs,
+    opts.baseDir === undefined
+      ? () => releaseScratchHome({
+        worktreeRoot: opts.worktreeRoot,
+        runId: opts.runId ?? 'sandbox-build-env',
+        attempt: opts.attempt ?? 0,
+        provider: 'claude',
+      }).then(() => {})
+      : undefined,
+  );
 }
 
 

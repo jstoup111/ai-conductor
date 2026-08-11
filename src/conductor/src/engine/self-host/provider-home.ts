@@ -98,6 +98,7 @@ class ThrowawayProviderHome implements ProviderHome {
     private readonly additions: NodeJS.ProcessEnv,
     private readonly args: readonly string[],
     private readonly fs: ProviderHomeFs,
+    private readonly releaseScratch?: () => Promise<void>,
   ) {}
 
   childEnv(): NodeJS.ProcessEnv {
@@ -118,6 +119,7 @@ class ThrowawayProviderHome implements ProviderHome {
     if (this.tornDown) return;
     this.tornDown = true;
     await this.fs.rm(this.homeDir, { recursive: true, force: true });
+    if (this.releaseScratch) await this.releaseScratch();
   }
 }
 
@@ -188,6 +190,14 @@ export async function provisionProviderHome(
       { ...auth?.env, ...controls?.env },
       [...(auth?.args ?? []), ...(controls?.args ?? [])],
       fs,
+      options.baseDir === undefined
+        ? () => releaseScratchHome({
+          worktreeRoot: options.worktreeRoot,
+          runId: options.runId ?? 'provider-home',
+          attempt: options.attempt ?? 0,
+          provider: options.provider.id,
+        }).then(() => {})
+        : undefined,
     );
   } catch (error) {
     if (homeDir) {

@@ -28,7 +28,7 @@ export interface ScratchFs {
   rmdir(path: string): Promise<void>;
 }
 
-export const realScratchFs: ScratchFs = {
+const realScratchFs: ScratchFs = {
   mkdir: (path, options) => fsp.mkdir(path, options).then(() => {}),
   writeFile: (path, content) => fsp.writeFile(path, content, 'utf8'),
   readFile: (path) => fsp.readFile(path, 'utf8').then((content) => content, () => null),
@@ -381,7 +381,7 @@ async function emitScratchCleanup(events: ConductorEventEmitter | undefined, eve
   }
 }
 
-export function probeScratchOwnerLiveness(ownerPid: number): ScratchOwnerLiveness {
+function probeScratchOwnerLiveness(ownerPid: number): ScratchOwnerLiveness {
   if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) return 'unknown';
   try {
     process.kill(ownerPid, 0);
