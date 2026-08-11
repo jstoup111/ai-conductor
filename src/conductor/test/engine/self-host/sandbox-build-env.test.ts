@@ -177,6 +177,33 @@ describe('minimal Claude self-host sandbox', () => {
     expect(await readdir(base)).toEqual([]);
   });
 
+  it('defaults the Claude config home and child env beneath worktree scratch', async () => {
+    const { baseDir: _explicitBaseDir, ...defaulted } = options();
+    const scratchRoot = join(worktree, '.daemon', 'scratch', 'run-12', '1-claude');
+    const sandbox = await provisionSandboxBuildEnv({
+      ...defaulted,
+      runId: 'run-12',
+      attempt: 1,
+    });
+    try {
+      expect([sandbox.configDir, sandbox.childEnv().CLAUDE_CONFIG_DIR]).toEqual([
+        expect.stringMatching(new RegExp(`^${scratchRoot}`)),
+        expect.stringMatching(new RegExp(`^${scratchRoot}`)),
+      ]);
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('leaves token liveness probes on the system temporary directory', async () => {
+    const source = await readFile(
+      new URL('../../../src/engine/self-host/token-liveness.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toContain("options.baseDir ?? tmpdir()");
+  });
+
   it('keeps the child env isolated and teardown idempotent on the crash path', async () => {
     const parentEnv = { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/operator/.claude' };
     let captured = '';
