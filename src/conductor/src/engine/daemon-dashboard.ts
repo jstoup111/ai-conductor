@@ -417,9 +417,7 @@ async function readDispatchActivity(
         state: event.state,
         ...(typeof event.reason === 'string' ? { reason: event.reason } : {}),
       };
-      if (event.state === 'pending' || event.state === 'rejected') {
-        completionUnmet = true;
-      }
+      completionUnmet = event.state === 'pending' || event.state === 'rejected';
     }
   }
   return { startedAtMs, completionUnmet, acceptanceRed };

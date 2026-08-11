@@ -250,6 +250,31 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     );
   });
 
+  it('closes a current dispatch waiting state when later acceptance RED evidence is satisfied', async () => {
+    const now = Date.now();
+    await makeStateful('red-satisfied', { acceptance_specs: 'in_progress' });
+    await writeFile(
+      join(worktreeBase, 'red-satisfied', '.pipeline', 'events.jsonl'),
+      [
+        { type: 'step_started', step: 'acceptance_specs', index: 11, ts: new Date(now - 10_000).toISOString() },
+        { type: 'acceptance_red', step: 'acceptance_specs', state: 'rejected', ts: new Date(now - 2_000).toISOString() },
+        { type: 'acceptance_red', step: 'acceptance_specs', state: 'satisfied', ts: new Date(now - 1_000).toISOString() },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({ worktreeBase, processedDir, discover: async () => [] });
+
+    const entry = state.inProgress.find((candidate) => candidate.slug === 'red-satisfied');
+    expect({
+      acceptanceRedState: entry?.acceptanceRedState,
+      isWaiting: entry?.activityState === 'waiting',
+    }).toEqual({
+      acceptanceRedState: 'satisfied',
+      isWaiting: false,
+    });
+  });
+
   it('renders child work as unknown and degrades when the event ledger is unavailable', async () => {
     await makeStateful('missing-ledger', { acceptance_specs: 'in_progress' });
     await makeStateful('unreadable-ledger', { acceptance_specs: 'in_progress' });
