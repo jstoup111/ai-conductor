@@ -292,10 +292,9 @@ describe("selfHealAcceptanceRed", () => {
       healed: false,
       reason: "failing-test detail could not be extracted from the self-heal run output",
     });
-    const marker = JSON.parse(
-      readFileSync(join(worktreeRoot, ".pipeline", "acceptance-specs-red.json"), "utf8"),
-    );
-    expect(marker).not.toHaveProperty("failingTests");
+    expect(
+      existsSync(join(worktreeRoot, ".pipeline", "acceptance-specs-red.json")),
+    ).toBe(false);
   });
 
   it("carries a malformed recorded exception forward without repairing it", async () => {

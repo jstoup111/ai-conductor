@@ -1307,10 +1307,11 @@ export function validateAcceptanceRedEvidence(
   const num = (k: string): number | null =>
     typeof e[k] === 'number' && Number.isFinite(e[k]) ? (e[k] as number) : null;
   const failed = num('failed');
+  const passed = num('passed');
   const skipped = num('skipped');
   const errors = num('errors');
   const executed = num('executed');
-  if (failed === null || skipped === null || errors === null || executed === null) {
+  if (failed === null || passed === null || skipped === null || errors === null || executed === null) {
     return {
       ok: false,
       class: 'shape',

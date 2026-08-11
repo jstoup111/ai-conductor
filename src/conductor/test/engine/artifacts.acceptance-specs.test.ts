@@ -155,6 +155,16 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
     });
   });
 
+  it('classifies a missing passed counter as a shape refusal', () => {
+    const { passed: _passed, ...evidenceWithoutPassed } = validEvidence;
+
+    expect(validateAcceptanceRedEvidence(evidenceWithoutPassed)).toMatchObject({
+      ok: false,
+      class: 'shape',
+      reason: expect.stringContaining('executed/passed/failed/skipped/errors'),
+    });
+  });
+
   it('classifies no failing tests as an outcome refusal', () => {
     expect(validateAcceptanceRedEvidence({ ...validEvidence, failed: 0 })).toMatchObject({
       ok: false,

@@ -1,6 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { ACCEPTANCE_SPECS_RED_EVIDENCE, validateAcceptanceRedEvidence } from "./artifacts.js";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Relative path (from the worktree root) to the acceptance run contract
@@ -232,6 +236,64 @@ export type AcceptanceRedExec = (
   opts: { cwd: string },
 ) => Promise<unknown>;
 
+export type AcceptanceRedCommandRunner = (
+  command: string,
+  cwd: string,
+) => Promise<{ stdout: string; stderr?: string }>;
+
+export type ProductionAcceptanceRedExec = (
+  command: string,
+  cwd: string,
+) => Promise<unknown>;
+
+const ACCEPTANCE_RED_EVIDENCE_PREFIX = "ACCEPTANCE_RED_EVIDENCE: ";
+
+function parseAcceptanceRedOutput(stdout: string): Record<string, unknown> {
+  const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const evidenceLines = lines.filter((line) => line.startsWith(ACCEPTANCE_RED_EVIDENCE_PREFIX));
+  if (evidenceLines.length !== 1 || lines.at(-1) !== evidenceLines[0]) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(
+      evidenceLines[0].slice(ACCEPTANCE_RED_EVIDENCE_PREFIX.length),
+    );
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // The final evidence line was malformed; preserve the prior marker.
+  }
+  return {};
+}
+
+async function runProductionAcceptanceCommand(
+  command: string,
+  cwd: string,
+): Promise<{ stdout: string; stderr?: string }> {
+  try {
+    const result = await execFileAsync(command, { cwd, shell: true } as any);
+    return { stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+  } catch (error) {
+    const result = error as { stdout?: unknown; stderr?: unknown };
+    return { stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+  }
+}
+
+/**
+ * Production adapter for the exact command recorded in the run contract.
+ * The command emits one final `ACCEPTANCE_RED_EVIDENCE: <JSON>` line carrying
+ * observed counters and provenance; ordinary diagnostics may precede it.
+ */
+export function createProductionAcceptanceRedExec(
+  runCommand: AcceptanceRedCommandRunner = runProductionAcceptanceCommand,
+): ProductionAcceptanceRedExec {
+  return async (command, cwd) => {
+    const result = await runCommand(command, cwd);
+    return parseAcceptanceRedOutput(result.stdout);
+  };
+}
+
 export interface SelfHealAcceptanceRedParams {
   worktree: string;
   specFiles: string[];
@@ -247,10 +309,9 @@ export type SelfHealAcceptanceRedResult =
  * marker left nested from a PRIOR run up to the authoritative root path,
  * then reads and validates the acceptance run contract, cross-checks it
  * against the feature's committed spec files, guards its cwd, executes it
- * via the injected `exec`, writes the fresh result at the authoritative root
- * path (unconditionally, since a freshly executed result always supersedes
- * whatever was there before), and re-validates with the existing
- * {@link validateAcceptanceRedEvidence}.
+ * via the injected `exec`, validates the fresh result, then replaces the root
+ * marker only when that complete provenance-bearing result passes validation.
+ * A malformed command result leaves any prior evidence intact.
  *
  * Any guard failure (parse/cross-check/cwd) short-circuits before `exec` is
  * ever called.
@@ -331,25 +392,18 @@ export async function selfHealAcceptanceRed(
       : {}),
   };
 
-  writeRedMarkerAtRoot(resolvedRoot, markerContent);
-
-  const markerPath = join(resolvedRoot, ACCEPTANCE_SPECS_RED_EVIDENCE);
-  const markerRaw = readFileSync(markerPath, "utf8");
-  let markerParsed: unknown;
-  try {
-    markerParsed = JSON.parse(markerRaw);
-  } catch {
-    return { healed: false, reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is not valid JSON` };
-  }
-
-  const validated = validateAcceptanceRedEvidence(markerParsed);
+  const validated = validateAcceptanceRedEvidence(markerContent);
   if (!validated.ok) {
+    // A complete fresh observation with an unsuccessful RED outcome is still
+    // useful evidence and must replace stale data. Only malformed/incomplete
+    // parser output is refused without disturbing the prior marker.
+    if (validated.class === "outcome") {
+      writeRedMarkerAtRoot(resolvedRoot, markerContent);
+      return { healed: false, reason: validated.reason };
+    }
     if (
-      typeof markerParsed === "object" &&
-      markerParsed !== null &&
-      !Array.isArray(markerParsed) &&
-      establishedRedCounters(markerParsed as Record<string, unknown>) &&
-      !hasExtractableFailingTestDetail(markerParsed as Record<string, unknown>)
+      establishedRedCounters(markerContent) &&
+      !hasExtractableFailingTestDetail(markerContent)
     ) {
       return {
         healed: false,
@@ -359,5 +413,6 @@ export async function selfHealAcceptanceRed(
     return { healed: false, reason: validated.reason };
   }
 
+  writeRedMarkerAtRoot(resolvedRoot, markerContent);
   return { healed: true };
 }

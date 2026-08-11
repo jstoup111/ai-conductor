@@ -44,6 +44,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { ConductorOptions, StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { createProductionAcceptanceRedExec } from '../../src/engine/acceptance-red-runner.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { validateAcceptanceRedEvidence } from '../../src/engine/artifacts.js';
 import { scanInheritedState, renderDashboard } from '../../src/engine/daemon-dashboard.js';
@@ -151,19 +152,19 @@ describe('acceptance_specs provenance and RED lifecycle use the real Conductor s
       JSON.stringify({
         command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
         targetSpecs: [FEATURE_SPEC],
-        executed: 1,
-        passed: 0,
-        failed: 1,
+        executed: 9,
+        passed: 4,
+        failed: 5,
         skipped: 0,
         errors: 0,
       }),
       'utf-8',
     );
 
-    const exec = vi.fn(async () => ({
-      executed: 1,
-      passed: 0,
-      failed: 1,
+    const commandRunner = vi.fn(async () => ({ stdout: `ACCEPTANCE_RED_EVIDENCE: ${JSON.stringify({
+      executed: 3,
+      passed: 1,
+      failed: 2,
       skipped: 0,
       errors: 0,
       failingTests: [
@@ -174,18 +175,26 @@ describe('acceptance_specs provenance and RED lifecycle use the real Conductor s
       ],
       intentRationale:
         'The missing event is the operator-visible behavior introduced by this feature.',
-    }));
+    })}`, stderr: JSON.stringify({ executed: 999 }) }));
 
-    await conductor({ acceptanceRedExec: exec }).run();
+    await conductor({ acceptanceRedExec: createProductionAcceptanceRedExec(commandRunner) }).run();
 
-    expect(exec).toHaveBeenCalledTimes(1);
+    expect(commandRunner).toHaveBeenCalledTimes(1);
+    expect(commandRunner).toHaveBeenCalledWith(
+      'npm test -- test/acceptance/feature.acceptance.test.ts',
+      join(root, '.'),
+    );
     const marker = JSON.parse(
       await readFile(join(root, '.pipeline', 'acceptance-specs-red.json'), 'utf-8'),
     ) as Record<string, unknown>;
     expect(marker).toMatchObject({
       command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
       targetSpecs: [FEATURE_SPEC],
-      failed: 1,
+      executed: 3,
+      passed: 1,
+      failed: 2,
+      skipped: 0,
+      errors: 0,
       failingTests: [
         {
           name: 'records the intended missing acceptance RED lifecycle',
@@ -211,6 +220,34 @@ describe('acceptance_specs provenance and RED lifecycle use the real Conductor s
     expect(redEvents.find((event) => event.state === 'rejected')?.reason).toMatch(
       /failingTests|ranAt|intentRationale/,
     );
+  });
+
+  it('preserves prior counter evidence when the production parser cannot produce valid provenance', async () => {
+    await writeRunContract();
+    const legacyMarker = {
+      command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+      targetSpecs: [FEATURE_SPEC],
+      executed: 1,
+      passed: 0,
+      failed: 1,
+      skipped: 0,
+      errors: 0,
+    };
+    await writeFile(
+      join(root, '.pipeline', 'acceptance-specs-red.json'),
+      JSON.stringify(legacyMarker),
+      'utf-8',
+    );
+    const commandRunner = vi.fn(async () => ({
+      stdout: 'ACCEPTANCE_RED_EVIDENCE: {"executed":1,"failed":1,"skipped":0,"errors":0}',
+    }));
+
+    await conductor({ acceptanceRedExec: createProductionAcceptanceRedExec(commandRunner) }).run();
+
+    expect(commandRunner).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(
+      await readFile(join(root, '.pipeline', 'acceptance-specs-red.json'), 'utf-8'),
+    )).toEqual(legacyMarker);
   });
 
   it('keeps a legacy marker invalid and reports the unchanged run-contract-missing reason when recovery has no contract', async () => {

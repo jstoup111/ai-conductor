@@ -547,6 +547,18 @@ Shape — exactly three fields, matching the command actually run in this step:
 - `targetSpecs` — the spec file(s)/path(s) the command targets, matching `targetSpecs` in
   `acceptance-specs-red.json`.
 
+The command's output must finish with exactly one machine-readable evidence line so the engine can
+replay it without guessing framework-specific text:
+
+```text
+ACCEPTANCE_RED_EVIDENCE: {"executed":5,"passed":0,"failed":5,"skipped":0,"errors":0,"failingTests":[{"name":"returns the archived filing","reason":"the archive endpoint is not implemented"}],"intentRationale":"The failing endpoint proves the requested archive behavior is not implemented."}
+```
+
+This line is part of the command's own output contract. It carries the fresh observed counters and
+provenance; the engine adds the recorded command, target specs, and fresh run timestamp before it
+replaces an older marker. A command that does not emit valid evidence is refused without overwriting
+the prior marker.
+
 Write this file **after** the RED run succeeds and **before** this skill reports the step
 complete — it is not optional evidence, it is the deterministic backstop the engine consumes
 when the red-evidence marker is missing or misplaced. This is gitignored run evidence, not a

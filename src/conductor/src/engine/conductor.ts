@@ -192,10 +192,6 @@ import {
   renderDecideEntryHalt,
 } from './decide-entry-policy.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import {
   classifyBuildSettle,
@@ -1947,9 +1943,8 @@ export class Conductor {
     this.guardrails = opts.selfHostGuardrails ?? defaultSelfHostGuardrails;
     this.acceptanceRedExec =
       opts.acceptanceRedExec ??
-      (async (command: string, cwd: string) => {
-        const { stdout } = await execFileAsync(command, { cwd, shell: true } as any);
-        return stdout;
+      (async () => {
+        throw new Error('acceptance RED executor must be injected at a production composition root');
       });
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
