@@ -544,7 +544,16 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         ...input,
         headArtifacts: new Map([[path, headBytes]]),
       }),
-      headDiffersFromBase: evaluateProtectedArtifactSealRotation({ ...input, baseTipArtifacts: new Map([[path, baseBytes]]) }),
+      headDiffersFromBase: evaluateProtectedArtifactSealRotation({
+        ...input,
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        authorshipByPath: new Map([[path, 'authored']]),
+      }),
+      headDiffersFromBaseNotAuthored: evaluateProtectedArtifactSealRotation({
+        ...input,
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        authorshipByPath: new Map([[path, 'not-authored']]),
+      }),
       missingWorkspaceArtifactDiffersFromHead: evaluateProtectedArtifactSealRotation({
         ...input,
         workspaceArtifacts: new Map(),
@@ -559,6 +568,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       baseTipUnresolved: { permitted: false, condition: 'base-tip-unresolved' },
       workspaceDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
       headDiffersFromBase: { permitted: false, condition: 'head-differs-from-base', path },
+      headDiffersFromBaseNotAuthored: { permitted: true, paths: [] },
       missingWorkspaceArtifactDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
     });
   });
