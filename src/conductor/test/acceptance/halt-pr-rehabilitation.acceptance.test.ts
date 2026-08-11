@@ -20,7 +20,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import { NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
+import {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from '../../src/engine/pr-labels.js';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import { reconcileHaltPrs } from '../../src/engine/halt-pr-reconciliation.js';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -64,10 +67,12 @@ function makeGhFake(state: {
   gh: GhRunner;
   calls: string[][];
   getBody: () => string;
+  getTitle: () => string;
   getLabels: () => string[];
   getIsDraft: () => boolean;
 } {
   let body = state.body ?? '';
+  let title = state.title;
   let labels = state.labels;
   let isDraft = state.isDraft;
   const calls: string[][] = [];
@@ -95,7 +100,9 @@ function makeGhFake(state: {
       // readHaltPresentation calls: pr view <url> --json isDraft,labels,body
       return {
         stdout: JSON.stringify({
-          title: state.title,
+          url: PR_URL,
+          state: 'OPEN',
+          title,
           isDraft,
           labels: labels.map((name) => ({ name })),
           body,
@@ -105,7 +112,9 @@ function makeGhFake(state: {
     if (args[0] === 'pr' && args[1] === 'view') {
       return {
         stdout: JSON.stringify({
-          title: state.title,
+          url: PR_URL,
+          state: 'OPEN',
+          title,
           isDraft,
           labels: labels.map((name) => ({ name })),
         }),
@@ -127,12 +136,17 @@ function makeGhFake(state: {
       body = args[args.indexOf('--body') + 1];
       return { stdout: '' };
     }
+    if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--title')) {
+      title = args[args.indexOf('--title') + 1];
+      return { stdout: '' };
+    }
     return { stdout: '' };
   };
   return {
     gh,
     calls,
     getBody: () => body,
+    getTitle: () => title,
     getLabels: () => labels,
     getIsDraft: () => isDraft,
   };
@@ -448,6 +462,123 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
       expect(dispatches).toBe(2);
       expect(pr.labels).not.toContain('needs-remediation');
       expect(pr.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('adopts a #1412-shaped placeholder during re-dispatch and floors it into a usable draft PR', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'placeholder-redispatch-'));
+    try {
+      const statePath = join(projectRoot, 'conduct-state.json');
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          plan: 'done',
+          acceptance_specs: 'done',
+          build: 'done',
+          manual_test: 'pending',
+          track: 'technical',
+          complexity_tier: 'M',
+          feature_desc: 'recover retained placeholder',
+          worktree_branch: 'feat/recover-retained-placeholder',
+        }),
+        'utf8',
+      );
+      const { gh, getBody, getIsDraft, getLabels, getTitle } = makeGhFake({
+        title: 'needs-remediation: feat/recover-retained-placeholder — manual remediation required',
+        labels: ['needs-remediation'],
+        isDraft: true,
+        body: [
+          'This PR was opened automatically after an irrecoverable daemon HALT.',
+          HALT_PR_BANNER_SENTINEL,
+          NEEDS_REMEDIATION_BODY_MARKER,
+        ].join('\n\n'),
+      });
+      const conductor = new Conductor({
+        projectRoot,
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            expect(step).toBe('manual_test');
+            return { success: false, output: 'sentinel: stop after SHIP adoption' };
+          },
+        },
+        events: new ConductorEventEmitter(),
+        fromStep: 'manual_test',
+        mode: 'default',
+        baseBranch: 'main',
+        gh,
+        runGh: gh,
+        git: async (args) => ({ stdout: args[0] === 'rev-list' ? '1\n' : '' }),
+        maxRetries: 1,
+        sleepFn: async () => {},
+      });
+
+      await conductor.run();
+
+      expect(getTitle()).toBe('feat: recover retained placeholder');
+      expect(getLabels()).not.toContain('needs-remediation');
+      expect(getBody()).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+      expect(getBody()).not.toContain(HALT_PR_BANNER_SENTINEL);
+      expect(getBody()).toContain('## Summary');
+      expect(getIsDraft()).toBe(true);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a hand-repaired title while re-dispatch repairs the remaining placeholder facets', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'hand-repaired-redispatch-'));
+    try {
+      const statePath = join(projectRoot, 'conduct-state.json');
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          plan: 'done',
+          acceptance_specs: 'done',
+          build: 'done',
+          manual_test: 'pending',
+          track: 'technical',
+          complexity_tier: 'M',
+          feature_desc: 'recover retained placeholder',
+          worktree_branch: 'feat/recover-retained-placeholder',
+        }),
+        'utf8',
+      );
+      const handWrittenTitle = 'feat: operator-repaired wording';
+      const { gh, getBody, getLabels, getTitle } = makeGhFake({
+        title: handWrittenTitle,
+        labels: ['needs-remediation'],
+        isDraft: true,
+        body: [HALT_PR_BANNER_SENTINEL, NEEDS_REMEDIATION_BODY_MARKER].join('\n\n'),
+      });
+      const conductor = new Conductor({
+        projectRoot,
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            expect(step).toBe('manual_test');
+            return { success: false, output: 'sentinel: stop after SHIP adoption' };
+          },
+        },
+        events: new ConductorEventEmitter(),
+        fromStep: 'manual_test',
+        mode: 'default',
+        baseBranch: 'main',
+        gh,
+        runGh: gh,
+        git: async (args) => ({ stdout: args[0] === 'rev-list' ? '1\n' : '' }),
+        maxRetries: 1,
+        sleepFn: async () => {},
+      });
+
+      await conductor.run();
+
+      expect(getTitle()).toBe(handWrittenTitle);
+      expect(getLabels()).not.toContain('needs-remediation');
+      expect(getBody()).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+      expect(getBody()).toContain('## Summary');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
