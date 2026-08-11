@@ -182,7 +182,7 @@ describe('Conductor.run acceptance_specs RED dispatch lifecycle (Task 10)', () =
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('emits required before dispatch and pending after a successful dispatch leaves the gate unsatisfied', async () => {
+  it('emits required before dispatch and rejected when a successful dispatch leaves the gate unsatisfied', async () => {
     // A missing marker reaches Task 9's pre-heal seam first. Refusing that
     // heal preserves the ordinary dispatch path, whose lifecycle is this
     // test's only concern.
@@ -215,7 +215,7 @@ describe('Conductor.run acceptance_specs RED dispatch lifecycle (Task 10)', () =
     expect(order).toEqual([
       'event:required',
       'dispatch:acceptance_specs',
-      'event:pending',
+      'event:rejected',
     ]);
   });
 });

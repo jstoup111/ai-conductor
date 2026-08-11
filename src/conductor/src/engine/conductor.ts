@@ -6321,15 +6321,19 @@ export class Conductor {
             // to derive here — a build-gate miss just falls through to the
             // normal retry path below.
 
+            if (step.name === 'acceptance_specs') {
+              const viaException =
+                'viaException' in completion && completion.viaException === true;
+              await emitTracked({
+                type: 'acceptance_red',
+                state: completion.done ? 'satisfied' : 'rejected',
+                step: step.name,
+                ...(!completion.done && { reason: completion.reason }),
+                viaException,
+              });
+            }
+
             if (!completion.done) {
-              if (step.name === 'acceptance_specs') {
-                await emitTracked({
-                  type: 'acceptance_red',
-                  state: 'pending',
-                  step: step.name,
-                  viaException: false,
-                });
-              }
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
               if (
                 step.name === 'build_review' &&
