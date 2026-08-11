@@ -296,6 +296,10 @@ export function validateConfig(
     'mergeable_autoresolve',
     // Opt-in judgement gate at the build → manual_test seam.
     'build_review',
+    // ADR corpus scope for conflict-check. Accepted (and ignored) ahead of the
+    // block's own validation so the deployed engine can parse a config that
+    // sets it — the self-host skew this key would otherwise cause.
+    'conflict_check',
     // CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
     'ci_watch',
     // Progress-aware build halt/park decision (daemon-halts-a-build-that-is-making-forward-progre).
