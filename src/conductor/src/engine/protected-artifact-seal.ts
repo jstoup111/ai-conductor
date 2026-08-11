@@ -946,11 +946,17 @@ function rotationRefusalPreservesInspection(
   rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
   inspection: ProtectedArtifactSealVerdict,
 ): boolean {
-  if (!inspection.ok) return true;
   return (
-    rotation.condition === 'same-history-ancestor'
-    || rotation.condition === 'base-tip-unresolved'
-    || rotation.condition === 'head-unresolvable'
+    (inspection.ok && (
+      rotation.condition === 'same-history-ancestor'
+      || rotation.condition === 'base-tip-unresolved'
+      || rotation.condition === 'head-unresolvable'
+    ))
+    || (
+      rotation.condition === 'workspace-differs-from-head'
+      && !inspection.ok
+      && inspection.reason.startsWith('Indeterminate protected artifact target')
+    )
   );
 }
 

@@ -1952,7 +1952,7 @@ describe('verifyProtectedArtifactSeal', () => {
       }).toEqual({
         verdict: {
           ok: false,
-          reason: `Protected artifact changed: ${path}`,
+          reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
         },
         sealBytesUnchanged: true,
         baselineCommit: strandedBaseline,
@@ -1995,7 +1995,10 @@ describe('verifyProtectedArtifactSeal', () => {
         rebaselines: JSON.parse(sealAfter).rebaselines,
         events,
       }).toEqual({
-        verdict: { ok: false, reason: `Protected artifact changed: ${path}` },
+        verdict: {
+          ok: false,
+          reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
+        },
         sealBytesUnchanged: true,
         baselineCommit: strandedBaseline,
         rebaselines: [],
@@ -2171,7 +2174,7 @@ describe('verifyProtectedArtifactSeal', () => {
       ]);
     });
 
-    it('preserves a failed inspection instead of replacing it with a feature-authored rotation refusal', async () => {
+    it('preserves the feature-authored rotation diagnostic after a failed inspection', async () => {
       const { repo } = await makeRewrittenRepo({
         initial: { '.docs/plans/other-feature.md': 'approved plan\n' },
         baseAdvance: { 'unrelated.ts': 'main advance\n' },
@@ -2186,7 +2189,9 @@ describe('verifyProtectedArtifactSeal', () => {
       });
 
       expect(verdict.ok).toBe(false);
-      expect((verdict as { reason: string }).reason).toBe('Protected artifact changed: .docs/plans/other-feature.md');
+      expect((verdict as { reason: string }).reason).toBe(
+        'Protected artifact changed: .docs/plans/other-feature.md\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.',
+      );
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
       ).toBe(before);
@@ -2385,7 +2390,7 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
-    it('preserves a failed inspection rather than replacing it with a workspace-versus-HEAD refusal', async () => {
+    it('preserves the workspace-versus-HEAD refusal diagnostic after a failed inspection', async () => {
       const path = '.docs/plans/other-feature.md';
       const { repo } = await makeRewrittenRepo({
         initial: { [path]: 'approved plan\n' },
@@ -2399,7 +2404,29 @@ describe('verifyProtectedArtifactSeal', () => {
         baseBranch: 'main',
       })).resolves.toEqual({
         ok: false,
-        reason: `Protected artifact changed: ${path}`,
+        reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
+      });
+    });
+
+    it('preserves an indeterminate target inspection during a workspace-versus-HEAD refusal', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const { repo } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work\n' },
+      });
+      const outside = join(await mkdtemp(join(tmpdir(), 'protected-artifact-outside-')), 'replacement.md');
+      scratches.push(dirname(outside));
+      await writeFile(outside, 'untrusted replacement\n');
+      await rm(join(repo, path));
+      await symlink(outside, join(repo, path));
+
+      await expect(verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      })).resolves.toEqual({
+        ok: false,
+        reason: `Indeterminate protected artifact target: ${path}`,
       });
     });
 
