@@ -5528,38 +5528,49 @@ export class Conductor {
                 exec,
               });
               if (healResult.healed) {
-                // A successful pre-heal bypasses the ordinary dispatch loop,
-                // whose lifecycle emissions would otherwise make the recovery
-                // invisible. Record the refused legacy marker, the bounded
-                // re-run, and its satisfied replacement in the same order.
-                await emitAcceptanceRed({
-                  type: 'acceptance_red',
-                  state: 'required',
-                  step: step.name,
-                  viaException: false,
-                });
-                await emitAcceptanceRed({
-                  type: 'acceptance_red',
-                  state: 'rejected',
-                  step: step.name,
-                  reason: preCheck.reason,
-                  viaException: false,
-                });
-                await emitAcceptanceRed({
-                  type: 'acceptance_red',
-                  state: 'pending',
-                  step: step.name,
-                  viaException: false,
-                });
-                await emitAcceptanceRed({
-                  type: 'acceptance_red',
-                  state: 'satisfied',
-                  step: step.name,
-                  viaException: false,
-                });
-                succeeded = true;
-                successOutput = undefined;
-                acceptanceRedPreHealed = true;
+                // Re-read through the completion predicate so the lifecycle
+                // reports the replacement marker's actual waiver status.
+                const healedCompletion = await checkStepCompletion(
+                  this.projectRoot,
+                  step.name,
+                  await this.completionCtx(state),
+                );
+                if (!healedCompletion.done) {
+                  acceptanceRedHealFailureReason = healedCompletion.reason;
+                } else {
+                  // A successful pre-heal bypasses the ordinary dispatch loop,
+                  // whose lifecycle emissions would otherwise make the recovery
+                  // invisible. Record the refused legacy marker, the bounded
+                  // re-run, and its satisfied replacement in the same order.
+                  await emitAcceptanceRed({
+                    type: 'acceptance_red',
+                    state: 'required',
+                    step: step.name,
+                    viaException: false,
+                  });
+                  await emitAcceptanceRed({
+                    type: 'acceptance_red',
+                    state: 'rejected',
+                    step: step.name,
+                    reason: preCheck.reason,
+                    viaException: false,
+                  });
+                  await emitAcceptanceRed({
+                    type: 'acceptance_red',
+                    state: 'pending',
+                    step: step.name,
+                    viaException: false,
+                  });
+                  await emitAcceptanceRed({
+                    type: 'acceptance_red',
+                    state: 'satisfied',
+                    step: step.name,
+                    viaException: healedCompletion.viaException === true,
+                  });
+                  succeeded = true;
+                  successOutput = undefined;
+                  acceptanceRedPreHealed = true;
+                }
               } else {
                 acceptanceRedHealFailureReason = healResult.reason;
               }
@@ -6318,6 +6329,16 @@ export class Conductor {
             this.currentAttemptStartedAt = undefined;
           }
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity') {
+            if (step.name === 'acceptance_specs') {
+              // The dispatch has returned; publish that RED evidence is now
+              // awaiting its authoritative completion-gate verdict.
+              await emitAcceptanceRed({
+                type: 'acceptance_red',
+                state: 'pending',
+                step: step.name,
+                viaException: false,
+              });
+            }
             let completion = await checkStepCompletion(
               this.projectRoot,
               step.name,

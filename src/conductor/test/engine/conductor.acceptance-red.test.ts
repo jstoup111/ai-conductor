@@ -125,7 +125,25 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     // No run contract / marker on disk — the completion gate misses with the
     // "marker is missing" reason and committed spec files are present, which
     // is exactly the condition the self-heal call site must fire on.
-    selfHealAcceptanceRedMock.mockResolvedValue({ healed: true });
+    selfHealAcceptanceRedMock.mockImplementation(async ({ worktree }: { worktree: string }) => {
+      await writeFile(
+        join(worktree, '.pipeline', 'acceptance-specs-red.json'),
+        JSON.stringify({
+          command: 'npm test',
+          targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+          executed: 1,
+          passed: 0,
+          failed: 1,
+          skipped: 0,
+          errors: 0,
+          failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+          ranAt: new Date().toISOString(),
+          intentRationale: 'The feature acceptance behavior remains unimplemented.',
+        }),
+        'utf-8',
+      );
+      return { healed: true };
+    });
 
     const { conductor, log, reasons, getHaltReason } = runConductor();
     await conductor.run();
@@ -141,6 +159,47 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.acceptance_specs).toBe('done');
+  });
+
+  it('reports a successful pre-heal as satisfied via exception when its preserved marker waives RED', async () => {
+    const exception = {
+      kind: 'remediation',
+      reason: 'The remediation coupled the production and acceptance changes.',
+      attribution: 'remediate',
+    };
+    selfHealAcceptanceRedMock.mockImplementation(async ({ worktree }: { worktree: string }) => {
+      await writeFile(
+        join(worktree, '.pipeline', 'acceptance-specs-red.json'),
+        JSON.stringify({
+          command: 'npm test',
+          targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+          executed: 1,
+          passed: 1,
+          failed: 0,
+          skipped: 0,
+          errors: 0,
+          ranAt: new Date().toISOString(),
+          intentRationale: 'The recorded remediation exception documents why RED is waived.',
+          exception,
+        }),
+        'utf-8',
+      );
+      return { healed: true };
+    });
+    const observed: Array<Record<string, unknown>> = [];
+    events.on('acceptance_red', (event) => {
+      observed.push(event as unknown as Record<string, unknown>);
+    });
+
+    const { conductor } = runConductor();
+    await conductor.run();
+
+    expect(observed).toContainEqual(expect.objectContaining({
+      type: 'acceptance_red',
+      state: 'satisfied',
+      step: 'acceptance_specs',
+      viaException: true,
+    }));
   });
 
   it('invokes selfHealAcceptanceRed for a shape-class marker refusal, not only missing or invalid JSON', async () => {
@@ -162,7 +221,25 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
       }),
       'utf-8',
     );
-    selfHealAcceptanceRedMock.mockResolvedValue({ healed: true });
+    selfHealAcceptanceRedMock.mockImplementation(async ({ worktree }: { worktree: string }) => {
+      await writeFile(
+        join(worktree, '.pipeline', 'acceptance-specs-red.json'),
+        JSON.stringify({
+          command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+          targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+          executed: 1,
+          passed: 0,
+          failed: 1,
+          skipped: 0,
+          errors: 0,
+          failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+          ranAt: new Date().toISOString(),
+          intentRationale: 'The self-heal repaired the missing provenance field.',
+        }),
+        'utf-8',
+      );
+      return { healed: true };
+    });
 
     const { conductor, log, reasons } = runConductor();
     await conductor.run();
@@ -275,7 +352,7 @@ describe('Conductor.run acceptance_specs RED dispatch lifecycle (Task 10)', () =
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('emits required before dispatch and rejected when a successful dispatch leaves the gate unsatisfied', async () => {
+  it('emits required before dispatch, pending at the completion seam, and rejected when a successful dispatch leaves the gate unsatisfied', async () => {
     // A missing marker reaches Task 9's pre-heal seam first. Refusing that
     // heal preserves the ordinary dispatch path, whose lifecycle is this
     // test's only concern.
@@ -308,6 +385,7 @@ describe('Conductor.run acceptance_specs RED dispatch lifecycle (Task 10)', () =
     expect(order).toEqual([
       'event:required',
       'dispatch:acceptance_specs',
+      'event:pending',
       'event:rejected',
     ]);
   });
