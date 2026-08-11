@@ -334,6 +334,7 @@ export function evaluateProtectedArtifactSealRotation({
     })
     .sort(comparePaths);
 
+  const rotationPaths: string[] = [];
   for (const path of paths) {
     const workspace = workspaceArtifacts.get(path);
     const head = headArtifacts.get(path);
@@ -342,14 +343,13 @@ export function evaluateProtectedArtifactSealRotation({
     }
     const base = baseTipArtifacts.get(path);
     if (head === undefined ? base !== undefined : base === undefined || !head.equals(base)) {
-      if ((authorshipByPath?.get(path) ?? 'indeterminate') === 'indeterminate') {
-        return { permitted: false, condition: 'head-differs-from-base', path };
-      }
+      if (authorshipByPath?.get(path) === 'not-authored') continue;
       return { permitted: false, condition: 'head-differs-from-base', path };
     }
+    rotationPaths.push(path);
   }
 
-  return { permitted: true, paths };
+  return { permitted: true, paths: rotationPaths };
 }
 
 function parseSeal(serialized: string): ProtectedArtifactSeal {

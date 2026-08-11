@@ -604,6 +604,45 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     })).toEqual({ permitted: false, condition: 'head-differs-from-base', path });
   });
 
+  it('permits a base-only protected path that was not authored by the feature', () => {
+    const path = '.docs/plans/base-only.md';
+    const baseBytes = Buffer.from('base-added plan\n');
+
+    expect(evaluateProtectedArtifactSealRotation({
+      seal: {
+        version: 2,
+        baselineCommit: 'sealed-head',
+        protectedArtifacts: [],
+        rebaselines: [],
+      },
+      baselineAncestry: 'non-ancestor',
+      workspaceArtifacts: new Map(),
+      headArtifacts: new Map(),
+      baseTipArtifacts: new Map([[path, baseBytes]]),
+      authorshipByPath: new Map([[path, 'not-authored']]),
+    })).toEqual({ permitted: true, paths: [] });
+  });
+
+  it('permits a base-ahead protected path that was not authored by the feature', () => {
+    const path = '.docs/plans/base-ahead.md';
+    const headBytes = Buffer.from('feature-behind base\n');
+    const baseBytes = Buffer.from('base-advanced plan\n');
+
+    expect(evaluateProtectedArtifactSealRotation({
+      seal: {
+        version: 2,
+        baselineCommit: 'sealed-head',
+        protectedArtifacts: [],
+        rebaselines: [],
+      },
+      baselineAncestry: 'non-ancestor',
+      workspaceArtifacts: new Map([[path, headBytes]]),
+      headArtifacts: new Map([[path, headBytes]]),
+      baseTipArtifacts: new Map([[path, baseBytes]]),
+      authorshipByPath: new Map([[path, 'not-authored']]),
+    })).toEqual({ permitted: true, paths: [] });
+  });
+
   it('fails closed distinctly when the sealed baseline object cannot resolve', async () => {
     const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
     const seal = {
