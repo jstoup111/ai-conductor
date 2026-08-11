@@ -242,6 +242,38 @@ describe('retained SHIP draft PR identity', () => {
     expect(presentation.body).not.toContain(HALT_PR_BANNER_SENTINEL);
   });
 
+  it('reads a healthy retained PR once without mutations and memoizes its identity', async () => {
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      calls.push([...args]);
+      if (args[1] === 'list') {
+        return { stdout: JSON.stringify([{ url: PR_URL, state: 'OPEN' }]) };
+      }
+      if (args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            title: 'feat: healthy retained PR',
+            isDraft: true,
+            labels: [],
+            body: BODY,
+            comments: [],
+          }),
+        };
+      }
+      return { stdout: '{}' };
+    };
+    const conductor = makeConductor(gh, { worktreeBranch: BRANCH });
+    const resolve = (conductor as unknown as {
+      resolveRetainedShipDraftPrUrl(branch: string): Promise<string | undefined>;
+    }).resolveRetainedShipDraftPrUrl.bind(conductor);
+
+    await expect(resolve(BRANCH)).resolves.toBe(PR_URL);
+    await expect(resolve(BRANCH)).resolves.toBe(PR_URL);
+
+    expect(calls.filter((call) => call[1] === 'view')).toHaveLength(1);
+    expect(calls.filter((call) => call[1] !== 'list' && call[1] !== 'view')).toEqual([]);
+  });
+
   it('falls back to the daemon-supplied worktree branch and resolves only once', async () => {
     const { gh, calls } = makeGh({ [`${BRANCH}->${BASE}`]: [{ url: PR_URL, state: 'OPEN' }] });
     const conductor = makeConductor(gh, { worktreeBranch: BRANCH });
