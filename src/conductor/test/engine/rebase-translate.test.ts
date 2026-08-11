@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -28,8 +28,18 @@ import { execa } from 'execa';
 //   git(['show', sha])                                  -> diff text, per sha in both lists
 //   git(['patch-id', '--stable'], { input: diffText })  -> "<patch-id> <sha>" per sha
 import type { GitResult } from '../../src/engine/rebase.js';
-import { buildRewriteMap, resolveThroughMap } from '../../src/engine/rebase-translate.js';
+import {
+  buildRewriteMap,
+  resolveThroughMap,
+  translateAfterRebase,
+} from '../../src/engine/rebase-translate.js';
 import { applyMapToStores } from '../../src/engine/rebase-translate.js';
+import type { GitRunner } from '../../src/engine/rebase.js';
+import {
+  createProtectedArtifactSeal,
+  PROTECTED_ARTIFACT_DIRECTORIES,
+  PROTECTED_ARTIFACT_SEAL_PATH,
+} from '../../src/engine/protected-artifact-seal.js';
 
 interface FakeGitOptions {
   input?: string;
@@ -727,5 +737,87 @@ describe('persistRewriteMap — transitive closure across successive rebases (FR
     // `new` for the original pre-first-rebase sha.
     expect(resolveThroughMap(OLD_FULL, persisted)).toBe(NEW_FULL);
     expect(resolveThroughMap(OLD_SHORT, persisted)).toBe(NEW_FULL);
+  });
+});
+
+describe('translateAfterRebase protected-artifact rotation audit paths (Task 15)', () => {
+  let projectRoot = '';
+
+  beforeAll(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'rebase-translate-rotation-'));
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.email', 'rotation@example.com'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.name', 'Rotation Fixture'], { cwd: projectRoot });
+    await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: projectRoot });
+    await mkdir(join(projectRoot, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs', 'plans', 'approved.md'), 'approved\n');
+    await writeFile(join(projectRoot, 'feature.ts'), 'base\n');
+    await execa('git', ['add', '.'], { cwd: projectRoot });
+    await execa('git', ['commit', '-q', '-m', 'base'], { cwd: projectRoot });
+  });
+
+  afterAll(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  async function git(args: string[], opts?: { input?: string }) {
+    const result = await execa('git', args, {
+      cwd: projectRoot,
+      input: opts?.input,
+      reject: false,
+    });
+    return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+  }
+
+  it('uses every protected directory for the audit diff, records decisions, excludes unprotected paths, and rotates empty or failed diffs', async () => {
+    await execa('git', ['checkout', '-q', '-B', 'feature'], { cwd: projectRoot });
+    await writeFile(join(projectRoot, 'feature.ts'), 'feature\n');
+    await execa('git', ['add', 'feature.ts'], { cwd: projectRoot });
+    await execa('git', ['commit', '-q', '-m', 'feature change'], { cwd: projectRoot });
+    const origHead = (await git(['rev-parse', 'HEAD'])).stdout;
+    await createProtectedArtifactSeal({ projectRoot, baselineCommit: origHead });
+
+    await execa('git', ['checkout', '-q', 'main'], { cwd: projectRoot });
+    await mkdir(join(projectRoot, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs', 'decisions', 'base-ahead.md'), 'decision\n');
+    await writeFile(join(projectRoot, 'unprotected.txt'), 'ignore\n');
+    await execa('git', ['add', '.'], { cwd: projectRoot });
+    await execa('git', ['commit', '-q', '-m', 'base decision'], { cwd: projectRoot });
+    const onto = (await git(['rev-parse', 'HEAD'])).stdout;
+    await execa('git', ['checkout', '-q', 'feature'], { cwd: projectRoot });
+    await execa('git', ['rebase', '-q', 'main'], { cwd: projectRoot });
+    const head = (await git(['rev-parse', 'HEAD'])).stdout;
+
+    const auditDiffs: string[][] = [];
+    const auditingGit: GitRunner = async (args, opts) => {
+      if (args[0] === 'diff') auditDiffs.push(args);
+      return git(args, opts);
+    };
+    await translateAfterRebase(auditingGit, projectRoot, onto, origHead, head);
+
+    const seal = JSON.parse(
+      await readFile(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8'),
+    ) as { rebaselines: Array<{ paths: string[] }> };
+    expect(auditDiffs).toEqual([[
+      'diff', '--name-only', origHead, head, '--', ...PROTECTED_ARTIFACT_DIRECTORIES,
+    ]]);
+    expect(seal.rebaselines.at(-1)?.paths).toEqual(['.docs/decisions/base-ahead.md']);
+
+    await translateAfterRebase(auditingGit, projectRoot, onto, head, head);
+    const afterEmptyDiff = JSON.parse(
+      await readFile(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8'),
+    ) as { rebaselines: Array<{ paths: string[] }> };
+    expect(afterEmptyDiff.rebaselines.at(-1)?.paths).toEqual([]);
+
+    const failedDiffGit: GitRunner = async (args, opts) => (
+      args[0] === 'diff'
+        ? { exitCode: 1, stdout: '', stderr: 'simulated diff failure' }
+        : git(args, opts)
+    );
+    await translateAfterRebase(failedDiffGit, projectRoot, onto, head, head);
+    const afterFailedDiff = JSON.parse(
+      await readFile(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH), 'utf8'),
+    ) as { rebaselines: Array<{ paths: string[] }> };
+    expect(afterFailedDiff.rebaselines.at(-1)?.paths).toEqual([]);
   });
 });
