@@ -176,6 +176,7 @@ export function createCandidateSafetyBoundary(options: {
 export type PrepareCandidateSelfHost = (
   candidate: ProviderCandidate,
   runtime: ProviderRuntime,
+  identity?: { readonly runId: string | undefined; readonly attempt: number },
 ) => Promise<SelfHostInvocation | undefined>;
 
 export interface ExecuteProviderCandidatesInput {
@@ -187,6 +188,8 @@ export interface ExecuteProviderCandidatesInput {
   config?: HarnessConfig;
   tier?: ComplexityTier;
   attempt?: number;
+  /** Run identity held by the enclosing step runner for self-host scratch homes. */
+  runId?: string;
   escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
@@ -505,6 +508,7 @@ export async function executeProviderCandidates({
   config,
   tier,
   attempt = 1,
+  runId,
   escalate = true,
   modelOverride,
   effortOverride,
@@ -572,7 +576,10 @@ export async function executeProviderCandidates({
         model: resolved.model,
         effort: resolved.effort,
       };
-      const selfHost = await prepareCandidateSelfHost?.(candidate, runtime);
+      const selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
+        runId,
+        attempt: index,
+      });
       try {
         invocation = await invokeProviderCandidate({
           providerKey,

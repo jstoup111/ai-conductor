@@ -9371,6 +9371,125 @@ describe('engine/conductor', () => {
     expect(planDispatch).toEqual({ model: 'gpt-5.6-sol', effort: 'xhigh' });
   });
 
+  it('threads the held run identity and candidate index into Codex and Claude self-host provisioning', async () => {
+    const codexHome = {
+      provider: 'codex' as const,
+      homeDir: join(dir, 'codex-home'),
+      childEnv: () => ({ CODEX_HOME: join(dir, 'codex-home') }),
+      childArgs: () => [],
+      teardown: vi.fn().mockResolvedValue(undefined),
+    };
+    const claudeSandbox = {
+      configDir: join(dir, 'claude-home'),
+      childEnv: () => ({ CLAUDE_CONFIG_DIR: join(dir, 'claude-home') }),
+      teardown: vi.fn().mockResolvedValue(undefined),
+    };
+    const provisionProviderHome = vi.fn().mockResolvedValue(codexHome);
+    const provisionSandbox = vi.fn().mockResolvedValue(claudeSandbox);
+    const codex: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn().mockResolvedValue({
+        success: false,
+        exitCode: 127,
+        output: 'Codex unavailable',
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+      }),
+      invokeInteractive: vi.fn(),
+      prepareSelfHostAuth: vi.fn(),
+      resolveSelfHostExecutable: vi.fn().mockResolvedValue('codex'),
+    } as LLMProvider;
+    const claude: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
+      invokeInteractive: vi.fn(),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      { key: 'codex', provider: codex, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability([]) },
+      { key: 'claude', provider: claude, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability([]) },
+    ]);
+    const providerExecution = {
+      configuredProviders: ['codex', 'claude'],
+      runtimes,
+      sessions: new ProviderSessionStore(),
+      config: { llm_provider: ['codex', 'claude'] },
+      warn: vi.fn(),
+    };
+    const runner = new DefaultStepRunner(codex, 'held-conductor-run', dir, {
+      config: providerExecution.config,
+      mode: 'auto',
+      providerExecution,
+      providerExecutor: async (input) => {
+        const prepare = input.prepareCandidateSelfHost;
+        if (!prepare) throw new Error('expected self-host preparation');
+        await prepare(
+          { step: 'build', providerKey: 'codex', model: 'gpt-5.6-terra', effort: 'medium' },
+          runtimes.get('codex'),
+          { runId: input.runId, attempt: 0 },
+        );
+        await prepare(
+          { step: 'build', providerKey: 'claude', model: 'sonnet', effort: 'medium' },
+          runtimes.get('claude'),
+          { runId: input.runId, attempt: 1 },
+        );
+        return {
+          success: true,
+          output: 'prepared',
+          exitCode: 0,
+          attempts: [],
+          preferredProvider: 'codex',
+          actualProvider: 'claude',
+          resolvedModel: 'sonnet',
+          resolvedEffort: 'medium',
+        };
+      },
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: {
+        llm_provider: ['codex', 'claude'],
+        harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } },
+      } as HarnessConfig,
+      providerExecution,
+      selfHostGuardrails: {
+        resolveHarnessRoot: vi.fn(),
+        resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
+        relink: vi.fn(),
+        provisionSandbox,
+        provisionProviderHome,
+        versionGate: vi.fn(),
+        releaseGate: vi.fn(),
+      } as any,
+    });
+
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', {} as ConductState);
+
+    expect({
+      codex: provisionProviderHome.mock.calls[0]?.[0],
+      claude: provisionSandbox.mock.calls[0]?.[0],
+    }).toEqual({
+      codex: expect.objectContaining({
+        provider: expect.objectContaining({ id: 'codex' }),
+        worktreeRoot: dir,
+        runId: 'held-conductor-run',
+        attempt: 0,
+      }),
+      claude: expect.objectContaining({
+        worktreeRoot: dir,
+        harnessRoot: dir,
+        runId: 'held-conductor-run',
+        attempt: 1,
+      }),
+    });
+  });
+
   it('keeps shared provider CLI overrides authoritative for ordinary step dispatch', async () => {
     await writeState(statePath, {
       worktree: 'done',

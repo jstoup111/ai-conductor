@@ -2943,7 +2943,7 @@ export class Conductor {
         );
         return result;
       };
-      this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime) => {
+      this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime, identity) => {
         const installed = await this.guardrails.resolveInstalledHarnessRoot();
         const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
         const codex = candidate.providerKey === 'codex';
@@ -2981,11 +2981,18 @@ export class Conductor {
           const home = await provisionHome({
             provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
             worktreeRoot: this.projectRoot,
+            runId: identity?.runId,
+            attempt: identity?.attempt,
           });
           return { executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } };
         }
         if (candidate.providerKey === 'claude') {
-          const sandbox = await this.guardrails.provisionSandbox({ worktreeRoot: this.projectRoot, harnessRoot: liveCheckout });
+          const sandbox = await this.guardrails.provisionSandbox({
+            worktreeRoot: this.projectRoot,
+            harnessRoot: liveCheckout,
+            runId: identity?.runId,
+            attempt: identity?.attempt,
+          });
           return {
             executable: 'claude',
             env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
@@ -2993,7 +3000,7 @@ export class Conductor {
             teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
           };
         }
-        return priorPreparation?.(candidate, runtime);
+        return priorPreparation?.(candidate, runtime, identity);
       };
     }
     try {
