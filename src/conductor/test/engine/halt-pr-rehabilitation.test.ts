@@ -252,6 +252,53 @@ describe('clearHaltStateForResume (Task 1)', () => {
       bodyEdit: ['pr', 'edit', PR_URL, '--body', cleared.body],
     });
   });
+
+  it('returns partial after bounded retries when the remediation label remains', async () => {
+    const halted = {
+      title: 'feat: widget import flow',
+      isDraft: true,
+      labels: [{ name: 'needs-remediation' }],
+      body: `## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->`,
+    };
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify(halted) }, // resume-clear state read
+      { stdout: JSON.stringify(halted) }, // cleanup state read
+      { stdout: '' }, // label removal attempt 1
+      { stdout: JSON.stringify(halted) }, // label remains
+      { stdout: '' }, // label removal attempt 2
+      { stdout: JSON.stringify(halted) }, // label remains
+      { stdout: '' }, // label removal attempt 3
+      { stdout: JSON.stringify(halted) }, // label remains
+      { stdout: '' }, // marker-removing body edit
+      { stdout: JSON.stringify({ ...halted, body: '## Summary\n\nWidget import flow.' }) }, // final re-read
+    ]);
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+
+    expect({
+      outcome,
+      labelRemovals: calls.filter((call) => call[0] === 'api' && call.includes('DELETE')).length,
+    }).toEqual({ outcome: 'partial', labelRemovals: 3 });
+  });
+
+  it('returns partial when the final re-read retains the remediation body marker', async () => {
+    const halted = {
+      title: 'feat: widget import flow',
+      isDraft: true,
+      labels: [],
+      body: `## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->`,
+    };
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify(halted) }, // resume-clear state read
+      { stdout: JSON.stringify(halted) }, // cleanup state read
+      { stdout: '' }, // marker-removing body edit
+      { stdout: JSON.stringify(halted) }, // marker remains on final re-read
+    ]);
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+
+    expect(outcome).toBe('partial');
+  });
 });
 
 describe('rehabilitateHaltPr — banner is a third stateless halt signal (Task 1)', () => {
