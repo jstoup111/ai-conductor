@@ -16,13 +16,17 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import { reconcileHaltPrs } from '../../src/engine/halt-pr-reconciliation.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { StepName } from '../../src/types/index.js';
 
 const REHAB_MOD = '../../src/engine/halt-pr-rehabilitation.js';
 
@@ -339,5 +343,113 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
     expect(getLabels()).not.toContain('needs-remediation');
     expect(getBody()).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
     expect(getIsDraft()).toBe(true);
+  });
+
+  it('re-heals a label-only partial clear, then retries and clears it on the following dispatch', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'partial-resume-clear-'));
+    try {
+      const statePath = join(projectRoot, 'conduct-state.json');
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          plan: 'done',
+          acceptance_specs: 'done',
+          build: 'pending',
+          track: 'technical',
+          feature_desc: 'partial resume clear',
+          worktree_branch: 'feat/daemon-partial-resume-clear',
+          pr_url: PR_URL,
+        }),
+        'utf8',
+      );
+
+      const pr = {
+        body: `halted\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+        isDraft: true,
+        labels: ['needs-remediation'],
+      };
+      let rejectMarkerRemoval = true;
+      const gh: GhRunner = async (args) => {
+        if (args[0] === 'pr' && args[1] === 'list') {
+          return {
+            stdout: JSON.stringify([{
+              number: 249,
+              url: PR_URL,
+              body: pr.body,
+              isDraft: pr.isDraft,
+              labels: pr.labels.map((name) => ({ name })),
+              headRefName: 'feat/daemon-partial-resume-clear',
+            }]),
+          };
+        }
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              body: pr.body,
+              isDraft: pr.isDraft,
+              labels: pr.labels.map((name) => ({ name })),
+            }),
+          };
+        }
+        if (args[0] === 'api' && args.includes('DELETE')) {
+          pr.labels = pr.labels.filter((name) => name !== 'needs-remediation');
+          return { stdout: '' };
+        }
+        if (args[0] === 'api' && args.includes('POST') && args.some((arg) => arg.includes('/labels'))) {
+          pr.labels = [...new Set([...pr.labels, 'needs-remediation'])];
+          return { stdout: '' };
+        }
+        if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+          if (rejectMarkerRemoval) throw new Error('marker body edit rejected');
+          pr.body = args[args.indexOf('--body') + 1] ?? pr.body;
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      };
+
+      let dispatches = 0;
+      const runner: StepRunner = {
+        run: async (step: StepName): Promise<StepRunResult> => {
+          expect(step).toBe('build');
+          dispatches++;
+          return { success: false, output: 'sentinel: stop after observing resume clear' };
+        },
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        config: {} as never,
+        fromStep: 'build',
+        mode: 'default',
+        gh,
+        git: async () => ({ stdout: '' }),
+        maxRetries: 1,
+        sleepFn: async () => {},
+      });
+
+      await conductor.run();
+      expect(pr.labels).not.toContain('needs-remediation');
+      expect(pr.body).toContain(NEEDS_REMEDIATION_BODY_MARKER);
+
+      await reconcileHaltPrs({
+        projectRoot,
+        runGh: gh,
+        runGit: async () => {
+          throw new Error('unshipped PR must be re-healed');
+        },
+      });
+      expect(pr.labels).toContain('needs-remediation');
+
+      rejectMarkerRemoval = false;
+      await conductor.run();
+
+      expect(dispatches).toBe(2);
+      expect(pr.labels).not.toContain('needs-remediation');
+      expect(pr.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });

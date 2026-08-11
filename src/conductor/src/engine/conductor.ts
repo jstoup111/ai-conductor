@@ -3227,7 +3227,6 @@ export class Conductor {
    */
   private async clearRetainedHaltStateForDispatch(state: ConductState): Promise<void> {
     if (this.resumeHaltStateClearAttempted) return;
-    this.resumeHaltStateClearAttempted = true;
 
     let prUrl = state.pr_url;
     if (!prUrl && state.worktree_branch && this.baseBranch) {
@@ -3259,13 +3258,17 @@ export class Conductor {
     }
     if (!prUrl) return;
 
-    await clearHaltStateForResume(
+    const outcome = await clearHaltStateForResume(
       this.gh,
       this.projectRoot,
       prUrl,
       this.log ?? console.warn,
       this.sleep,
     );
+    // A partial clear leaves the marker visible to reconciliation. Do not
+    // consume this run's retry until the cleanup has been verified, otherwise
+    // the sweep can re-heal the label while later dispatches are suppressed.
+    if (outcome === 'cleared') this.resumeHaltStateClearAttempted = true;
   }
 
   /** Capture only a valid, re-readable release block before finish can replace the body. */
