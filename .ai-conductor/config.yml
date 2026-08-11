@@ -101,7 +101,7 @@ steps:
   conflict_check:
     llm_provider: claude
   coherence_check:
-    llm_provider: claude
+    llm_provider: codex
   build_review:
     llm_provider: claude
   prd_audit:
@@ -130,10 +130,11 @@ steps:
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
-  # Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
+  # Provider pinned explicitly because release disposition is a deliberate
+  # Codex judgement lane rather than an inherited routing choice.
   release-disposition:
-    llm_provider: claude
-    model: sonnet
+    llm_provider: codex
+    model: gpt-5.6-terra
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
