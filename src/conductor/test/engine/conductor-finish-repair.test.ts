@@ -714,4 +714,156 @@ describe('conductor/finish-repair', () => {
     expect(readCount).toBeGreaterThanOrEqual(3);
     expect(calls.some((args) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
   });
+
+  // FINISH runs one publication transition per dispatch, so the pre-dispatch
+  // snapshot hook fires again AFTER `author_pr_prose` has legitimately rewritten
+  // the body without the metadata. Re-deriving the capture from that body found
+  // nothing and halted the feature at the very last step.
+  it('retains the captured block when finish re-dispatches after the prose author stripped the body', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    const metadata = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Preserve release metadata after finish.',
+    ].join('\n');
+    let body = metadata;
+    const gh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = args[args.indexOf('--body') + 1]!;
+      }
+      return { stdout: '{}' };
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    });
+    (conductor as any).shipDraftPrUrl = prUrl;
+    await (conductor as any).snapshotFinishReleaseMetadata();
+
+    // author_pr_prose rewrote the whole body; the next finish dispatch re-enters
+    // the snapshot hook against that stripped body.
+    body = '## What Changed\n\nFinish-authored reader content.';
+    await expect((conductor as any).snapshotFinishReleaseMetadata()).resolves.toBeUndefined();
+
+    const ctx = await (conductor as any).completionCtx({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr(prUrl);
+
+    expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${metadata}`);
+  });
+
+  // The daemon re-dispatches a feature in a fresh process, so an in-memory-only
+  // capture is lost between the prose rewrite and the next finish dispatch.
+  it('restores from the persisted capture when finish re-dispatches in a fresh process', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    const metadata = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Preserve release metadata after finish.',
+    ].join('\n');
+    let body = metadata;
+    const gh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = args[args.indexOf('--body') + 1]!;
+      }
+      return { stdout: '{}' };
+    };
+    const options = {
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    };
+    const first = new Conductor(options);
+    (first as any).shipDraftPrUrl = prUrl;
+    await (first as any).snapshotFinishReleaseMetadata();
+
+    body = '## What Changed\n\nFinish-authored reader content.';
+
+    const resumed = new Conductor(options);
+    (resumed as any).shipDraftPrUrl = prUrl;
+    await (resumed as any).snapshotFinishReleaseMetadata();
+    const ctx = await (resumed as any).completionCtx({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr(prUrl);
+
+    expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${metadata}`);
+  });
+
+  // A kickback can re-run release-disposition after a capture exists. The newly
+  // written disposition is authoritative; restoring the superseded one would
+  // silently ship the wrong release note.
+  it('discards a stale capture when release-disposition is dispatched again', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    const stale = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Superseded note.',
+    ].join('\n');
+    const fresh = [
+      'Release-Disposition: note',
+      'Release-Category: Added',
+      'Release-Semver: minor',
+      'Release-Note: The disposition actually written last.',
+    ].join('\n');
+    let body = stale;
+    const gh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = args[args.indexOf('--body') + 1]!;
+      }
+      return { stdout: '{}' };
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    });
+    (conductor as any).shipDraftPrUrl = prUrl;
+    await (conductor as any).snapshotFinishReleaseMetadata();
+
+    // release-disposition re-runs and rewrites the block, then finish captures again.
+    await (conductor as any).clearFinishReleaseMetadataSnapshot();
+    body = fresh;
+    await (conductor as any).snapshotFinishReleaseMetadata();
+
+    body = '## What Changed\n\nFinish-authored reader content.';
+    const ctx = await (conductor as any).completionCtx({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr(prUrl);
+
+    expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${fresh}`);
+  });
 });
