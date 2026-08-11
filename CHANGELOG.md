@@ -25,6 +25,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host builds no longer halt when a concurrent Codex session opens or closes a thread, which wrote transient lock files into the fingerprinted provider-state directory. ([implementation PR #1470](https://github.com/jstoup111/ai-conductor/pull/1470)).
 - A rebase that only pulls in unrelated base-branch changes no longer discards the build_review verdict, cutting the harness's largest LLM cost; the feature's own code or tests still re-open it. ([implementation PR #1473](https://github.com/jstoup111/ai-conductor/pull/1473)).
 - The daemon repairs a feature's retained PR after a transient HALT instead of leaving it stuck as an unrecoverable "needs-remediation" placeholder. ([implementation PR #1468](https://github.com/jstoup111/ai-conductor/pull/1468)).
+- Finish no longer halts with "release metadata is malformed or non-canonical" when its publication spans more than one dispatch. ([implementation PR #1499](https://github.com/jstoup111/ai-conductor/pull/1499)).
 
 ## [0.101.1] - 2026-08-10
 
