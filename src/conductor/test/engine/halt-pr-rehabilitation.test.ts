@@ -186,7 +186,13 @@ describe('ensureShipReady (Task 7)', () => {
   });
 });
 
-describe('clearHaltStateForResume (Task 1)', () => {
+describe('clearHaltStateForResume (Tasks 1, 4)', () => {
+  it('returns gh-unavailable without throwing when the initial read rejects', async () => {
+    const { gh } = fakeGh([new Error('gh: network error')]);
+
+    await expect(clearHaltStateForResume(gh, CWD, PR_URL)).resolves.toBe('gh-unavailable');
+  });
+
   it('preserves a halted draft PR while clearing halt state', async () => {
     const halted = {
       title: 'feat: widget import flow',
@@ -250,6 +256,39 @@ describe('clearHaltStateForResume (Task 1)', () => {
         'repos/acme/repo/issues/7/labels/needs-remediation',
       ],
       bodyEdit: ['pr', 'edit', PR_URL, '--body', cleared.body],
+    });
+  });
+
+  it('clears a remediation label even when the body has no marker', async () => {
+    const labeledWithoutMarker = {
+      title: 'feat: widget import flow',
+      isDraft: true,
+      labels: [{ name: 'needs-remediation' }],
+      body: '## Summary\n\nWidget import flow.',
+    };
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify(labeledWithoutMarker) }, // resume-clear state read
+      { stdout: JSON.stringify(labeledWithoutMarker) }, // cleanup state read
+      { stdout: '' }, // REST label removal
+      { stdout: JSON.stringify({ ...labeledWithoutMarker, labels: [] }) }, // label verification
+      { stdout: JSON.stringify({ ...labeledWithoutMarker, labels: [] }) }, // final verification
+    ]);
+
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+
+    expect({
+      outcome,
+      labelRemoval: calls.find((call) => call[0] === 'api' && call.includes('DELETE')),
+      bodyEdit: calls.find((call) => call[0] === 'pr' && call[1] === 'edit'),
+    }).toEqual({
+      outcome: 'cleared',
+      labelRemoval: [
+        'api',
+        '--method',
+        'DELETE',
+        'repos/acme/repo/issues/7/labels/needs-remediation',
+      ],
+      bodyEdit: undefined,
     });
   });
 
