@@ -49,6 +49,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'parallel_completed',
   'parallel_failure',
   'attribution_divergence',
+  'acceptance_red',
 ] satisfies Array<ConductorEvent['type']>;
 
 const BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES = [
@@ -296,8 +297,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 73 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(73);
+  it('is total over all 74 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(74);
   });
 
   it('routes verdict_freshness to every sink', () => {

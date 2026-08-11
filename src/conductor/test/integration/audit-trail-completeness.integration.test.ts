@@ -129,6 +129,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   halt_cleared: 'friction-mapped',
   ci_failed: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
+  acceptance_red: 'not-audited-by-design',
 };
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
@@ -354,6 +355,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     phase: 'detected',
   },
   attribution_divergence: { type: 'attribution_divergence', feature: 'my-feature', taskId: '1' },
+  acceptance_red: {
+    type: 'acceptance_red',
+    state: 'required',
+    step: 'acceptance_specs',
+    viaException: false,
+  },
 };
 
 async function loadWriter(): Promise<Record<string, any>> {

@@ -80,6 +80,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   halt_cleared: { render: false, persist: false, audit: true },
   ci_failed: { render: true, persist: false, audit: false },
   attribution_divergence: { render: false, persist: true, audit: false },
+  acceptance_red: { render: false, persist: true, audit: false },
 };
 
 function eventTypesFor(sink: keyof SinkDeclaration): ConductorEvent['type'][] {

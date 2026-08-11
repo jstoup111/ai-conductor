@@ -719,4 +719,13 @@ export type ConductorEvent =
       feature: string;
       /** Task ID with divergent verdict */
       taskId: string;
+    }
+  | {
+      /** RED-evidence lifecycle for an acceptance-specs dispatch. */
+      type: 'acceptance_red';
+      state: 'required' | 'pending' | 'satisfied' | 'rejected';
+      step: StepName;
+      reason?: string;
+      failingTests?: Array<{ name: string; reason: string }>;
+      viaException: boolean;
     };
