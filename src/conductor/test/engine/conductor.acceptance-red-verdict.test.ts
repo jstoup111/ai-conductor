@@ -88,7 +88,9 @@ describe('Conductor.run acceptance_specs RED verdict lifecycle (Task 11)', () =>
       .mockResolvedValueOnce(preflight)
       .mockResolvedValueOnce(verdict);
     const observed: Array<Record<string, unknown>> = [];
-    events.on('acceptance_red', (event) => observed.push(event));
+    events.on('acceptance_red', (event) => {
+      observed.push(event as unknown as Record<string, unknown>);
+    });
     await new Conductor({
       stateFilePath: statePath,
       stepRunner: runner(),
@@ -129,5 +131,62 @@ describe('Conductor.run acceptance_specs RED verdict lifecycle (Task 11)', () =>
     expect(events).toContainEqual(expect.objectContaining({
       type: 'acceptance_red', state: 'satisfied', step: 'acceptance_specs', viaException: true,
     }));
+  });
+
+  it('keeps a rejected gate verdict when acceptance RED emission throws', async () => {
+    const reason = 'first refusal remains authoritative';
+    checkStepCompletionMock
+      .mockResolvedValueOnce({ done: true })
+      .mockResolvedValueOnce({ done: false, reason });
+    const originalEmit = events.emit.bind(events);
+    events.emit = vi.fn(async (event) => {
+      if (event.type === 'acceptance_red') throw new Error('telemetry unavailable');
+      return originalEmit(event);
+    });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner(),
+      events,
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'acceptance_specs',
+    }).run();
+
+    const state = await readState(statePath);
+    expect(state.ok && state.value.acceptance_specs).toBe('failed');
+  });
+
+  it('emits every repeated rejection with its own reason', async () => {
+    const firstReason = 'first distinct refusal';
+    const secondReason = 'second distinct refusal';
+    checkStepCompletionMock
+      .mockResolvedValueOnce({ done: true })
+      .mockResolvedValueOnce({ done: false, reason: firstReason })
+      .mockResolvedValueOnce({ done: false, reason: secondReason });
+    const observed: Array<Record<string, unknown>> = [];
+    events.on('acceptance_red', (event) => {
+      observed.push(event as unknown as Record<string, unknown>);
+    });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner(),
+      events,
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'acceptance_specs',
+    }).run();
+
+    expect(observed.filter((event) => event.state === 'rejected')).toEqual([
+      expect.objectContaining({ reason: firstReason }),
+      expect.objectContaining({ reason: secondReason }),
+    ]);
   });
 });

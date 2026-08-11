@@ -3899,6 +3899,11 @@ export class Conductor {
       breadcrumb.lastEventType = ev.type;
       return this.events.emit(ev);
     };
+    // Acceptance RED telemetry records gate lifecycle but must not alter the
+    // gate's authority: a failing sink leaves every later lifecycle event
+    // eligible to emit and the completion verdict unchanged.
+    const emitAcceptanceRed = (ev: Extract<Parameters<typeof this.events.emit>[0], { type: 'acceptance_red' }>) =>
+      emitTracked(ev).catch(() => undefined);
     let lastSettledUnit: SchedulingUnitRef | undefined;
     const stopAtOperatorParkBoundary =
       async (): Promise<OperatorParkedTermination | undefined> => {
@@ -5755,7 +5760,7 @@ export class Conductor {
             // and kicked back into further dispatches against the same absent
             // path. Classify it here, before any provider call.
             if (step.name === 'acceptance_specs') {
-              await emitTracked({
+              await emitAcceptanceRed({
                 type: 'acceptance_red',
                 state: 'required',
                 step: step.name,
@@ -6324,7 +6329,7 @@ export class Conductor {
             if (step.name === 'acceptance_specs') {
               const viaException =
                 'viaException' in completion && completion.viaException === true;
-              await emitTracked({
+              await emitAcceptanceRed({
                 type: 'acceptance_red',
                 state: completion.done ? 'satisfied' : 'rejected',
                 step: step.name,
