@@ -97,7 +97,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  function runConductor() {
+  function runConductor(maxRetries = 1) {
     const { runner, log } = trackingRunner();
     const reasons: string[] = [];
     let haltReason: string | undefined;
@@ -115,7 +115,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
-      maxRetries: 1,
+      maxRetries,
       fromStep: 'acceptance_specs',
     });
     return { conductor, log, reasons, getHaltReason: () => haltReason };
@@ -170,6 +170,70 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     expect(selfHealAcceptanceRedMock).toHaveBeenCalledTimes(1);
     expect(log).not.toContain('run:acceptance_specs');
     expect(reasons).toEqual([]);
+  });
+
+  it.each([
+    ['failed == 0', { failed: 0 }],
+    ['skipped > 0', { skipped: 1 }],
+    ['errors > 0', { errors: 1 }],
+  ])('does not rerun a marker refused for the real observed outcome: %s', async (_name, outcome) => {
+    await writeFile(
+      join(dir, '.pipeline', 'acceptance-specs-red.json'),
+      JSON.stringify({
+        command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+        targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errors: 0,
+        failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+        ranAt: new Date().toISOString(),
+        intentRationale: 'The observed failure proves the behavior remains unimplemented.',
+        ...outcome,
+      }),
+      'utf-8',
+    );
+
+    const { conductor, log } = runConductor();
+    await conductor.run();
+
+    expect(selfHealAcceptanceRedMock).not.toHaveBeenCalled();
+    expect(log).toContain('run:acceptance_specs');
+  });
+
+  it('does not rerun a shape-class refusal when no committed acceptance specs exist', async () => {
+    await rm(join(dir, 'test', 'acceptance', 'feature.acceptance.test.ts'));
+    await writeFile(
+      join(dir, '.pipeline', 'acceptance-specs-red.json'),
+      JSON.stringify({
+        command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+        targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errors: 0,
+        failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+        ranAt: new Date().toISOString(),
+      }),
+      'utf-8',
+    );
+
+    const { conductor } = runConductor();
+    await conductor.run();
+
+    expect(selfHealAcceptanceRedMock).not.toHaveBeenCalled();
+  });
+
+  it('attempts the bounded pre-heal only once per step run', async () => {
+    selfHealAcceptanceRedMock.mockResolvedValue({ healed: false, reason: 'run contract missing: x' });
+
+    const { conductor, log } = runConductor(2);
+    await conductor.run();
+
+    expect(selfHealAcceptanceRedMock).toHaveBeenCalledTimes(1);
+    expect(log.filter((entry) => entry === 'run:acceptance_specs')).toHaveLength(2);
   });
 
   it('falls through to the existing retry/HALT behavior unchanged when the heal fails', async () => {
