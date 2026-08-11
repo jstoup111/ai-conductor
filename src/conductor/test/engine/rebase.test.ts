@@ -1095,8 +1095,11 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // featureSrc ∪ foreignSrc (foreignSrc: src/foreign.ts; featureSrc empty).
     expect(byGate.wiring_check).toEqual(['src/foreign.ts']);
     expect(byGate.manual_test).toEqual(['src/foreign.ts']);
-    // build_review is 'any-codetest' — matchedPaths is the full delta.
-    expect(byGate.build_review).toEqual(['src/feature.test.ts', 'src/foreign.ts']);
+    // build_review is 'feature-codetest' — matchedPaths is featureSrc ∪ the
+    // feature's OWN test paths. src/foreign.ts is outside F and so justifies
+    // nothing here; src/feature.test.ts is the feature's own test, which is
+    // what re-opens the plan-vs-diff grade.
+    expect(byGate.build_review).toEqual(['src/feature.test.ts']);
     expect(byGate.test_suite).toEqual(['src/feature.test.ts', 'src/foreign.ts']);
     // Preserved audits must not appear at all.
     expect(byGate.prd_audit).toBeUndefined();

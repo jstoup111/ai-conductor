@@ -12,7 +12,7 @@
 
 import type { GitRunner } from './rebase.js';
 import { originDefaultBranch, changedPathsBetween } from './rebase.js';
-import { GATE_SURFACE, partitionDelta } from './gate-invalidation.js';
+import { featureTestPaths, GATE_SURFACE, partitionDelta } from './gate-invalidation.js';
 
 /** Minimal context the decision helper needs: an injected git runner rooted
  * at the project's working directory. Mirrors the `GitRunner` convention
@@ -91,7 +91,9 @@ export async function gateVerdictStillValid(
     .filter((l) => l.length > 0);
 
   const F =
-    surface === 'feature-runtime' || surface === 'all-runtime'
+    surface === 'feature-runtime' ||
+    surface === 'feature-codetest' ||
+    surface === 'all-runtime'
       ? await deriveFeatureSurface(ctx)
       : [];
 
@@ -101,6 +103,17 @@ export async function gateVerdictStillValid(
   switch (surface) {
     case 'feature-runtime':
       isSurfaceMiss = featureSrc.length === 0;
+      break;
+    case 'feature-codetest':
+      // Fail closed on an underivable surface. `deriveFeatureSurface` fails
+      // open to `[]`, which would make every path "foreign" and preserve a
+      // verdict across a real feature-surface change (e.g. a kickback fix
+      // commit). With no F to compare against, fall back to 'any-codetest'
+      // semantics: any code/test delta re-runs.
+      isSurfaceMiss =
+        F.length === 0
+          ? test.length === 0 && featureSrc.length === 0 && foreignSrc.length === 0
+          : featureSrc.length === 0 && featureTestPaths(delta, F).length === 0;
       break;
     case 'all-runtime':
       isSurfaceMiss = featureSrc.length === 0 && foreignSrc.length === 0;

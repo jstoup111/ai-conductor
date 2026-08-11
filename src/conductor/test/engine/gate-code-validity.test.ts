@@ -216,6 +216,73 @@ describe('gateVerdictStillValid', () => {
     expect(result).toBe('preserve');
   });
 
+  it('feature-codetest (build_review): returns preserve when the delta touches only a FOREIGN runtime path', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await commit(s, { 'src/feature.ts': 'f\n', 'src/other.ts': 'o\n' }, 'init');
+    await addOriginRemote(s);
+
+    // Feature branch claims only src/feature.ts.
+    await s.git(['checkout', '-q', '-b', 'feature']);
+    const baseline = await commit(s, { 'src/feature.ts': 'f2\n' }, 'feature work');
+
+    // Base advances with a foreign runtime change, which the feature then
+    // absorbs (as a rebase would). src/other.ts is in the delta since the
+    // baseline, but outside F — it cannot change the feature's own diff, so
+    // build_review's plan-vs-diff grade still holds.
+    await s.git(['checkout', '-q', 'main']);
+    await commit(s, { 'src/other.ts': 'o2\n' }, 'foreign runtime change');
+    await s.git(['push', '-q', 'origin', 'main']);
+    await s.git(['fetch', '-q', 'origin']);
+    await s.git(['checkout', '-q', 'feature']);
+    await s.git(['merge', '-q', '--no-edit', 'main']);
+
+    const result = await gateVerdictStillValid(
+      { projectRoot: s.repo, git: s.git },
+      'build_review',
+      baseline,
+    );
+    expect(result).toBe('preserve');
+  });
+
+  it("feature-codetest (build_review): returns rerun when the delta touches the feature's OWN test file", async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    await commit(s, { 'src/feature.ts': 'f\n' }, 'init');
+    await addOriginRemote(s);
+    const baseline = await commit(
+      s,
+      { 'src/feature.ts': 'f2\n', 'src/feature.test.ts': 't\n' },
+      'feature work',
+    );
+    // The feature's own test file is in F but partitions into `test`, not
+    // `featureSrc` — plain feature-runtime would wrongly preserve here.
+    await commit(s, { 'src/feature.test.ts': 't2\n' }, 'feature test change');
+
+    const result = await gateVerdictStillValid(
+      { projectRoot: s.repo, git: s.git },
+      'build_review',
+      baseline,
+    );
+    expect(result).toBe('rerun');
+  });
+
+  it('feature-codetest (build_review): fails closed to rerun when the feature surface is underivable and the delta touches code', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    // No origin remote → deriveFeatureSurface returns []. Everything is
+    // "foreign" by construction, so preserving would be unsound.
+    const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
+    await commit(s, { 'src/a.ts': 'a2\n' }, 'kickback fix');
+
+    const result = await gateVerdictStillValid(
+      { projectRoot: s.repo, git: s.git },
+      'build_review',
+      baseline,
+    );
+    expect(result).toBe('rerun');
+  });
+
   it('feature-runtime (prd_audit): returns rerun when the delta since baseline touches the feature\'s own surface (surface hit)', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);

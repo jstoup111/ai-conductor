@@ -767,9 +767,25 @@ once; a lock loser never runs it and never touches worktrees.
 Honouring the `REKICK` sentinel always rebases the feature onto the advanced base before any gate
 resumes, even when it is cleanly mergeable. This play-forward path is intentionally different from
 normal finish: the pending gate must observe the advanced base in its worktree.
-When that rebase changes code or test paths, the downstream judged gates — `build_review`,
-`wiring_check`, and (when they ran) `manual_test`, `prd_audit`,
-`architecture_review_as_built` — are re-opened, because their verdicts graded the pre-rebase diff.
+When that rebase changes code or test paths, the downstream judged gates — `wiring_check`,
+`test_suite`, `build_review`, and (when they ran) `manual_test`, `prd_audit`,
+`architecture_review_as_built` — are candidates for re-opening, because their verdicts graded the
+pre-rebase diff. Which ones actually re-open depends on the delta: each judged gate declares the
+surface its verdict depends on, and only a delta that lands inside that surface invalidates it.
+
+| Gate | Depends on | Re-opened when the rebase delta touches |
+| --- | --- | --- |
+| `test_suite` | the whole tree | any code or test path, anywhere |
+| `wiring_check`, `manual_test` | all runtime source | any runtime source path, feature-owned or not |
+| `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
+| `prd_audit`, `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
+
+`build_review` grades the feature's own diff against its plan, so a delta made up entirely of
+foreign, main-side paths cannot change that grade and its verdict is preserved — a rebase that only
+merges in unrelated base work no longer pays for an LLM re-grade. Its own test files DO re-open it,
+because the completeness rubric grades whether the plan's tests were written. `test_suite`
+deliberately stays maximally aggressive: it proves the exact tree, so any delta at all makes that
+proof stale, and it runs no model, so re-running it is cheap.
 
 If aggregate verification then exposes a base-induced repair, the daemon records its sanitized
 failure identity in `.pipeline/build-review-rebase-repairs.json`. Entries accumulate across repeated

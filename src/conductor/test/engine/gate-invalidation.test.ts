@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   classifyGateInvalidation,
+  featureTestPaths,
   GATE_SURFACE,
   isRuntimeSourcePath,
   partitionDelta,
@@ -78,16 +79,26 @@ describe('classifyGateInvalidation', () => {
     );
   });
 
-  it('test-only delta preserves the feature-scoped judged gates and all-runtime gates; build_review re-runs on any code/test change', () => {
+  it('foreign test-only delta preserves the feature-scoped judged gates, build_review, and all-runtime gates; only test_suite re-runs', () => {
+    // `x.test.ts` is not in F, so it is a FOREIGN test path: it cannot change
+    // the feature's own diff, so build_review's plan-vs-diff grade still
+    // holds. test_suite stays 'any-codetest' — its proof is of the whole
+    // tree, so any delta stales it.
     const D = ['x.test.ts'];
     const F: string[] = [];
 
     const result = classifyGateInvalidation(D, F, true);
 
     expect(result.preserved.sort()).toEqual(
-      ['wiring_check', 'manual_test', 'prd_audit', 'architecture_review_as_built'].sort(),
+      [
+        'build_review',
+        'wiring_check',
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ].sort(),
     );
-    expect(result.invalidated.sort()).toEqual(['build_review', 'test_suite'].sort());
+    expect(result.invalidated).toEqual(['test_suite']);
   });
 
   it('when manual_test never ran, it is excluded from both lists on a test-only delta', () => {
@@ -126,10 +137,103 @@ describe('classifyGateInvalidation', () => {
     const result = classifyGateInvalidation(D, F, true);
 
     expect(result.preserved.sort()).toEqual(
-      ['prd_audit', 'architecture_review_as_built'].sort(),
+      ['build_review', 'prd_audit', 'architecture_review_as_built'].sort(),
     );
     expect(result.invalidated.sort()).toEqual(
-      ['build_review', 'wiring_check', 'test_suite', 'manual_test'].sort(),
+      ['wiring_check', 'test_suite', 'manual_test'].sort(),
     );
+  });
+});
+
+/**
+ * build_review grades THE FEATURE'S OWN diff against its plan, so a rebase
+ * delta that never touches the feature's own code or tests cannot change that
+ * grade. It therefore sits on 'feature-codetest', not the maximally
+ * aggressive 'any-codetest'.
+ *
+ * A NEW kind is required rather than plain 'feature-runtime' because
+ * `partitionDelta` tests `isTestPath` FIRST and never consults `F` for a test
+ * path — so a feature's OWN changed test file lands in `test`, never in
+ * `featureSrc`. Under 'feature-runtime' (preserve iff `featureSrc` is empty)
+ * build_review would be preserved across a change to the feature's own tests,
+ * which is exactly what its "were the plan's tests written?" rubric grades.
+ */
+describe('build_review feature-codetest surface (foreign-only deltas preserve the verdict)', () => {
+  it('partitionDelta routes a FEATURE-OWNED test path to `test`, never to `featureSrc`', () => {
+    const D = ['src/feature.test.ts'];
+    const F = ['src/feature.test.ts']; // the feature owns this test file
+
+    const result = partitionDelta(D, F);
+
+    expect(result.test).toEqual(['src/feature.test.ts']);
+    expect(result.featureSrc).toEqual([]);
+    expect(result.foreignSrc).toEqual([]);
+  });
+
+  it('featureTestPaths selects only the delta test paths inside F', () => {
+    const D = ['src/feature.test.ts', 'test/foreign.test.ts', 'src/feature.ts'];
+    const F = ['src/feature.test.ts', 'src/feature.ts'];
+
+    expect(featureTestPaths(D, F)).toEqual(['src/feature.test.ts']);
+  });
+
+  it('declares build_review on feature-codetest and leaves test_suite on any-codetest', () => {
+    expect(GATE_SURFACE.build_review).toBe('feature-codetest');
+    expect(GATE_SURFACE.test_suite).toBe('any-codetest');
+  });
+
+  it('a foreign-only runtime delta PRESERVES build_review', () => {
+    const D = ['src/foreign.ts'];
+    const F = ['src/feature.ts', 'src/feature.test.ts'];
+
+    const result = classifyGateInvalidation(D, F, true);
+
+    expect(result.preserved).toContain('build_review');
+    expect(result.invalidated).not.toContain('build_review');
+  });
+
+  it('a foreign-only TEST delta PRESERVES build_review', () => {
+    const D = ['test/foreign.test.ts'];
+    const F = ['src/feature.ts', 'src/feature.test.ts'];
+
+    const result = classifyGateInvalidation(D, F, true);
+
+    expect(result.preserved).toContain('build_review');
+  });
+
+  it("a delta touching the feature's OWN source INVALIDATES build_review", () => {
+    const D = ['src/feature.ts'];
+    const F = ['src/feature.ts', 'src/feature.test.ts'];
+
+    const result = classifyGateInvalidation(D, F, true);
+
+    expect(result.invalidated).toContain('build_review');
+    expect(result.preserved).not.toContain('build_review');
+  });
+
+  it("a delta touching the feature's OWN tests INVALIDATES build_review", () => {
+    const D = ['src/feature.test.ts'];
+    const F = ['src/feature.ts', 'src/feature.test.ts'];
+
+    const result = classifyGateInvalidation(D, F, true);
+
+    expect(result.invalidated).toContain('build_review');
+    expect(result.preserved).not.toContain('build_review');
+  });
+
+  it('regression guard: test_suite still invalidates on EVERY non-empty code/test delta', () => {
+    const F = ['src/feature.ts', 'src/feature.test.ts'];
+    const deltas = [
+      ['src/foreign.ts'],
+      ['test/foreign.test.ts'],
+      ['src/feature.ts'],
+      ['src/feature.test.ts'],
+    ];
+
+    for (const D of deltas) {
+      const result = classifyGateInvalidation(D, F, true);
+      expect(result.invalidated, `delta ${D[0]}`).toContain('test_suite');
+      expect(result.preserved, `delta ${D[0]}`).not.toContain('test_suite');
+    }
   });
 });

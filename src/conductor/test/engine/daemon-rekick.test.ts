@@ -909,9 +909,11 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
   });
 
   // Task 12: Rekick call site ships capability-absent (fail-closed).
-  // When a play-forward rebase touches code paths, the full target set
-  // (build, build_review, manual_test) gets unconditionally invalidated kickback
+  // When a play-forward rebase touches code paths, the gates whose surface the
+  // delta hits (build, manual_test) get unconditionally invalidated kickback
   // verdicts WITHOUT preVerify capability, preserving fail-closed default.
+  // build_review is surface-scoped ('feature-codetest') and a foreign-only
+  // delta preserves it.
   it('play-forward rebase with changed code paths → unconditionally fail-closed (no preVerify)', async () => {
     await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
@@ -959,9 +961,12 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     // Verify no preVerify-based reverification marker
     expect(build?.reason).not.toContain('re-verified mechanically');
 
-    const buildReview = await readVerdict(dir, 'build_review');
-    expect(buildReview?.satisfied).toBe(false);
-    expect(buildReview?.kickback?.from).toBe('rebase');
+    // build_review is 'feature-codetest': the base advance added
+    // src/base-code.ts, foreign to this feature's surface, so the diff it
+    // graded is unchanged and its verdict is preserved. Fail-closed still
+    // governs the gates whose surface the delta actually hits (build,
+    // manual_test below).
+    expect(await readVerdict(dir, 'build_review')).toBeNull();
 
     const manualTest = await readVerdict(dir, 'manual_test');
     expect(manualTest?.satisfied).toBe(false);
@@ -2062,11 +2067,15 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       ranManualTest: false,
     });
 
-    for (const step of ['build_review', 'wiring_check'] as const) {
-      const verdict = await readVerdict(dir, step);
-      expect(verdict?.satisfied).toBe(false);
-      expect(verdict?.kickback?.from).toBe('rebase');
-    }
+    const wiringCheck = await readVerdict(dir, 'wiring_check');
+    expect(wiringCheck?.satisfied).toBe(false);
+    expect(wiringCheck?.kickback?.from).toBe('rebase');
+
+    // build_review is 'feature-codetest': the base advance added src/sibling.ts,
+    // which is outside the feature's surface and so cannot change the diff
+    // build_review graded. Its verdict survives rather than paying for another
+    // LLM re-grade.
+    expect(await readVerdict(dir, 'build_review')).toBeNull();
   });
 
   it('kicks the build gate back when a plan task has no Task: trailer (fail-closed)', async () => {

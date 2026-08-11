@@ -32,6 +32,8 @@ export function isRuntimeSourcePath(path: string): boolean {
 /**
  * How a judged gate's claimed surface relates to a delta partition:
  * - 'feature-runtime': only the feature's own runtime source paths matter.
+ * - 'feature-codetest': the feature's own runtime source paths OR its own
+ *   test paths matter; foreign paths (runtime or test) do not.
  * - 'all-runtime': any runtime source path in the repo matters.
  * - 'any-codetest': any code-or-test path (including test-only changes)
  *   matters.
@@ -39,11 +41,21 @@ export function isRuntimeSourcePath(path: string): boolean {
  * Deliberately excludes `build` — this map only covers the judged gates
  * this ADR's invalidation logic re-runs.
  */
-export type GateSurfaceKind = 'feature-runtime' | 'all-runtime' | 'any-codetest';
+export type GateSurfaceKind =
+  | 'feature-runtime'
+  | 'feature-codetest'
+  | 'all-runtime'
+  | 'any-codetest';
 
 export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
-  // Grades the diff; any code/test path (including test-only) re-grades it.
-  build_review: 'any-codetest',
+  // Grades THE FEATURE'S OWN diff against its plan (plan-vs-diff
+  // completeness), so only the feature's own code or tests can change the
+  // grade — a foreign main-side delta leaves that diff, and therefore the
+  // verdict, intact. Its own TESTS count too: the rubric grades whether the
+  // plan's tests were written, and a feature-owned test path partitions into
+  // `test`, never `featureSrc` — which is why this is 'feature-codetest'
+  // rather than plain 'feature-runtime'.
+  build_review: 'feature-codetest',
   // Aggregate verification proves the exact tree; any code/test delta makes
   // that proof stale, while an empty delta preserves it.
   test_suite: 'any-codetest',
@@ -91,6 +103,23 @@ export function partitionDelta(D: string[], F: string[]): DeltaPartition {
 }
 
 /**
+ * The delta paths that are BOTH test paths and inside the feature's claimed
+ * surface `F` — i.e. the feature's own tests.
+ *
+ * `partitionDelta` cannot express this: it checks `isTestPath` FIRST and
+ * never consults `F` for a test path, so every test path (feature-owned or
+ * foreign) lands in `test`. That is deliberate for the existing three kinds,
+ * whose three groups must stay disjoint with `featureSrc ∪ foreignSrc`
+ * equal to the runtime slice of `D`. `feature-codetest` needs the extra
+ * distinction, so it is computed alongside rather than by widening — and
+ * kept out of `DeltaPartition` so that invariant is untouched.
+ */
+export function featureTestPaths(D: string[], F: string[]): string[] {
+  const featureSet = new Set(F);
+  return D.filter((path) => isTestPath(path) && featureSet.has(path));
+}
+
+/**
  * Preserve/invalidate decision table for the post-rebase judged tail
  * (ADR-2026-07-20). `D` is the rebase delta (`changedCodePaths`), `F` is the
  * feature's claimed surface (`mergeBase..preTree`). `ranManualTest` gates
@@ -101,10 +130,16 @@ export function partitionDelta(D: string[], F: string[]): DeltaPartition {
  * Per gate surface kind (see `GATE_SURFACE`):
  * - 'feature-runtime' (prd_audit, architecture_review_as_built): preserved
  *   iff `featureSrc` is empty.
+ * - 'feature-codetest' (build_review): preserved iff `featureSrc` AND the
+ *   feature's own test paths are both empty — a foreign-only delta (runtime
+ *   or test) cannot change the feature's own diff, so its plan-vs-diff grade
+ *   survives the rebase.
  * - 'all-runtime' (wiring_check, manual_test): preserved iff both
  *   `featureSrc` and `foreignSrc` are empty.
- * - 'any-codetest' (build_review, test_suite): preserved iff `D` is entirely empty
- *   (test ∪ featureSrc ∪ foreignSrc all empty).
+ * - 'any-codetest' (test_suite): preserved iff `D` is entirely empty
+ *   (test ∪ featureSrc ∪ foreignSrc all empty). Aggregate verification
+ *   proves the exact tree, so ANY delta stales it — and it runs no LLM, so
+ *   re-running is cheap.
  */
 export function classifyGateInvalidation(
   D: string[],
@@ -112,6 +147,7 @@ export function classifyGateInvalidation(
   ranManualTest: boolean,
 ): { preserved: string[]; invalidated: string[] } {
   const { test, featureSrc, foreignSrc } = partitionDelta(D, F);
+  const featureTest = featureTestPaths(D, F);
   const preserved: string[] = [];
   const invalidated: string[] = [];
 
@@ -124,6 +160,9 @@ export function classifyGateInvalidation(
     switch (surface) {
       case 'feature-runtime':
         isPreserved = featureSrc.length === 0;
+        break;
+      case 'feature-codetest':
+        isPreserved = featureSrc.length === 0 && featureTest.length === 0;
         break;
       case 'all-runtime':
         isPreserved = featureSrc.length === 0 && foreignSrc.length === 0;
