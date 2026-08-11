@@ -138,9 +138,7 @@ steps:
   conflict_check:
     llm_provider: claude
   coherence_check:
-    llm_provider: claude
-  acceptance_specs:
-    llm_provider: claude
+    llm_provider: codex
   build_review:
     llm_provider: claude
   prd_audit:
@@ -148,6 +146,8 @@ steps:
   architecture_review_as_built:
     llm_provider: claude
   rebase:
+    llm_provider: codex
+  finish:
     llm_provider: claude
   manual_test:
     disable: true
@@ -157,13 +157,22 @@ steps:
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
+  release-disposition:
+    llm_provider: codex
+    model: gpt-5.6-terra
+    after: maintain-documentation
+    skill: .agents/skills/release-disposition/SKILL.md
+    enforcement: gating
+    completion_artifact: .pipeline/release-disposition-pass
 ```
 
-**Execution runs on Codex; judgement runs on Claude.** The run-level ladder puts `codex` first, so
-`build` and the mechanical steps dispatch there with `claude` behind them. Eleven steps pin
-`llm_provider: claude` for themselves — the design, review, and audit steps, plus `rebase` and this
-repo's own documentation step — and each still falls back to `codex`, because a step-level selection
-is prepended to the run-level list rather than replacing it. See [multiprovider](multiprovider.md).
+**Execution runs on Codex; most design and audit judgement runs on Claude.** The run-level ladder
+puts `codex` first, so `build` and the mechanical steps dispatch there with `claude` behind them.
+The design, review, audit, documentation, and finish steps that remain pinned to
+`llm_provider: claude` still fall back to `codex`, because a step-level selection is prepended to
+the run-level list rather than replacing it. `coherence_check`, `rebase`, and
+`release-disposition` deliberately use Codex. See
+[multiprovider](multiprovider.md).
 
 **`manual_test` is disabled.** The harness's own features are engine and CLI changes covered by the
 vitest suite and the integrity script, so a dispatched manual-test session costs tokens without
@@ -180,7 +189,7 @@ a loop gate, the custom step joins the gate-driven SHIP tail loop.
 The resulting tail is:
 
 ```text
-rebase → maintain-documentation → finish
+rebase → maintain-documentation → release-disposition → finish
 ```
 
 With no config, that tail is `rebase → finish`.
@@ -202,7 +211,8 @@ stale PASS from a previous attempt can never satisfy the gate. See
 
 The skill lives at `.agents/skills/maintain-documentation/SKILL.md` and is symlinked from
 `.claude/skills/maintain-documentation`. A repository-local test asserts the two are byte-identical
-and that the configured tail is exactly `rebase → maintain-documentation → finish`.
+and that the configured tail is exactly
+`rebase → maintain-documentation → release-disposition → finish`.
 
 ## The live boundary
 

@@ -84,8 +84,8 @@ test_suite:
 # downstream prerequisites (prd_audit, rebase) and the SHIP-tail selector —
 # the pipeline flows build → build_review (opt-in, currently off) → prd_audit
 # (skipped on technical track) → architecture_review_as_built → rebase →
-# maintain-documentation → finish. manual_test is the only gating step whose definition opts into
-# config-disable (`configDisableAllowed`); structural steps can never be
+# maintain-documentation → release-disposition → finish. manual_test is the only gating step whose
+# definition opts into config-disable (`configDisableAllowed`); structural steps can never be
 # disabled. Read per conduct run; new builds pick it up once the engine
 # supporting `configDisableAllowed` is deployed (rebuild + daemon reload) —
 # an OLDER engine rejects this key as "Cannot disable gating step".
@@ -101,7 +101,7 @@ steps:
   conflict_check:
     llm_provider: claude
   coherence_check:
-    llm_provider: claude
+    llm_provider: codex
   build_review:
     llm_provider: claude
   prd_audit:
@@ -130,10 +130,11 @@ steps:
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
-  # Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
+  # Provider pinned explicitly because release disposition is a deliberate
+  # Codex judgement lane rather than an inherited routing choice.
   release-disposition:
-    llm_provider: claude
-    model: sonnet
+    llm_provider: codex
+    model: gpt-5.6-terra
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
