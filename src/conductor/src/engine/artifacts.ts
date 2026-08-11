@@ -1301,6 +1301,34 @@ export function validateAcceptanceRedEvidence(
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record numeric executed/passed/failed/skipped/errors from the real RED run`,
     };
   }
+  if (errors > 0) {
+    return {
+      ok: false,
+      class: 'outcome',
+      reason: `acceptance specs errored at collection (${errors}) — they never ran; fix the specs so they execute (this is not RED)`,
+    };
+  }
+  if (skipped > 0) {
+    return {
+      ok: false,
+      class: 'outcome',
+      reason: `${skipped} acceptance spec(s) were SKIPPED — a skipped spec does not establish RED (missing testcontainer/dependency, or a unit-only test scope?). Bring up the required infra and run the feature's specs so they actually execute`,
+    };
+  }
+  if (executed < 1) {
+    return {
+      ok: false,
+      class: 'outcome',
+      reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
+    };
+  }
+  if (failed < 1) {
+    return {
+      ok: false,
+      class: 'outcome',
+      reason: `acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation`,
+    };
+  }
   if (typeof e.command !== 'string' || e.command.trim() === '') {
     return {
       ok: false,
@@ -1346,34 +1374,6 @@ export function validateAcceptanceRedEvidence(
       ok: false,
       class: 'shape',
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a non-empty "intentRationale" for why the failures establish RED`,
-    };
-  }
-  if (errors > 0) {
-    return {
-      ok: false,
-      class: 'outcome',
-      reason: `acceptance specs errored at collection (${errors}) — they never ran; fix the specs so they execute (this is not RED)`,
-    };
-  }
-  if (skipped > 0) {
-    return {
-      ok: false,
-      class: 'outcome',
-      reason: `${skipped} acceptance spec(s) were SKIPPED — a skipped spec does not establish RED (missing testcontainer/dependency, or a unit-only test scope?). Bring up the required infra and run the feature's specs so they actually execute`,
-    };
-  }
-  if (executed < 1) {
-    return {
-      ok: false,
-      class: 'outcome',
-      reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
-    };
-  }
-  if (failed < 1) {
-    return {
-      ok: false,
-      class: 'outcome',
-      reason: `acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation`,
     };
   }
   return { ok: true };

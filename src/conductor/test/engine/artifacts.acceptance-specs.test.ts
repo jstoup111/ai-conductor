@@ -208,4 +208,37 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
       reason: expect.stringContaining('intentRationale'),
     });
   });
+
+  it.each([
+    [
+      'errors > 0',
+      { errors: 1 },
+      'acceptance specs errored at collection (1) — they never ran; fix the specs so they execute (this is not RED)',
+    ],
+    [
+      'skipped > 0',
+      { skipped: 1 },
+      "1 acceptance spec(s) were SKIPPED — a skipped spec does not establish RED (missing testcontainer/dependency, or a unit-only test scope?). Bring up the required infra and run the feature's specs so they actually execute",
+    ],
+    [
+      'executed < 1',
+      { executed: 0 },
+      "acceptance-specs RED run executed 0 tests — the command did not select the feature's specs",
+    ],
+    [
+      'failed < 1',
+      { failed: 0 },
+      'acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation',
+    ],
+  ])('preserves the exact %s counter refusal before provenance validation', (_case, counters, reason) => {
+    const evidence = { ...validEvidence, ...counters };
+    const { intentRationale: _intentRationale, ...evidenceWithoutIntentRationale } = evidence;
+
+    expect(validateAcceptanceRedEvidence(evidence)).toEqual({ ok: false, class: 'outcome', reason });
+    expect(validateAcceptanceRedEvidence(evidenceWithoutIntentRationale)).toEqual({
+      ok: false,
+      class: 'outcome',
+      reason,
+    });
+  });
 });
