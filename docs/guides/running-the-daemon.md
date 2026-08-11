@@ -346,6 +346,19 @@ If no current-dispatch start event is available, elapsed time is omitted. If tes
 missing, malformed, or unreadable, the dashboard says `(last test outcome: unavailable)` rather
 than inferring a result.
 
+`(working)` means the current dispatch has fresh activity telemetry; `(waiting)` means the current
+dispatch returned but its completion gate is still unmet. A waiting acceptance-specs step also
+names its RED-evidence state and the completion predicate's unmet-condition reason:
+
+```text
+IN-PROGRESS (1)
+  • my-feature [M] @acceptance_specs (waiting; RED: rejected; completion condition: acceptance specs RED run shows 0 failed — RED not established) (children: unknown)
+```
+
+`completion condition: unavailable` means the completion predicate did not supply a reason. The
+`(children: unknown)` suffix is constant — the provider layer cannot observe work done by child
+processes it spawns, so the dashboard never fabricates a count.
+
 The heartbeat file is overwritten, never cleared, so a worktree keeps its last pulse after the step
 that wrote it ends. The dashboard ignores a heartbeat from another step or from before the current
 dispatch; a leftover heartbeat is treated as "no heartbeat yet." Neither a missing nor a stale

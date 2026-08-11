@@ -361,7 +361,7 @@ Agent-authored, engine-validated. Alphabetized.
 
 | File | Shape | Writer |
 | --- | --- | --- |
-| `acceptance-specs-red.json` | `{ command, targetSpecs[], executed, passed, failed, skipped, errors, summary? }`. Validation hard-fails on `errors > 0`, `skipped > 0`, `executed < 1`, or `failed < 1` — a RED phase must actually fail | `acceptance-red-runner.ts` |
+| `acceptance-specs-red.json` | `{ command, targetSpecs[], executed, passed, failed, skipped, errors, failingTests[], ranAt, intentRationale, exception?, summary? }`. Validation hard-fails on `errors > 0`, `skipped > 0`, `executed < 1`, or `failed < 1` unless a recorded `exception` (`{ kind: 'remediation', reason, attribution }`) waives separate RED proof — a RED phase must actually fail, or the waiver must be attributable | `acceptance-red-runner.ts` |
 | `architecture-review-as-built.md` | Markdown with a `Verdict: <value>` line | as-built review step |
 | `architecture-review-as-built-code-stamp.json` | The HEAD sha the review was formed against | engine |
 | `assessment/` | Assessment outputs | `assess` skill |
@@ -596,16 +596,20 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **62 variants**. `EventPersister` subscribes to the **34** names in
-`ALL_EVENT_TYPES` and writes only those:
+`ConductorEvent` defines **71 variants**. `EventPersister` subscribes to the **44** event types
+marked `persist: true` in `event-sinks.ts` and writes only those:
 
 `step_started`, `step_completed`, `step_failed`, `provider_attempt`, `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `session_reset`,
-`credentials_park`, `credentials_park_progress`, `feature_complete`, `dashboard_refresh`, `auto_heal`,
-`mode_skip`, `build_progress`, `unattributed_progress`, `build_no_progress`, `build_stall`,
+`credentials_park`, `operator_park_boundary`, `credentials_park_progress`,
+`finish_publication_transition`, `finish_publication_blocked`, `finish_publication_disposition`,
+`feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
+`protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
+`verdict_freshness`, `mode_skip`, `build_stall`, `build_progress`, `build_no_progress`,
 `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`,
-`attribution_divergence`, `build_member_evidence_reused`, `build_member_evidence_recomputed`.
+`build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
+`unattributed_progress`, `attribution_divergence`, `acceptance_red`.
 
 The BUILD-member settle events carry only a member, decision, and closed basis classification:
 `build_member_evidence_reused` is `reuse` with `fingerprint-match`;
