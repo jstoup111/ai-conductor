@@ -3258,6 +3258,27 @@ export class Conductor {
     }
     if (!prUrl) return;
 
+    // `state.pr_url` is durable but not authoritative about a PR's current
+    // lifecycle. Re-check immediately before a resume clear so a PR closed or
+    // merged by a human can never receive a label/body mutation.
+    try {
+      const { stdout } = await this.gh(
+        ['pr', 'view', prUrl, '--json', 'state'],
+        { cwd: this.projectRoot },
+      );
+      const prState = (JSON.parse(stdout) as { state?: unknown }).state;
+      if (prState !== 'OPEN') {
+        this.resumeHaltStateClearAttempted = true;
+        return;
+      }
+    } catch (err) {
+      (this.log ?? console.warn)(
+        `[halt-pr-rehab] resume clear state validation failed for ${prUrl}: ${err}`,
+      );
+      this.resumeHaltStateClearAttempted = true;
+      return;
+    }
+
     const outcome = await clearHaltStateForResume(
       this.gh,
       this.projectRoot,
@@ -3268,7 +3289,9 @@ export class Conductor {
     // A partial clear leaves the marker visible to reconciliation. Do not
     // consume this run's retry until the cleanup has been verified, otherwise
     // the sweep can re-heal the label while later dispatches are suppressed.
-    if (outcome === 'cleared') this.resumeHaltStateClearAttempted = true;
+    // Every settled outcome, including an unavailable GitHub read, is a
+    // one-shot advisory attempt for this run.
+    if (outcome !== 'partial') this.resumeHaltStateClearAttempted = true;
   }
 
   /** Capture only a valid, re-readable release block before finish can replace the body. */
