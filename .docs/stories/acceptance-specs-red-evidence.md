@@ -122,6 +122,15 @@ that no build is declared GREEN on specs that passed, were skipped, or errored a
 - Given the engine executes the contract and the specs PASS (failed==0), when it re-validates, then
   the gate fails with a "did not establish RED (0 failed)" reason and no passing marker is fabricated.
 
+> **Amended 2026-08-09 by #1246:** this assertion now holds for every run **that carries no recorded
+> exception**, which is every run that existed when it was written. `adr-2026-08-09-recorded-red-exception-for-remediation`
+> introduces a structured remediation waiver stored on the marker: with a well-formed exception
+> present (`kind: 'remediation'`, non-empty reason, attribution), `failed == 0` passes and is
+> reported as `viaException: true` — waived, never as proven RED. Without one, the refusal and its
+> reason text are unchanged, exactly as asserted above. The execution requirements
+> (`errors == 0`, `skipped == 0`, `executed >= 1`) are never waived, so the negative paths below are
+> unaffected.
+
 #### Negative Paths
 - Given the engine-run specs are all SKIPPED/deselected (skipped>0, executed==0), when re-validated,
   then the gate fails ("specs skipped — RED not established").
