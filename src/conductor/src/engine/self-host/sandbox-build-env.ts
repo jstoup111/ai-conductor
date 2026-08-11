@@ -40,7 +40,7 @@ import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
-import { resolveScratchHome } from './provider-scratch.js';
+import { releaseScratchHome, resolveScratchHome } from './provider-scratch.js';
 export {
   provisionProviderHome,
   type ProviderHome,
@@ -223,7 +223,16 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
   } catch (err) {
     // Remove any partial sandbox so a half-built dir is never launched (TR-5).
     if (configDir) {
-      await fs.rm(configDir, { recursive: true, force: true }).catch(() => {});
+      if (opts.baseDir === undefined) {
+        await releaseScratchHome({
+          worktreeRoot: opts.worktreeRoot,
+          runId: opts.runId ?? 'sandbox-build-env',
+          attempt: opts.attempt ?? 0,
+          provider: 'claude',
+        });
+      } else {
+        await fs.rm(configDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
     if (err instanceof SandboxProvisionError) throw err;
     const e = err as NodeJS.ErrnoException;

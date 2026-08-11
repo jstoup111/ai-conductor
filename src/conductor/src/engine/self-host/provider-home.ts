@@ -6,7 +6,7 @@ import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
-import { resolveScratchHome } from './provider-scratch.js';
+import { releaseScratchHome, resolveScratchHome } from './provider-scratch.js';
 
 export type SelfHostProviderId = 'claude' | 'codex';
 
@@ -190,7 +190,18 @@ export async function provisionProviderHome(
       fs,
     );
   } catch (error) {
-    if (homeDir) await fs.rm(homeDir, { recursive: true, force: true }).catch(() => {});
+    if (homeDir) {
+      if (options.baseDir === undefined) {
+        await releaseScratchHome({
+          worktreeRoot: options.worktreeRoot,
+          runId: options.runId ?? 'provider-home',
+          attempt: options.attempt ?? 0,
+          provider: options.provider.id,
+        });
+      } else {
+        await fs.rm(homeDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
     if (error instanceof ProviderHomeProvisionError) throw error;
     const reason = redactSafetyText(error instanceof Error ? error.message : String(error));
     throw new ProviderHomeProvisionError(
