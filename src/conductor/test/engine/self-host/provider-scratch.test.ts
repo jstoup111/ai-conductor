@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-boundary.js';
-import { resolveScratchHome } from '../../../src/engine/self-host/provider-scratch.js';
+import {
+  acquireScratchHome,
+  readScratchLease,
+  resolveScratchHome,
+  type ScratchFs,
+} from '../../../src/engine/self-host/provider-scratch.js';
 
 const execFile = promisify(execFileCb);
 
@@ -69,5 +74,43 @@ describe('provider scratch homes', () => {
     } finally {
       await rm(worktreeRoot, { recursive: true, force: true });
     }
+  });
+
+  it('writes the owner lease before returning an acquired home and round-trips its identity', async () => {
+    const files = new Map<string, string>();
+    const events: string[] = [];
+    const fs: ScratchFs = {
+      mkdir: async (path) => { events.push(`mkdir:${path}`); },
+      writeFile: async (path, content) => {
+        events.push(`write:${path}`);
+        files.set(path, content);
+      },
+      readFile: async (path) => files.get(path) ?? null,
+    };
+
+    const home = await acquireScratchHome({
+      worktreeRoot: '/wt',
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      provider: 'codex',
+      ownerPid: 1234,
+      now: () => new Date('2026-08-11T12:34:56.000Z'),
+      fs,
+    });
+
+    await expect(readScratchLease(home, { fs })).resolves.toEqual({
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      ownerPid: 1234,
+      startedAt: '2026-08-11T12:34:56.000Z',
+    });
+    expect(events).toEqual([
+      `mkdir:${home}`,
+      `write:${join(home, 'owner.json')}`,
+    ]);
   });
 });
