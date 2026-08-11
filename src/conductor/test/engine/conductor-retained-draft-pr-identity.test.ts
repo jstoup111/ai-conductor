@@ -21,6 +21,10 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import {
+  HALT_PR_BANNER_SENTINEL,
+  NEEDS_REMEDIATION_BODY_MARKER,
+} from '../../src/engine/pr-labels.js';
 
 const BRANCH = 'feat/daemon-e2e-smoke-step';
 const BASE = 'main';
@@ -65,6 +69,43 @@ function makeGh(rowsByQuery: Record<string, PrRow[]>): {
     return { stdout: '{}' };
   };
   return { gh, calls };
+}
+
+function makeHaltedPrGh(): {
+  gh: GhRunner;
+  presentation: { title: string; labels: string[]; body: string };
+} {
+  const presentation = {
+    title: 'needs-remediation: blocked implementation',
+    labels: ['needs-remediation'],
+    body: `${HALT_PR_BANNER_SENTINEL}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+  };
+  const gh: GhRunner = async (args) => {
+    if (args[1] === 'list') {
+      return { stdout: JSON.stringify([{ url: PR_URL, state: 'OPEN' }]) };
+    }
+    if (args[1] === 'view') {
+      return {
+        stdout: JSON.stringify({
+          ...presentation,
+          isDraft: true,
+          labels: presentation.labels.map((name) => ({ name })),
+          comments: [],
+        }),
+      };
+    }
+    if (args[0] === 'api' && args[2] === 'DELETE') {
+      presentation.labels = presentation.labels.filter((label) => label !== 'needs-remediation');
+    }
+    if (args[1] === 'edit') {
+      const titleIndex = args.indexOf('--title');
+      const bodyIndex = args.indexOf('--body');
+      if (titleIndex >= 0) presentation.title = args[titleIndex + 1]!;
+      if (bodyIndex >= 0) presentation.body = args[bodyIndex + 1]!;
+    }
+    return { stdout: '{}' };
+  };
+  return { gh, presentation };
 }
 
 const noopRunner: StepRunner = { run: async (): Promise<StepRunResult> => ({ success: true }) };
@@ -182,6 +223,23 @@ describe('retained SHIP draft PR identity', () => {
     const result = await readMetadata(conductor, BRANCH);
 
     expect(result.ok).toBe(true);
+  });
+
+  it('repairs a retained placeholder before returning its resolved identity', async () => {
+    const { gh, presentation } = makeHaltedPrGh();
+    const conductor = makeConductor(gh, { worktreeBranch: BRANCH });
+
+    const result = await (conductor as unknown as {
+      resolveRetainedShipDraftPrUrl(branch: string): Promise<string | undefined>;
+    }).resolveRetainedShipDraftPrUrl(BRANCH);
+
+    expect(result).toBe(PR_URL);
+    expect(presentation).toMatchObject({
+      title: expect.stringMatching(/^feat:/),
+      labels: [],
+    });
+    expect(presentation.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    expect(presentation.body).not.toContain(HALT_PR_BANNER_SENTINEL);
   });
 
   it('falls back to the daemon-supplied worktree branch and resolves only once', async () => {
