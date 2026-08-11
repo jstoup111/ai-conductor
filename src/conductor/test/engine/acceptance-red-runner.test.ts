@@ -203,6 +203,99 @@ describe("selfHealAcceptanceRed", () => {
     );
   }
 
+  it("carries a recorded exception across a re-execution without changing its declaration", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    writeContract(worktreeRoot);
+
+    const rootMarkerPath = join(worktreeRoot, ".pipeline", "acceptance-specs-red.json");
+    const exception = {
+      kind: "remediation",
+      reason: "The remediation added production behavior before its acceptance spec could fail.",
+      attribution: "remediate",
+    };
+    writeFileSync(rootMarkerPath, JSON.stringify({ exception }), "utf8");
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec: async () => ({
+        executed: 7,
+        passed: 2,
+        failed: 5,
+        skipped: 0,
+        errors: 0,
+        ...RED_PROVENANCE,
+      }),
+    });
+
+    expect(result).toEqual({ healed: true });
+    const marker = JSON.parse(readFileSync(rootMarkerPath, "utf8"));
+    expect(marker).toMatchObject({
+      command: "npm test",
+      targetSpecs: ["a.test.ts"],
+      executed: 7,
+      passed: 2,
+      failed: 5,
+      skipped: 0,
+      errors: 0,
+      exception,
+    });
+  });
+
+  it("does not invent an exception when re-executing a marker without one", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    writeContract(worktreeRoot);
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec: async () => ({
+        executed: 3,
+        passed: 0,
+        failed: 3,
+        skipped: 0,
+        errors: 0,
+        exception: {
+          kind: "remediation",
+          reason: "The execution result must not declare a waiver.",
+          attribution: "exec",
+        },
+        ...RED_PROVENANCE,
+      }),
+    });
+
+    expect(result).toEqual({ healed: true });
+    const marker = JSON.parse(
+      readFileSync(join(worktreeRoot, ".pipeline", "acceptance-specs-red.json"), "utf8"),
+    );
+    expect(marker).not.toHaveProperty("exception");
+  });
+
+  it("carries a malformed recorded exception forward without repairing it", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    writeContract(worktreeRoot);
+
+    const rootMarkerPath = join(worktreeRoot, ".pipeline", "acceptance-specs-red.json");
+    const exception = { kind: "remediation", reason: "", attribution: "remediate" };
+    writeFileSync(rootMarkerPath, JSON.stringify({ exception }), "utf8");
+
+    await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec: async () => ({
+        executed: 3,
+        passed: 0,
+        failed: 3,
+        skipped: 0,
+        errors: 0,
+        ...RED_PROVENANCE,
+      }),
+    });
+
+    const marker = JSON.parse(readFileSync(rootMarkerPath, "utf8"));
+    expect(marker.exception).toEqual(exception);
+  });
+
   it("returns healed:false with a real-evidence reason when the run looks GREEN (failed==0, passed>0)", async () => {
     worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
     writeContract(worktreeRoot);

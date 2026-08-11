@@ -120,6 +120,41 @@ function writeRedMarkerAtRoot(
 }
 
 /**
+ * Retrieves the operator-recorded exception from the prior root marker. The
+ * self-heal owns observed run results, not this declaration, so a re-run must
+ * retain it exactly as recorded. An unreadable or non-object prior marker has
+ * no declaration to carry forward.
+ */
+function readRecordedException(
+  worktreeRoot: string,
+): { hasException: boolean; exception?: unknown } {
+  const markerPath = join(resolve(worktreeRoot), ACCEPTANCE_SPECS_RED_EVIDENCE);
+  if (!existsSync(markerPath)) {
+    return { hasException: false };
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(markerPath, "utf8"));
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      Object.prototype.hasOwnProperty.call(parsed, "exception")
+    ) {
+      return {
+        hasException: true,
+        exception: (parsed as Record<string, unknown>).exception,
+      };
+    }
+  } catch {
+    // The fresh run can still recover an unreadable prior marker; it simply
+    // has no trustworthy declaration to preserve.
+  }
+
+  return { hasException: false };
+}
+
+/**
  * Known nested location a RED marker can stray into when an acceptance run's
  * contract.cwd points at a subdirectory (e.g. `src/conductor`) instead of the
  * worktree root.
@@ -245,6 +280,7 @@ export async function selfHealAcceptanceRed(
 
   const { contract } = cwdChecked;
   const resolvedCwd = resolve(resolvedRoot, contract.cwd);
+  const recordedException = readRecordedException(resolvedRoot);
   const execResult = await exec(contract.command, { cwd: resolvedCwd });
 
   // `validateAcceptanceRedEvidence` requires `command` and `targetSpecs` on
@@ -252,11 +288,19 @@ export async function selfHealAcceptanceRed(
   // executed/passed/failed/skipped/errors counters — merge the contract's
   // command/targetSpecs in so a genuinely successful RED run is never
   // rejected for a shape gap the exec result was never responsible for.
+  const execMarker =
+    typeof execResult === "object" && execResult !== null && !Array.isArray(execResult)
+      ? (execResult as Record<string, unknown>)
+      : {};
+  const { exception: _execException, ...observedRun } = execMarker;
   const markerContent = {
-    ...(typeof execResult === 'object' && execResult !== null ? execResult : {}),
+    ...observedRun,
     command: contract.command,
     targetSpecs: contract.targetSpecs,
     ranAt: new Date().toISOString(),
+    ...(recordedException.hasException
+      ? { exception: recordedException.exception }
+      : {}),
   };
 
   writeRedMarkerAtRoot(resolvedRoot, markerContent);
