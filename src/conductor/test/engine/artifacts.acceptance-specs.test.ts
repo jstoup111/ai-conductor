@@ -150,4 +150,25 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
       reason: expect.stringContaining('failingTests'),
     });
   });
+
+  it('refuses an empty failingTests array as a shape failure', () => {
+    expect(validateAcceptanceRedEvidence({ ...validEvidence, failingTests: [] })).toMatchObject({
+      ok: false,
+      class: 'shape',
+      reason: expect.stringContaining('failingTests'),
+    });
+  });
+
+  it('refuses a failing test without a reason as a shape failure', () => {
+    expect(
+      validateAcceptanceRedEvidence({
+        ...validEvidence,
+        failingTests: [{ name: 'test_x' }],
+      }),
+    ).toMatchObject({
+      ok: false,
+      class: 'shape',
+      reason: expect.stringContaining('failingTests'),
+    });
+  });
 });

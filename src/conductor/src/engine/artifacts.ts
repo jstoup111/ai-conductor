@@ -1311,11 +1311,23 @@ export function validateAcceptanceRedEvidence(
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list the "targetSpecs" the RED run exercised`,
     };
   }
-  if (!Array.isArray(e.failingTests)) {
+  if (
+    !Array.isArray(e.failingTests) ||
+    e.failingTests.length === 0 ||
+    e.failingTests.some(
+      (test) =>
+        typeof test !== 'object' ||
+        test === null ||
+        typeof test.name !== 'string' ||
+        test.name.trim() === '' ||
+        typeof test.reason !== 'string' ||
+        test.reason.trim() === '',
+    )
+  ) {
     return {
       ok: false,
       class: 'shape',
-      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list the "failingTests" that established RED`,
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list non-empty "failingTests" with a name and reason that established RED`,
     };
   }
   if (errors > 0) {
