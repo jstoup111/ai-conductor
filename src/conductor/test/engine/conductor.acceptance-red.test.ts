@@ -161,3 +161,61 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     if (result.ok) expect(result.value.acceptance_specs).not.toBe('done');
   });
 });
+
+describe('Conductor.run acceptance_specs RED dispatch lifecycle (Task 10)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    selfHealAcceptanceRedMock.mockReset();
+    dir = await mkdtemp(join(tmpdir(), 'acceptance-red-dispatch-lifecycle-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await seedAllDoneExcept(statePath, 'acceptance_specs');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await mkdir(join(dir, 'test', 'acceptance'), { recursive: true });
+    await writeFile(join(dir, 'test', 'acceptance', 'feature.acceptance.test.ts'), '// spec\n', 'utf-8');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('emits required before dispatch and pending after a successful dispatch leaves the gate unsatisfied', async () => {
+    // A missing marker reaches Task 9's pre-heal seam first. Refusing that
+    // heal preserves the ordinary dispatch path, whose lifecycle is this
+    // test's only concern.
+    selfHealAcceptanceRedMock.mockResolvedValue({ healed: false, reason: 'run contract missing: x' });
+    const order: string[] = [];
+    events.on('acceptance_red', (event) => {
+      if (event.type === 'acceptance_red') order.push(`event:${event.state}`);
+    });
+    const runner: StepRunner = {
+      run: async (step): Promise<StepRunResult> => {
+        order.push(`dispatch:${step}`);
+        return { success: true };
+      },
+      resetSession: async () => {},
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'acceptance_specs',
+    });
+
+    await conductor.run();
+
+    expect(order).toEqual([
+      'event:required',
+      'dispatch:acceptance_specs',
+      'event:pending',
+    ]);
+  });
+});

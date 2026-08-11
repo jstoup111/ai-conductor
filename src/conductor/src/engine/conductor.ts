@@ -5754,6 +5754,14 @@ export class Conductor {
             // reads to an operator like worktree corruption and is then retried
             // and kicked back into further dispatches against the same absent
             // path. Classify it here, before any provider call.
+            if (step.name === 'acceptance_specs') {
+              await emitTracked({
+                type: 'acceptance_red',
+                state: 'required',
+                step: step.name,
+                viaException: false,
+              });
+            }
             result =
               (await this.missingWorktreeResult(step.name)) ??
               (step.name === 'complexity'
@@ -6314,6 +6322,14 @@ export class Conductor {
             // normal retry path below.
 
             if (!completion.done) {
+              if (step.name === 'acceptance_specs') {
+                await emitTracked({
+                  type: 'acceptance_red',
+                  state: 'pending',
+                  step: step.name,
+                  viaException: false,
+                });
+              }
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
               if (
                 step.name === 'build_review' &&
