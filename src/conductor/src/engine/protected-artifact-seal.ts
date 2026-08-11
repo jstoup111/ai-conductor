@@ -321,6 +321,9 @@ export function evaluateProtectedArtifactSealRotation({
     ...workspaceArtifacts.keys(),
     ...headArtifacts.keys(),
     ...baseTipArtifacts.keys(),
+    ...[...(authorshipByPath ?? new Map()).entries()]
+      .filter(([, authorship]) => authorship === 'authored')
+      .map(([path]) => path),
   ])]
     .filter((path) => {
       const workspace = workspaceArtifacts.get(path);
@@ -328,7 +331,8 @@ export function evaluateProtectedArtifactSealRotation({
       const sealedDiffersFromWorkspace = workspace === undefined
         ? sealedFingerprint !== undefined
         : sealedFingerprint === undefined || sealedFingerprint !== fingerprint(workspace);
-      return sealedDiffersFromWorkspace
+      return authorshipByPath?.get(path) === 'authored'
+        || sealedDiffersFromWorkspace
         || !optionalBuffersEqual(workspace, headArtifacts.get(path))
         || !optionalBuffersEqual(headArtifacts.get(path), baseTipArtifacts.get(path));
     })
@@ -336,6 +340,9 @@ export function evaluateProtectedArtifactSealRotation({
 
   const rotationPaths: string[] = [];
   for (const path of paths) {
+    if (authorshipByPath?.get(path) === 'authored') {
+      return { permitted: false, condition: 'head-differs-from-base', path };
+    }
     const workspace = workspaceArtifacts.get(path);
     const head = headArtifacts.get(path);
     if (workspace === undefined ? head !== undefined : head === undefined || !workspace.equals(head)) {

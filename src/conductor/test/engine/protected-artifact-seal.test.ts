@@ -653,6 +653,63 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     })).toEqual({ permitted: true, paths: [] });
   });
 
+  it('refuses rotation for every feature-authored divergent path regardless of its blob contents', () => {
+    const authoredPath = '.docs/plans/authored.md';
+    const inheritedPath = '.docs/plans/inherited.md';
+    const sharedBytes = Buffer.from('shared bytes\n');
+    const inheritedHeadBytes = Buffer.from('feature-behind base\n');
+    const inheritedBaseBytes = Buffer.from('base advanced\n');
+    const input = {
+      seal: {
+        version: 2 as const,
+        baselineCommit: 'sealed-head',
+        protectedArtifacts: [],
+        rebaselines: [],
+      },
+      baselineAncestry: 'non-ancestor' as const,
+    };
+
+    expect({
+      equalContent: evaluateProtectedArtifactSealRotation({
+        ...input,
+        workspaceArtifacts: new Map([[authoredPath, sharedBytes]]),
+        headArtifacts: new Map([[authoredPath, sharedBytes]]),
+        baseTipArtifacts: new Map([[authoredPath, sharedBytes]]),
+        authorshipByPath: new Map([[authoredPath, 'authored']]),
+      }),
+      deletion: evaluateProtectedArtifactSealRotation({
+        ...input,
+        workspaceArtifacts: new Map(),
+        headArtifacts: new Map(),
+        baseTipArtifacts: new Map(),
+        authorshipByPath: new Map([[authoredPath, 'authored']]),
+      }),
+      mixed: evaluateProtectedArtifactSealRotation({
+        ...input,
+        workspaceArtifacts: new Map([
+          [authoredPath, sharedBytes],
+          [inheritedPath, inheritedHeadBytes],
+        ]),
+        headArtifacts: new Map([
+          [authoredPath, sharedBytes],
+          [inheritedPath, inheritedHeadBytes],
+        ]),
+        baseTipArtifacts: new Map([
+          [authoredPath, sharedBytes],
+          [inheritedPath, inheritedBaseBytes],
+        ]),
+        authorshipByPath: new Map([
+          [authoredPath, 'authored'],
+          [inheritedPath, 'not-authored'],
+        ]),
+      }),
+    }).toEqual({
+      equalContent: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
+      deletion: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
+      mixed: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
+    });
+  });
+
   it('fails closed distinctly when the sealed baseline object cannot resolve', async () => {
     const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
     const seal = {
