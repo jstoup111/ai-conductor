@@ -108,8 +108,15 @@ steps:
     llm_provider: claude
   architecture_review_as_built:
     llm_provider: claude
+  # Routed to codex (operator order, 2026-08-10). Conflict resolution is
+  # mechanical pattern-matching rather than the judgement the other claude pins
+  # protect, and a bad resolution cannot pass silently: the rebase step HALTs on
+  # failure and the protected-artifact seal independently rejects any DECIDE
+  # artifact the resolution disturbs. Telemetry motivating the move: rebase was
+  # the only non-zero claude spend outside build_review ($2.81 of $41.10 across
+  # the sampled worktrees) and originated 5 of 12 observed kickbacks.
   rebase:
-    llm_provider: claude
+    llm_provider: codex
   finish:
     llm_provider: claude
   manual_test:
