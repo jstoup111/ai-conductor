@@ -79,6 +79,11 @@ Blockers from `/prd-audit`, as-built `/architecture-review`, and `/finish` route
 to the appropriate SDLC step or a required human decision. Neither path is pre-authored as
 speculative implementation work.
 
+An acceptance-spec remediation may waive separate RED proof only when one atomic repair must change
+both the acceptance spec and its implementation. The waiver must be recorded with a non-empty reason
+and attributable approval; the completion is reported as waived, never as proven RED. Without that
+recorded declaration, the acceptance specs must establish ordinary failing-spec RED evidence.
+
 ### DECIDE Artifact Amendment Ownership
 
 When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE amends that artifact

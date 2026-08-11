@@ -103,6 +103,11 @@ Judgment rules:
   `build`.
 - A gap that is an `impl-gap` in the audit is almost always `build` (or `acceptance_specs` when the
   real miss is coverage).
+- **RED-waiver obligation:** An `acceptance_specs` disposition may waive separate RED proof only
+  for a remediation that must atomically repair both the acceptance spec and its implementation.
+  The disposition must require a recorded declaration with a non-empty reason and attributable
+  approval; the resulting completion is reported as waived, never as proven RED. Without that
+  declaration, route the gap through the ordinary failing-spec RED path.
 - **Finish test failures are almost always `build`.** Decide what the failure means first: a test
   that lags an **intentional contract change** made on this branch gets tasks that update the
   TEST to the new contract — never a task that weakens the production code to appease the old

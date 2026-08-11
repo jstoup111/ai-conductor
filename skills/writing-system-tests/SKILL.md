@@ -453,6 +453,14 @@ actually executed — not merely that spec files exist on disk:
   "failed": 5,
   "skipped": 0,
   "errors": 0,
+  "failingTests": [
+    {
+      "name": "returns the archived filing",
+      "reason": "the archive endpoint is not implemented"
+    }
+  ],
+  "ranAt": "2026-08-10T12:00:00.000Z",
+  "intentRationale": "The failing endpoint proves the requested archive behavior is not implemented.",
   "summary": "5 failed in 12.3s"
 }
 ```
@@ -460,8 +468,10 @@ actually executed — not merely that spec files exist on disk:
 Counts are for the feature's own specs from the run above (`executed` = passed + failed). The
 `acceptance_specs` gate REJECTS the step unless this file shows `failed >= 1`, `skipped == 0`,
 `errors == 0`, and `executed >= 1`. A run where the new specs were skipped, deselected, or errored
-at collection does not establish RED and will not pass the gate. This is gitignored run evidence,
-not a committed design artifact.
+at collection does not establish RED and will not pass the gate. The marker must also identify at
+least one failing test with its failure reason, record when the run occurred (`ranAt`), and state
+why the observed failure proves the feature remains unimplemented (`intentRationale`). This is
+gitignored run evidence, not a committed design artifact.
 
 #### Record the FR coverage evidence (gating)
 
@@ -596,7 +606,8 @@ lower level. This skill handles the top layer. TDD handles the bottom two.
 - [ ] The new specs were EXECUTED, not just written — a spec that never ran does not
       establish RED
 - [ ] The real RED run's results recorded to `.pipeline/acceptance-specs-red.json`
-      (command, targetSpecs, executed/passed/failed/skipped/errors counts) — the
+      (command, targetSpecs, executed/passed/failed/skipped/errors counts, failing-test identity,
+      `ranAt`, and `intentRationale`) — the
       completion gate validates this file and rejects runs where the feature's own
       specs were skipped, deselected, or errored at collection
 - [ ] Failures are for the RIGHT reason (missing implementation), not
