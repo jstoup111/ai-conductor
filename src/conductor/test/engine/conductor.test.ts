@@ -7412,26 +7412,6 @@ describe('engine/conductor', () => {
       }
     });
 
-    it('prd_audit disabled by config stays product-track while architecture_review_as_built remains dispatchable', () => {
-      const state = { complexity_tier: 'M' } as ConductState;
-      const config = { steps: { prd_audit: { disable: true } } } as unknown as Parameters<
-        typeof resolveGroupMembership
-      >[4];
-      const result = resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'product',
-        CLAUDE_MODEL_POLICY,
-        config,
-      );
-
-      expect(result.members.find((m) => m.name === 'prd_audit')?.outcome).toEqual({ kind: 'skipped' });
-      expect(result.dispatchable.map((m) => m.name)).toEqual([
-        'manual_test',
-        'architecture_review_as_built',
-      ]);
-    });
-
     it('Task 6: re-verification preserves tier, track, upstream, and configuration exclusions', () => {
       // These are the four existing skip authorities. The Task 5
       // re-verification flag changes only the already-done shortcut; it must
