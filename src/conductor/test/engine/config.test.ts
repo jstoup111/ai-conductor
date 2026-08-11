@@ -1408,6 +1408,14 @@ complexity:
     });
   });
 
+  describe('conflict_check forward-compatibility', () => {
+    it('accepts a config that sets conflict_check ahead of the block validation landing', () => {
+      const result = validateConfig({ conflict_check: { adr_corpus: 'repo_wide' } });
+
+      expect(result.ok).toBe(true);
+    });
+  });
+
   // Task 3 (negative paths: TR-1): build_auth.mode validation — fail-closed for unknown/empty/non-string modes
   describe('harness_self_host.build_auth.mode validation (Task 3: TR-1 negative paths)', () => {
     it('accepts valid mode: daemon-token', () => {

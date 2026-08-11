@@ -39,9 +39,9 @@ describe('repository-local release-disposition contract', () => {
       claudeTarget: canonicalDir,
       byteIdentical: true,
       config: {
-        // Deliberate Codex judgement lane, rather than inherited run-level routing.
-        llm_provider: 'codex',
-        model: 'gpt-5.6-terra',
+        // Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
+        llm_provider: 'claude',
+        model: 'sonnet',
         after: 'maintain-documentation',
         skill: '.agents/skills/release-disposition/SKILL.md',
         enforcement: 'gating',
