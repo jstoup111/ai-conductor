@@ -189,7 +189,7 @@ a loop gate, the custom step joins the gate-driven SHIP tail loop.
 The resulting tail is:
 
 ```text
-rebase → maintain-documentation → finish
+rebase → maintain-documentation → release-disposition → finish
 ```
 
 With no config, that tail is `rebase → finish`.
@@ -211,7 +211,8 @@ stale PASS from a previous attempt can never satisfy the gate. See
 
 The skill lives at `.agents/skills/maintain-documentation/SKILL.md` and is symlinked from
 `.claude/skills/maintain-documentation`. A repository-local test asserts the two are byte-identical
-and that the configured tail is exactly `rebase → maintain-documentation → finish`.
+and that the configured tail is exactly
+`rebase → maintain-documentation → release-disposition → finish`.
 
 ## The live boundary
 
