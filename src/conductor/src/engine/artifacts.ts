@@ -1248,6 +1248,12 @@ export function parseAsBuiltVerdict(content: string): string | null {
  */
 export const ACCEPTANCE_SPECS_RED_EVIDENCE = '.pipeline/acceptance-specs-red.json';
 
+export interface AcceptanceRedRemediationException {
+  kind: 'remediation';
+  reason: string;
+  attribution: string;
+}
+
 export interface AcceptanceRedEvidence {
   /** The exact test command run (for the audit trail / reason messages). */
   command: string;
@@ -1265,6 +1271,8 @@ export interface AcceptanceRedEvidence {
   ranAt: string;
   /** Why the observed failures prove the feature remains unimplemented. */
   intentRationale: string;
+  /** Recorded authorization for a remediation that could not establish RED separately. */
+  exception?: AcceptanceRedRemediationException;
   /** Raw runner summary line, e.g. pytest's "5 failed in 12.3s". */
   summary?: string;
 }
@@ -1322,7 +1330,17 @@ export function validateAcceptanceRedEvidence(
       reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
     };
   }
-  if (failed < 1) {
+  const exception =
+    typeof e.exception === 'object' && e.exception !== null
+      ? (e.exception as Record<string, unknown>)
+      : null;
+  const hasRemediationException =
+    exception?.kind === 'remediation' &&
+    typeof exception.reason === 'string' &&
+    exception.reason.trim() !== '' &&
+    typeof exception.attribution === 'string' &&
+    exception.attribution.trim() !== '';
+  if (failed < 1 && !hasRemediationException) {
     return {
       ok: false,
       class: 'outcome',

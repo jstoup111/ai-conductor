@@ -140,6 +140,27 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
     });
   });
 
+  it('accepts a green run only when its remediation exception is recorded', () => {
+    const waivedEvidence = {
+      ...validEvidence,
+      failed: 0,
+      passed: 3,
+      exception: {
+        kind: 'remediation',
+        reason: 'The remediation necessarily changed the acceptance spec and production behavior together.',
+        attribution: 'remediation task 7',
+      },
+    };
+
+    expect(validateAcceptanceRedEvidence(waivedEvidence)).toEqual({ ok: true });
+    expect(validateAcceptanceRedEvidence({ ...validEvidence, failed: 0 })).toEqual({
+      ok: false,
+      class: 'outcome',
+      reason:
+        'acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation',
+    });
+  });
+
   it('requires failingTests identity while accepting a named failed test', () => {
     const evidenceWithFailingTest = {
       ...validEvidence,
