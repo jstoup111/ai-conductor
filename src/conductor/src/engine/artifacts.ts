@@ -832,6 +832,8 @@ export interface CompletionResult {
    * missing or malformed recording without re-running a real observed result.
    */
   acceptanceRedRefusalClass?: 'missing' | 'unparseable' | 'shape' | 'outcome';
+  /** Whether acceptance_specs completed through a recorded remediation exception. */
+  viaException?: boolean;
 }
 
 async function verdictFreshnessFor(
@@ -1336,16 +1338,7 @@ export function validateAcceptanceRedEvidence(
       reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
     };
   }
-  const exception =
-    typeof e.exception === 'object' && e.exception !== null
-      ? (e.exception as Record<string, unknown>)
-      : null;
-  const hasRemediationException =
-    exception?.kind === 'remediation' &&
-    typeof exception.reason === 'string' &&
-    exception.reason.trim() !== '' &&
-    typeof exception.attribution === 'string' &&
-    exception.attribution.trim() !== '';
+  const hasRemediationException = hasRecordedRemediationException(e.exception);
   if ('exception' in e && !hasRemediationException) {
     return {
       ok: false,
@@ -1375,17 +1368,18 @@ export function validateAcceptanceRedEvidence(
     };
   }
   if (
-    !Array.isArray(e.failingTests) ||
-    e.failingTests.length === 0 ||
-    e.failingTests.some(
-      (test) =>
-        typeof test !== 'object' ||
-        test === null ||
-        typeof test.name !== 'string' ||
-        test.name.trim() === '' ||
-        typeof test.reason !== 'string' ||
-        test.reason.trim() === '',
-    )
+    (!hasRemediationException &&
+      (!Array.isArray(e.failingTests) || e.failingTests.length === 0)) ||
+    (Array.isArray(e.failingTests) &&
+      e.failingTests.some(
+        (test) =>
+          typeof test !== 'object' ||
+          test === null ||
+          typeof test.name !== 'string' ||
+          test.name.trim() === '' ||
+          typeof test.reason !== 'string' ||
+          test.reason.trim() === '',
+      ))
   ) {
     return {
       ok: false,
@@ -1408,6 +1402,18 @@ export function validateAcceptanceRedEvidence(
     };
   }
   return { ok: true };
+}
+
+function hasRecordedRemediationException(exception: unknown): boolean {
+  if (typeof exception !== 'object' || exception === null) return false;
+  const candidate = exception as Record<string, unknown>;
+  return (
+    candidate.kind === 'remediation' &&
+    typeof candidate.reason === 'string' &&
+    candidate.reason.trim() !== '' &&
+    typeof candidate.attribution === 'string' &&
+    candidate.attribution.trim() !== ''
+  );
 }
 
 /**
@@ -1946,7 +1952,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (!verdict.ok) {
       return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
     }
-    return { done: true };
+    return {
+      done: true,
+      viaException:
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        hasRecordedRemediationException((parsed as Record<string, unknown>).exception),
+    };
   },
 
   // Manual-test passes only when .pipeline/manual-test-results.md exists, has

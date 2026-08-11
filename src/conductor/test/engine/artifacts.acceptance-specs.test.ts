@@ -84,10 +84,32 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
 
     const result = await checkStepCompletion(dir, 'acceptance_specs');
 
-    expect(result.done).toBe(true);
+    expect(result).toEqual({ done: true, viaException: false });
     expect(execSpy).not.toHaveBeenCalled();
     expect(execFileSpy).not.toHaveBeenCalled();
     expect(execSyncSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports whether a valid marker satisfied the gate through a remediation exception', async () => {
+    await createFile('test/acceptance/foo.spec.ts', 'spec content');
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({
+        ...validEvidence,
+        failed: 0,
+        passed: 3,
+        failingTests: [],
+        exception: {
+          kind: 'remediation',
+          reason: 'The remediation necessarily changed the acceptance spec and production behavior together.',
+          attribution: 'remediation task 8',
+        },
+      }),
+    );
+
+    const result = await checkStepCompletion(dir, 'acceptance_specs');
+
+    expect(result).toEqual({ done: true, viaException: true });
   });
 
   it('reads only the worktree-root marker path, never a nested marker path', async () => {
@@ -159,6 +181,33 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
       reason:
         'acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation',
     });
+  });
+
+  it('accepts an empty failingTests list only for a well-formed remediation waiver', () => {
+    const waiver = {
+      kind: 'remediation',
+      reason: 'The remediation necessarily changed the acceptance spec and production behavior together.',
+      attribution: 'remediation task 8',
+    };
+
+    expect(
+      validateAcceptanceRedEvidence({
+        ...validEvidence,
+        failed: 0,
+        passed: 3,
+        failingTests: [],
+        exception: waiver,
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      validateAcceptanceRedEvidence({
+        ...validEvidence,
+        failed: 0,
+        passed: 3,
+        failingTests: [{ name: ' ', reason: 'missing identity' }],
+        exception: waiver,
+      }),
+    ).toMatchObject({ ok: false, class: 'shape', reason: expect.stringContaining('failingTests') });
   });
 
   it.each([
