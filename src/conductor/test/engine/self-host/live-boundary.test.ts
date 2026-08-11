@@ -488,6 +488,56 @@ describe('live self-host boundary', () => {
     finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  // Regression: Codex writes a zero-byte lock per open thread under
+  // `thread-writer-locks/`, so the paths that trip the guard APPEAR mid-run
+  // rather than changing — the shape the `changed`-only case above misses.
+  // Observed 2026-08-10: a build whose `acceptance_specs` step had already
+  // succeeded (and committed its RED specs) halted at the next dispatch
+  // boundary with "4 added, 0 removed, 0 changed". The locks are deleted when
+  // their thread closes, which made the halt intermittent and unattributable.
+  it('ignores Codex thread-writer lock files appearing and vanishing mid-run', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-codex-thread-locks-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(live),
+      mkdir(join(provider, 'thread-writer-locks'), { recursive: true }),
+    ]);
+    await writeFile(join(provider, 'thread-writer-locks', '.coordination.lock'), '');
+    await writeFile(join(provider, 'thread-writer-locks', '019fedfe-4aba.lock'), '');
+    await writeFile(join(provider, 'config.toml'), 'unchanged');
+
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'codex',
+    });
+
+    // A concurrent Codex session opens two threads and closes a third.
+    await writeFile(join(provider, 'thread-writer-locks', '019fee04-cc23.lock'), '');
+    await writeFile(join(provider, 'thread-writer-locks', '019fee07-acdb.lock'), '');
+    await rm(join(provider, 'thread-writer-locks', '019fedfe-4aba.lock'));
+
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // The exclusion must not blind the guard to operator config, which is the
+  // whole point of fingerprinting the provider-state surface.
+  it('still halts on a Codex config.toml change alongside thread-writer-lock churn', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-codex-config-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(join(provider, 'thread-writer-locks'), { recursive: true })]);
+    await writeFile(join(provider, 'config.toml'), 'before');
+
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'codex',
+    });
+
+    await writeFile(join(provider, 'thread-writer-locks', '019fee04-cc23.lock'), '');
+    await writeFile(join(provider, 'config.toml'), 'after');
+
+    try { expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   // --- halt-reason diagnostics: the reason must name what differed ---
 
   it('names the added, removed and changed paths, tagged by kind', async () => {

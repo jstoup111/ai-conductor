@@ -142,6 +142,15 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'plugins/cache',         // installed-plugin cache refreshed on CLI startup
   'plugins/.remote-plugin-install-staging', // transient staging dir for plugin installs
   'mcp-oauth-locks',       // ephemeral lock files for the MCP oauth flow, not credential material
+  'thread-writer-locks',   // one zero-byte lock per OPEN Codex thread, created and deleted by the
+                           // CLI as threads come and go. Same category as mcp-oauth-locks above:
+                           // no config, no hook wiring, no credential material — the file's very
+                           // existence is the whole signal, and its content is always empty.
+                           // Verified 2026-08-10 as the sole diff ("4 added, 0 removed, 0 changed")
+                           // behind a false halt that discarded a build whose step had already
+                           // succeeded. Because the locks vanish when their thread closes, the halt
+                           // fired only when a concurrent session happened to hold a thread open at
+                           // a dispatch boundary — intermittent, and unattributable from the reason.
   '.tmp',                  // plugin-sync staging/lock files written by the CLI's own updater
   'tmp',                   // scratch dir (e.g. `arg0`) written by the CLI at startup
   'packages/standalone',   // self-update installer bookkeeping (current release, install lock)

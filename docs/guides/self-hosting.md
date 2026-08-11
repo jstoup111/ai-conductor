@@ -272,9 +272,9 @@ power. The list is explicit and provider-specific, selected by the provider the 
 | Provider | Excluded | Also excluded |
 | --- | --- | --- |
 | `claude` | `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`, `shell-snapshots`, `backups`, `sessions`, `session-env`, `projects`, `tasks`, `.last-update-result.json`, `stats-cache.json`, `mcp-needs-auth-cache.json`, `cache`, `file-history`, `paste-cache` | the selected auth file, `.credentials.json` |
-| `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, and any root-level `*.sqlite`, `*.sqlite-shm`, `*.sqlite-wal`, `*.sqlite-journal` | the selected auth file, `auth.json` |
+| `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `thread-writer-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, and any root-level `*.sqlite`, `*.sqlite-shm`, `*.sqlite-wal`, `*.sqlite-journal` | the selected auth file, `auth.json` |
 
-Two entries carry extra caveats:
+Three entries carry extra caveats:
 
 - **`file-history` (Claude).** The CLI snapshots every file it edits into
   `file-history/<session-uuid>/`, so *any* concurrent interactive session editing a file used to trip
@@ -287,6 +287,14 @@ Two entries carry extra caveats:
   until the list was patched. The `*` matches a **root-level basename only**: a nested lookalike such
   as `skills/state_9.sqlite-wal` still trips the guard, and the live-checkout surface declares no
   patterns at all, so a `*.sqlite-wal` in the harness checkout is still fingerprinted.
+- **Codex `thread-writer-locks` (churn that appears, not changes).** Codex writes one zero-byte lock
+  per *open* thread and deletes it when the thread closes, so this subtree trips the guard by paths
+  **appearing and vanishing** rather than by content changing — a halt reason of the form
+  "4 added, 0 removed, 0 changed" with no file the operator ever touched. Because the locks only
+  exist while a thread is open, the halt fired only when a concurrent session happened to hold one
+  at a dispatch boundary, which made it intermittent and effectively unattributable. The lock's
+  existence is its entire signal and its content is always empty, so excluding it costs no leak
+  detection.
 
 Every entry is usage, log, or cache telemetry that any concurrent provider process writes whether or
 not a build is running. Config surfaces are deliberately **not** excluded: `settings.json` on Claude,
