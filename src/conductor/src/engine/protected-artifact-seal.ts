@@ -1096,6 +1096,7 @@ export async function rotateProtectedArtifactSeal({
     recomputed,
     trigger,
     paths,
+    excludedBaseAheadPaths,
     fileOperations,
     onRebaseline,
   });
@@ -1134,6 +1135,7 @@ interface PersistProtectedArtifactSealRotationOptions {
   recomputed: ProtectedArtifactSeal;
   trigger: string;
   paths: string[];
+  excludedBaseAheadPaths?: string[];
   reason?: string;
   fileOperations: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
@@ -1145,6 +1147,7 @@ async function persistProtectedArtifactSealRotation({
   recomputed,
   trigger,
   paths,
+  excludedBaseAheadPaths,
   reason,
   fileOperations,
   onRebaseline,

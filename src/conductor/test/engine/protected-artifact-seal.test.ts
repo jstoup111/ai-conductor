@@ -53,6 +53,8 @@ const protectedArtifactEventTypes: Record<
 > = {
   protected_artifact_rebaseline: true,
   protected_artifact_rebaseline_refused: true,
+  protected_artifact_reseal: true,
+  protected_artifact_reseal_refused: true,
 };
 
 async function git(repo: string, args: string[]): Promise<string> {
@@ -2133,6 +2135,8 @@ describe('verifyProtectedArtifactSeal', () => {
         protectedArtifactEventTypes: {
           protected_artifact_rebaseline: true,
           protected_artifact_rebaseline_refused: true,
+          protected_artifact_reseal: true,
+          protected_artifact_reseal_refused: true,
         },
         eventTypes: ['protected_artifact_rebaseline'],
         pipelineFiles: ['protected-artifact-seal.json'],
