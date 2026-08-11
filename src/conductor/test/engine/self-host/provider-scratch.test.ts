@@ -1,8 +1,13 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
+import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-boundary.js';
 import { resolveScratchHome } from '../../../src/engine/self-host/provider-scratch.js';
+
+const execFile = promisify(execFileCb);
 
 describe('provider scratch homes', () => {
   it('resolves beneath the owning worktree', () => {
@@ -43,6 +48,26 @@ describe('provider scratch homes', () => {
       expect(realHome).not.toContain(mainRoot);
     } finally {
       await Promise.all([rm(mainRoot, { recursive: true, force: true }), rm(worktreeRoot, { recursive: true, force: true }), rm(relocatedPipeline, { recursive: true, force: true })]);
+    }
+  });
+
+  it('resolves beneath an ignored live-boundary-excluded worktree prefix', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-worktree-'));
+    const home = resolveScratchHome({ worktreeRoot, runId: 'R', attempt: 2, provider: 'codex' });
+
+    try {
+      const gitignore = await readFile(new URL('../../../../../.gitignore', import.meta.url), 'utf8');
+      await Promise.all([
+        writeFile(join(worktreeRoot, '.gitignore'), gitignore),
+        mkdir(home, { recursive: true }),
+      ]);
+      await execFile('git', ['init', '--quiet', worktreeRoot]);
+
+      const relativeHome = relative(worktreeRoot, home);
+      await expect(execFile('git', ['-C', worktreeRoot, 'check-ignore', '--quiet', '--', relativeHome])).resolves.toBeDefined();
+      expect(LIVE_CHECKOUT_VOLATILE).toContain(relativeHome.split(/[\\/]/, 1)[0]);
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
     }
   });
 });

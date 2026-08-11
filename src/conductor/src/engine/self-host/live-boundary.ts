@@ -54,7 +54,7 @@ export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
  * already-tracked content is indistinguishable from an operator edit and is
  * the accepted residual gap in this guard.
  */
-const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
+export const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
   '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
   'src/conductor/dist-versions',
 ];
