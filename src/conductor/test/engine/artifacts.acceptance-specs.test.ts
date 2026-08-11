@@ -161,6 +161,61 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
     });
   });
 
+  it.each([
+    ['empty reason', { kind: 'remediation', reason: '  ', attribution: 'remediation task 8' }],
+    ['missing attribution', { kind: 'remediation', reason: 'Approved atomic remediation.' }],
+    ['unrecognized kind', { kind: 'operator_override', reason: 'Approved atomic remediation.', attribution: 'remediation task 8' }],
+  ])('refuses an exception with a %s even when genuine RED exists', (_case, exception) => {
+    expect(validateAcceptanceRedEvidence({ ...validEvidence, exception })).toMatchObject({
+      ok: false,
+      class: 'shape',
+      reason: expect.stringContaining('exception'),
+    });
+  });
+
+  it.each([
+    [
+      'errors > 0',
+      { errors: 1 },
+      'acceptance specs errored at collection (1) — they never ran; fix the specs so they execute (this is not RED)',
+    ],
+    [
+      'skipped > 0',
+      { skipped: 1 },
+      "1 acceptance spec(s) were SKIPPED — a skipped spec does not establish RED (missing testcontainer/dependency, or a unit-only test scope?). Bring up the required infra and run the feature's specs so they actually execute",
+    ],
+    [
+      'executed == 0',
+      { executed: 0 },
+      'acceptance-specs RED run executed 0 tests — the command did not select the feature\'s specs',
+    ],
+  ])('never waives %s and preserves its execution refusal text', (_case, counters, reason) => {
+    const exception = {
+      kind: 'remediation',
+      reason: 'The remediation necessarily changed the acceptance spec and production behavior together.',
+      attribution: 'remediation task 8',
+    };
+
+    expect(validateAcceptanceRedEvidence({ ...validEvidence, failed: 0, passed: 3, ...counters, exception })).toEqual({
+      ok: false,
+      class: 'outcome',
+      reason,
+    });
+  });
+
+  it('accepts genuine RED when a well-formed remediation exception is also recorded', () => {
+    expect(
+      validateAcceptanceRedEvidence({
+        ...validEvidence,
+        exception: {
+          kind: 'remediation',
+          reason: 'The remediation necessarily changed the acceptance spec and production behavior together.',
+          attribution: 'remediation task 8',
+        },
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it('requires failingTests identity while accepting a named failed test', () => {
     const evidenceWithFailingTest = {
       ...validEvidence,

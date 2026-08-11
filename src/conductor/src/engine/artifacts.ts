@@ -1340,6 +1340,13 @@ export function validateAcceptanceRedEvidence(
     exception.reason.trim() !== '' &&
     typeof exception.attribution === 'string' &&
     exception.attribution.trim() !== '';
+  if ('exception' in e && !hasRemediationException) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a remediation "exception" with a non-empty reason and attribution`,
+    };
+  }
   if (failed < 1 && !hasRemediationException) {
     return {
       ok: false,
