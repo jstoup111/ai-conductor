@@ -262,6 +262,9 @@ describe('#993 TS-993-4 — repository/run scope and custom predicates keep thei
     failed: 3,
     skipped: 0,
     errors: 0,
+    failingTests: [{ name: 'repository acceptance corpus', reason: 'expected behavior is not implemented' }],
+    ranAt: '2026-08-10T00:00:00.000Z',
+    intentRationale: 'The fixture records an executed, failing repository acceptance corpus.',
   });
 
   beforeEach(async () => {
