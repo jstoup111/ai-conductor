@@ -4,6 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { selfHealAcceptanceRed } from "../../src/engine/acceptance-red-runner";
 
+const RED_PROVENANCE = {
+  failingTests: [
+    {
+      name: "records missing acceptance RED evidence",
+      reason: "expected the acceptance RED marker at the authoritative worktree root",
+    },
+  ],
+  intentRationale:
+    "The failing acceptance spec proves the requested RED evidence behavior remains unimplemented.",
+};
+
 describe("selfHealAcceptanceRed", () => {
   let worktreeRoot: string;
 
@@ -39,6 +50,7 @@ describe("selfHealAcceptanceRed", () => {
         failed: 3,
         skipped: 0,
         errors: 0,
+        ...RED_PROVENANCE,
       };
     };
 
@@ -53,7 +65,8 @@ describe("selfHealAcceptanceRed", () => {
 
     const rootPath = join(worktreeRoot, ".pipeline", "acceptance-specs-red.json");
     expect(existsSync(rootPath)).toBe(true);
-    expect(JSON.parse(readFileSync(rootPath, "utf8"))).toEqual({
+    const marker = JSON.parse(readFileSync(rootPath, "utf8"));
+    expect(marker).toMatchObject({
       command: "npm test",
       targetSpecs: ["a.test.ts"],
       executed: 3,
@@ -61,7 +74,9 @@ describe("selfHealAcceptanceRed", () => {
       failed: 3,
       skipped: 0,
       errors: 0,
+      ...RED_PROVENANCE,
     });
+    expect(Date.parse(marker.ranAt)).not.toBeNaN();
   });
 
   it("returns healed:false without calling exec when targetSpecs cross-check fails", async () => {
@@ -200,6 +215,7 @@ describe("selfHealAcceptanceRed", () => {
       failed: 0,
       skipped: 0,
       errors: 0,
+      ...RED_PROVENANCE,
     });
 
     const result = await selfHealAcceptanceRed({
@@ -227,6 +243,7 @@ describe("selfHealAcceptanceRed", () => {
       failed: 0,
       skipped: 3,
       errors: 0,
+      ...RED_PROVENANCE,
     });
 
     const result = await selfHealAcceptanceRed({
@@ -254,6 +271,7 @@ describe("selfHealAcceptanceRed", () => {
       failed: 0,
       skipped: 0,
       errors: 2,
+      ...RED_PROVENANCE,
     });
 
     const result = await selfHealAcceptanceRed({
@@ -281,6 +299,7 @@ describe("selfHealAcceptanceRed", () => {
       failed: 0,
       skipped: 0,
       errors: 0,
+      ...RED_PROVENANCE,
     });
 
     const result = await selfHealAcceptanceRed({
@@ -393,6 +412,7 @@ describe("selfHealAcceptanceRed", () => {
       failed: 3,
       skipped: 0,
       errors: 0,
+      ...RED_PROVENANCE,
     });
 
     const result = await selfHealAcceptanceRed({
@@ -405,7 +425,8 @@ describe("selfHealAcceptanceRed", () => {
     expect(existsSync(nestedPath)).toBe(false);
 
     const rootPath = join(worktreeRoot, ".pipeline", "acceptance-specs-red.json");
-    expect(JSON.parse(readFileSync(rootPath, "utf8"))).toEqual({
+    const marker = JSON.parse(readFileSync(rootPath, "utf8"));
+    expect(marker).toMatchObject({
       command: "npm test",
       targetSpecs: ["a.test.ts"],
       executed: 3,
@@ -413,7 +434,9 @@ describe("selfHealAcceptanceRed", () => {
       failed: 3,
       skipped: 0,
       errors: 0,
+      ...RED_PROVENANCE,
     });
+    expect(Date.parse(marker.ranAt)).not.toBeNaN();
   });
 
   it("returns healed:false without calling exec when the run contract is missing the command field", async () => {

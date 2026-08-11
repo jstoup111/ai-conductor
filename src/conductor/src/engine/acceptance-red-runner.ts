@@ -256,6 +256,7 @@ export async function selfHealAcceptanceRed(
     ...(typeof execResult === 'object' && execResult !== null ? execResult : {}),
     command: contract.command,
     targetSpecs: contract.targetSpecs,
+    ranAt: new Date().toISOString(),
   };
 
   writeRedMarkerAtRoot(resolvedRoot, markerContent);
