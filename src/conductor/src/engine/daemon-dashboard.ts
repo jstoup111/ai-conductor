@@ -74,6 +74,10 @@ export interface InProgressEntry {
    * Undefined deliberately means neither conclusion is supported yet.
    */
   activityState?: 'working' | 'waiting';
+  /** Latest RED-evidence lifecycle state from the current dispatch's ledger. */
+  acceptanceRedState?: 'required' | 'pending' | 'satisfied' | 'rejected';
+  /** Completion predicate's exact unmet-condition reason, when it supplied one. */
+  completionCondition?: string;
   /** Current provider preparation/running/recovery phase, if persisted. */
   lifecycle?: ProviderLifecycleDiagnostic;
 }
@@ -372,7 +376,14 @@ async function readProviderLifecycleDiagnostic(
 async function readDispatchActivity(
   wt: string,
   step: string,
-): Promise<{ startedAtMs?: number; completionUnmet: boolean }> {
+): Promise<{
+  startedAtMs?: number;
+  completionUnmet: boolean;
+  acceptanceRed?: {
+    state: 'required' | 'pending' | 'satisfied' | 'rejected';
+    reason?: string;
+  };
+}> {
   let content: string;
   try {
     content = await readFile(join(wt, '.pipeline/events.jsonl'), 'utf-8');
@@ -382,6 +393,10 @@ async function readDispatchActivity(
 
   let startedAtMs: number | undefined;
   let completionUnmet = false;
+  let acceptanceRed: {
+    state: 'required' | 'pending' | 'satisfied' | 'rejected';
+    reason?: string;
+  } | undefined;
   for (const line of content.split('\n')) {
     let event: unknown;
     try {
@@ -394,17 +409,26 @@ async function readDispatchActivity(
     if (event.type === 'step_started' && Number.isFinite(timestamp)) {
       startedAtMs = timestamp;
       completionUnmet = false;
+      acceptanceRed = undefined;
       continue;
     }
-    if (
-      startedAtMs !== undefined
-      && event.type === 'acceptance_red'
-      && (event.state === 'pending' || event.state === 'rejected')
-    ) {
-      completionUnmet = true;
+    if (startedAtMs !== undefined && event.type === 'acceptance_red' && isAcceptanceRedState(event.state)) {
+      acceptanceRed = {
+        state: event.state,
+        ...(typeof event.reason === 'string' ? { reason: event.reason } : {}),
+      };
+      if (event.state === 'pending' || event.state === 'rejected') {
+        completionUnmet = true;
+      }
     }
   }
-  return { startedAtMs, completionUnmet };
+  return { startedAtMs, completionUnmet, acceptanceRed };
+}
+
+function isAcceptanceRedState(
+  value: unknown,
+): value is 'required' | 'pending' | 'satisfied' | 'rejected' {
+  return value === 'required' || value === 'pending' || value === 'satisfied' || value === 'rejected';
 }
 
 function parseProviderLifecycleDiagnostic(
@@ -582,6 +606,10 @@ export async function scanInheritedState(
         if (Number.isFinite(ageMs)) entry.heartbeatAgeMs = Math.max(0, ageMs);
       }
       const activity = await readDispatchActivity(wt, entry.step);
+      if (activity.acceptanceRed) {
+        entry.acceptanceRedState = activity.acceptanceRed.state;
+        entry.completionCondition = activity.acceptanceRed.reason;
+      }
       if (activity.completionUnmet) {
         entry.activityState = 'waiting';
       } else if (
@@ -687,8 +715,14 @@ function heartbeatSuffix(heartbeatAgeMs?: number): string {
   return ` (activity telemetry: ${formatHeartbeatAge(heartbeatAgeMs)} ago)`;
 }
 
-function activityStateSuffix(activityState?: InProgressEntry['activityState']): string {
-  return activityState ? ` (${activityState})` : '';
+function activityStateSuffix(entry: InProgressEntry): string {
+  const state = entry.activityState;
+  const redState = entry.acceptanceRedState ? `RED: ${entry.acceptanceRedState}` : undefined;
+  if (state === 'waiting') {
+    return ` (waiting${redState ? `; ${redState}` : ''}; completion condition: ${entry.completionCondition ?? 'unavailable'})`;
+  }
+  if (state) return ` (${[state, redState].filter(Boolean).join('; ')})`;
+  return redState ? ` (${redState})` : '';
 }
 
 function lifecycleSuffix(lifecycle?: ProviderLifecycleDiagnostic): string {
@@ -822,7 +856,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p.activityState)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(

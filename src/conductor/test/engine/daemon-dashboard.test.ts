@@ -217,6 +217,39 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.inProgress.find((entry) => entry.slug === 'leftover')?.activityState).toBeUndefined();
   });
 
+  it('retains the latest acceptance RED state and completion condition for a waiting dispatch', async () => {
+    const now = Date.now();
+    await makeStateful('with-condition', { acceptance_specs: 'in_progress' });
+    await makeStateful('without-condition', { acceptance_specs: 'in_progress' });
+    for (const [slug, reason] of [
+      ['with-condition', 'acceptance specs RED run shows 0 failed — RED not established'],
+      ['without-condition', undefined],
+    ] as const) {
+      await writeFile(
+        join(worktreeBase, slug, '.pipeline', 'events.jsonl'),
+        [
+          { type: 'step_started', step: 'acceptance_specs', index: 11, ts: new Date(now - 10_000).toISOString() },
+          { type: 'acceptance_red', step: 'acceptance_specs', state: 'rejected', ...(reason ? { reason } : {}), ts: new Date(now - 1_000).toISOString() },
+        ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+        'utf-8',
+      );
+    }
+
+    const state = await scanInheritedState({ worktreeBase, processedDir, discover: async () => [] });
+
+    expect(state.inProgress.find((entry) => entry.slug === 'with-condition')).toMatchObject({
+      activityState: 'waiting',
+      acceptanceRedState: 'rejected',
+      completionCondition: 'acceptance specs RED run shows 0 failed — RED not established',
+    });
+    expect(renderDashboard(state)).toContain(
+      'with-condition @acceptance_specs (waiting; RED: rejected; completion condition: acceptance specs RED run shows 0 failed — RED not established)',
+    );
+    expect(renderDashboard(state)).toContain(
+      'without-condition @acceptance_specs (waiting; RED: rejected; completion condition: unavailable)',
+    );
+  });
+
   it('reads the current lifecycle phase and attempt evidence for an in-progress feature', async () => {
     await makeStateful('preparing', { build: 'in_progress' });
     await makeStateful('running', { build: 'in_progress' });
