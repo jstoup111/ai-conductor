@@ -50,6 +50,19 @@ the permission predicate.
    If any differing path fails either test, the change is feature-authored and the existing
    `Protected artifact changed: <path>` refusal stands, now qualified as feature-authored.
 
+   > **Amended 2026-08-09 by #1229:** the second bullet's byte-identity test does not implement the
+   > intent stated after its "i.e." — it answers "is HEAD level with base?", not "did this feature
+   > author the difference?". The two coincide only when the feature is fully up to date, so a
+   > feature merely *behind* base fails it while having authored nothing, and the refusal is then
+   > mislabelled feature-authored. The permission gate is now: the workspace bytes equal the
+   > committed blob at HEAD (unchanged), and HEAD did not change the path since the merge-base with
+   > the base branch. A path the base branch alone advanced is excluded from the blocking set rather
+   > than refused. Indeterminate provenance fails closed as feature-authored. Additionally, a
+   > rotation refusal no longer downgrades a passing `inspectSeal` verdict for the environmental
+   > refusal classes, while `workspace-differs-from-head` and provenance-confirmed feature-authored
+   > refusals keep escalating. See `adr-2026-08-09-seal-rotation-authorship-predicate`. Decision
+   > items 1, 3, and 4 of this ADR are unaffected and remain authoritative.
+
 3. **Proactive rotation.** `performRebase` verifies the seal *before* rebasing (an already-violated
    seal blocks exactly as today) and, after a clean rebase, rotates it to the post-rebase HEAD.
    This is the normal path; step 2 is the recovery path for worktrees rewritten outside the
