@@ -1922,6 +1922,94 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
+    it('refuses the incident-shaped rotation when the feature committed a protected divergence', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const { repo, strandedBaseline } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work before rebase\n' },
+        featureCommit: { [path]: 'feature-authored edit\n' },
+      });
+      const sealBefore = await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8');
+      const events: ProtectedArtifactSealRebaselineEvent[] = [];
+      const mergeBase = await git(repo, ['merge-base', 'main', 'HEAD']);
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => {
+          events.push(event);
+        },
+      });
+      const sealAfter = await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8');
+
+      expect({
+        verdict,
+        sealBytesUnchanged: sealAfter === sealBefore,
+        baselineCommit: JSON.parse(sealAfter).baselineCommit,
+        rebaselines: JSON.parse(sealAfter).rebaselines,
+        events,
+      }).toEqual({
+        verdict: {
+          ok: false,
+          reason: `Protected artifact changed: ${path}`,
+        },
+        sealBytesUnchanged: true,
+        baselineCommit: strandedBaseline,
+        rebaselines: [],
+        events: [{
+          type: 'protected_artifact_rebaseline_refused',
+          condition: 'feature-authored:head-differs-from-base',
+          verdictCondition: 'head-differs-from-base',
+          path,
+          mergeBase,
+          headTouchedPath: true,
+        }],
+      });
+    });
+
+    it('refuses the incident-shaped rotation when only the workspace diverges from HEAD', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const { repo, strandedBaseline } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work before rebase\n' },
+      });
+      await writeProjectFile(repo, path, 'uncommitted feature edit\n');
+      const sealBefore = await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8');
+      const events: ProtectedArtifactSealRebaselineEvent[] = [];
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => {
+          events.push(event);
+        },
+      });
+      const sealAfter = await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8');
+
+      expect({
+        verdict,
+        sealBytesUnchanged: sealAfter === sealBefore,
+        baselineCommit: JSON.parse(sealAfter).baselineCommit,
+        rebaselines: JSON.parse(sealAfter).rebaselines,
+        events,
+      }).toEqual({
+        verdict: { ok: false, reason: `Protected artifact changed: ${path}` },
+        sealBytesUnchanged: true,
+        baselineCommit: strandedBaseline,
+        rebaselines: [],
+        events: [{
+          type: 'protected_artifact_rebaseline_refused',
+          condition: 'feature-authored:workspace-differs-from-head',
+          verdictCondition: 'workspace-differs-from-head',
+          path,
+          mergeBase: await git(repo, ['merge-base', 'main', 'HEAD']),
+          headTouchedPath: false,
+        }],
+      });
+    });
+
     it('keeps rotation policy unchanged when telemetry observation fails while provenance evidence is additive', async () => {
       const fixture = {
         initial: {
