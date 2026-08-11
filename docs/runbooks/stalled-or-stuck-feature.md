@@ -726,40 +726,30 @@ task's targets.`
 
 **The edit is intentional and operator-approved (e.g. a feature's plan or architecture was amended
 mid-build after the first BUILD seal was created).** The committed amendment makes the existing
-seal baseline stale. The engine has no automatic path
-for this — a feature-authored change never rotates on its own, by design, so there is no default
-action to take here without a human reading the diff first. Do not hand-edit
-`.pipeline/protected-artifact-seal.json` (malformed JSON or a wrong fingerprint silently breaks
-verification for every other artifact in the seal). Instead, review the diff, and only after
-approving it, call the engine's own rotation function so it recomputes real fingerprints instead of
-guessing at them:
+seal baseline stale. The engine has no automatic path for this — a feature-authored change never
+rotates on its own, by design, so there is no default action to take here without a human reading
+the diff first. Do not hand-edit `.pipeline/protected-artifact-seal.json` (malformed JSON or a wrong
+fingerprint silently breaks verification for every other artifact in the seal). Instead, review the
+diff, commit the amendment, and only after approving it, run
+[`conduct-ts reseal`](../reference/cli.md#conduct-ts-reseal) from the main repository checkout so it
+recomputes real fingerprints instead of guessing at them:
 
 ```bash
-npx tsx - <<'EOF'
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { rotateProtectedArtifactSeal } from '<projectRoot>/src/conductor/src/engine/protected-artifact-seal.js';
-
-const projectRoot = '<projectRoot>';
-const sealPath = join(projectRoot, '.pipeline/protected-artifact-seal.json');
-const seal = JSON.parse(await readFile(sealPath, 'utf8'));
-
-await rotateProtectedArtifactSeal({
-  projectRoot,
-  seal,
-  toCommit: '<current HEAD sha>',
-  trigger: 'operator-approved-manual-review',
-  paths: ['<path under .docs/... that was reviewed and approved>'],
-});
-EOF
+conduct-ts reseal \
+  --slug <feature-slug> \
+  --path <path under .docs/... that was reviewed and approved> \
+  --reason "<why this amendment is approved>" \
+  --clear-halt
 ```
 
-Run from that worktree's `src/conductor` directory (`npx tsx` needs its `node_modules`). This writes
-a new baseline at the given commit and appends a `rebaselines` entry recording the trigger, so the
-override is auditable rather than silent. Never invent a trigger string that implies engine
-automation (`proactive-rebase`, `defensive-history-rewrite` are reserved for the engine's own call
-sites) — use a distinct, honest label like `operator-approved-manual-review` so a later reader can
-tell a human, not the engine, vouched for this rotation.
+Repeat `--path` for each amended file. The command only runs from an interactive operator terminal —
+it refuses under a step subprocess or any non-TTY invocation — and refuses the whole reseal if any
+protected path outside the given `--path` list has also drifted, so it cannot be used to launder
+unrelated changes into the seal. On success it writes a new baseline at the current commit, appends a
+`rebaselines` entry recording the trigger (`operator-reseal`) and rationale, and writes a
+`protected_artifact_reseal` audit record with an `operator` origin — so the override is auditable
+rather than silent. `--clear-halt` also clears the worktree's HALT in the same step, once its class is
+the protected-artifact class.
 
 If REKICK encounters this refusal before starting git, the HALT begins
 `protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase
