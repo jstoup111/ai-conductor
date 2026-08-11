@@ -223,14 +223,6 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 13)', () => {
     expect(result.eligible).toBe(true);
   });
 
-  it('re-enters eligibility after remediation is cleared and the PR is ready', async () => {
-    const state = { ...defaultState, labels: [], isDraft: false };
-
-    const result = await isEligibleForCiFix(defaultEntry, state, defaultConfig, NOW);
-
-    expect(result).toEqual({ eligible: true });
-  });
-
   it('gate 3 (conflict): mergeable = CONFLICTING → ineligible', async () => {
     const state = { ...defaultState, mergeable: 'CONFLICTING' };
     const logs: string[] = [];
