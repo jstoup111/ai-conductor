@@ -487,6 +487,45 @@ describe('resealProtectedArtifactSeal', () => {
 });
 
 describe('evaluateProtectedArtifactSealRotation', () => {
+  async function makeDivergingBaseRepository({ unrelatedBase = false } = {}): Promise<{
+    repo: string;
+    path: string;
+    seal: Parameters<typeof evaluateProtectedArtifactSealRotationInRepository>[0]['seal'];
+    headCommit: string;
+    baseTipRef: string;
+  }> {
+    const path = '.docs/plans/feature.md';
+    const repo = await makeRepo({ [path]: 'approved plan\n' });
+    const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
+    await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
+    await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
+    const baseTipRef = unrelatedBase ? 'unrelated-base' : 'main';
+    await git(repo, unrelatedBase ? ['checkout', '-q', '--orphan', baseTipRef] : ['checkout', '-q', baseTipRef]);
+    if (unrelatedBase) await git(repo, ['rm', '-q', '-r', '-f', '.']);
+    await writeProjectFile(repo, path, 'base-owned plan\n');
+    await git(repo, ['add', path]);
+    await git(repo, ['commit', '-q', '-m', 'base advances protected plan']);
+    await git(repo, ['checkout', '-q', 'feature']);
+
+    return {
+      repo,
+      path,
+      seal: {
+        version: 2,
+        baselineCommit,
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+        }],
+        rebaselines: [],
+      },
+      headCommit: await git(repo, ['rev-parse', 'HEAD']),
+      baseTipRef,
+    };
+  }
+
   it('permits a non-ancestor rotation when every workspace and HEAD path is inherited from the base tip', () => {
     const deletedPath = '.docs/plans/deleted.md';
     const addedPath = '.docs/plans/added.md';
@@ -762,6 +801,29 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       headCommit: await git(repo, ['rev-parse', 'HEAD']),
       baseTipRef: 'main',
     })).resolves.toEqual({ permitted: true, paths: [] });
+  });
+
+  it('refuses rotation when no merge-base makes divergent-path authorship indeterminate', async () => {
+    const { repo, path, seal, headCommit, baseTipRef } = await makeDivergingBaseRepository({ unrelatedBase: true });
+
+    await expect(evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: repo,
+      seal,
+      headCommit,
+      baseTipRef,
+    })).resolves.toEqual({ permitted: false, condition: 'head-differs-from-base', path });
+  });
+
+  it('refuses rotation when a non-zero git diff makes divergent-path authorship indeterminate', async () => {
+    const { repo, path, seal, headCommit, baseTipRef } = await makeDivergingBaseRepository();
+    failGitDiff.value = true;
+
+    await expect(evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: repo,
+      seal,
+      headCommit,
+      baseTipRef,
+    })).resolves.toEqual({ permitted: false, condition: 'head-differs-from-base', path });
   });
 });
 
