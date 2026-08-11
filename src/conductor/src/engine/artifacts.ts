@@ -1259,6 +1259,8 @@ export interface AcceptanceRedEvidence {
   failed: number;
   skipped: number;
   errors: number;
+  /** Identifies the tests whose failures established RED. */
+  failingTests: Array<{ name: string; reason: string }>;
   /** Raw runner summary line, e.g. pytest's "5 failed in 12.3s". */
   summary?: string;
 }
@@ -1307,6 +1309,13 @@ export function validateAcceptanceRedEvidence(
       ok: false,
       class: 'shape',
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list the "targetSpecs" the RED run exercised`,
+    };
+  }
+  if (!Array.isArray(e.failingTests)) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list the "failingTests" that established RED`,
     };
   }
   if (errors > 0) {

@@ -62,6 +62,7 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
     failed: 3,
     skipped: 0,
     errors: 0,
+    failingTests: [{ name: 'test_x', reason: 'expected result was absent' }],
   };
 
   it('performs no subprocess exec when the RED marker is missing (miss path)', async () => {
@@ -116,6 +117,7 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
     failed: 3,
     skipped: 0,
     errors: 0,
+    failingTests: [{ name: 'test_x', reason: 'expected result was absent' }],
   };
 
   it('classifies a missing command as a shape refusal', () => {
@@ -131,6 +133,21 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
     expect(validateAcceptanceRedEvidence({ ...validEvidence, failed: 0 })).toMatchObject({
       ok: false,
       class: 'outcome',
+    });
+  });
+
+  it('requires failingTests identity while accepting a named failed test', () => {
+    const evidenceWithFailingTest = {
+      ...validEvidence,
+      failingTests: [{ name: 'rejects an absent marker', reason: 'marker is missing' }],
+    };
+    const { failingTests: _failingTests, ...evidenceWithoutFailingTests } = evidenceWithFailingTest;
+
+    expect(validateAcceptanceRedEvidence(evidenceWithFailingTest)).toEqual({ ok: true });
+    expect(validateAcceptanceRedEvidence(evidenceWithoutFailingTests)).toMatchObject({
+      ok: false,
+      class: 'shape',
+      reason: expect.stringContaining('failingTests'),
     });
   });
 });
