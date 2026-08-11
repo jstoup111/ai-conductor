@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
+  type ProtectedArtifactSealRebaselineEvent,
   createProtectedArtifactSeal,
   classifyMutationTarget,
   evaluateProtectedArtifactSealRotation,
@@ -607,7 +608,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       baseTipUnresolved: { permitted: false, condition: 'base-tip-unresolved' },
       workspaceDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
       headDiffersFromBase: { permitted: false, condition: 'head-differs-from-base', path },
-      headDiffersFromBaseNotAuthored: { permitted: true, paths: [] },
+      headDiffersFromBaseNotAuthored: { permitted: true, paths: [], excludedBaseAheadPaths: [path] },
       missingWorkspaceArtifactDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
     });
   });
@@ -669,7 +670,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       headArtifacts: new Map(),
       baseTipArtifacts: new Map([[path, baseBytes]]),
       authorshipByPath: new Map([[path, 'not-authored']]),
-    })).toEqual({ permitted: true, paths: [] });
+    })).toEqual({ permitted: true, paths: [], excludedBaseAheadPaths: [path] });
   });
 
   it('permits a base-ahead protected path that was not authored by the feature', () => {
@@ -689,7 +690,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       headArtifacts: new Map([[path, headBytes]]),
       baseTipArtifacts: new Map([[path, baseBytes]]),
       authorshipByPath: new Map([[path, 'not-authored']]),
-    })).toEqual({ permitted: true, paths: [] });
+    })).toEqual({ permitted: true, paths: [], excludedBaseAheadPaths: [path] });
   });
 
   it('refuses rotation for every feature-authored divergent path regardless of its blob contents', () => {
@@ -831,7 +832,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       seal,
       headCommit: await git(repo, ['rev-parse', 'HEAD']),
       baseTipRef: 'main',
-    })).resolves.toEqual({ permitted: true, paths: [] });
+    })).resolves.toEqual({ permitted: true, paths: [], excludedBaseAheadPaths: [path] });
   });
 
   it('probes authorship only for protected paths that diverge from the base tip', async () => {
@@ -880,7 +881,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       verdict,
       authorshipProbes: gitInvocations.filter(([command]) => command === 'diff'),
     }).toEqual({
-      verdict: { permitted: true, paths: [] },
+      verdict: { permitted: true, paths: [], excludedBaseAheadPaths: [divergingPath] },
       authorshipProbes: [['diff', '--name-only', 'main...HEAD', '--', divergingPath]],
     });
   });
@@ -1821,6 +1822,44 @@ describe('verifyProtectedArtifactSeal', () => {
           paths: [],
         }],
       });
+    });
+
+    it('emits the excluded base-ahead protected paths when a permitted rotation resumes from a rewritten HEAD', async () => {
+      const baseAheadPath = '.docs/decisions/base-ahead.md';
+      const { repo, strandedBaseline, rewrittenHead } = await makeRewrittenRepo({
+        initial: {
+          '.docs/plans/mine.md': 'approved plan\n',
+          [baseAheadPath]: 'approved decision\n',
+        },
+        baseAdvance: {
+          'src/base.ts': 'base work\n',
+          [baseAheadPath]: 'first base decision\n',
+        },
+      });
+      await git(repo, ['checkout', '-q', 'main']);
+      await writeProjectFile(repo, baseAheadPath, 'second base decision\n');
+      await git(repo, ['add', baseAheadPath]);
+      await git(repo, ['commit', '-q', '-m', 'base adds protected decision after rebase']);
+      await git(repo, ['checkout', '-q', 'feat']);
+      const events: ProtectedArtifactSealRebaselineEvent[] = [];
+
+      await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => {
+          events.push(event);
+        },
+      });
+
+      expect(events).toEqual([{
+        type: 'protected_artifact_rebaseline',
+        fromCommit: strandedBaseline,
+        toCommit: rewrittenHead,
+        trigger: 'defensive-history-rewrite',
+        paths: [],
+        excludedBaseAheadPaths: [baseAheadPath],
+      }]);
     });
 
     it('upgrades a v1 seal to the versioned shape in place when it rotates', async () => {

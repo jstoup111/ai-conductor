@@ -252,6 +252,8 @@ export type ConductorEvent =
       fromCommit: string;
       toCommit: string;
       paths: string[];
+      /** Base-ahead paths excluded after provenance proved they were not feature-authored. */
+      excludedBaseAheadPaths?: string[];
     }
   | {
       type: 'protected_artifact_rebaseline_refused';

@@ -66,7 +66,7 @@ export interface EvaluateProtectedArtifactSealRotationInRepositoryInput {
 }
 
 export type ProtectedArtifactSealRotationVerdict =
-  | { permitted: true; paths: string[] }
+  | { permitted: true; paths: string[]; excludedBaseAheadPaths?: string[] }
   | ({ permitted: false; condition: 'baseline-unresolvable' } & ProtectedArtifactRotationEvidence)
   | ({ permitted: false; condition: 'same-history-ancestor' } & ProtectedArtifactRotationEvidence)
   | ({ permitted: false; condition: 'head-unresolvable' } & ProtectedArtifactRotationEvidence)
@@ -86,6 +86,7 @@ export type ProtectedArtifactSealRebaselineEvent =
       fromCommit: string;
       toCommit: string;
       paths: string[];
+      excludedBaseAheadPaths?: string[];
     }
   | {
       type: 'protected_artifact_rebaseline_refused';
@@ -136,6 +137,7 @@ export interface RotateProtectedArtifactSealOptions {
   toCommit: string;
   trigger: string;
   paths: string[];
+  excludedBaseAheadPaths?: string[];
   fileOperations?: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
@@ -346,6 +348,7 @@ export function evaluateProtectedArtifactSealRotation({
     .sort(comparePaths);
 
   const rotationPaths: string[] = [];
+  const excludedBaseAheadPaths: string[] = [];
   for (const path of paths) {
     const workspace = workspaceArtifacts.get(path);
     const head = headArtifacts.get(path);
@@ -357,13 +360,20 @@ export function evaluateProtectedArtifactSealRotation({
     }
     const base = baseTipArtifacts.get(path);
     if (head === undefined ? base !== undefined : base === undefined || !head.equals(base)) {
-      if (authorshipByPath?.get(path) === 'not-authored') continue;
+      if (authorshipByPath?.get(path) === 'not-authored') {
+        excludedBaseAheadPaths.push(path);
+        continue;
+      }
       return { permitted: false, condition: 'head-differs-from-base', path };
     }
     rotationPaths.push(path);
   }
 
-  return { permitted: true, paths: rotationPaths };
+  return {
+    permitted: true,
+    paths: rotationPaths,
+    ...(excludedBaseAheadPaths.length > 0 ? { excludedBaseAheadPaths } : {}),
+  };
 }
 
 function parseSeal(serialized: string): ProtectedArtifactSeal {
@@ -945,6 +955,7 @@ interface ApplyPermittedProtectedArtifactSealRotationInput {
   seal: ProtectedArtifactSeal;
   headCommit: string;
   paths: string[];
+  excludedBaseAheadPaths?: string[];
 }
 
 async function applyPermittedProtectedArtifactSealRotation(
@@ -953,6 +964,7 @@ async function applyPermittedProtectedArtifactSealRotation(
     seal,
     headCommit,
     paths,
+    excludedBaseAheadPaths,
   }: ApplyPermittedProtectedArtifactSealRotationInput,
 ): Promise<ProtectedArtifactSealVerdict> {
   const rotated = await rotateProtectedArtifactSeal({
@@ -961,6 +973,7 @@ async function applyPermittedProtectedArtifactSealRotation(
     toCommit: headCommit,
     trigger: 'defensive-history-rewrite',
     paths,
+    excludedBaseAheadPaths,
     onRebaseline: options.onRebaseline,
   });
   return { ok: true, seal: rotated, selfAmendments: [] };
@@ -1003,6 +1016,7 @@ async function verifyExistingProtectedArtifactSeal(
     seal,
     headCommit: context.headCommit,
     paths: rotation.paths,
+    excludedBaseAheadPaths: rotation.excludedBaseAheadPaths,
   });
 }
 
@@ -1037,6 +1051,7 @@ export async function rotateProtectedArtifactSeal({
   toCommit,
   trigger,
   paths,
+  excludedBaseAheadPaths,
   fileOperations = { writeFile, rename, rm },
   onRebaseline,
 }: RotateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
@@ -1127,6 +1142,7 @@ async function persistProtectedArtifactSealRotation({
       fromCommit: seal.baselineCommit,
       toCommit: recomputed.baselineCommit,
       paths,
+      ...(excludedBaseAheadPaths && excludedBaseAheadPaths.length > 0 ? { excludedBaseAheadPaths } : {}),
     });
     return rotated;
   } catch (error) {
