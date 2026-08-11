@@ -21,7 +21,11 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { checkStepCompletion, ACCEPTANCE_SPECS_RED_EVIDENCE } from '../../src/engine/artifacts.js';
+import {
+  checkStepCompletion,
+  ACCEPTANCE_SPECS_RED_EVIDENCE,
+  validateAcceptanceRedEvidence,
+} from '../../src/engine/artifacts.js';
 
 // Regression pin for #733's self-heal boundary: the acceptance_specs
 // completion predicate must remain a pure, synchronous-per-call READ of the
@@ -100,5 +104,33 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
     // proving the predicate never fell back to the nested path.
     expect(result.done).toBe(false);
     expect(result.reason).toContain(ACCEPTANCE_SPECS_RED_EVIDENCE);
+  });
+});
+
+describe('validateAcceptanceRedEvidence refusal classification', () => {
+  const validEvidence = {
+    command: 'pytest spec/integration/test_x.py',
+    targetSpecs: ['spec/integration/test_x.py'],
+    executed: 3,
+    passed: 0,
+    failed: 3,
+    skipped: 0,
+    errors: 0,
+  };
+
+  it('classifies a missing command as a shape refusal', () => {
+    const { command: _command, ...evidenceWithoutCommand } = validEvidence;
+
+    expect(validateAcceptanceRedEvidence(evidenceWithoutCommand)).toMatchObject({
+      ok: false,
+      class: 'shape',
+    });
+  });
+
+  it('classifies no failing tests as an outcome refusal', () => {
+    expect(validateAcceptanceRedEvidence({ ...validEvidence, failed: 0 })).toMatchObject({
+      ok: false,
+      class: 'outcome',
+    });
   });
 });

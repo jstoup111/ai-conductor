@@ -1273,9 +1273,13 @@ export interface AcceptanceRedEvidence {
  */
 export function validateAcceptanceRedEvidence(
   ev: unknown,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true } | { ok: false; reason: string; class: 'shape' | 'outcome' } {
   if (typeof ev !== 'object' || ev === null) {
-    return { ok: false, reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is not a JSON object` };
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is not a JSON object`,
+    };
   }
   const e = ev as Record<string, unknown>;
   const num = (k: string): number | null =>
@@ -1287,42 +1291,49 @@ export function validateAcceptanceRedEvidence(
   if (failed === null || skipped === null || errors === null || executed === null) {
     return {
       ok: false,
+      class: 'shape',
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record numeric executed/passed/failed/skipped/errors from the real RED run`,
     };
   }
   if (typeof e.command !== 'string' || e.command.trim() === '') {
     return {
       ok: false,
+      class: 'shape',
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record the test "command" that was run`,
     };
   }
   if (!Array.isArray(e.targetSpecs) || e.targetSpecs.length === 0) {
     return {
       ok: false,
+      class: 'shape',
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list the "targetSpecs" the RED run exercised`,
     };
   }
   if (errors > 0) {
     return {
       ok: false,
+      class: 'outcome',
       reason: `acceptance specs errored at collection (${errors}) — they never ran; fix the specs so they execute (this is not RED)`,
     };
   }
   if (skipped > 0) {
     return {
       ok: false,
+      class: 'outcome',
       reason: `${skipped} acceptance spec(s) were SKIPPED — a skipped spec does not establish RED (missing testcontainer/dependency, or a unit-only test scope?). Bring up the required infra and run the feature's specs so they actually execute`,
     };
   }
   if (executed < 1) {
     return {
       ok: false,
+      class: 'outcome',
       reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
     };
   }
   if (failed < 1) {
     return {
       ok: false,
+      class: 'outcome',
       reason: `acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation`,
     };
   }
