@@ -84,8 +84,8 @@ test_suite:
 # downstream prerequisites (prd_audit, rebase) and the SHIP-tail selector —
 # the pipeline flows build → build_review (opt-in, currently off) → prd_audit
 # (skipped on technical track) → architecture_review_as_built → rebase →
-# maintain-documentation → finish. manual_test is the only gating step whose definition opts into
-# config-disable (`configDisableAllowed`); structural steps can never be
+# maintain-documentation → release-disposition → finish. manual_test is the only gating step whose
+# definition opts into config-disable (`configDisableAllowed`); structural steps can never be
 # disabled. Read per conduct run; new builds pick it up once the engine
 # supporting `configDisableAllowed` is deployed (rebuild + daemon reload) —
 # an OLDER engine rejects this key as "Cannot disable gating step".
