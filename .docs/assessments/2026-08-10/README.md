@@ -18,7 +18,7 @@ cross-referenced.
 | Architecture coherence | [cto-architecture.md](cto-architecture.md) | CRITICAL |
 | Code duplication | [cto-duplication.md](cto-duplication.md) | NEEDS_WORK |
 | Test strategy | [cto-testing.md](cto-testing.md) | NEEDS_WORK |
-| Infrastructure | [cto-infrastructure.md](cto-infrastructure.md) | _pending_ |
+| Infrastructure | [cto-infrastructure.md](cto-infrastructure.md) | NEEDS_WORK |
 | Observability | [cto-observability.md](cto-observability.md) | _pending_ |
 | Developer experience | [cto-devex.md](cto-devex.md) | _pending_ |
 
