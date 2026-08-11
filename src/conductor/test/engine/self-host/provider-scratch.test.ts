@@ -303,6 +303,47 @@ describe('provider scratch homes', () => {
     }
   });
 
+  it('reports a failed orphan removal and continues reclaiming later homes', async () => {
+    const scratchRoot = '/wt/.daemon/scratch';
+    const runDirectory = join(scratchRoot, 'R');
+    const firstHome = join(runDirectory, '1-codex');
+    const secondHome = join(runDirectory, '2-codex');
+    const lease = (attempt: number, ownerPid: number) => JSON.stringify({
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt,
+      ownerPid,
+      startedAt: '2026-08-11T12:34:56.000Z',
+    });
+    const removals: string[] = [];
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async (path) => path === join(firstHome, 'owner.json')
+        ? lease(1, 1001)
+        : path === join(secondHome, 'owner.json')
+          ? lease(2, 1002)
+          : null,
+      readdir: async (path) => path === scratchRoot ? ['R'] : path === runDirectory ? ['1-codex', '2-codex'] : [],
+      rm: async (path) => {
+        if (path === firstHome) throw new Error('first removal failed');
+        removals.push(path);
+      },
+      rmdir: async () => {},
+    };
+
+    await expect(sweepScratch({
+      worktreeRoot: '/wt',
+      fs,
+      ownerLiveness: () => 'dead',
+    })).resolves.toStrictEqual([
+      { kind: 'failed', home: firstHome, error: 'first removal failed' },
+      { kind: 'reclaimed', home: secondHome },
+    ]);
+    expect(removals).toStrictEqual([secondHome]);
+  });
+
   it('retains every uncertain lease state with a distinct reason', async () => {
     const scratchRoot = '/wt/.daemon/scratch';
     const runDirectory = join(scratchRoot, 'R');

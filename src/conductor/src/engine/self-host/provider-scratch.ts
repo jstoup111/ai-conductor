@@ -71,6 +71,7 @@ export interface SweepScratchOptions {
 
 export type ScratchSweepDecision =
   | { readonly kind: 'reclaimed'; readonly home: string }
+  | { readonly kind: 'failed'; readonly home: string; readonly error: string }
   | {
     readonly kind: 'retained';
     readonly home: string;
@@ -141,8 +142,12 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
 
       switch (ownerLiveness(lease.lease.ownerPid)) {
         case 'dead':
-          await fs.rm(home, { recursive: true, force: true });
-          decisions.push({ kind: 'reclaimed', home });
+          try {
+            await fs.rm(home, { recursive: true, force: true });
+            decisions.push({ kind: 'reclaimed', home });
+          } catch (error) {
+            decisions.push({ kind: 'failed', home, error: error instanceof Error ? error.message : String(error) });
+          }
           break;
         case 'live':
           decisions.push({ kind: 'retained', home, reason: 'live-owner' });
