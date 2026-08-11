@@ -563,6 +563,47 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     });
   });
 
+  it('refuses a diverging path when its authorship is indeterminate', () => {
+    const path = '.docs/plans/changed.md';
+    const headBytes = Buffer.from('head\n');
+    const baseBytes = Buffer.from('base\n');
+    const seal = {
+      version: 2 as const,
+      baselineCommit: 'sealed-head',
+      protectedArtifacts: [],
+      rebaselines: [],
+    };
+
+    expect(evaluateProtectedArtifactSealRotation({
+      seal,
+      baselineAncestry: 'non-ancestor',
+      workspaceArtifacts: new Map([[path, headBytes]]),
+      headArtifacts: new Map([[path, headBytes]]),
+      baseTipArtifacts: new Map([[path, baseBytes]]),
+      authorshipByPath: new Map([[path, 'indeterminate']]),
+    })).toEqual({ permitted: false, condition: 'head-differs-from-base', path });
+  });
+
+  it('treats omitted authorship as indeterminate for a diverging path', () => {
+    const path = '.docs/plans/changed.md';
+    const headBytes = Buffer.from('head\n');
+    const baseBytes = Buffer.from('base\n');
+    const seal = {
+      version: 2 as const,
+      baselineCommit: 'sealed-head',
+      protectedArtifacts: [],
+      rebaselines: [],
+    };
+
+    expect(evaluateProtectedArtifactSealRotation({
+      seal,
+      baselineAncestry: 'non-ancestor',
+      workspaceArtifacts: new Map([[path, headBytes]]),
+      headArtifacts: new Map([[path, headBytes]]),
+      baseTipArtifacts: new Map([[path, baseBytes]]),
+    })).toEqual({ permitted: false, condition: 'head-differs-from-base', path });
+  });
+
   it('fails closed distinctly when the sealed baseline object cannot resolve', async () => {
     const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
     const seal = {

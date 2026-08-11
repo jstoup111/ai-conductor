@@ -55,6 +55,7 @@ export interface EvaluateProtectedArtifactSealRotationInput {
   workspaceArtifacts: ReadonlyMap<string, Buffer>;
   headArtifacts: ReadonlyMap<string, Buffer>;
   baseTipArtifacts?: ReadonlyMap<string, Buffer>;
+  authorshipByPath?: ReadonlyMap<string, 'authored' | 'not-authored' | 'indeterminate'>;
 }
 
 export interface EvaluateProtectedArtifactSealRotationInRepositoryInput {
@@ -302,6 +303,7 @@ export function evaluateProtectedArtifactSealRotation({
   workspaceArtifacts,
   headArtifacts,
   baseTipArtifacts,
+  authorshipByPath,
 }: EvaluateProtectedArtifactSealRotationInput): ProtectedArtifactSealRotationVerdict {
   if (baselineAncestry === 'unresolvable') {
     return { permitted: false, condition: 'baseline-unresolvable' };
@@ -340,6 +342,9 @@ export function evaluateProtectedArtifactSealRotation({
     }
     const base = baseTipArtifacts.get(path);
     if (head === undefined ? base !== undefined : base === undefined || !head.equals(base)) {
+      if ((authorshipByPath?.get(path) ?? 'indeterminate') === 'indeterminate') {
+        return { permitted: false, condition: 'head-differs-from-base', path };
+      }
       return { permitted: false, condition: 'head-differs-from-base', path };
     }
   }
