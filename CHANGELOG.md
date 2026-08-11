@@ -22,6 +22,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Spec PRs opened into a repository that requires a release disposition now always declare one, so its required release-metadata check no longer fails on every landed spec. ([implementation PR #1448](https://github.com/jstoup111/ai-conductor/pull/1448)).
 - `Wired-into:` inert waivers accept `Task N` (a task in the same plan) and bare `#N` issue refs, and an unrecognized ref is now rejected at authoring time instead of failing the build as a missing file. ([implementation PR #1469](https://github.com/jstoup111/ai-conductor/pull/1469)).
+- Self-host builds no longer halt when a concurrent Codex session opens or closes a thread, which wrote transient lock files into the fingerprinted provider-state directory. ([implementation PR #1470](https://github.com/jstoup111/ai-conductor/pull/1470)).
 
 ## [0.101.1] - 2026-08-10
 
