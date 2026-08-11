@@ -97,7 +97,8 @@ the preceding `step_started`.
 - **Pros:** no schema change; touches only the writer.
 - **Cons:** routes the failure into `.daemon/daemon.log` free text, which is precisely the
   fallback diagnosis path this feature exists to eliminate. Invisible to the ledger, the
-  dashboard, the cost rollup, and the OTel exporter.
+  dashboard, and the cost rollup. (Not a point of difference for the OTel exporter — see
+  "OTel is out of scope" below; neither option reaches it.)
 - **Rejected.**
 
 **Option E — a new spine variant (CHOSEN).** `halt_marker_write_failed` on the same bus.
@@ -113,6 +114,30 @@ the preceding `step_started`.
 **Option F — persist every `persist: false` event.** Rejected: the intake explicitly requires
 that non-halt event volume not measurably grow, and `loop_converged`, `build_review_base`,
 `pipeline_closeout` and the rebase-lifecycle events are out of scope for this feature.
+
+## OTel is out of scope, and why that is worth stating
+
+`EVENT_SINKS` is not the only routing table. `OtelVisualizer.start`
+(`engine/otel/otel-visualizer.ts:298-311`) subscribes from its **own hardcoded list** of
+twelve event types and dispatches through a matching `switch`
+(`otel-visualizer.ts:394-441`). It does not read `EVENT_SINKS`, `persistedEventTypes()`, or
+any other sink helper.
+
+`loop_halt` appears in neither the list nor the switch. Consequently:
+
+- Nothing in this ADR makes a halt visible to the OTel exporter. A halted run still exports a
+  trace with no terminal signal — and, because `step_started` opens a span that only
+  `step_completed`/`step_failed` close, a halt mid-step leaves that span unclosed.
+- `halt_marker_write_failed` will likewise not reach OTel.
+
+This is deliberately **not** fixed here: #1477's desired outcomes are all stated against
+`.pipeline/events.jsonl`, and widening this spec to a second subscriber would change the
+feature's shape without operator intent. It is recorded because a reader of this ADR would
+otherwise reasonably assume that "extend the union and declare a sink" reaches every consumer.
+It does not.
+
+The duplicate routing table is the deeper issue — a second, silently-diverging declaration of
+"which events matter" — and is filed separately rather than absorbed into this feature.
 
 ## Event-spine compliance
 

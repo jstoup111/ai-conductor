@@ -3,8 +3,8 @@
 **Date:** 2026-08-11
 **New stories:** `.docs/stories/loop-halt-never-reaches-events-jsonl-so-a-halt-is-.md` (7 stories)
 **Result:** PASS — 0 blocking, 0 degrading. 2 reinforcing overlaps with prior shipped stories
-(both are satisfied *more* by this change, not contradicted). 2 coverage notes routed to
-`/plan`.
+(both are satisfied *more* by this change, not contradicted). 3 coverage notes, 2 of them
+routed to `/plan`.
 
 Scope of the scan: every `.docs/stories/` file mentioning `loop_halt`, `events.jsonl`,
 `EVENT_SINKS`, `persist`, or `writeHaltMarker`, plus the two documentation pages that describe
@@ -67,10 +67,26 @@ Note for the implementer: the runbook sentence also names `kickback`, which
 `event-sinks.ts:57` already declares `persist: true`. That half of the sentence is *already*
 wrong today and should be corrected in the same edit.
 
+## Coverage note 3: OTel keeps a second, independent routing table
+
+`OtelVisualizer.start` (`engine/otel/otel-visualizer.ts:298-311`) does not read `EVENT_SINKS`
+or `persistedEventTypes()`. It subscribes from a hardcoded twelve-entry list and dispatches
+through a matching `switch` (`:394-441`). `loop_halt` is in neither.
+
+This is not a conflict with the new stories — no story claims OTel coverage, and no OTel story
+claims sink-table derivation — but it bounds what this feature delivers, and the bound is easy
+to misread. After this change a halt is recoverable from the ledger, the audit trail, the cost
+rollup and the engineer signal, and is still absent from the OTel trace. A halt mid-step also
+leaves an unclosed span there, since only `step_completed`/`step_failed` close one.
+
+**Routed to `/plan`:** nothing. Deliberately out of scope for #1477, whose outcomes are all
+stated against `.pipeline/events.jsonl`. Recorded here so the gap is not rediscovered as a
+surprise during BUILD, and filed separately as a follow-up intake.
+
 ## No conflicts found with
 
-- The OTel observability stories — they consume the emitter and the sink declarations without
-  pinning which types persist.
+- The OTel observability stories — see coverage note 3; they subscribe to their own list and
+  are unaffected by a sink-table change in either direction.
 - The rebase-on-latest stories (`phase-9.0-rebase-on-latest.md`) — they specify rebase halt
   *behavior* (park the feature), not its telemetry routing. Adding a sink does not change when
   a rebase parks.

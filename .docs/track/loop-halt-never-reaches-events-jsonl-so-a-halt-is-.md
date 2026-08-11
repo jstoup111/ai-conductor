@@ -81,3 +81,8 @@ The change moves in the direction the spine principle prescribes: it *removes* r
 - The `.pipeline/HALT` marker itself stays durable state read by name (event-spine
   exception C). It is not replaced by an event; only its *write outcome* becomes one.
 - The audit trail is not removed. Its `loop_halt` step attribution is corrected in place.
+- The OTel exporter is untouched. It subscribes from its own hardcoded event list
+  (`engine/otel/otel-visualizer.ts:298-311`), not from `EVENT_SINKS`, so a halt stays absent
+  from the trace after this change. Deliberately out of scope — #1477's outcomes are stated
+  against `.pipeline/events.jsonl` — and filed separately. See the ADR's "OTel is out of
+  scope" section and conflict-check coverage note 3.
