@@ -1,6 +1,7 @@
 import { dirname, join, normalize } from 'node:path';
 import * as fsp from 'node:fs/promises';
 import type { SelfHostProviderId } from './provider-home.js';
+import type { ConductorEvent } from '../../types/events.js';
 import type { ConductorEventEmitter } from '../../ui/events.js';
 
 const OWNER_LEASE_FILE = 'owner.json';
@@ -134,11 +135,18 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
       const home = join(runDirectory, attempt);
       const lease = await readScratchLease(home, { fs });
       if (lease.kind !== 'present') {
-        if (lease.kind === 'missing' && (await readScratchLease(home, { fs })).kind === 'present') {
-          decisions.push({ kind: 'retained', home, reason: 'concurrent-acquisition' });
-        } else {
-          decisions.push({ kind: 'retained', home, reason: leaseReason(lease.kind) });
-        }
+        const concurrentLease = lease.kind === 'missing' ? await readScratchLease(home, { fs }) : undefined;
+        const reason = concurrentLease?.kind === 'present'
+          ? 'concurrent-acquisition'
+          : leaseReason(lease.kind);
+        const identity = concurrentLease?.kind === 'present' ? concurrentLease.lease : undefined;
+        decisions.push({ kind: 'retained', home, reason });
+        await emitScratchCleanup(options.events, {
+          type: 'scratch_cleanup_retained',
+          ...scratchCleanupIdentity(identity),
+          path: home,
+          reason,
+        });
         continue;
       }
 
@@ -147,7 +155,7 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
           try {
             await fs.rm(home, { recursive: true, force: true });
             decisions.push({ kind: 'reclaimed', home });
-            await options.events?.emit({
+            await emitScratchCleanup(options.events, {
               type: 'scratch_cleanup_reclaimed',
               repository: lease.lease.repository,
               featureSlug: lease.lease.featureSlug,
@@ -159,7 +167,7 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
           } catch (error) {
             const reason = error instanceof Error ? error.message : String(error);
             decisions.push({ kind: 'failed', home, error: reason });
-            await options.events?.emit({
+            await emitScratchCleanup(options.events, {
               type: 'scratch_cleanup_failed',
               repository: lease.lease.repository,
               featureSlug: lease.lease.featureSlug,
@@ -172,7 +180,7 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
           break;
         case 'live':
           decisions.push({ kind: 'retained', home, reason: 'live-owner' });
-          await options.events?.emit({
+          await emitScratchCleanup(options.events, {
             type: 'scratch_cleanup_retained',
             repository: lease.lease.repository,
             featureSlug: lease.lease.featureSlug,
@@ -184,11 +192,45 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
           break;
         case 'unknown':
           decisions.push({ kind: 'retained', home, reason: 'unknown-owner' });
+          await emitScratchCleanup(options.events, {
+            type: 'scratch_cleanup_retained',
+            repository: lease.lease.repository,
+            featureSlug: lease.lease.featureSlug,
+            runId: lease.lease.runId,
+            attempt: lease.lease.attempt,
+            path: home,
+            reason: 'unknown-owner',
+          });
           break;
       }
     }
   }
   return decisions;
+}
+
+function scratchCleanupIdentity(lease: ScratchLease | undefined): {
+  repository: string | 'unknown';
+  featureSlug: string | 'unknown';
+  runId: string | 'unknown';
+  attempt: number | 'unknown';
+} {
+  return lease === undefined
+    ? { repository: 'unknown', featureSlug: 'unknown', runId: 'unknown', attempt: 'unknown' }
+    : {
+      repository: lease.repository,
+      featureSlug: lease.featureSlug,
+      runId: lease.runId,
+      attempt: lease.attempt,
+    };
+}
+
+async function emitScratchCleanup(events: ConductorEventEmitter | undefined, event: ConductorEvent): Promise<void> {
+  if (events === undefined) return;
+  try {
+    await events.emit(event);
+  } catch {
+    // Cleanup is authoritative; telemetry is best-effort.
+  }
 }
 
 export function probeScratchOwnerLiveness(ownerPid: number): ScratchOwnerLiveness {

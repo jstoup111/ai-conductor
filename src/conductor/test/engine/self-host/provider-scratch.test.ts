@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-boundary.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
+import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import {
   acquireScratchHome,
@@ -466,6 +467,67 @@ describe('provider scratch homes', () => {
       { kind: 'retained', home: join(runDirectory, 'acquired'), reason: 'concurrent-acquisition' },
     ]);
     expect(removals).toStrictEqual([]);
+  });
+
+  it('reports unknown identity for unreadable leases and survives cleanup-event emission failures', async () => {
+    const scratchRoot = '/wt/.daemon/scratch';
+    const runDirectory = join(scratchRoot, 'R');
+    const deadHome = join(runDirectory, 'dead');
+    const leases = new Map<string, string | null>([
+      [join(runDirectory, 'missing', 'owner.json'), null],
+      [join(runDirectory, 'malformed', 'owner.json'), '{'],
+      [join(runDirectory, 'incomplete', 'owner.json'), JSON.stringify({ ownerPid: 1003 })],
+      [join(runDirectory, 'unknown', 'owner.json'), JSON.stringify({
+        repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 4, ownerPid: 1004, startedAt: '2026-08-11T12:34:56.000Z',
+      })],
+      [join(runDirectory, 'acquired', 'owner.json'), null],
+      [join(deadHome, 'owner.json'), JSON.stringify({
+        repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 6, ownerPid: 1006, startedAt: '2026-08-11T12:34:56.000Z',
+      })],
+    ]);
+    let acquiredReadCount = 0;
+    const emitted: unknown[] = [];
+    const removals: string[] = [];
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async (path) => {
+        if (path === join(runDirectory, 'acquired', 'owner.json')) {
+          acquiredReadCount += 1;
+          return acquiredReadCount === 1 ? null : JSON.stringify({
+            repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 5, ownerPid: 1005, startedAt: '2026-08-11T12:34:56.000Z',
+          });
+        }
+        return leases.get(path) ?? null;
+      },
+      readdir: async (path) => path === scratchRoot ? ['R'] : path === runDirectory ? ['missing', 'malformed', 'incomplete', 'unknown', 'acquired', 'dead'] : [],
+      rm: async (path) => { removals.push(path); },
+      rmdir: async () => {},
+    };
+    const recordingEvents = new class extends ConductorEventEmitter {
+      override async emit(event: ConductorEvent): Promise<void> { emitted.push(event); }
+    }();
+    const throwingEvents = new class extends ConductorEventEmitter {
+      override async emit(_event: ConductorEvent): Promise<void> { throw new Error('event sink unavailable'); }
+    }();
+
+    await expect(sweepScratch({
+      worktreeRoot: '/wt', fs, events: recordingEvents,
+      ownerLiveness: (pid) => pid === 1006 ? 'dead' : pid === 1004 ? 'unknown' : 'live',
+    })).resolves.toContainEqual({ kind: 'reclaimed', home: deadHome });
+    expect(emitted).toEqual(expect.arrayContaining([
+      { type: 'scratch_cleanup_retained', repository: 'unknown', featureSlug: 'unknown', runId: 'unknown', attempt: 'unknown', path: join(runDirectory, 'missing'), reason: 'no-lease' },
+      { type: 'scratch_cleanup_retained', repository: 'unknown', featureSlug: 'unknown', runId: 'unknown', attempt: 'unknown', path: join(runDirectory, 'malformed'), reason: 'malformed-lease' },
+      { type: 'scratch_cleanup_retained', repository: 'unknown', featureSlug: 'unknown', runId: 'unknown', attempt: 'unknown', path: join(runDirectory, 'incomplete'), reason: 'incomplete-lease' },
+      { type: 'scratch_cleanup_retained', repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 4, path: join(runDirectory, 'unknown'), reason: 'unknown-owner' },
+      { type: 'scratch_cleanup_retained', repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 5, path: join(runDirectory, 'acquired'), reason: 'concurrent-acquisition' },
+    ]));
+
+    removals.length = 0;
+    await expect(sweepScratch({
+      worktreeRoot: '/wt', fs, events: throwingEvents, ownerLiveness: () => 'dead',
+    })).resolves.toContainEqual({ kind: 'reclaimed', home: deadHome });
+    expect(removals).toContain(deadHome);
   });
 
   it('keeps reclamation platform-neutral and scheduler-free', async () => {

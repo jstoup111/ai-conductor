@@ -12,6 +12,10 @@ import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Identity is deliberately explicit when a retention decision has no readable lease. */
+type ScratchCleanupIdentityValue = string | 'unknown';
+type ScratchCleanupAttempt = number | 'unknown';
+
 /** Closed, credential-safe FINISH publication observability vocabulary. */
 export type FinishPublicationTransition =
   | 'establish_pr'
@@ -183,10 +187,10 @@ export type ConductorEvent =
   | {
       /** A provider scratch home was retained during a daemon sweep. */
       type: 'scratch_cleanup_retained';
-      repository: string;
-      featureSlug: string;
-      runId: string;
-      attempt: number;
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
       path: string;
       reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition';
     }
