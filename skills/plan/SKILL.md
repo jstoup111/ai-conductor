@@ -155,9 +155,18 @@ Compliance Gate later checks against real `file:line` callers after implementati
 3. **No new surface:** `none (no new production surface)` — the task only touches
    tests, docs, or refactors existing wired code without adding a new call target.
 4. **Deferred/waived:** `none (inert until <ref>)` — the surface is intentionally
-   not yet reachable, where `<ref>` is either a repo-relative path (path-form,
-   e.g. `none (inert until src/engine/loop.ts)`) or a tracked issue
-   (issue-form, e.g. `none (inert until #431)`) naming where/when it will be wired.
+   not yet reachable, where `<ref>` names where/when it will be wired and is one of:
+   - a **repo-relative path** — e.g. `none (inert until src/engine/loop.ts)`
+   - a **tracked issue** — `none (inert until #431)` or
+     `none (inert until owner/repo#431)`
+   - **another task in this same plan** — `none (inert until Task 6)`, for a
+     surface that becomes reachable when a later task of this plan wires it
+
+   `<ref>` must be one of those three shapes. Free prose is rejected as malformed
+   at authoring time: `none (inert until the follow-up work)` does not parse, and
+   a ref that is neither an issue nor a `Task N` must be a valid repo-relative
+   path. A `Task N` ref is resolved against this plan's own task list — naming a
+   task that does not exist fails validation immediately.
 
 **Inline code is accepted:** a declared `path#symbol` site or a deferred `<ref>` may be
 wrapped in Markdown inline code (`` `src/engine/loop.ts` ``); the delimiters are treated

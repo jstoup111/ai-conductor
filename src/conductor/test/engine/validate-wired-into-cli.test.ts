@@ -166,6 +166,42 @@ describe('validateWiredIntoPlan — inheritance and waiver forms', () => {
     expect(result.rows.map((r) => r.form)).toEqual(['no_new_surface', 'inert']);
   });
 
+  // The DECIDE-time counterpart of the BUILD-time task-ref resolution. A task
+  // ref is the one inert form whose target is fully known at authoring time, so
+  // it is resolved here rather than deferred — an unresolvable one must fail
+  // while the plan is still editable, not after DECIDE seals it.
+  it('SKIPs an inert task ref that names a real task in the same plan', async () => {
+    const result = await validateWiredIntoPlan(
+      plan(
+        '### Task 2: Build helper\n**Wired-into:** none (inert until Task 6)\n\n' +
+          '### Task 6: Wire it\n**Wired-into:** none (no new production surface)\n',
+      ),
+      async () => {
+        throw new Error('no file should be read for a none (...) form');
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.rows.map((r) => r.status)).toEqual(['skip', 'skip']);
+    expect(result.rows[0].detail).toContain('Task 6');
+  });
+
+  it('FAILs an inert task ref naming a task that does not exist in the plan', async () => {
+    const result = await validateWiredIntoPlan(
+      plan(
+        '### Task 2: Build helper\n**Wired-into:** none (inert until Task 99)\n\n' +
+          '### Task 6: Wire it\n**Wired-into:** none (no new production surface)\n',
+      ),
+      async () => {
+        throw new Error('no file should be read for a none (...) form');
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.rows[0].status).toBe('fail');
+    expect(result.rows[0].detail).toContain('Task 99');
+  });
+
   it('reports no rows (and stays ok) for a plan with no `Wired-into:` lines', async () => {
     const result = await validateWiredIntoPlan(
       plan('### Task 1: Nothing declared\n**Files:** src/a.ts\n'),

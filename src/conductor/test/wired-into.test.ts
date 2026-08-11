@@ -114,6 +114,66 @@ describe('parseWiredIntoLine', () => {
     const result = parseWiredIntoLine('**Wired-into:** none (inert until )');
     expect(result.kind).toBe('malformed');
   });
+
+  it('parses "none (inert until Task N)" as an inert task ref', () => {
+    expect(
+      parseWiredIntoLine('**Wired-into:** none (inert until Task 6)'),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'task', taskId: '6' },
+    });
+  });
+
+  it('parses an inert task ref case-insensitively', () => {
+    expect(
+      parseWiredIntoLine('**Wired-into:** none (inert until task 6)'),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'task', taskId: '6' },
+    });
+  });
+
+  it('strips Markdown inline-code delimiters from an inert task ref', () => {
+    expect(
+      parseWiredIntoLine('**Wired-into:** none (inert until `Task 6`)'),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'task', taskId: '6' },
+    });
+  });
+
+  it('accepts a non-numeric task id in an inert task ref', () => {
+    expect(
+      parseWiredIntoLine('**Wired-into:** none (inert until Task 6.2)'),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'task', taskId: '6.2' },
+    });
+  });
+
+  // Regression: `Task 6` was previously classified as a repo-relative PATH ref by
+  // classifyInertRef's unconditional fallback, so the plan passed authoring-time
+  // validation and then failed at BUILD with "inert waiver ref Task 6 not found" —
+  // an unfixable kickback loop, because the only remedy edits a protected DECIDE
+  // artifact. Any ref containing whitespace is neither a path nor an issue ref.
+  it('parses an inert ref containing whitespace as malformed, not a path ref', () => {
+    const result = parseWiredIntoLine('**Wired-into:** none (inert until some future work)');
+    expect(result.kind).toBe('malformed');
+    if (result.kind !== 'malformed') throw new Error('unreachable');
+    expect(result.message).toContain('some future work');
+  });
+
+  it('parses an inert ref that escapes the repo root as malformed', () => {
+    expect(
+      parseWiredIntoLine('**Wired-into:** none (inert until ../outside.ts)').kind,
+    ).toBe('malformed');
+  });
+
+  it('parses an absolute inert path ref as malformed', () => {
+    expect(
+      parseWiredIntoLine('**Wired-into:** none (inert until /etc/passwd)').kind,
+    ).toBe('malformed');
+  });
 });
 
 describe('serializeWiredInto round-trip', () => {
@@ -123,6 +183,7 @@ describe('serializeWiredInto round-trip', () => {
     '**Wired-into:** none (no new production surface)',
     '**Wired-into:** none (inert until jstoup111/ai-conductor#999)',
     '**Wired-into:** none (inert until path/to/some-file.ts)',
+    '**Wired-into:** none (inert until Task 6)',
   ];
 
   for (const line of fixtures) {

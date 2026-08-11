@@ -72,7 +72,8 @@ export interface WiredIntoMalformed {
 const ACCEPTED_FORMS = [
   'declared site(s) (e.g. `path/to/file.ts#symbol`, comma-separated)',
   '`none (no new production surface)`',
-  '`none (inert until <ref>)`',
+  '`none (inert until <ref>)`, where <ref> is a repo-relative path, an issue ' +
+    '(`#N` or `owner/repo#N`), or `Task N` naming another task in this plan',
   '`same as Task N` (inheritance shorthand)',
 ];
 
@@ -83,21 +84,49 @@ function malformed(text: string): WiredIntoMalformed {
   };
 }
 
-/** A GitHub issue reference: `owner/repo#number`. */
+/**
+ * A GitHub issue reference: `owner/repo#number`, or a bare `#number` naming an
+ * issue in the current repository. `owner`/`repo` are absent for the bare form,
+ * which `gh` resolves from the working directory.
+ */
 export interface InertIssueRef {
   form: 'issue';
-  owner: string;
-  repo: string;
+  owner?: string;
+  repo?: string;
   number: number;
 }
 
-/** A repo-relative path reference — anything not shaped like an issue ref. */
+/**
+ * A reference to another task in the SAME plan: `Task N`. The surface this task
+ * builds becomes reachable when that task wires it, so the waiver resolves
+ * against the plan's own task set — never the filesystem.
+ */
+export interface InertTaskRef {
+  form: 'task';
+  taskId: string;
+}
+
+/** A repo-relative path reference. */
 export interface InertPathRef {
   form: 'path';
   path: string;
 }
 
-export type InertRef = InertIssueRef | InertPathRef;
+export type InertRef = InertIssueRef | InertTaskRef | InertPathRef;
+
+/** Canonical display text for an `InertRef` — used in both messages and serialization. */
+export function inertRefText(ref: InertRef): string {
+  switch (ref.form) {
+    case 'issue':
+      return ref.owner && ref.repo
+        ? `${ref.owner}/${ref.repo}#${ref.number}`
+        : `#${ref.number}`;
+    case 'task':
+      return `Task ${ref.taskId}`;
+    case 'path':
+      return ref.path;
+  }
+}
 
 /** `none (no new production surface)`, case-insensitive. */
 const NO_NEW_SURFACE = /^none\s*\(\s*no new production surface\s*\)$/i;
@@ -107,6 +136,9 @@ const INERT_UNTIL = /^none\s*\(\s*inert until\s+(.+?)\s*\)$/i;
 
 /** `owner/repo#number`, e.g. `jstoup111/ai-conductor#999`. */
 const ISSUE_REF = /^([^\s/]+)\/([^\s/#]+)#(\d+)$/;
+
+/** A bare `#number` issue ref, e.g. `#431` — resolved against the current repo. */
+const BARE_ISSUE_REF = /^#(\d+)$/;
 
 /**
  * A ref wrapped in Markdown inline code — `` `path` `` or ``` ``path`` ``` —
@@ -131,9 +163,19 @@ function stripInlineCode(text: string): string {
  * `resolveWaiverRef` in wiring-probe.ts, which resolves a path-form ref
  * against the filesystem and previously looked for a file whose name still
  * contained the backticks.
+ *
+ * Returns `null` for a ref matching NO form, which the caller turns into a
+ * `malformed` line. Path form is deliberately NOT a catch-all: it used to be,
+ * so `none (inert until Task 6)` classified as a path, passed authoring-time
+ * validation (which never resolves a ref), and then failed at BUILD with
+ * "inert waiver ref Task 6 not found" — an unfixable kickback loop, because
+ * the only remedy edits a protected DECIDE artifact. Anything carrying
+ * whitespace, or escaping the repo root, is now rejected while the plan is
+ * still editable.
  */
-function classifyInertRef(text: string): InertRef {
+function classifyInertRef(text: string): InertRef | null {
   const ref = stripInlineCode(text);
+
   const issueMatch = ref.match(ISSUE_REF);
   if (issueMatch) {
     return {
@@ -143,6 +185,18 @@ function classifyInertRef(text: string): InertRef {
       number: Number(issueMatch[3]),
     };
   }
+
+  const bareIssueMatch = ref.match(BARE_ISSUE_REF);
+  if (bareIssueMatch) {
+    return { form: 'issue', number: Number(bareIssueMatch[1]) };
+  }
+
+  const taskMatch = ref.match(INERT_TASK_REF);
+  if (taskMatch) {
+    return { form: 'task', taskId: taskMatch[1] };
+  }
+
+  if (/\s/.test(ref) || !isRepoRelativePath(ref)) return null;
   return { form: 'path', path: ref };
 }
 
@@ -174,7 +228,8 @@ export function parseWiredIntoLine(line: string): WiredIntoParseResult {
 
   const inertMatch = rest.match(INERT_UNTIL);
   if (inertMatch) {
-    return { kind: 'inert', ref: classifyInertRef(inertMatch[1].trim()) };
+    const ref = classifyInertRef(inertMatch[1].trim());
+    return ref ? { kind: 'inert', ref } : malformed(rest);
   }
 
   const sites: WiredIntoSite[] = [];
@@ -202,13 +257,8 @@ export function serializeWiredInto(result: WiredIntoParseResult): string {
       return `**Wired-into:** ${result.sites.map((s) => `${s.path}#${s.symbol}`).join(', ')}`;
     case 'no_new_surface':
       return '**Wired-into:** none (no new production surface)';
-    case 'inert': {
-      const refText =
-        result.ref.form === 'issue'
-          ? `${result.ref.owner}/${result.ref.repo}#${result.ref.number}`
-          : result.ref.path;
-      return `**Wired-into:** none (inert until ${refText})`;
-    }
+    case 'inert':
+      return `**Wired-into:** none (inert until ${inertRefText(result.ref)})`;
     case 'malformed':
       return `**Wired-into:** ${result.message}`;
   }
@@ -221,6 +271,16 @@ const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
 /** `same as Task N` inheritance shorthand, case-insensitive. */
 const SAME_AS_TASK = new RegExp(`^same\\s+as\\s+task\\s+(${TASK_ID_PATTERN})$`, 'i');
+
+/**
+ * `Task N` as an inert waiver ref, case-insensitive — the same task-id grammar
+ * as `SAME_AS_TASK` above. Declared HERE, after `TASK_ID_PATTERN`, rather than
+ * beside the other inert-ref patterns: a `const` is in its temporal dead zone
+ * until its initializer runs, so building this regex above that declaration
+ * would throw at module load. `classifyInertRef` reads it from a function body,
+ * which runs long after module init, so the ordering is safe.
+ */
+const INERT_TASK_REF = new RegExp(`^task\\s+(${TASK_ID_PATTERN})$`, 'i');
 
 /**
  * Parse a **Wired-into:** line, resolving `same as Task N` inheritance
