@@ -224,6 +224,11 @@ export const ALL_STEPS: StepDefinition[] = [
     isCheckpoint: false,
     skillName: 'prd-audit',
     loopGate: true,
+    // Projects may explicitly opt out when they have a product-track fixture
+    // or workflow with no PRD audit to run. This committed, validated setting
+    // is observable in review; it is not the silent gating-step skip this
+    // enforcement protects against.
+    configDisableAllowed: true,
   },
   {
     // SHIP-tail compliance gate: as-built drift sweep of shipped code vs the

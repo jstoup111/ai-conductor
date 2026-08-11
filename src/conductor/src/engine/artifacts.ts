@@ -33,6 +33,7 @@ import {
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
+import { extractPrdFrIds } from './prd-fr-ids.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -594,6 +595,38 @@ export async function resolveFeatureStoriesPath(
 }
 
 /**
+ * Resolve the approved PRD files for the active feature without ever treating
+ * the whole specs corpus as that feature's denominator. The identity ladder is
+ * deliberately ordered: the recorded active plan is authoritative, followed
+ * by the feature description convention, then the broader identity set.
+ * Superseded PRDs are never approved input.
+ */
+export async function resolveFeaturePrdPaths(
+  projectRoot: string,
+  context: ArtifactResolutionContext,
+): Promise<string[]> {
+  const prdFiles = (await matchGlob(projectRoot, '.docs/specs/*.md')).filter(
+    (path) => !basename(path).startsWith('SUPERSEDED-'),
+  );
+  const matchesStem = (stem: string): string[] =>
+    prdFiles.filter((path) => planStem(path) === stem);
+
+  if (context.activePlanPath) {
+    const matches = matchesStem(planStem(context.activePlanPath));
+    if (matches.length > 0) return matches;
+  }
+
+  if (context.featureDesc) {
+    const matches = matchesStem(slugify(context.featureDesc));
+    if (matches.length > 0) return matches;
+  }
+
+  return prdFiles.filter((path) =>
+    context.featureIdentities.includes(planStem(path)),
+  );
+}
+
+/**
  * True if the step has at least one artifact on disk. True for steps that
  * produce no artifacts (nothing to verify).
  */
@@ -646,6 +679,7 @@ async function sweptArtifactStillValid(
   dir: string,
   step: StepName,
   config?: HarnessConfig,
+  artifactResolution?: ArtifactResolutionContext,
 ): Promise<boolean> {
   if (!resolveGateCodeValidityConfig(config).enabled) return false;
   const git = makeGitRunner(dir);
@@ -678,7 +712,13 @@ async function sweptArtifactStillValid(
       // presence signals "last recorded verdict was a PASS", but the report
       // about to be swept can diverge from what it was stamped from — never
       // spare a report that does not itself currently read clean.
-      return findUnalignedFrRows(await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8')).length === 0;
+      const report = await readFile(join(dir, '.pipeline/prd-audit.md'), 'utf-8');
+      if (findUnalignedFrRows(report).length > 0) return false;
+      return (await prdAuditCoverageGap(
+        dir,
+        artifactResolution ?? (await buildArtifactResolutionContext(dir, { git })),
+        report,
+      )) === null;
     }
     if (step === 'architecture_review_as_built') {
       const raw = await readFile(join(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP), 'utf-8');
@@ -730,12 +770,13 @@ export async function sweepStaleReviewArtifacts(
   step: StepName,
   sessionStartedAt: number | undefined,
   config?: HarnessConfig,
+  artifactResolution?: ArtifactResolutionContext,
 ): Promise<string[]> {
   if (!STALE_SWEEP_STEPS.has(step) || sessionStartedAt === undefined) return [];
   const removed: string[] = [];
   for (const f of await findArtifactFiles(dir, step)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
-    if (await sweptArtifactStillValid(dir, step, config)) continue; // still code-valid → spare
+    if (await sweptArtifactStillValid(dir, step, config, artifactResolution)) continue; // still code-valid → spare
     try {
       await rm(f);
       removed.push(f);
@@ -2253,8 +2294,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             const preCheckFiles = await findArtifactFiles(dir, 'prd_audit');
             if (preCheckFiles.length > 0) {
               let stillClean = true;
+              const artifactResolution =
+                ctx.artifactResolution ??
+                (await buildArtifactResolutionContext(dir, {
+                  planPath: ctx.planPath,
+                  featureDesc: ctx.featureDesc,
+                  git: ctx.git,
+                }));
               for (const f of preCheckFiles) {
-                if (findUnalignedFrRows(await readFile(f, 'utf-8')).length > 0) {
+                const report = await readFile(f, 'utf-8');
+                if (
+                  findUnalignedFrRows(report).length > 0 ||
+                  (await prdAuditCoverageGap(dir, artifactResolution, report)) !== null
+                ) {
                   stillClean = false;
                   break;
                 }
@@ -2299,18 +2351,35 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         verdictFreshness: await verdictFreshnessFor(f, ctx, 'stale_invalidated'),
       };
     }
+    let blockingReason: string | undefined;
     for (const f of fresh) {
       const blocking = findUnalignedFrRows(await readFile(f, 'utf-8'));
       if (blocking.length > 0) {
         const shown = blocking.slice(0, 3).join('; ');
         const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
-        return {
-          done: false,
-          reason: `prd-audit found un-ALIGNED FRs: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`,
-        };
+        blockingReason = `prd-audit found un-ALIGNED FRs: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
+        break;
       }
     }
     const passF = fresh[0];
+    const artifactResolution =
+      ctx.artifactResolution ??
+      (await buildArtifactResolutionContext(dir, {
+        planPath: ctx.planPath,
+        featureDesc: ctx.featureDesc,
+        git: ctx.git,
+      }));
+    const coverageGap = await prdAuditCoverageGap(
+      dir,
+      artifactResolution,
+      await readFile(passF, 'utf-8'),
+    );
+    if (blockingReason || coverageGap) {
+      return {
+        done: false,
+        reason: [blockingReason, coverageGap].filter((reason): reason is string => Boolean(reason)).join('; '),
+      };
+    }
     const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
     await writePrdAuditCodeStamp(dir, ctx);
     return {
@@ -3229,6 +3298,50 @@ function parseFrVerdictRow(line: string): ParsedFrRow | null {
         : 'unknown';
 
   return { fr: frId, blocking, gapClass };
+}
+
+/** Return expected FR ids that have no parseable verdict row in the report. */
+export function findFrIdsWithoutRows(content: string, expectedIds: ReadonlySet<string>): string[] {
+  const present = new Set<string>();
+  for (const line of content.split('\n')) {
+    const row = parseFrVerdictRow(line);
+    if (row) present.add(row.fr);
+  }
+  return [...expectedIds].filter((id) => !present.has(id.toUpperCase()));
+}
+
+/** Return a diagnostic when a resolved PRD requirement lacks an audit verdict row. */
+export async function prdAuditCoverageGap(
+  projectRoot: string,
+  context: ArtifactResolutionContext,
+  reportContent: string,
+): Promise<string | null> {
+  // Direct predicate callers from before feature-scoped artifact resolution
+  // existed have no way to identify a PRD. Preserve their established
+  // presence/freshness-only contract; once any feature identity is available,
+  // resolution is authoritative and an absent PRD must fail closed.
+  const hasFeatureIdentity = Boolean(context.activePlanPath || context.featureDesc || context.featureIdentities.length > 0);
+  if (!hasFeatureIdentity) return null;
+
+  const prdPaths = await resolveFeaturePrdPaths(projectRoot, context);
+  if (prdPaths.length === 0) {
+    return 'PRD audit coverage is unresolvable: no approved PRD could be resolved for the feature.';
+  }
+
+  let frIdSets: Set<string>[];
+  try {
+    frIdSets = await Promise.all(
+      prdPaths.map(async (path) => extractPrdFrIds(await readFile(path, 'utf8'))),
+    );
+  } catch {
+    return 'PRD audit coverage is unreadable: a resolved approved PRD could not be read.';
+  }
+
+  const expectedIds = new Set(
+    frIdSets.flatMap((ids) => [...ids]),
+  );
+  const missing = findFrIdsWithoutRows(reportContent, expectedIds);
+  return missing.length === 0 ? null : `PRD audit report is missing verdict rows for ${missing.join(', ')}.`;
 }
 
 /**

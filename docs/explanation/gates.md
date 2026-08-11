@@ -125,7 +125,7 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `wiring_check` | code that exists but nothing calls — unreachable new exports and unsatisfied wiring contracts become gaps |
 | `test_suite` | a stale green — the fingerprint is re-inspected every time, so the evidence file's existence can never satisfy it |
 | `manual_test` | a whitewashed retest — after a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
-| `prd_audit` | shipped code drifting from the requirements — any missing, partial, or diverged requirement blocks unless explicitly accepted |
+| `prd_audit` | a partial audit report passing as complete — exactly one verdict row is required for every FR enumerated by the feature's approved PRD; a missing row blocks identically to an unaccepted missing, partial, or diverged row. An unresolvable or unreadable feature PRD also blocks fail-closed |
 | `architecture_review_as_built` | an unrecognized verdict passing by default — only an explicit approval verdict satisfies it |
 | `retro` | a retro from a different feature or a prior session counting for this one |
 | `finish` | a publication outcome that was never coherently recorded — `.pipeline/finish-choice` is the final record, not the source of interactive intent; a `pr` outcome additionally requires the recorded PR identity and verified publication evidence |

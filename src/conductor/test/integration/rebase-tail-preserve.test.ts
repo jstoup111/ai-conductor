@@ -94,6 +94,8 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     await git('config', 'user.name', 'Test');
     await git('config', 'commit.gpgsign', 'false');
     await writeFile(join(dir, 'README.md'), '# base\n');
+    await mkdir(join(dir, '.docs/specs'), { recursive: true });
+    await writeFile(join(dir, '.docs/specs/add-foo.md'), '## Functional Requirements\n\nFR-1\n');
     await git('add', '.');
     await git('commit', '-m', 'initial commit on base');
 

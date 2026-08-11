@@ -229,7 +229,10 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     );
   }
 
-  function conductorAtBuild(runner: StepRunner, opts: { daemon: boolean }): Conductor {
+  function conductorAtBuild(
+    runner: StepRunner,
+    opts: { daemon: boolean; disablePrdAudit?: boolean },
+  ): Conductor {
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -242,6 +245,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       maxRetries: 1,
       git: fakeGit,
       shipmentEvidence: validShipmentEvidence,
+      config: opts.disablePrdAudit ? { steps: { prd_audit: { disable: true } } } : undefined,
     });
   }
 
@@ -500,7 +504,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         halted = true;
       });
 
-      await conductorAtBuild(runner, { daemon: true }).run();
+      await conductorAtBuild(runner, { daemon: true, disablePrdAudit: true }).run();
 
       expect(kicks).toContainEqual({ from: 'manual_test', to: 'build' });
       expect(ran.filter((s) => s === 'build')).toHaveLength(2);
@@ -531,7 +535,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         halted = true;
       });
 
-      await conductorAtBuild(buildKicksBackToPlan(ran), { daemon: false }).run();
+      await conductorAtBuild(buildKicksBackToPlan(ran), { daemon: false, disablePrdAudit: true }).run();
 
       expect(kicks).toContainEqual({ from: 'build', to: 'plan' });
       expect(ran).toContain('plan'); // the amendment pass actually ran

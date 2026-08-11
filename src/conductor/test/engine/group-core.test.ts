@@ -18,6 +18,7 @@ import type { StepName, ConductState } from "../../src/types/index.js";
 import { mkdtemp, writeFile, mkdir, stat, utimes, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execa } from "execa";
 import { DefaultStepRunner } from "../../src/engine/step-runners.js";
 import { ProviderRuntimeSet } from "../../src/engine/provider-runtime.js";
 import { executeProviderCandidates } from "../../src/engine/provider-execution.js";
@@ -1427,5 +1428,38 @@ describe("group-core: runGroupBranch per-branch stale-sweep isolation (Task 9)",
     // B's fresh marker survived untouched.
     const freshStat = await stat(freshMarker);
     expect(freshStat).toBeTruthy();
+  });
+
+  it("does not spare a stale partial PRD-audit report when the dispatch state supplies its feature description", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "group-core-prd-audit-sweep-"));
+    try {
+      await mkdir(join(dir, ".pipeline"), { recursive: true });
+      await mkdir(join(dir, ".docs/specs"), { recursive: true });
+      await writeFile(
+        join(dir, ".docs/specs/current-feature.md"),
+        "# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2\n",
+      );
+      await execa("git", ["init", "-q", "-b", "main"], { cwd: dir });
+      await execa("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+      await execa("git", ["config", "user.name", "Test"], { cwd: dir });
+      await execa("git", ["add", "."], { cwd: dir });
+      await execa("git", ["commit", "-qm", "fixture"], { cwd: dir });
+      const baseline = (await execa("git", ["rev-parse", "HEAD"], { cwd: dir })).stdout;
+      const reportPath = join(dir, ".pipeline/prd-audit.md");
+      await writeFile(reportPath, "| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | x |\n");
+      await writeFile(join(dir, ".pipeline/prd-audit-code-stamp.json"), JSON.stringify({ codeStamp: baseline }));
+      await utimes(reportPath, 1, 1);
+
+      await runGroupBranch(
+        { name: "prd_audit", skill: "prd-audit", outcome: makeSkippedOutcome() },
+        { feature_desc: "current feature" } as ConductState,
+        { stepRunner: okRunner(), projectRoot: dir, sessionStartedAt: Date.now() },
+        1,
+      );
+
+      await expect(stat(reportPath)).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

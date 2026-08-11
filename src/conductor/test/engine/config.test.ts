@@ -542,6 +542,13 @@ complexity:
       expect(result.ok).toBe(true);
     });
 
+    it('accepts steps.prd_audit.disable: true — prd_audit explicitly opts into config-disable', () => {
+      const result = validateConfig({
+        steps: { prd_audit: { disable: true } },
+      });
+      expect(result.ok).toBe(true);
+    });
+
     it('rejects steps.test_suite.disable: true — the native BUILD gate is non-disableable', () => {
       const result = validateConfig({
         steps: { test_suite: { disable: true } },

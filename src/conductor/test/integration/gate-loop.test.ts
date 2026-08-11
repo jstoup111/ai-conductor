@@ -96,7 +96,7 @@ describe('integration/gate-loop', () => {
       events,
       projectRoot: dir,
       verifyArtifacts: true,
-      mode: 'auto',
+      mode: 'auto' as const,
       fromStep: 'build',
       maxRetries: 1,
     });
@@ -173,6 +173,11 @@ describe('integration/gate-loop', () => {
       );
     } else if (step === 'prd_audit') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await mkdir(join(dir, '.docs/specs'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/specs/add-foo.md'),
+        '## Functional Requirements\n\nFR-1\n',
+      );
       await writeFile(
         join(dir, '.pipeline/prd-audit.md'),
         '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
@@ -958,7 +963,7 @@ describe('integration/gate-loop', () => {
       await git('commit', '--allow-empty', '-q', '-m', 'init');
     }
 
-    function daemonConductor(runner: StepRunner): Conductor {
+    function daemonConductor(runner: StepRunner, config?: HarnessConfig): Conductor {
       const fakeGit: GitRunner = async (args) =>
         args.includes('--symbolic-full-name')
           ? { stdout: 'refs/remotes/origin/feature/x\n' }
@@ -975,6 +980,7 @@ describe('integration/gate-loop', () => {
         fromStep: 'build',
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
+        config,
       });
     }
 
@@ -1033,7 +1039,7 @@ describe('integration/gate-loop', () => {
         halted = true;
       });
 
-      await daemonConductor(runner).run();
+      await daemonConductor(runner, { steps: { prd_audit: { disable: true } } }).run();
 
       // One kickback, one fix build, convergence — no HALT.
       expect(kickbacks).toEqual([{ from: 'manual_test', to: 'build' }]);
@@ -1100,7 +1106,7 @@ describe('integration/gate-loop', () => {
         completed = true;
       });
 
-      await daemonConductor(runner).run();
+      await daemonConductor(runner, { steps: { prd_audit: { disable: true } } }).run();
 
       // The guard refused the no-commit PASS rewrite and the run HALTed. As
       // of #367's whitewash-guard-marker fallback in readManualTestFailRows,
@@ -1808,7 +1814,8 @@ describe('integration/gate-loop', () => {
         daemon: true,
         fromStep: 'build',
         maxRetries: 1,
-        config,
+        config: { ...config, steps: { prd_audit: { disable: true } } },
+        baseBranch: 'main',
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
       });
@@ -2065,7 +2072,7 @@ describe('integration/gate-loop', () => {
         daemon: true,
         fromStep: 'build',
         maxRetries: 1,
-        config,
+        config: { ...config, steps: { prd_audit: { disable: true } } },
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
       });
@@ -2291,5 +2298,183 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     // the structural predicate alone never mistakes an unresolved plan
     // task for done.
     expect(verdict.done).toBe(false);
+  });
+});
+
+describe('prd_audit coverage recheck through a real repository (Task 11)', () => {
+  const execFileP = promisify(execFile);
+  let repoDir: string;
+
+  async function git(...args: string[]): Promise<void> {
+    await execFileP('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args], {
+      cwd: repoDir,
+    });
+  }
+
+  beforeEach(async () => {
+    repoDir = await mkdtemp(join(tmpdir(), 'prd-audit-real-tail-'));
+    await git('init', '-q', '-b', 'main');
+    await mkdir(join(repoDir, '.docs/specs'), { recursive: true });
+    await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(repoDir, '.docs/specs/current-feature.md'),
+      '# PRD\n\n## Functional Requirements\n\nFR-1\nFR-2\nFR-3\n',
+    );
+    await git('add', '.');
+    await git('commit', '-q', '-m', 'docs: add feature PRD');
+    // The production protected-artifact seal resolves the base through the
+    // remote-tracking ref, so provide the local stand-in used by real-repo
+    // fixtures without introducing a network remote.
+    await git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  });
+
+  afterEach(async () => {
+    await rm(repoDir, { recursive: true, force: true });
+    vi.doMock('execa', () => ({ execa: vi.fn() }));
+    vi.resetModules();
+  });
+
+  it('kicks back on a coverage-incomplete report, then converges only after every PRD FR has a verdict', async () => {
+    // This file normally mocks execa. Resetting before the dynamic import makes
+    // the production tail use real git for protected-artifact sealing and PRD
+    // resolution, rather than a hand-built artifact-resolution context.
+    vi.doUnmock('execa');
+    vi.resetModules();
+    const { Conductor: RealConductor } = await import('../test-conductor.js');
+    const { ConductorEventEmitter: RealEvents } = await import('../../src/ui/events.js');
+    const { writeState: writeRealState, readState: readRealState } = await import('../../src/engine/state.js');
+    const { createProtectedArtifactSeal } = await import('../../src/engine/protected-artifact-seal.js');
+    const { PRD_AUDIT_CODE_STAMP } = await import('../../src/engine/artifacts.js');
+
+    const { stdout: baselineCommit } = await execFileP('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    await createProtectedArtifactSeal({ projectRoot: repoDir, baselineCommit: baselineCommit.trim() });
+
+    // This is a stale, previously stamped partial pass: Task 8's sweep-spare
+    // recheck must remove it before the new audit dispatch. The runner below
+    // then writes the same coverage-incomplete shape as fresh evidence, so the
+    // gate's normal predicate — rather than an un-ALIGNED row — is the only
+    // source of the kickback.
+    const auditPath = join(repoDir, '.pipeline/prd-audit.md');
+    await writeFile(
+      auditPath,
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | ALIGNED | | implemented.ts:1 | yes |\n',
+    );
+    await writeFile(join(repoDir, PRD_AUDIT_CODE_STAMP), JSON.stringify({ codeStamp: baselineCommit.trim() }));
+    await utimes(auditPath, new Date(0), new Date(0));
+
+    const realStatePath = join(repoDir, 'conduct-state.json');
+    await writeRealState(realStatePath, {
+      ...FRONT_DONE,
+      feature_desc: 'current feature',
+      architecture_review: 'skipped',
+      rebase: 'skipped',
+      prd_audit: 'stale',
+    } as ConductState);
+
+    const realEvents = new RealEvents();
+    const kicks: Array<{ from: string; to: string }> = [];
+    realEvents.on('kickback', (event) => {
+      if (event.type === 'kickback') kicks.push({ from: event.from, to: event.to });
+    });
+    let auditRuns = 0;
+    let buildRuns = 0;
+    let staleReportWasPresentBeforeAudit = false;
+    const runner: StepRunner = {
+      run: async (step, _artifacts, options) => {
+        if (step === 'build') {
+          buildRuns += 1;
+          await writeFile(
+            join(repoDir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+          );
+          if (options?.retryReason) {
+            await writeFile(join(repoDir, 'implemented.ts'), 'export const fixed = true;\n');
+            await git('add', '.');
+            await git('commit', '-q', '-m', 'fix: cover the omitted PRD requirement');
+          }
+          return { success: true };
+        }
+        if (step === 'prd_audit') {
+          auditRuns += 1;
+          if (auditRuns === 1) {
+            try {
+              await access(auditPath);
+              staleReportWasPresentBeforeAudit = true;
+            } catch {
+              // Task 8 removed the stale, coverage-incomplete prior report.
+            }
+          }
+          await writeFile(
+            auditPath,
+            buildRuns === 0
+              ? '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | ALIGNED | | implemented.ts:1 | yes |\n'
+              : '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | | implemented.ts:1 | yes |\n| FR-2 | ALIGNED | | implemented.ts:1 | yes |\n| FR-3 | ALIGNED | | implemented.ts:1 | yes |\n',
+          );
+          return { success: true };
+        }
+        if (step === 'remediate') {
+          await writeFile(
+            join(repoDir, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'FR-3-coverage',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'add the omitted FR-3 audit verdict',
+                  tasks: [{ id: 'FR-3-coverage-fix', title: 'Record an FR-3 audit verdict' }],
+                },
+              ],
+            }),
+          );
+          return { success: true };
+        }
+        if (step === 'retro') {
+          await writeFile(join(repoDir, '.pipeline/retro.md'), '# Retro\n');
+        } else if (step === 'finish') {
+          await writeFile(join(repoDir, '.pipeline/finish-choice'), 'keep\n');
+        }
+        return { success: true };
+      },
+    };
+
+    const conductorOptions = {
+      stateFilePath: realStatePath,
+      stepRunner: runner,
+      events: realEvents,
+      projectRoot: repoDir,
+      verifyArtifacts: true,
+      mode: 'auto' as const,
+      daemon: true,
+      fromStep: 'manual_test' as StepName,
+      maxRetries: 1,
+      baseBranch: 'main',
+      config: { steps: { manual_test: { disable: true } } },
+      shipmentEvidence: validShipmentEvidence,
+    };
+
+    await new RealConductor(conductorOptions).run();
+
+    expect(kicks).toContainEqual({ from: 'prd_audit', to: 'build' });
+    expect(buildRuns).toBeGreaterThan(0);
+    expect(staleReportWasPresentBeforeAudit).toBe(false);
+
+    // The coverage-only failure routed through /remediate into BUILD. Resume
+    // the real SHIP tail after recording BUILD's deterministic native evidence;
+    // this dispatch adds FR-3's ALIGNED row and is the convergence proof.
+    const afterBuild = await readRealState(realStatePath);
+    if (!afterBuild.ok) throw new Error(afterBuild.error.message);
+    await writeRealState(realStatePath, {
+      ...afterBuild.value,
+      wiring_check: 'done',
+      test_suite: 'done',
+      build_review: 'skipped',
+      prd_audit: 'stale',
+    });
+    await new RealConductor({ ...conductorOptions, fromStep: 'prd_audit' }).run();
+
+    expect(auditRuns).toBe(2);
+    const finalState = await readRealState(realStatePath);
+    expect(finalState.ok && finalState.value.prd_audit).toBe('done');
   });
 });

@@ -83,6 +83,7 @@ import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
 const AUDIT_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
 const PRD_PASS = AUDIT_HEADER + '| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
+const FEATURE_PRD = '# PRD: Build auth token check and classify\n\n## Functional Requirements\n\n- **FR-1 — Group auth recovery.** Authentication failures park and resume.\n';
 
 // Verbatim observed rejected-credential output
 // (adr-2026-07-22-auth-failure-classification-observed-401-patterns).
@@ -114,6 +115,20 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
     state.build_review = 'done';
     await writeState(statePath, state as unknown as ConductState);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.docs/specs'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/plans/2026-07-22-build-auth-token-check-and-classify.md'),
+      '# Plan\n',
+    );
+    await writeFile(
+      join(dir, '.docs/specs/2026-07-22-build-auth-token-check-and-classify.md'),
+      FEATURE_PRD,
+    );
+    await writeFile(
+      join(dir, '.pipeline/engine-state.json'),
+      JSON.stringify({ activePlanPath: '.docs/plans/2026-07-22-build-auth-token-check-and-classify.md' }),
+    );
     await writeFile(
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),

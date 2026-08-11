@@ -5705,6 +5705,7 @@ describe('engine/conductor', () => {
 
   describe('single-writer join state + gate verdicts — all-green (Task 17)', () => {
     const VALIDATION_GROUP_PREREQS = {
+      feature_desc: 'prd-audit-join',
       worktree: 'done',
       memory: 'done',
       explore: 'done',
@@ -5728,6 +5729,14 @@ describe('engine/conductor', () => {
     const PRD_AUDIT_PASS =
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
     const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
+
+    beforeEach(async () => {
+      await mkdir(join(dir, '.docs/specs'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs/specs/prd-audit-join.md'),
+        '## Functional Requirements\n\nFR-1\n',
+      );
+    });
 
     function joinRunner(delays: Partial<Record<StepName, number>>): StepRunner {
       return {

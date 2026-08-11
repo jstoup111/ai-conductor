@@ -246,12 +246,83 @@ CLI surface changes, so no migration block is required.
 
 **Dependencies:** Task 8
 
+> **Amended 2026-08-10 by operator (2):** Tasks 2-5 are restored to their approved
+> `none (inert until Task 6)` declarations. BUILD did not rewrite them on its own — `wiring_check`
+> ordered it (`.pipeline/kickback-ledger.json`: "task 2: declared inert but diff adds a production
+> reference to «resolveFeaturePrdPaths» — contract is stale, switch to a declared call site"). But
+> the call site the gate named was `.docs/plans/prd-audit-passes-on-a-partial-report-when-backgrou.md`
+> — this plan document. `wiring-probe.ts:742` filters candidate references with only
+> `file !== exp.file && !isTestPath(file)`, so a Markdown spec that merely names a symbol counts as
+> a production reference. The instruction was a false positive, and complying with it was
+> self-reinforcing: each rewrite put more symbol names into the plan for the next scan to find.
+> The approved declarations stand. Tracked in #1458.
+
+> **Amended 2026-08-10 by operator:** Tasks 10 and 11 are added after BUILD proved the approved
+> task set cannot be implemented as written. Task 5's fail-closed PRD resolution means every
+> fixture that lets `prd_audit` run must place a file under `.docs/specs/` — a protected artifact
+> directory (`protected-artifact-seal.ts:17-23`). `gate-loop.test.ts` mocks `execa` module-wide
+> (line 8), so the seal's `resolveBaseTipRef` cannot resolve a base ref there and every dispatch
+> after that file appears refuses with "provenance undeterminable". The only lever that removes
+> `prd_audit` from those hermetic tails is `track: 'technical'`, which also silently removes
+> `architecture_review_as_built` and makes the changed tests pass without the diff. The approved
+> tasks are unchanged; these two supply the missing seam. No production behavior specified above
+> is revised.
+
+### Task 10: Let a project disable `prd_audit` explicitly instead of faking the track
+
+**Story:** Story 2 — a pass from an incomplete run is never reused
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: `steps.prd_audit.disable: true` validates and marks the step `skipped`,
+   while every other gating step without the opt-in still rejects `disable` with the existing
+   "Cannot disable gating step" error.
+2. Verify the tests fail (RED).
+3. Implement: add `configDisableAllowed: true` to the `prd_audit` definition, mirroring the
+   `manual_test` opt-in and its recorded rationale.
+4. Verify the tests pass (GREEN).
+5. Replace every `track: 'technical'` edit added to a SHIP-tail test in this branch with this
+   config disable, so no test asserts a track the fixture does not have.
+6. Commit with message: "feat(steps): allow an explicit prd_audit config disable"
+
+**Files:** `src/conductor/src/engine/steps.ts`, `src/conductor/src/engine/config.ts`,
+`src/conductor/test/integration/gate-loop.test.ts`,
+`src/conductor/test/acceptance/daemon-decide-kickback-halt.acceptance.test.ts`
+
+**Wired-into:** `src/conductor/src/engine/config.ts#validateConfig`
+
+**Dependencies:** Task 8
+
+### Task 11: Cover the coverage recheck in a real-repo fixture
+
+**Story:** Story 2 — a pass from an incomplete run is never reused
+**Type:** negative-path
+
+**Steps:**
+1. Write a failing integration test in a describe that unmocks `execa`, resets the module registry
+   and drives a REAL git repository — the pattern already used by "build gate and post-rebase
+   pre-verify share one verdict basis (Task 12)" at the foot of `gate-loop.test.ts`.
+2. Drive a SHIP tail whose `prd_audit` report is coverage-incomplete and assert the gate blocks and
+   kicks back; then a complete report and assert it converges. Both cases run with a real
+   `.docs/specs/*.md` on disk, so the protected-artifact seal is genuinely exercised rather than
+   bypassed.
+3. Verify the incomplete case fails before Task 8's change and passes after it (no test-only
+   production change).
+4. Commit with message: "test(prd-audit): cover the coverage recheck against a real repo"
+
+**Files:** `src/conductor/test/integration/gate-loop.test.ts`
+
+**Wired-into:** none (no new production surface)
+
+**Dependencies:** Task 10
+
 ## Task Dependency Graph
 
 ```
 Task 1 ──▶ Task 2 ──┐
                     ├──▶ Task 4 ──▶ Task 5 ──▶ Task 6 ──▶ Task 7 ──▶ Task 8 ──▶ Task 9
-Task 3 ─────────────┘
+Task 3 ─────────────┘                                                      │
+                                                                           └──▶ Task 10 ──▶ Task 11
 ```
 
 Tasks 1 and 3 are independent and may run concurrently. Everything from Task 4 onward is serial —

@@ -201,7 +201,11 @@ describe('integration/rebase-loop', () => {
     statePath = join(dir, '.pipeline', 'conduct-state.json');
     events = new ConductorEventEmitter();
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await mkdir(join(dir, '.docs'), { recursive: true });
+    await mkdir(join(dir, '.docs/specs'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/specs/add-foo.md'),
+      '## Functional Requirements\n\nFR-1\n',
+    );
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
