@@ -503,12 +503,29 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
   if (!baseTipArtifacts) {
     return { permitted: false, condition: 'base-tip-unresolved' };
   }
+  const authorshipByPath = new Map(await Promise.all(
+    [...new Set([...headArtifacts.keys(), ...baseTipArtifacts.keys()])]
+      .filter((path) => (
+        optionalBuffersEqual(workspace.artifacts.get(path), headArtifacts.get(path))
+        && !optionalBuffersEqual(headArtifacts.get(path), baseTipArtifacts.get(path))
+      ))
+      .map(async (path) => {
+        const inheritance = await branchUntouchedInheritance(projectRoot, baseTipRef, path);
+        return [
+          path,
+          inheritance === 'inherited' ? 'not-authored'
+            : inheritance === 'not-inherited' ? 'authored'
+              : 'indeterminate',
+        ] as const;
+      }),
+  ));
   return evaluateProtectedArtifactSealRotation({
     seal,
     baselineAncestry,
     workspaceArtifacts: workspace.artifacts,
     headArtifacts,
     baseTipArtifacts,
+    authorshipByPath,
   });
 }
 

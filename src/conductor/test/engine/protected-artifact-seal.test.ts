@@ -729,6 +729,40 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       baseTipRef: 'main',
     })).resolves.toEqual({ permitted: false, condition: 'baseline-unresolvable' });
   });
+
+  it('resolves untouched inheritance before judging a diverging protected path', async () => {
+    const path = '.docs/plans/feature.md';
+    const repo = await makeRepo({ [path]: 'approved plan\n' });
+    const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
+    await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
+    await git(repo, ['checkout', '-q', 'main']);
+    await writeProjectFile(repo, path, 'newer base plan\n');
+    await git(repo, ['add', path]);
+    await git(repo, ['commit', '-q', '-m', 'base advances protected plan']);
+    await git(repo, ['checkout', '-q', 'feature']);
+
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path,
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [],
+    };
+
+    await expect(evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: repo,
+      seal,
+      headCommit: await git(repo, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    })).resolves.toEqual({ permitted: true, paths: [] });
+  });
 });
 
 describe('rotateProtectedArtifactSeal', () => {
