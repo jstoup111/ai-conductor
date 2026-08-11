@@ -1871,6 +1871,57 @@ describe('verifyProtectedArtifactSeal', () => {
       }]);
     });
 
+    it('reproduces the base-ahead incident without halting or classifying the feature as its author', async () => {
+      const baseAheadPath = '.docs/decisions/other-feature.md';
+      const { repo, strandedBaseline, rewrittenHead } = await makeRewrittenRepo({
+        initial: { '.docs/plans/mine.md': 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work before rebase\n' },
+      });
+      await git(repo, ['checkout', '-q', 'main']);
+      await writeProjectFile(repo, baseAheadPath, 'new protected artifact after rebase\n');
+      await git(repo, ['add', baseAheadPath]);
+      await git(repo, ['commit', '-q', '-m', "another feature's protected artifact"]);
+      await git(repo, ['checkout', '-q', 'feat']);
+      const events: ProtectedArtifactSealRebaselineEvent[] = [];
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => {
+          events.push(event);
+        },
+      });
+      const seal = await readSeal(repo);
+      const haltFiles = await Promise.all(['HALT', 'HALT.class'].map(async (name) =>
+        readFile(join(repo, '.pipeline', name), 'utf8').then(() => name, () => undefined),
+      ));
+
+      expect({
+        verdictOk: verdict.ok,
+        baselineCommit: seal.baselineCommit,
+        haltFiles,
+        featureAuthoredEvents: events.filter((event) =>
+          event.type === 'protected_artifact_rebaseline_refused'
+          && event.condition.startsWith('feature-authored:'),
+        ),
+        events,
+      }).toEqual({
+        verdictOk: true,
+        baselineCommit: rewrittenHead,
+        haltFiles: [undefined, undefined],
+        featureAuthoredEvents: [],
+        events: [{
+          type: 'protected_artifact_rebaseline',
+          fromCommit: strandedBaseline,
+          toCommit: rewrittenHead,
+          trigger: 'defensive-history-rewrite',
+          paths: [],
+          excludedBaseAheadPaths: [baseAheadPath],
+        }],
+      });
+    });
+
     it('keeps rotation policy unchanged when telemetry observation fails while provenance evidence is additive', async () => {
       const fixture = {
         initial: {

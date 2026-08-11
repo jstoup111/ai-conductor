@@ -735,7 +735,20 @@ async function branchUntouchedInheritance(
     stripFinalNewline: false,
     reject: false,
   }).catch(() => undefined);
-  if (!head || head.exitCode !== 0) return { inheritance: 'not-inherited', provenance };
+  if (!head || head.exitCode !== 0) {
+    // `git show HEAD:<path>` also fails for a path that base added after this
+    // feature's merge-base. Distinguish that expected absence from a real git
+    // failure: `ls-tree` succeeds with no output only when HEAD lacks the path.
+    const headTree = await execa('git', ['ls-tree', '--name-only', 'HEAD', '--', path], {
+      cwd: projectRoot,
+      reject: false,
+    }).catch(() => undefined);
+    if (!headTree || headTree.exitCode !== 0 || headTree.stdout.length !== 0) {
+      return { inheritance: 'not-inherited', provenance };
+    }
+    const workspace = await readContainedProtectedArtifact(projectRoot, path);
+    return { inheritance: workspace === undefined ? 'inherited' : 'not-inherited', provenance };
+  }
 
   const workspace = await readContainedProtectedArtifact(projectRoot, path);
   return {
