@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile as execFileCb } from 'child_process';
@@ -170,6 +170,26 @@ describe('engine/worktree', () => {
         // Verify branch is gone
         const branches = await git(tempDir, 'branch', '--list', 'feature/cleanup-target');
         expect(branches).toBe('');
+      });
+
+      it('removes worktree scratch without touching external run-state and is idempotent', async () => {
+        const { path: worktreePath } = await manager.create('scratch cleanup target');
+        const scratchRoot = join(worktreePath, '.daemon', 'scratch', 'run-24');
+        const externalRunState = join(tempDir, '.daemon', 'runs', 'run-24.json');
+
+        await mkdir(join(scratchRoot, '1-codex'), { recursive: true });
+        await writeFile(join(scratchRoot, '1-codex', 'owner.json'), '{"provider":"codex"}');
+        await mkdir(join(scratchRoot, '1-claude'), { recursive: true });
+        await writeFile(join(scratchRoot, '1-claude', 'owner.json'), '{"provider":"claude"}');
+        await mkdir(join(tempDir, '.daemon', 'runs'), { recursive: true });
+        await writeFile(externalRunState, '{"status":"active"}');
+
+        await manager.cleanup('scratch-cleanup-target');
+        await expect(stat(scratchRoot)).rejects.toThrow();
+        await expect(readFile(externalRunState, 'utf8')).resolves.toBe('{"status":"active"}');
+
+        await expect(manager.cleanup('scratch-cleanup-target')).resolves.toBeUndefined();
+        await expect(readFile(externalRunState, 'utf8')).resolves.toBe('{"status":"active"}');
       });
     });
   });
