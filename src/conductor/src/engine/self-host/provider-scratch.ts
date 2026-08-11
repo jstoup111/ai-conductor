@@ -1,6 +1,7 @@
 import { dirname, join, normalize } from 'node:path';
 import * as fsp from 'node:fs/promises';
 import type { SelfHostProviderId } from './provider-home.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
 
 const OWNER_LEASE_FILE = 'owner.json';
 
@@ -67,6 +68,7 @@ export interface SweepScratchOptions {
   readonly worktreeRoot: string;
   readonly fs?: ScratchFs;
   readonly ownerLiveness?: (ownerPid: number) => ScratchOwnerLiveness;
+  readonly events?: ConductorEventEmitter;
 }
 
 export type ScratchSweepDecision =
@@ -145,12 +147,40 @@ export async function sweepScratch(options: SweepScratchOptions): Promise<readon
           try {
             await fs.rm(home, { recursive: true, force: true });
             decisions.push({ kind: 'reclaimed', home });
+            await options.events?.emit({
+              type: 'scratch_cleanup_reclaimed',
+              repository: lease.lease.repository,
+              featureSlug: lease.lease.featureSlug,
+              runId: lease.lease.runId,
+              attempt: lease.lease.attempt,
+              path: home,
+              reason: 'dead-owner',
+            });
           } catch (error) {
-            decisions.push({ kind: 'failed', home, error: error instanceof Error ? error.message : String(error) });
+            const reason = error instanceof Error ? error.message : String(error);
+            decisions.push({ kind: 'failed', home, error: reason });
+            await options.events?.emit({
+              type: 'scratch_cleanup_failed',
+              repository: lease.lease.repository,
+              featureSlug: lease.lease.featureSlug,
+              runId: lease.lease.runId,
+              attempt: lease.lease.attempt,
+              path: home,
+              reason,
+            });
           }
           break;
         case 'live':
           decisions.push({ kind: 'retained', home, reason: 'live-owner' });
+          await options.events?.emit({
+            type: 'scratch_cleanup_retained',
+            repository: lease.lease.repository,
+            featureSlug: lease.lease.featureSlug,
+            runId: lease.lease.runId,
+            attempt: lease.lease.attempt,
+            path: home,
+            reason: 'live-owner',
+          });
           break;
         case 'unknown':
           decisions.push({ kind: 'retained', home, reason: 'unknown-owner' });

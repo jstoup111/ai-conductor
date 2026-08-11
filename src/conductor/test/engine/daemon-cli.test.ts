@@ -452,7 +452,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 
     expect(src).toMatch(
-      /await runDaemon\(\s*\{[\s\S]*?sweepProviderScratch:\s*async\s*\(\)\s*=>\s*\{\s*await sweepScratch\(\{\s*worktreeRoot:\s*worktreeBase\s*\}\);\s*\},/,
+      /await runDaemon\(\s*\{[\s\S]*?sweepProviderScratch:\s*async\s*\(\)\s*=>\s*\{\s*await sweepScratch\(\{\s*worktreeRoot:\s*worktreeBase,\s*events\s*\}\);\s*\},/,
     );
   });
 });

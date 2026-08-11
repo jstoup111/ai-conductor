@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-boundary.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import {
   acquireScratchHome,
   readScratchLease,
@@ -342,6 +344,68 @@ describe('provider scratch homes', () => {
       { kind: 'reclaimed', home: secondHome },
     ]);
     expect(removals).toStrictEqual([secondHome]);
+  });
+
+  it('emits and persists reclaimed, retained, and failed cleanup decisions', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-scratch-cleanup-events-'));
+    const scratchRoot = join(worktreeRoot, '.daemon', 'scratch');
+    const runDirectory = join(scratchRoot, 'R');
+    const reclaimedHome = join(runDirectory, '1-codex');
+    const retainedHome = join(runDirectory, '2-codex');
+    const failedHome = join(runDirectory, '3-codex');
+    const lease = (attempt: number, ownerPid: number) => JSON.stringify({
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt,
+      ownerPid,
+      startedAt: '2026-08-11T12:34:56.000Z',
+    });
+    const events = new ConductorEventEmitter();
+    const ledger = join(worktreeRoot, '.pipeline', 'events.jsonl');
+    const persister = new EventPersister(ledger, events);
+    const emitted: unknown[] = [];
+    events.on('scratch_cleanup_reclaimed', (event) => { emitted.push(event); });
+    events.on('scratch_cleanup_retained', (event) => { emitted.push(event); });
+    events.on('scratch_cleanup_failed', (event) => { emitted.push(event); });
+    const fs: ScratchFs = {
+      mkdir: async () => {},
+      writeFile: async () => {},
+      readFile: async (path) => path === join(reclaimedHome, 'owner.json')
+        ? lease(1, 1001)
+        : path === join(retainedHome, 'owner.json')
+          ? lease(2, 1002)
+          : path === join(failedHome, 'owner.json')
+            ? lease(3, 1003)
+            : null,
+      readdir: async (path) => path === scratchRoot ? ['R'] : path === runDirectory ? ['1-codex', '2-codex', '3-codex'] : [],
+      rm: async (path) => {
+        if (path === failedHome) throw new Error('removal blocked');
+      },
+      rmdir: async () => {},
+    };
+
+    persister.start();
+    try {
+      await sweepScratch({
+        worktreeRoot,
+        fs,
+        events,
+        ownerLiveness: (pid) => pid === 1002 ? 'live' : 'dead',
+      });
+    } finally {
+      persister.stop();
+    }
+
+    expect(emitted).toStrictEqual([
+      { type: 'scratch_cleanup_reclaimed', repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, path: reclaimedHome, reason: 'dead-owner' },
+      { type: 'scratch_cleanup_retained', repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 2, path: retainedHome, reason: 'live-owner' },
+      { type: 'scratch_cleanup_failed', repository: 'owner/repository', featureSlug: 'provider-scratch', runId: 'R', attempt: 3, path: failedHome, reason: 'removal blocked' },
+    ]);
+    const persisted = (await readFile(ledger, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(persisted).toMatchObject(emitted);
+
+    await rm(worktreeRoot, { recursive: true, force: true });
   });
 
   it('retains every uncertain lease state with a distinct reason', async () => {

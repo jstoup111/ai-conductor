@@ -171,6 +171,36 @@ export type ConductorEvent =
     }
   | ProviderAttemptEvent
   | {
+      /** A dead-owner provider scratch home was removed during a daemon sweep. */
+      type: 'scratch_cleanup_reclaimed';
+      repository: string;
+      featureSlug: string;
+      runId: string;
+      attempt: number;
+      path: string;
+      reason: 'dead-owner';
+    }
+  | {
+      /** A provider scratch home was retained during a daemon sweep. */
+      type: 'scratch_cleanup_retained';
+      repository: string;
+      featureSlug: string;
+      runId: string;
+      attempt: number;
+      path: string;
+      reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition';
+    }
+  | {
+      /** A dead-owner provider scratch home could not be removed during a daemon sweep. */
+      type: 'scratch_cleanup_failed';
+      repository: string;
+      featureSlug: string;
+      runId: string;
+      attempt: number;
+      path: string;
+      reason: string;
+    }
+  | {
       /**
        * Whole-feature provider usage, emitted once when `finish` completes.
        *
