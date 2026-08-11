@@ -154,6 +154,34 @@ function readRecordedException(
   return { hasException: false };
 }
 
+function hasExtractableFailingTestDetail(marker: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(marker.failingTests) &&
+    marker.failingTests.length > 0 &&
+    marker.failingTests.every((test) => {
+      if (typeof test !== "object" || test === null) return false;
+      const detail = test as Record<string, unknown>;
+      return (
+        typeof detail.name === "string" &&
+        detail.name.trim() !== "" &&
+        typeof detail.reason === "string" &&
+        detail.reason.trim() !== ""
+      );
+    })
+  );
+}
+
+function establishedRedCounters(marker: Record<string, unknown>): boolean {
+  return (
+    typeof marker.executed === "number" &&
+    marker.executed >= 1 &&
+    typeof marker.failed === "number" &&
+    marker.failed >= 1 &&
+    marker.skipped === 0 &&
+    marker.errors === 0
+  );
+}
+
 /**
  * Known nested location a RED marker can stray into when an acceptance run's
  * contract.cwd points at a subdirectory (e.g. `src/conductor`) instead of the
@@ -316,6 +344,18 @@ export async function selfHealAcceptanceRed(
 
   const validated = validateAcceptanceRedEvidence(markerParsed);
   if (!validated.ok) {
+    if (
+      typeof markerParsed === "object" &&
+      markerParsed !== null &&
+      !Array.isArray(markerParsed) &&
+      establishedRedCounters(markerParsed as Record<string, unknown>) &&
+      !hasExtractableFailingTestDetail(markerParsed as Record<string, unknown>)
+    ) {
+      return {
+        healed: false,
+        reason: "failing-test detail could not be extracted from the self-heal run output",
+      };
+    }
     return { healed: false, reason: validated.reason };
   }
 

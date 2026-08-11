@@ -271,6 +271,33 @@ describe("selfHealAcceptanceRed", () => {
     expect(marker).not.toHaveProperty("exception");
   });
 
+  it("reports an unextractable failing-test identity without fabricating a placeholder", async () => {
+    worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
+    writeContract(worktreeRoot);
+
+    const result = await selfHealAcceptanceRed({
+      worktree: worktreeRoot,
+      specFiles: ["a.test.ts"],
+      exec: async () => ({
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errors: 0,
+        intentRationale: "The suite failed, but its output did not identify the failing test.",
+      }),
+    });
+
+    expect(result).toEqual({
+      healed: false,
+      reason: "failing-test detail could not be extracted from the self-heal run output",
+    });
+    const marker = JSON.parse(
+      readFileSync(join(worktreeRoot, ".pipeline", "acceptance-specs-red.json"), "utf8"),
+    );
+    expect(marker).not.toHaveProperty("failingTests");
+  });
+
   it("carries a malformed recorded exception forward without repairing it", async () => {
     worktreeRoot = mkdtempSync(join(tmpdir(), "acceptance-red-runner-"));
     writeContract(worktreeRoot);
@@ -308,7 +335,6 @@ describe("selfHealAcceptanceRed", () => {
       failed: 0,
       skipped: 0,
       errors: 0,
-      ...RED_PROVENANCE,
     });
 
     const result = await selfHealAcceptanceRed({
@@ -364,7 +390,6 @@ describe("selfHealAcceptanceRed", () => {
       failed: 0,
       skipped: 0,
       errors: 2,
-      ...RED_PROVENANCE,
     });
 
     const result = await selfHealAcceptanceRed({
