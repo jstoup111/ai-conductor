@@ -122,3 +122,20 @@ the sense that matters — nothing is left *permanently* disabled by a sticky la
 
 Re-run after applying the Conflict 1 resolution: **zero blocking conflicts remain.** One degrading
 conflict (Conflict 3) is accepted and documented in the stories themselves.
+
+### Re-check 2026-08-10 (conduct `conflict_check` step, spec branch)
+
+Stories unchanged since the 2026-08-09 pass. Re-ran the full scan and additionally examined three
+pairs the first pass did not list. **Zero blocking conflicts; Conflict 3 remains the only accepted
+degrading conflict.**
+
+| Pair (newly checked) | Result |
+|---|---|
+| Story 3 (resume clear keeps `isDraft:true`) vs `halt-pr-presentation-reliability` D5 (finish clear flips `isDraft:false` + strips marker) | Compatible, both directions tested. Satisfying Story 3 leaves D5's finish-time assertions still reachable — it re-reads and confirms absence of label/marker, and the ready-flip is owned by `finish-publication-production.ts:342` (`gh pr ready`), which is unconditional and independent of halt state (verified, 95%). Satisfying D5 does not forbid an earlier clear. One "no" in neither direction → not an oscillation. |
+| Story 3 (clear removes the halt signal before finish) vs `finish-should-rewrite-stale-needs-remediation-titl` Story 3 (`rehabilitateHaltPr` no-ops with zero mutations on a non-halt PR, incl. `Closes` injection) | No regression. The `Closes owner/repo#N` line does not depend on the halt path: `closeIssueOnImplementationMerge` is invoked generically from `daemon-cli.ts:1116`, gated only on `sourceRef` + `pr_url` (verified, 95%). A resumed feature whose halt signal was cleared early still gets its issue reference. |
+| Story 3 negative path (HALT marker still present → no clear) vs `operator-park-a-human-placed-halt-must-survive-the` | Compatible — the resume clear is triggered only by a re-dispatch after the HALT marker is cleared, so a human-placed or park-placed halt is never cleared out from under the operator. |
+
+Conflict 2's resolution re-verified against current code, not assumed: `halt-pr-reconciliation.ts`
+enumerates with `--json ...body...` and filters to body-marker carriers before healing
+(`isDraft && hasLabel` → skip), so removing the marker deselects the PR from the sweep entirely
+(verified, 95%).
