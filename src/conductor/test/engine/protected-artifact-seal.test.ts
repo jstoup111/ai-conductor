@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ConductorEvent } from '../../src/types/events.js';
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
   type ProtectedArtifactSealRebaselineEvent,
@@ -45,6 +46,14 @@ vi.mock('execa', async (importOriginal) => {
 
 const execFile = promisify(execFileCallback);
 const scratches: string[] = [];
+
+const protectedArtifactEventTypes: Record<
+  Extract<ConductorEvent, { type: `protected_artifact_${string}` }>['type'],
+  true
+> = {
+  protected_artifact_rebaseline: true,
+  protected_artifact_rebaseline_refused: true,
+};
 
 async function git(repo: string, args: string[]): Promise<string> {
   const result = await execFile('git', args, { cwd: repo });
@@ -1860,6 +1869,113 @@ describe('verifyProtectedArtifactSeal', () => {
         paths: [],
         excludedBaseAheadPaths: [baseAheadPath],
       }]);
+    });
+
+    it('keeps rotation policy unchanged when telemetry observation fails while provenance evidence is additive', async () => {
+      const fixture = {
+        initial: {
+          '.docs/plans/mine.md': 'approved plan\n',
+          '.docs/decisions/base-ahead.md': 'approved decision\n',
+        },
+        baseAdvance: {
+          'src/base.ts': 'base work\n',
+          '.docs/decisions/base-ahead.md': 'base-owned decision\n',
+        },
+      };
+      const withoutObservation = await makeRewrittenRepo(fixture);
+      const withObservation = await makeRewrittenRepo(fixture);
+      const observed: ProtectedArtifactSealRebaselineEvent[] = [];
+      for (const { repo } of [withoutObservation, withObservation]) {
+        await git(repo, ['checkout', '-q', 'main']);
+        await writeProjectFile(repo, '.docs/decisions/base-ahead.md', 'base advanced again\n');
+        await git(repo, ['add', '.docs/decisions/base-ahead.md']);
+        await git(repo, ['commit', '-q', '-m', 'base advances after feature rebase']);
+        await git(repo, ['checkout', '-q', 'feat']);
+      }
+
+      const unobservedVerdict = await verifyProtectedArtifactSeal({
+        projectRoot: withoutObservation.repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      });
+      const observedVerdict = await verifyProtectedArtifactSeal({
+        projectRoot: withObservation.repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => {
+          observed.push(event);
+          throw new Error('telemetry unavailable');
+        },
+      });
+
+      expect({
+        unobserved: {
+          ok: unobservedVerdict.ok,
+          baselineCommit: (await readSeal(withoutObservation.repo)).baselineCommit,
+          rebaselinePaths: (await readSeal(withoutObservation.repo)).rebaselines?.at(-1)?.paths,
+        },
+        observed: {
+          ok: observedVerdict.ok,
+          baselineCommit: (await readSeal(withObservation.repo)).baselineCommit,
+          rebaselinePaths: (await readSeal(withObservation.repo)).rebaselines?.at(-1)?.paths,
+        },
+        evidence: observed.map((event) => {
+          if (event.type !== 'protected_artifact_rebaseline') return event;
+          return {
+            type: event.type,
+            trigger: event.trigger,
+            paths: event.paths,
+            excludedBaseAheadPaths: event.excludedBaseAheadPaths,
+          };
+        }),
+      }).toEqual({
+        unobserved: {
+          ok: true,
+          baselineCommit: withoutObservation.rewrittenHead,
+          rebaselinePaths: [],
+        },
+        observed: {
+          ok: true,
+          baselineCommit: withObservation.rewrittenHead,
+          rebaselinePaths: [],
+        },
+        evidence: [{
+          type: 'protected_artifact_rebaseline',
+          trigger: 'defensive-history-rewrite',
+          paths: [],
+          excludedBaseAheadPaths: ['.docs/decisions/base-ahead.md'],
+        }],
+      });
+    });
+
+    it('emits provenance through the existing observer without creating a telemetry ledger', async () => {
+      const { repo } = await makeRewrittenRepo({
+        initial: { '.docs/plans/mine.md': 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work\n' },
+      });
+      const observed: ProtectedArtifactSealRebaselineEvent[] = [];
+
+      await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => {
+          observed.push(event);
+        },
+      });
+
+      expect({
+        protectedArtifactEventTypes,
+        eventTypes: observed.map(({ type }) => type),
+        pipelineFiles: await readdir(join(repo, '.pipeline')),
+      }).toEqual({
+        protectedArtifactEventTypes: {
+          protected_artifact_rebaseline: true,
+          protected_artifact_rebaseline_refused: true,
+        },
+        eventTypes: ['protected_artifact_rebaseline'],
+        pipelineFiles: ['protected-artifact-seal.json'],
+      });
     });
 
     it('upgrades a v1 seal to the versioned shape in place when it rotates', async () => {
