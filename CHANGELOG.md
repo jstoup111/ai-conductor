@@ -17,6 +17,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - A plan can declare that a task replicates an existing source file under a rename map, and BUILD mechanically copies and verifies that replication with a new blocking `build_review` gate instead of relying on an LLM to reproduce it from scratch. ([implementation PR #1451](https://github.com/jstoup111/ai-conductor/pull/1451)).
 - Add a `conduct-ts build-tail` rollup command and pipeline closeout-event telemetry that decompose build-step timing into task execution, remediation, and closeout, surfaced in the terminal UI and OTel export. ([implementation PR #1395](https://github.com/jstoup111/ai-conductor/pull/1395)).
+- Operators can now run `conduct-ts reseal` from an interactive terminal to re-fingerprint approved, amended protected DECIDE artifacts, with every reseal and refusal recorded in the audit trail. ([implementation PR #1454](https://github.com/jstoup111/ai-conductor/pull/1454)).
 
 ### Fixed
 
@@ -26,6 +27,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A rebase that only pulls in unrelated base-branch changes no longer discards the build_review verdict, cutting the harness's largest LLM cost; the feature's own code or tests still re-open it. ([implementation PR #1473](https://github.com/jstoup111/ai-conductor/pull/1473)).
 - The daemon repairs a feature's retained PR after a transient HALT instead of leaving it stuck as an unrecoverable "needs-remediation" placeholder. ([implementation PR #1468](https://github.com/jstoup111/ai-conductor/pull/1468)).
 - Finish no longer halts with "release metadata is malformed or non-canonical" when its publication spans more than one dispatch. ([implementation PR #1499](https://github.com/jstoup111/ai-conductor/pull/1499)).
+- The prd_audit gate now fails closed when the audit report is missing a verdict row for any functional requirement in the feature's approved PRD, instead of passing on a partial report. ([implementation PR #1457](https://github.com/jstoup111/ai-conductor/pull/1457)).
 
 ## [0.101.1] - 2026-08-10
 
