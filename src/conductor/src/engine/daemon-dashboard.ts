@@ -13,6 +13,7 @@ import {
   heartbeatBelongsToDispatch,
   readStepHeartbeat,
 } from './step-heartbeat.js';
+import { readFullSuiteEvidence } from './full-suite-evidence.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -68,6 +69,10 @@ export interface InProgressEntry {
    * activity pulse never renders as "stalled" (see `step-heartbeat.ts`).
    */
   heartbeatAgeMs?: number;
+  /** Elapsed time since the current dispatch's `step_started` event. */
+  elapsedStepTimeMs?: number;
+  /** Most recent validated aggregate test outcome, when run evidence exists. */
+  lastTestOutcome?: 'PASS' | 'FAIL';
   /**
    * `working` is backed by fresh telemetry from this dispatch; `waiting` is
    * backed by a returned dispatch whose completion gate remains unsatisfied.
@@ -219,6 +224,8 @@ export interface ScanInheritedStateDeps {
   log?: (msg: string) => void;
   /** Optional PR-state lookup for refining processed-ledger retained reasons. */
   prStateProbe?: PrStateProbe;
+  /** Injectable clock for deterministic dashboard timing. */
+  now?: () => number;
 }
 
 /** The completed-run marker; mirrors the private constant in conductor.ts. */
@@ -486,6 +493,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function scanInheritedState(
   deps: ScanInheritedStateDeps,
 ): Promise<InheritedState> {
+  const now = deps.now ?? Date.now;
   const processed = await readProcessedEntries(deps.processedDir);
   const processedSlugs = new Set(processed.map((p) => p.slug));
   const processedBySlug = new Map(processed.map((entry) => [entry.slug, entry]));
@@ -600,10 +608,17 @@ export async function scanInheritedState(
       // multi-hour "stall" for a step that just started.
       const heartbeat = await readStepHeartbeat(wt);
       if (heartbeat && heartbeat.step === entry.step) {
-        const ageMs = Date.now() - Date.parse(heartbeat.ts);
+        const ageMs = now() - Date.parse(heartbeat.ts);
         if (Number.isFinite(ageMs)) entry.heartbeatAgeMs = Math.max(0, ageMs);
       }
       const activity = await readDispatchActivity(wt, entry.step);
+      if (activity.startedAtMs !== undefined) {
+        entry.elapsedStepTimeMs = Math.max(0, now() - activity.startedAtMs);
+      }
+      const testEvidence = await readFullSuiteEvidence(wt);
+      if ('evidence' in testEvidence && testEvidence.evidence) {
+        entry.lastTestOutcome = testEvidence.evidence.outcome;
+      }
       if (activity.acceptanceRed) {
         entry.acceptanceRedState = activity.acceptanceRed.state;
         entry.completionCondition = activity.acceptanceRed.reason;
@@ -613,7 +628,7 @@ export async function scanInheritedState(
       } else if (
         activity.startedAtMs !== undefined
         && heartbeatBelongsToDispatch(heartbeat, entry.step, activity.startedAtMs)
-        && classifyHeartbeatAge(heartbeat, Date.now(), DASHBOARD_HEARTBEAT_FRESH_MS).kind === 'fresh'
+        && classifyHeartbeatAge(heartbeat, now(), DASHBOARD_HEARTBEAT_FRESH_MS).kind === 'fresh'
       ) {
         entry.activityState = 'working';
       }
@@ -711,6 +726,14 @@ function prSuffix(prUrl?: string): string {
 function heartbeatSuffix(heartbeatAgeMs?: number): string {
   if (heartbeatAgeMs === undefined) return '';
   return ` (activity telemetry: ${formatHeartbeatAge(heartbeatAgeMs)} ago)`;
+}
+
+function elapsedStepTimeSuffix(elapsedStepTimeMs?: number): string {
+  return elapsedStepTimeMs === undefined ? '' : ` (elapsed: ${formatHeartbeatAge(elapsedStepTimeMs)})`;
+}
+
+function lastTestOutcomeSuffix(lastTestOutcome?: 'PASS' | 'FAIL'): string {
+  return ` (last test outcome: ${lastTestOutcome ?? 'unavailable'})`;
 }
 
 function activityStateSuffix(entry: InProgressEntry): string {
@@ -860,7 +883,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${childWorkSuffix()}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix()}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(

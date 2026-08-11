@@ -13,6 +13,7 @@ import type { ComplexityTier } from '../../src/types/index.js';
 import type { PriorityResolution } from '../../src/engine/backlog-priority.js';
 import type { GatedItem } from '../../src/engine/daemon-backlog.js';
 import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
+import { writeFullSuiteEvidence, type FullSuiteEvidence } from '../../src/engine/full-suite-evidence.js';
 
 function item(slug: string, tier?: ComplexityTier): BacklogItem {
   return tier ? { slug, tier } : { slug };
@@ -65,6 +66,52 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       })}\n`,
       'utf-8',
     );
+  }
+  async function makeTestSuiteEvidence(slug: string, outcome: 'PASS' | 'FAIL'): Promise<void> {
+    const timestamp = '2026-08-11T12:00:00.000Z';
+    const evidence: FullSuiteEvidence = outcome === 'PASS'
+      ? {
+          version: 3,
+          outcome,
+          reason: 'exit_zero',
+          fingerprint: 'sha256:fixture',
+          categoryFingerprints: {
+            additional_inputs: 'additional',
+            dependencies: 'dependencies',
+            environment: 'environment',
+            migrations: 'migrations',
+            project_config: 'project-config',
+            source: 'source',
+            test_infrastructure: 'infrastructure',
+            tests: 'tests',
+          },
+          provenanceHeadSha: 'fixture-head',
+          command: 'true',
+          workingDirectory: '.',
+          startedAt: timestamp,
+          endedAt: timestamp,
+          durationMs: 0,
+          exitCode: 0,
+          stdout: '',
+          stderr: '',
+        }
+      : {
+          version: 3,
+          outcome,
+          reason: 'nonzero_exit',
+          fingerprint: null,
+          provenanceHeadSha: null,
+          command: 'false',
+          workingDirectory: '.',
+          startedAt: timestamp,
+          endedAt: timestamp,
+          durationMs: 0,
+          exitCode: 1,
+          signal: null,
+          stdout: '',
+          stderr: '',
+        };
+    await writeFullSuiteEvidence(join(worktreeBase, slug), evidence);
   }
   // Legacy ledger format (plain `shipped`).
   async function makeProcessed(slug: string): Promise<void> {
@@ -215,6 +262,67 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.inProgress.find((entry) => entry.slug === 'working')?.activityState).toBe('working');
     expect(state.inProgress.find((entry) => entry.slug === 'waiting')?.activityState).toBe('waiting');
     expect(state.inProgress.find((entry) => entry.slug === 'leftover')?.activityState).toBeUndefined();
+  });
+
+  it('renders current-dispatch elapsed time and latest test outcome for working and waiting rows', async () => {
+    const now = Date.parse('2026-08-11T12:01:05.000Z');
+    const startedAt = new Date(now - 65_000).toISOString();
+    await makeStateful('working-evidence', { acceptance_specs: 'in_progress' });
+    await makeStateful('waiting-evidence', { acceptance_specs: 'in_progress' });
+    await writeFile(
+      join(worktreeBase, 'working-evidence', '.pipeline', 'events.jsonl'),
+      JSON.stringify({ type: 'step_started', step: 'acceptance_specs', index: 11, ts: startedAt }) + '\n',
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeBase, 'working-evidence', '.pipeline', 'step-heartbeat'),
+      JSON.stringify({ step: 'acceptance_specs', ts: new Date(now - 1_000).toISOString() }),
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeBase, 'waiting-evidence', '.pipeline', 'events.jsonl'),
+      [
+        { type: 'step_started', step: 'acceptance_specs', index: 11, ts: startedAt },
+        { type: 'acceptance_red', step: 'acceptance_specs', state: 'rejected', ts: new Date(now - 1_000).toISOString() },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf-8',
+    );
+    await makeTestSuiteEvidence('working-evidence', 'PASS');
+    await makeTestSuiteEvidence('waiting-evidence', 'FAIL');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      now: () => now,
+    });
+
+    const out = renderDashboard(state);
+    expect(out).toContain('working-evidence @acceptance_specs (working)');
+    expect(out).toContain('waiting-evidence @acceptance_specs (waiting; RED: rejected; completion condition: unavailable)');
+    expect(out).toContain('(elapsed: 1m5s) (last test outcome: PASS)');
+    expect(out).toContain('(elapsed: 1m5s) (last test outcome: FAIL)');
+  });
+
+  it('renders unavailable test outcome when run evidence cannot be read', async () => {
+    const now = Date.parse('2026-08-11T12:01:05.000Z');
+    await makeStateful('missing-test-evidence', { acceptance_specs: 'in_progress' });
+    await writeFile(
+      join(worktreeBase, 'missing-test-evidence', '.pipeline', 'events.jsonl'),
+      JSON.stringify({ type: 'step_started', step: 'acceptance_specs', index: 11, ts: new Date(now - 5_000).toISOString() }) + '\n',
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      now: () => now,
+    });
+
+    expect(renderDashboard(state)).toContain(
+      'missing-test-evidence @acceptance_specs (elapsed: 5s) (last test outcome: unavailable)',
+    );
   });
 
   it('retains the latest acceptance RED state and completion condition for a waiting dispatch', async () => {
