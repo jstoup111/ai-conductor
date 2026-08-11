@@ -64,6 +64,7 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
     errors: 0,
     failingTests: [{ name: 'test_x', reason: 'expected result was absent' }],
     ranAt: '2026-08-10T12:00:00.000Z',
+    intentRationale: 'The failed test proves the requested behavior is not yet implemented.',
   };
 
   it('performs no subprocess exec when the RED marker is missing (miss path)', async () => {
@@ -120,6 +121,7 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
     errors: 0,
     failingTests: [{ name: 'test_x', reason: 'expected result was absent' }],
     ranAt: '2026-08-10T12:00:00.000Z',
+    intentRationale: 'The failed test proves the requested behavior is not yet implemented.',
   };
 
   it('classifies a missing command as a shape refusal', () => {
@@ -186,6 +188,24 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
       ok: false,
       class: 'shape',
       reason: expect.stringContaining('ranAt'),
+    });
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['empty', ''],
+    ['whitespace-only', '  \t  '],
+  ])('refuses a %s intentRationale as a shape failure', (_case, intentRationale) => {
+    const { intentRationale: _intentRationale, ...evidenceWithoutIntentRationale } = validEvidence;
+    const evidence =
+      intentRationale === undefined
+        ? evidenceWithoutIntentRationale
+        : { ...validEvidence, intentRationale };
+
+    expect(validateAcceptanceRedEvidence(evidence)).toMatchObject({
+      ok: false,
+      class: 'shape',
+      reason: expect.stringContaining('intentRationale'),
     });
   });
 });

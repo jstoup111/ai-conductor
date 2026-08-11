@@ -1263,6 +1263,8 @@ export interface AcceptanceRedEvidence {
   failingTests: Array<{ name: string; reason: string }>;
   /** Timestamp when the RED command ran. */
   ranAt: string;
+  /** Why the observed failures prove the feature remains unimplemented. */
+  intentRationale: string;
   /** Raw runner summary line, e.g. pytest's "5 failed in 12.3s". */
   summary?: string;
 }
@@ -1337,6 +1339,13 @@ export function validateAcceptanceRedEvidence(
       ok: false,
       class: 'shape',
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a parseable "ranAt" timestamp for the RED run`,
+    };
+  }
+  if (typeof e.intentRationale !== 'string' || e.intentRationale.trim() === '') {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a non-empty "intentRationale" for why the failures establish RED`,
     };
   }
   if (errors > 0) {
