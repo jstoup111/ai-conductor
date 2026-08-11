@@ -2013,6 +2013,25 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
+    it('refuses rotation for an unsealed out-of-repository symlink absent from HEAD', async () => {
+      const { repo } = await makeRewrittenRepo({
+        initial: { '.docs/plans/other-feature.md': 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work before rebase\n' },
+      });
+      const outside = join(await mkdtemp(join(tmpdir(), 'protected-artifact-outside-')), 'unsealed.md');
+      scratches.push(dirname(outside));
+      await writeFile(outside, 'untrusted artifact\n');
+      await symlink(outside, join(repo, '.docs/plans/unsealed.md'));
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      });
+
+      expect(verdict.ok).toBe(false);
+    });
+
     it('keeps rotation policy unchanged when telemetry observation fails while provenance evidence is additive', async () => {
       const fixture = {
         initial: {

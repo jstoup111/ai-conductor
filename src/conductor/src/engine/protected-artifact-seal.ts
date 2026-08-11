@@ -540,6 +540,14 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
               : 'indeterminate',
     ] as const),
   );
+  if (workspace.unresolvedPath) {
+    return {
+      permitted: false,
+      condition: 'workspace-differs-from-head',
+      path: workspace.unresolvedPath,
+      ...provenanceByPath.get(workspace.unresolvedPath)?.provenance,
+    };
+  }
   const verdict = evaluateProtectedArtifactSealRotation({
     seal,
     baselineAncestry,
@@ -746,8 +754,15 @@ async function branchUntouchedInheritance(
     if (!headTree || headTree.exitCode !== 0 || headTree.stdout.length !== 0) {
       return { inheritance: 'not-inherited', provenance };
     }
-    const workspace = await readContainedProtectedArtifact(projectRoot, path);
-    return { inheritance: workspace === undefined ? 'inherited' : 'not-inherited', provenance };
+    try {
+      await lstat(join(projectRoot, path));
+      return { inheritance: 'not-inherited', provenance };
+    } catch (error) {
+      return {
+        inheritance: (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'inherited' : 'not-inherited',
+        provenance,
+      };
+    }
   }
 
   const workspace = await readContainedProtectedArtifact(projectRoot, path);
