@@ -187,6 +187,35 @@ describe('ensureShipReady (Task 7)', () => {
 });
 
 describe('clearHaltStateForResume (Task 1)', () => {
+  it('preserves a halted draft PR while clearing halt state', async () => {
+    const halted = {
+      title: 'feat: widget import flow',
+      isDraft: true,
+      labels: [{ name: 'needs-remediation' }],
+      body: `## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->`,
+    };
+    const cleared = {
+      ...halted,
+      labels: [],
+      body: '## Summary\n\nWidget import flow.',
+    };
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify(halted) }, // resume-clear state read
+      { stdout: JSON.stringify(halted) }, // cleanupHaltPresentation state read
+      { stdout: '' }, // REST label removal
+      { stdout: JSON.stringify({ ...halted, labels: [] }) }, // label verification
+      { stdout: '' }, // marker-removing body edit
+      { stdout: JSON.stringify(cleared) }, // final verification
+    ]);
+
+    await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+
+    expect({
+      readyCalls: calls.filter((call) => call[0] === 'pr' && call[1] === 'ready').length,
+      finalIsDraft: cleared.isDraft,
+    }).toEqual({ readyCalls: 0, finalIsDraft: true });
+  });
+
   it('clears the remediation label and body marker from a halted PR', async () => {
     const halted = {
       title: 'feat: widget import flow',
