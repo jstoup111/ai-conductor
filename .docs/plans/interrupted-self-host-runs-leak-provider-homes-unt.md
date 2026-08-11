@@ -77,7 +77,7 @@ one-time legacy collection land last, since both consume the sweep's decisions.
 - src/conductor/src/engine/self-host/provider-scratch.ts — new resolver
 - src/conductor/test/engine/self-host/provider-scratch.test.ts — resolver test
 
-**Wired-into:** none (inert until src/conductor/src/engine/self-host/provider-home.ts)
+**Wired-into:** src/conductor/src/engine/self-host/provider-home.ts#provisionProviderHome
 
 **Dependencies:** none
 
@@ -133,7 +133,7 @@ one-time legacy collection land last, since both consume the sweep's decisions.
 - src/conductor/src/engine/self-host/live-boundary.ts — export the exclusion list for assertion
 - src/conductor/test/engine/self-host/provider-scratch.test.ts — ignore and exclusion assertions
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** src/conductor/src/engine/self-host/live-boundary.ts#verifyLiveBoundary
 
 **Dependencies:** Task 1
 
@@ -344,7 +344,7 @@ one-time legacy collection land last, since both consume the sweep's decisions.
 - src/conductor/src/engine/self-host/provider-scratch.ts — sweep and liveness probe
 - src/conductor/test/engine/self-host/provider-scratch.test.ts — dead and live owner cases
 
-**Wired-into:** none (inert until src/conductor/src/engine/daemon.ts)
+**Wired-into:** src/conductor/src/engine/daemon.ts#runDaemon
 
 **Dependencies:** Task 6, Task 10
 
