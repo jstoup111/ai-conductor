@@ -20,7 +20,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
+import { reconcileHaltPrs } from '../../src/engine/halt-pr-reconciliation.js';
 
 const REHAB_MOD = '../../src/engine/halt-pr-rehabilitation.js';
 
@@ -54,17 +56,42 @@ function makeGhFake(state: {
   labels: string[];
   isDraft: boolean;
   body?: string;
-}): { gh: GhRunner; calls: string[][]; getBody: () => string } {
+}): {
+  gh: GhRunner;
+  calls: string[][];
+  getBody: () => string;
+  getLabels: () => string[];
+  getIsDraft: () => boolean;
+} {
   let body = state.body ?? '';
   let labels = state.labels;
   let isDraft = state.isDraft;
   const calls: string[][] = [];
   const gh: GhRunner = async (args) => {
     calls.push([...args]);
-    if (args[0] === 'pr' && args[1] === 'view' && args.includes('body')) {
+    if (args[0] === 'pr' && args[1] === 'list') {
+      return {
+        stdout: JSON.stringify([
+          {
+            number: 249,
+            url: PR_URL,
+            body,
+            isDraft,
+            labels: labels.map((name) => ({ name })),
+            headRefName: 'feat/daemon-retry-ladder',
+          },
+        ]),
+      };
+    }
+    if (
+      args[0] === 'pr' &&
+      args[1] === 'view' &&
+      String(args[args.indexOf('--json') + 1] ?? '').split(',').includes('body')
+    ) {
       // readHaltPresentation calls: pr view <url> --json isDraft,labels,body
       return {
         stdout: JSON.stringify({
+          title: state.title,
           isDraft,
           labels: labels.map((name) => ({ name })),
           body,
@@ -98,7 +125,13 @@ function makeGhFake(state: {
     }
     return { stdout: '' };
   };
-  return { gh, calls, getBody: () => body };
+  return {
+    gh,
+    calls,
+    getBody: () => body,
+    getLabels: () => labels,
+    getIsDraft: () => isDraft,
+  };
 }
 
 describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
@@ -265,5 +298,46 @@ describe('acceptance: halt -> remediate PR flow (Story 3)', () => {
     expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit' && c.includes('--title'))).toBe(
       false,
     );
+  });
+
+  it('a resume-cleared draft PR is absent from the reconciliation marked set and receives no sweep mutations', async () => {
+    const { clearHaltStateForResume } = await import(REHAB_MOD);
+    const { gh, calls, getBody, getLabels, getIsDraft } = makeGhFake({
+      title: HALT_TITLE,
+      labels: ['needs-remediation'],
+      isDraft: true,
+      body: `Existing implementation PR.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+    });
+
+    const clearOutcome = await clearHaltStateForResume(gh, '/repo', PR_URL, () => {}, async () => {});
+    expect(clearOutcome).toBe('cleared');
+
+    const sweepStart = calls.length;
+    const gitCalls: string[][] = [];
+    await reconcileHaltPrs({
+      projectRoot: '/repo',
+      runGh: gh,
+      runGit: async (args) => {
+        gitCalls.push(args);
+        throw new Error('unmarked PRs must not query shipped-record state');
+      },
+    });
+
+    expect(calls.slice(sweepStart)).toEqual([
+      [
+        'pr',
+        'list',
+        '--json',
+        'number,url,body,isDraft,labels,headRefName',
+        '--state',
+        'open',
+        '--limit',
+        '100',
+      ],
+    ]);
+    expect(gitCalls).toHaveLength(0);
+    expect(getLabels()).not.toContain('needs-remediation');
+    expect(getBody()).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    expect(getIsDraft()).toBe(true);
   });
 });
