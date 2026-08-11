@@ -900,13 +900,11 @@ function rotationRefusalPreservesInspection(
   rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
   inspection: ProtectedArtifactSealVerdict,
 ): boolean {
-  return rotation.condition === 'same-history-ancestor'
+  return inspection.ok && (
+    rotation.condition === 'same-history-ancestor'
     || rotation.condition === 'base-tip-unresolved'
-    || (
-      rotation.condition === 'workspace-differs-from-head'
-      && !inspection.ok
-      && inspection.reason.startsWith('Indeterminate protected artifact target')
-    );
+    || rotation.condition === 'head-unresolvable'
+  );
 }
 
 async function reportRotationRefusal(
@@ -961,10 +959,9 @@ async function verifyExistingProtectedArtifactSeal(
     options.baseBranch,
   );
   if (!context.resolved) {
-    await emitRotationRefusal(options.onRebaseline, { permitted: false, condition: context.condition });
-    return context.condition === 'head-unresolvable'
-      ? { ok: false, reason: 'Protected artifact seal HEAD is unresolvable' }
-      : inspection;
+    const rotation = { permitted: false, condition: context.condition } as const;
+    await emitRotationRefusal(options.onRebaseline, rotation);
+    return rotationRefusalVerdict(rotation, inspection, seal, 'HEAD');
   }
 
   const rotation = await evaluateProtectedArtifactSealRotationInRepository({

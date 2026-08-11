@@ -2056,6 +2056,45 @@ describe('verifyProtectedArtifactSeal', () => {
       ).toBe(before);
     });
 
+    it.each([
+      ['base-tip-unresolved', async (_repo: string): Promise<string> => {
+        return 'no-such-base';
+      }],
+      ['head-unresolvable', async (repo: string): Promise<string> => {
+        await rename(join(repo, '.git'), join(repo, '.git-hidden'));
+        return 'main';
+      }],
+      ['same-history-ancestor', async (_repo: string): Promise<string> => 'main'],
+    ] as const)(
+      'preserves a passing inspection without rebaselining when rotation is %s',
+      async (_condition, makeRotationUnavailable) => {
+        const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+        await createProtectedArtifactSeal({
+          projectRoot: repo,
+          baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+        });
+        const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+        const before = await readFile(sealPath, 'utf8');
+        const baseBranch = await makeRotationUnavailable(repo);
+
+        const verdict = await verifyProtectedArtifactSeal({
+          projectRoot: repo,
+          featureDesc: 'mine',
+          baseBranch,
+        });
+
+        expect({
+          verdict,
+          sealBytesUnchanged: await readFile(sealPath, 'utf8') === before,
+          rebaselines: JSON.parse(await readFile(sealPath, 'utf8')).rebaselines,
+        }).toEqual({
+          verdict: expect.objectContaining({ ok: true }),
+          sealBytesUnchanged: true,
+          rebaselines: [],
+        });
+      },
+    );
+
     it('never rotates when the baseline IS an ancestor of HEAD, even though HEAD advanced past it', async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       const baseline = await git(repo, ['rev-parse', 'HEAD']);
