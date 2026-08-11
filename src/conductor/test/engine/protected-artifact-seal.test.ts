@@ -769,6 +769,37 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     })).resolves.toEqual({ permitted: false, condition: 'baseline-unresolvable' });
   });
 
+  it('does not probe authorship when the sealed baseline is an ancestor of HEAD', async () => {
+    const path = '.docs/plans/feature.md';
+    const repo = await makeRepo({ [path]: 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    await git(repo, ['commit', '--allow-empty', '-q', '-m', 'feature advances HEAD']);
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path,
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [],
+    };
+    gitInvocations.length = 0;
+
+    const verdict = await evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: repo,
+      seal,
+      headCommit: await git(repo, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    });
+
+    expect({ verdict, gitInvocations }).toEqual({
+      verdict: { permitted: false, condition: 'same-history-ancestor' },
+      gitInvocations: [
+        ['merge-base', '--is-ancestor', baselineCommit, expect.any(String)],
+      ],
+    });
+  });
+
   it('resolves untouched inheritance before judging a diverging protected path', async () => {
     const path = '.docs/plans/feature.md';
     const repo = await makeRepo({ [path]: 'approved plan\n' });
@@ -801,6 +832,57 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       headCommit: await git(repo, ['rev-parse', 'HEAD']),
       baseTipRef: 'main',
     })).resolves.toEqual({ permitted: true, paths: [] });
+  });
+
+  it('probes authorship only for protected paths that diverge from the base tip', async () => {
+    const divergingPath = '.docs/plans/feature.md';
+    const unchangedPath = '.docs/stories/feature.md';
+    const repo = await makeRepo({
+      [divergingPath]: 'approved plan\n',
+      [unchangedPath]: 'approved story\n',
+    });
+    const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
+    await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
+    await git(repo, ['checkout', '-q', 'main']);
+    await writeProjectFile(repo, divergingPath, 'base-owned plan\n');
+    await git(repo, ['add', divergingPath]);
+    await git(repo, ['commit', '-q', '-m', 'base advances protected plan']);
+    await git(repo, ['checkout', '-q', 'feature']);
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [
+        {
+          path: divergingPath,
+          fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+        },
+        {
+          path: unchangedPath,
+          fingerprint: `sha256:${createHash('sha256').update('approved story\n').digest('hex')}`,
+        },
+      ],
+      rebaselines: [],
+    };
+    gitInvocations.length = 0;
+
+    const verdict = await evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: repo,
+      seal,
+      headCommit: await git(repo, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    });
+
+    expect({
+      verdict,
+      authorshipProbes: gitInvocations.filter(([command]) => command === 'diff'),
+    }).toEqual({
+      verdict: { permitted: true, paths: [] },
+      authorshipProbes: [['diff', '--name-only', 'main...HEAD', '--', divergingPath]],
+    });
   });
 
   it('refuses rotation when no merge-base makes divergent-path authorship indeterminate', async () => {

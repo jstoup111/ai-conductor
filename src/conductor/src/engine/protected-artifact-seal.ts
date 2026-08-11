@@ -483,6 +483,9 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
   if (baselineAncestry === 'unresolvable') {
     return { permitted: false, condition: 'baseline-unresolvable' };
   }
+  if (baselineAncestry === 'ancestor') {
+    return { permitted: false, condition: 'same-history-ancestor' };
+  }
   if (!baseTipRef) {
     return { permitted: false, condition: 'base-tip-unresolved' };
   }
