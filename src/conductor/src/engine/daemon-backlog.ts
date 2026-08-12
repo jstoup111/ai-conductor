@@ -1023,7 +1023,15 @@ export async function discoverBacklog(
       tier !== 'S' &&
       !hasCoherenceTableDataRow(coherenceContent)
     ) {
-      const strandedRekick = (await opts.hasRekickSentinel?.(slug)) === true;
+      let strandedRekick = false;
+      try {
+        strandedRekick = (await opts.hasRekickSentinel?.(slug)) === true;
+      } catch (err) {
+        log(
+          `${slug}: stranded re-kick sentinel probe failed: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
       blockedItems.push({
         slug,
         reason: 'missing-coherence',

@@ -454,6 +454,34 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(withoutProbe.blocked).toEqual(expected);
   });
 
+  it('keeps every missing-coherence block complete when a sentinel probe rejects', async () => {
+    const slugs = ['failing-sentinel', 'no-worktree-sentinel', 'second-sentinel'];
+    for (const slug of slugs) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+    }
+    const logs: string[] = [];
+    const hasRekickSentinel = vi.fn(async (slug: string) => {
+      if (slug === 'failing-sentinel') throw new Error('sentinel unavailable');
+      return false;
+    });
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: fsTreeSource(dir),
+      hasRekickSentinel,
+    });
+
+    expect(result.blocked).toEqual(
+      slugs.map((slug) => ({
+        slug,
+        reason: 'missing-coherence',
+        remedy: `Author a valid coherence table in .docs/coherence/${slug}.md on the default branch.`,
+      })),
+    );
+    expect(hasRekickSentinel).toHaveBeenCalledTimes(3);
+    expect(logs).toContain('failing-sentinel: stranded re-kick sentinel probe failed: sentinel unavailable');
+  });
+
   it('Task 8: blocked classification is visibility-only across the mixed discovery fixture', async () => {
     const writeEligible = async (slug: string, storiesRef = `.docs/stories/${slug}.md`) => {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(storiesRef));
