@@ -614,7 +614,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: ['tautological assertion at x.ts:10'],
-                rubric: {},
+                rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
               }),
             );
           } else if (step === 'manual_test') {

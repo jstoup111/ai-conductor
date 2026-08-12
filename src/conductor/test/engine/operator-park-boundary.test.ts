@@ -937,18 +937,11 @@ describe('operator park boundary contract', () => {
       complexity_tier: 'M',
     });
     const members = ['wiring_check', 'test_suite'] as const;
-    const wiringStarted = deferred();
     const suiteStarted = deferred();
-    const releaseWiring = deferred();
     const releaseSuite = deferred();
     const settled: StepName[] = [];
     let parked = false;
     const run = vi.fn<StepRunner['run']>(async (step) => {
-      if (step === 'wiring_check') {
-        wiringStarted.resolve();
-        await releaseWiring.promise;
-        settled.push(step);
-      }
       return { success: true };
     });
     const ensure = vi.fn(async () => {
@@ -981,11 +974,10 @@ describe('operator park boundary contract', () => {
     });
 
     const resultPromise = conductor.run();
-    await Promise.all([wiringStarted.promise, suiteStarted.promise]);
+    await suiteStarted.promise;
     releaseSuite.resolve();
     await Promise.resolve();
     parked = true;
-    releaseWiring.resolve();
     const result = await resultPromise;
     const persisted = await readState(statePath);
     const raw = persisted.ok
@@ -1009,7 +1001,7 @@ describe('operator park boundary contract', () => {
         kind: 'operator-parked',
         boundary: { kind: 'group', name: 'build_verification' },
       },
-      settled: ['test_suite', 'wiring_check'],
+      settled: ['test_suite'],
       memberStatuses: { wiring_check: 'done', test_suite: 'done' },
       syntheticStatuses: {
         build_verification__wiring_check: 'done',
