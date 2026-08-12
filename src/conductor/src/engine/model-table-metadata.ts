@@ -46,7 +46,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
-    'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands a high-capability model, same class of judgement as prd_audit/code-review.',
+    'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, root-cause fixes, plan completeness, and static wiring reachability — adversarial code review demands a high-capability model, same class of judgement as prd_audit/code-review.',
   wiring_check: 'Deprecated compatibility step; build_review owns wiring judgement.',
   test_suite:
     'Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required.',

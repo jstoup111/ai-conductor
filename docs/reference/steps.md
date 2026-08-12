@@ -64,6 +64,18 @@ The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 
 Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 5, SHIP 6.
 
+`wiring_check` is deprecated. It remains a gating, engine-native no-op solely for compatibility: it
+always succeeds, dispatches no agent, produces no evidence, and emits a deprecation notice. Static
+wiring reachability is instead an all-or-FAIL `build_review` rubric item.
+
+### Retiring a step safely
+
+Step retirement has two phases: first remove the step's machinery while retaining its name as a
+deprecated no-op; only in a later, separate change may the name be deleted, after no live state or
+consumer configuration can reference it. This preserves in-flight `conduct-state.json`, configured
+step keys, historical artifacts, and downstream prerequisites while operators receive an observable
+deprecation notice. See `adr-2026-08-11-deprecated-no-op-step-retirement`.
+
 Two steps are checkpoints (`isCheckpoint: true`) — the engine pauses for the operator after them in
 default and interactive mode: `build` and `manual_test`.
 
@@ -133,24 +145,12 @@ only the loop thread does, after every branch settles.
 
 ## The build verification group
 
-`build_verification` is a `StepGroup` over two members already present in `ALL_STEPS`: `wiring_check`
-and `test_suite`. Both dispatch no skill — each is a deterministic function of the tree — and both list
-`build` as their only prerequisite, so they fan out together immediately after `build` and join before
-`build_review`. Like `validation`, this is a wrapper: it does not remove, replace, or reorder the
-members' own `StepDefinition`s, and it shares the same fan-out mechanics (auto mode only, width-1
-degrades to the serial path, capped by `validation_concurrency`, single-writer join).
-
-Because both members are deterministic rather than model-judged, the join classifies a member as failed
-whenever its outcome is a no-verdict (other than an auth failure, which parks and retries) or a
-passing dispatch whose recomputed gate verdict is not `satisfied` — there is no ambiguous or
-partial-credit outcome to reconcile, unlike the SHIP-tail `validation` group.
-
-After a BUILD repair, the next `build_verification` round dispatches every non-skipped member,
-including a member with a passing verdict left on disk by an earlier round. A stored verdict is not
-membership authority: only the current round's join declares a member satisfied. Each dispatched
-member decides its own work from its existing evidence. `wiring_check` re-derives when its recorded
-head differs from the current head; `test_suite` reuses a matching content fingerprint or derives a
-fresh suite result. Reuse does not consume retry or kickback budget.
+`build_verification` is a `StepGroup` over `wiring_check` and `test_suite`. It retains both names so
+existing state and prerequisites resolve, but only `test_suite` is active: `wiring_check` is the
+deprecated no-op described above. The members fan out after `build` and join before `build_review`.
+After a BUILD repair, the next round dispatches every non-skipped member; `test_suite` reuses a
+matching content fingerprint or derives a fresh suite result. Reuse does not consume retry or
+kickback budget.
 
 ## Tier skips
 
@@ -236,7 +236,7 @@ detail.
 | `acceptance_specs` | spec files in the project's test dirs, plus `.pipeline/acceptance-specs-red.json` | specs yes, evidence no | At least one spec file **and** RED evidence proving the feature's own specs ran and failed. A spec that was skipped, deselected, or hit a collection error does not establish RED |
 | `build` | `.pipeline/task-status.json` | no | No `.pipeline/halt-user-input-required` marker, every task completed or skipped, **and** a clean working tree whenever the status probe establishes one. The post-rebase closure applies the same conjunct: a reapplied autostash blocks BUILD until the named paths are committed or discarded. An absent or failed probe fails open to the legacy behavior. Task status is re-seeded and re-derived on each evaluation, so forged rows fail |
 | `build_review` | `.pipeline/build-review.json` | no | A fresh, valid `PASS` verdict. Missing, prior-session, malformed, or `FAIL` all block, and a `FAIL` surfaces the grader's reasons into the kickback. The kickback target is derived from the failing rubric item, not fixed at `build` — see [gates](../explanation/gates.md#where-a-build_review-fail-goes) |
-| `wiring_check` | `.pipeline/wiring-evidence.json` | no | Validated evidence with non-empty symbols per task. Missing evidence is computed live; evidence recorded at a prior HEAD is re-derived in process rather than rejected |
+| `wiring_check` | — | no | Deprecated no-op; always satisfied for compatibility and emits a deprecation notice. It does not inspect plans, diffs, or evidence. |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | no | A live re-inspection returning `CURRENT`. File presence alone can never satisfy this gate |
 | `manual_test` | `.pipeline/manual-test-results.md` | no | The latest attempt section has no FAIL rows and is fresh. After a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
 | `prd_audit` | `.pipeline/prd-audit.md` | no | Fresh audit with exactly one verdict row for every FR enumerated by the feature's approved PRD; each row is `ALIGNED` or explicitly `ACCEPTED`. A missing row blocks identically to a `MISSING`, `PARTIAL`, or `DIVERGED` row. An unresolvable or unreadable feature PRD blocks fail-closed |
@@ -282,8 +282,8 @@ Dispatch reads a single map keyed by step name. That map is the authority for wh
 
 Four steps dispatch no skill at all and run entirely in the engine: `build_review`, `wiring_check`,
 `test_suite`, and `attribution_verify`. Of these, `build_review` and `attribution_verify` dispatch a
-one-shot model call from engine code and keep the normal per-step retry budget; `wiring_check` and
-`test_suite` are deterministic functions of the tree.
+one-shot model call from engine code; `test_suite` is a deterministic aggregate verifier; and
+`wiring_check` is a deprecated compatibility no-op.
 
 Two steps dispatch the `conduct` skill with an argument rather than a skill of their own name:
 `worktree` runs `/conduct worktree` and `complexity` runs `/conduct complexity`.

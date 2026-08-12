@@ -121,8 +121,8 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `plan` | a plan that does not cover the feature's stories, scoped to this feature's plan and stories |
 | `build` | tasks reported complete without work — task rows are re-seeded and re-derived from the plan each evaluation, so a forged row fails |
 | `acceptance_specs` | acceptance specs that never ran — proof is required that this feature's specs executed *and failed*, so a collection error or a skipped spec cannot pass for RED |
-| `build_review` | an incomplete build — a fresh PASS verdict against a completeness rubric, judged from the diff rather than from self-reports |
-| `wiring_check` | code that exists but nothing calls — unreachable new exports and unsatisfied wiring contracts become gaps |
+| `build_review` | an incomplete or unreachable build — a fresh PASS verdict against its all-or-FAIL rubric, including static wiring reachability, judged from the diff rather than from self-reports |
+| `wiring_check` | no active check — a deprecated compatibility step retained so existing state, config, and prerequisites continue to resolve |
 | `test_suite` | a stale green — the fingerprint is re-inspected every time, so the evidence file's existence can never satisfy it |
 | `manual_test` | a whitewashed retest — after a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
 | `prd_audit` | a partial audit report passing as complete — exactly one verdict row is required for every FR enumerated by the feature's approved PRD; a missing row blocks identically to an unaccepted missing, partial, or diverged row. An unresolvable or unreadable feature PRD also blocks fail-closed |
@@ -137,12 +137,11 @@ Each predicate's exact file, format, and failure text is in [artifacts](../refer
 
 ### BUILD-verification round authority
 
-`wiring_check` and `test_suite` run as the BUILD-verification group. After BUILD is repaired, the
-next round re-dispatches every non-skipped member; a satisfied gate verdict on disk never skips a
-member by itself. The member's evidence rule decides whether its dispatch reuses valid evidence or
-recomputes it, while the group's current join is the sole authority that marks the member satisfied
-for that round. This keeps the selection and gate checks aligned without creating a second evidence
-validity rule.
+`wiring_check` and `test_suite` remain the BUILD-verification group for topology compatibility.
+`wiring_check` is a deprecated no-op; only `test_suite` performs an active verification. After BUILD
+is repaired, the next round re-dispatches every non-skipped member; a satisfied gate verdict on disk
+never skips a member by itself. The group's current join is the sole authority that marks a member
+satisfied for that round.
 
 ### Land-time gates
 
@@ -159,60 +158,11 @@ from specs that would waste a build.
 | coherence | a traceability record that does not connect outcomes, requirements, accepted ADRs, stories, and tasks, or stories that do not tie out to the PRD |
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
 | protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
-| plan wiring anchor | a task whose `**Wired-into:**` anchor does not resolve to a real, existing call site |
 
 Before land, plan authoring runs `conduct-ts plan-protected-targets <plan-path>`. It is a blocking,
 read-only check that reports every offending task/path pair. Land repeats the same judgment against
 the plan being landed, so a plan cannot bypass the rule by skipping the authoring command. Both gates
 apply at every tier and judge only the current plan, not historical plans already merged.
-
-The plan wiring-anchor gate is the same shape. `conduct-ts validate-wired-into` has always been able
-to resolve a plan's `**Wired-into:**` anchors at DECIDE time, through the same
-`extractWiredIntoContracts` + `verifyDeclaredSites` machinery BUILD runs — but as an optional command
-nothing invoked, so an anchor naming a symbol that does not exist could be approved and only surface
-mid-build, where the only way forward was rewriting the approved plan. Land now runs that same
-validation as a blocking check: every declared anchor must name a file that exists and carries a
-non-test reference to the declared symbol, or the task must declare a `none (...)` waiver form. It
-applies at every tier — an anchor either resolves or it does not, and tier has no bearing on that.
-
-The check is a literal text search, so it proves a symbol *appears* in the declared file, not that the
-appearance is a call. That residue is covered by a judged pass in `skills/plan/SKILL.md` §5c, which runs
-at DECIDE only after the mechanical validation is green, and looks for the two shapes the matcher cannot
-see: an anchor naming a symbol defined in a file the same task creates (self-referential — it points at
-the new surface's own definition), and an anchor whose match is an import, re-export, comment, type
-annotation, or string literal rather than a call (decorative). The split is deliberate and one-directional:
-the mechanical verdict is authoritative and a judged finding can never overturn a `FAIL`, while every
-judged resolution must be re-validated mechanically before the plan is complete. The judged pass is
-confined to DECIDE for the reason [#1399](https://github.com/jstoup111/ai-conductor/issues/1399) records —
-a gate that instructs a mid-build plan-contract rewrite makes `build_review` report the compliance as an
-unauthorized scope violation, and the remediation re-triggers the original gate, a loop that costs a
-needs-human HALT.
-
-A related BUILD-time check has the mirror shape: a task declaring `none (inert until <ref>)` whose diff
-nonetheless wires the new symbol somewhere is a stale contract, so `wiring_check` searches the repository
-for references to that symbol. That search is a repo-wide `git grep`, and documentation is not wiring —
-Markdown files (`.md`/`.markdown`/`.mdx`) and anything under `.docs/` are excluded from the reference set
-alongside test paths, because a feature's own plan and PRD necessarily spell out the symbols they plan.
-Counting prose was self-reinforcing: the gate ordered a plan rewrite, the rewrite wrote more symbol names
-into the plan for the next scan to find, and `build_review` flagged the rewrites as unauthorized scope
-([#1390](https://github.com/jstoup111/ai-conductor/issues/1390)). The exclusion is a denylist of
-documentation shapes rather than an allowlist of source extensions, so no code file in any language
-changes classification — a genuine source reference still contradicts an inert declaration.
-
-The waiver's `<ref>` itself is a closed grammar for the same reason. It is a repo-relative path, an
-issue (`#N` or `owner/repo#N`), or `Task N` naming another task in the same plan. Path form used to be
-an unconditional fallback, so any unrecognized text — `none (inert until Task 6)`, the natural way to
-say a surface is wired by a later task of the same plan — became a path ref, passed authoring-time
-validation (which resolves no refs), and then failed at BUILD as `inert waiver ref Task 6 not found`.
-That is unfixable from inside BUILD: the only remedy edits the plan, a protected DECIDE artifact, so
-`wiring_check` kicked back to a build that could not move the tree until the no-op escalation HALTed
-the run. A ref matching no form is now malformed at authoring time, and a `Task N` ref resolves against
-the plan's own task list in both places.
-
-What still is not caught: a plan authored without the judged pass, or one whose author judged wrongly.
-The judged half is prose, and prose is not enforcement — the durable fix would be a probe that
-distinguishes a definition from a call in the declared file, which needs language-aware analysis rather
-than a text search. Until then the mechanical half stays the only blocking authority on resolvability.
 
 The coherence gate is itself layered. It disengages entirely at tier S, and it does not apply retroactively:
 a change set with no coherence artifact path in it is treated as a legacy change, not a violation. Once
@@ -295,16 +245,6 @@ step is the one exception: remediation explicitly asking to revise that step is 
 artifact needs another look, so a satisfied contract does not fast-forward it either — the same grant
 is still required. Interactive runs retain their existing DECIDE authoring path.
 
-A `wiring_check` kickback into `build` additionally checks `.pipeline/build-outcome.json`
-before dispatching. If the most recent build-settle record already observed a no-movement outcome
-for this exact cycle — same tree hash, same gate, same verdict, same model/effort rung — the
-conductor refuses to re-dispatch and halts immediately instead of spending a full turn re-running a
-build already known to change nothing. A prior no-op record never blocks a cycle that differs on any
-one of those four components: a moved tree, a different verdict, a different gate, or a strictly more
-capable rung all dispatch normally, and a missing or unreadable sidecar fails open to dispatch. This
-refusal only ever produces a halt, never a silent skip forward past the gate — see
-[the runbook](../runbooks/stalled-or-stuck-feature.md#kickback-loops) for diagnosis and recovery.
-
 **Remediation** is what a blocking SHIP audit — or a `build_review` completeness or scope failure — does when the
 fix is not obvious. It classifies each gap and routes it to the earliest step that can close it — build,
 acceptance specs, architecture review, or plan — all of which sit before the gate that found it. A fifth
@@ -360,19 +300,6 @@ for a scope gap — the difference is that the deletion becomes a recorded plan-
 The graded diff excludes paths the **engine** authors rather than the builder — `.docs/shipped/` and
 `.pipeline/`. No plan task can describe harness machinery output, so grading it guarantees a scope
 finding the builder cannot legitimately act on.
-
-`build_review` also receives a third engine-recorded context section: prior `wiring_check` →
-`build` kickbacks from this feature's `.pipeline/events.jsonl` ledger. Each entry preserves the
-issuing gate, target, retry count, and verbatim evidence, so the grader can judge whether an
-otherwise out-of-plan plan hunk directly implements the gate instruction that required it. The
-reader admits only `kickback` records whose `from` is `wiring_check` and whose `to` is `build`;
-instructions from other gates or to other targets do not become grading context.
-
-Like rebase-repair context and accepted scope widenings, a recorded gate instruction is evidence,
-not an exemption. A matching plan hunk may be treated as in scope, but unrelated work remains
-subject to every rubric item. The ledger reader fails open: a missing or unreadable ledger yields
-no instructions, and malformed lines are ignored while well-formed qualifying records remain
-available. Ledger degradation therefore cannot prevent `build_review` from running.
 
 When `test_suite` exposes a repair needed only after a base advance, the engine accumulates the
 sanitized failure in `.pipeline/build-review-rebase-repairs.json`. The ledger is outside rewritten

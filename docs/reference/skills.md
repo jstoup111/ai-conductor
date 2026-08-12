@@ -316,23 +316,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `## Wiring Surface` section at tiers M and L.
 - **Outputs** — `.docs/plans/<date>-<feature>.md`.
 - **Gate role** — blocking. It refuses to produce a plan without stories, dependency lines, both paths,
-  and a clean conflict-check; every acceptance criterion must map to at least one task; a missing
-  `**Wired-into:**` line blocks its own verification; 41 or more tasks is a hard stop. Each `Story:`
+  and a clean conflict-check; every acceptance criterion must map to at least one task; 41 or more tasks
+  is a hard stop. Each `Story:`
   line takes one id — a comma-separated list silently registers only the first. Plans must not append
   a terminal catch-all task that re-proves the completed feature; scoped tests stay with their
   behavior-owning implementation task, while writing-system-tests and later BUILD/SHIP gates own
   whole-feature validation.
-- **Wiring anchors are gated, not advised** — `conduct-ts validate-wired-into <plan file>` remains the
-  authoring-time command, but land now runs the same validation against the plan being landed, at every
-  tier. A `**Wired-into:**` anchor that names a file that does not exist, or a symbol with no non-test
-  reference in its declared file, refuses the spec naming the task and the anchor. Fix the anchor during
-  DECIDE or declare a `none (...)` form — BUILD must never rewrite an approved plan to make it resolve.
-- **Judged wiring pass (§5c)** — after the mechanical validation is green, the skill judges the residue a
-  text search cannot decide: a self-referential anchor (a symbol defined in a file the same task creates)
-  and a decorative one (the match is an import, re-export, comment, type annotation, or string, not a
-  call). Blocking, DECIDE-only, and strictly subordinate — a judged finding never overturns a mechanical
-  `FAIL`, is never resolved by downgrading to a `none (...)` waiver, and every judged edit must re-pass
-  `validate-wired-into`. Integrity check 21 pins this prose to the wired engine gate.
 - **Declared pattern replication** — a plan may add `**Pattern-source:**` and `**Rename-map:**` header
   lines to declare that it replicates an existing source file under a rename map, so BUILD copies and
   verifies that source mechanically instead of deriving it from scratch. Both lines are required
@@ -532,12 +521,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   to the operator.
 
 `test-suite` and `wiring-check` have no `SKILL.md` — both `test_suite` (index 14) and `wiring_check`
-(index 13) are **engine-native** BUILD steps: they dispatch no skill. Together they form the
-`build_verification` step group (see [The build verification group](steps.md#the-build-verification-group)),
-fanning out after `build` and joining before `build_review`. `test_suite` obtains a current result from
-the repository-configured aggregate verifier; `wiring_check` runs the deterministic reachability probe.
-The engine writes `.pipeline/test-suite-evidence.json` and `.pipeline/wiring-evidence.json`
-respectively. Both are blocking and cannot be tier-skipped or satisfied by a scoped result.
+(index 13) are **engine-native** BUILD steps. `test_suite` obtains a current result from the
+repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility;
+wiring reachability is judged by `build_review`. The two names remain in `build_verification` (see
+[The build verification group](steps.md#the-build-verification-group)); it fans out after `build` and
+joins before `build_review`.
 
 ## SHIP-phase skills
 
