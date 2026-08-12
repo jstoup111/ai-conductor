@@ -34,6 +34,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Finish no longer halts with "release metadata is malformed or non-canonical" when its publication spans more than one dispatch. ([implementation PR #1499](https://github.com/jstoup111/ai-conductor/pull/1499)).
 - The prd_audit gate now fails closed when the audit report is missing a verdict row for any functional requirement in the feature's approved PRD, instead of passing on a partial report. ([implementation PR #1457](https://github.com/jstoup111/ai-conductor/pull/1457)).
 - Protected artifact seal rotation no longer refuses when a base-ahead path was never touched by the feature, avoiding false "seal rebaseline refused" halts. ([implementation PR #1498](https://github.com/jstoup111/ai-conductor/pull/1498)).
+- `conduct-ts scoped-run` now runs in `test_suite.working_directory` and rebases project-root-relative selectors onto it, so scoped test runs work in monorepo layouts. ([implementation PR #1520](https://github.com/jstoup111/ai-conductor/pull/1520)).
 
 ## [0.101.1] - 2026-08-10
 
