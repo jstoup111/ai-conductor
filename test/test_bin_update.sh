@@ -426,18 +426,33 @@ git -C "$REPO" commit -q -m "orphan checkout"
 run_identity_resolver "$REPO"
 assert_resolved_identity "orphan checkout without a reachable release" undeterminable unknown "" "" none
 
-# v0.4.0 is the nearest release through the merged branch, but v0.5.0 is the
-# highest release reachable from HEAD.  The resolver must select the latter.
+# A real Git query failure has the same fail-closed contract as an empty
+# result.  Keep the library present while making only its checkout argument
+# non-Git, so a source/cd failure cannot accidentally stand in for the query.
+REPO="$TMP_ROOT/resolver-git-query-failure"
+mkdir -p "$REPO/bin/lib"
+cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$REPO/bin/lib/harness-common.sh"
+run_identity_resolver "$REPO"
+assert_resolved_identity "failed Git tag query" undeterminable unknown "" "" none
+assert "failed Git tag query: leaks no Git diagnostic" \
+  "$([ "$RESOLVER_OUT" = $'undeterminable\tunknown\t\t\tnone' ] && echo 0 || echo 1)"
+
+# v0.4.0 is one commit from HEAD while the higher reachable v0.5.0 is two.
+# A nearest-tag implementation therefore chooses v0.4.0; the resolver must
+# deliberately select the higher reachable release instead.
 REPO=$(make_repo "resolver-highest-reachable-not-nearest")
-BASE_SHA=$(git -C "$REPO" rev-parse HEAD)
-PRIMARY_BRANCH=$(git -C "$REPO" symbolic-ref --short HEAD)
 git -C "$REPO" commit -q --allow-empty -m "v0.5.0"
 git -C "$REPO" tag v0.5.0
-git -C "$REPO" checkout -q -b nearer-v0.4.0 "$BASE_SHA"
 git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
 git -C "$REPO" tag v0.4.0
-git -C "$REPO" checkout -q "$PRIMARY_BRANCH"
-git -C "$REPO" merge -q --no-ff nearer-v0.4.0 -m "merge nearer release"
+git -C "$REPO" commit -q --allow-empty -m "post-release head"
+LOWER_TAG_DISTANCE=$(git -C "$REPO" rev-list --count v0.4.0..HEAD)
+HIGHER_TAG_DISTANCE=$(git -C "$REPO" rev-list --count v0.5.0..HEAD)
+NEAREST_TAG=$(git -C "$REPO" describe --tags --abbrev=0 HEAD)
+assert "highest-vs-nearest fixture: lower tag is strictly nearer" \
+  "$([ "$LOWER_TAG_DISTANCE" -lt "$HIGHER_TAG_DISTANCE" ] && echo 0 || echo 1)"
+assert "highest-vs-nearest fixture: Git describes the lower tag as nearest" \
+  "$([ "$NEAREST_TAG" = "v0.4.0" ] && echo 0 || echo 1)"
 run_identity_resolver "$REPO"
 assert_resolved_identity "highest reachable release beats nearest release" post-release v0.5.0+2 v0.5.0 2 checkout
 
@@ -451,6 +466,24 @@ done
 git -C "$REPO" commit -q --allow-empty -m "post twenty-second release"
 run_identity_resolver "$REPO"
 assert_resolved_identity "twenty-two reachable release tags" post-release v0.4.22+1 v0.4.22 1 checkout
+
+# Long lightweight refs exercise the resolver's real Git pipeline without
+# thousands of commits.  The roughly 170 KiB output reliably reaches the
+# evaluator's broken-pipe path while keeping this fixture quick to construct.
+REPO=$(make_repo "resolver-large-tag-output")
+HEAD_SHA=$(git -C "$REPO" rev-parse HEAD)
+TAG_SUFFIX=""
+for suffix_component in $(seq 1 80); do
+  TAG_SUFFIX="${TAG_SUFFIX}0."
+done
+for tag_number in $(seq 1 1024); do
+  printf 'create refs/tags/v1.%s.%s0 %s\n' "$tag_number" "$TAG_SUFFIX" "$HEAD_SHA"
+done | git -C "$REPO" update-ref --stdin
+EXPECTED_LARGE_TAG="v1.1024.${TAG_SUFFIX}0"
+run_identity_resolver "$REPO"
+assert_resolved_identity "large reachable-tag output" release "$EXPECTED_LARGE_TAG" "$EXPECTED_LARGE_TAG" 0 "checked-out tag"
+assert "large reachable-tag output: leaks no pipeline diagnostic" \
+  "$([ "$RESOLVER_OUT" = "release"$'\t'"$EXPECTED_LARGE_TAG"$'\t'"$EXPECTED_LARGE_TAG"$'\t0\tchecked-out tag' ] && echo 0 || echo 1)"
 
 # Prerelease tags are not release baselines.  They must not displace the last
 # stable release even though the basic Git glob can match their names.
