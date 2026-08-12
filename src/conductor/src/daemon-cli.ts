@@ -142,6 +142,7 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  REKICK_SENTINEL,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { readHaltClass } from './engine/halt-marker.js';
@@ -1367,6 +1368,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         access(join(projectRoot, '.worktrees', slug, '.pipeline', 'finish-choice'))
           .then(() => true)
           .catch(() => false),
+      hasRekickSentinel: async (slug) =>
+        access(join(worktreeBase, slug, REKICK_SENTINEL)).then(() => true).catch(() => false),
       fastForwardRoot,
       discoverBacklog,
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),

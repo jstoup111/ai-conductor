@@ -27,6 +27,24 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON_CLI_SRC = join(__dirname, '../../src/daemon-cli.ts');
 
+describe('Task 6 — daemon-cli wires the real REKICK sentinel probe', () => {
+  it('passes a worktree-rooted REKICK probe to localWorkSource', async () => {
+    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
+
+    expect(source).toMatch(
+      /import\s*\{[^}]*REKICK_SENTINEL[^}]*\}\s*from\s*['"]\.\/engine\/daemon-rekick\.js['"]/,
+    );
+
+    const workSourceConstruction = source.match(
+      /localWorkSource\(\{[\s\S]*?fastForwardRoot,\n\s*discoverBacklog,/,
+    );
+    expect(workSourceConstruction, 'expected the daemon CLI localWorkSource construction').toBeTruthy();
+    expect(workSourceConstruction![0]).toMatch(
+      /hasRekickSentinel:\s*async \(slug\)\s*=>\s*\n\s*access\(join\(worktreeBase, slug, REKICK_SENTINEL\)\)\.then\(\(\) => true\)\.catch\(\(\) => false\)/,
+    );
+  });
+});
+
 describe('Task 8 — daemon-cli guards resumeRebaseFirst (REKICK sentinel) on operator-park', () => {
   it('checks isOperatorParked and returns BEFORE the one-shot resumeRebaseFirst call, so a parked sentinel is never consumed', async () => {
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
