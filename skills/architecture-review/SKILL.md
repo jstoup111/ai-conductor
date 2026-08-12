@@ -14,12 +14,7 @@ Catches technical infeasibility, hidden complexity, architectural drift, and dom
 early — when they're cheap to fix. This is where the *how* is resolved (so the PRD stays
 product-only) and captured as APPROVED ADRs.
 
-Read the `Scope boundary:` field in `.docs/track/<slug>.md` and consume the confirmed scope boundary as a binding input.
-Consume the confirmed scope boundary as a binding input.
-Preserve the operator-confirmed narrow or comprehensive outcome in the artifact.
-Do not put a materially broader scope into the artifact until the operator confirms it.
-Block any expansion beyond that boundary without operator confirmation.
-Block a material expansion beyond that boundary until the operator confirms it.
+Read the `Scope boundary:` from `.docs/track/<slug>.md` as binding; preserve the confirmed narrow/comprehensive breadth outcome; do not permit a materially broader expansion beyond it unless the operator confirms before it enters the artifact.
 
 **Run after `/prd` (product track) or `/explore` (technical track), and BEFORE `/stories`** (adr-2026-06-29-architecture-before-stories-convergent-kickback).
 The review's input is the PRD's functional requirements (product) or the explore output + technical

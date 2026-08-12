@@ -80,9 +80,9 @@ scope_choice_contract_holds() {
 confirmed_breadth_contract_holds() {
   local skill_file="$1"
 
-  grep -qF 'Consume the confirmed scope boundary as a binding input.' "$skill_file" \
-    && grep -qF 'Preserve the operator-confirmed narrow or comprehensive outcome in the artifact.' "$skill_file" \
-    && grep -qF 'Block a material expansion beyond that boundary until the operator confirms it.' "$skill_file"
+  grep -qiE 'Scope boundary:.*\.docs/track/<slug>\.md.*binding' "$skill_file" \
+    && grep -qiE 'preserve.+confirmed.+(narrow|comprehensive).+(breadth|outcome|scope)' "$skill_file" \
+    && grep -qiE '(do not|must not|never).+(materially broader|material expansion|expand materially).+(unless|without).+operator.+confirm.+before.+artifact' "$skill_file"
 }
 
 adr_creation_contract_holds() {

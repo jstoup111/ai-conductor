@@ -21,12 +21,7 @@ Stories run **after** architecture-review (the design is known), so they describ
 mechanism (architecture *informs which scenarios exist*; it is not copied as mechanism into story
 text — the *how* is the plan's job). Negative paths are mandatory — they feed TDD RED phases.
 
-Read the `Scope boundary:` field in `.docs/track/<slug>.md` and consume the confirmed scope boundary as a binding input.
-Consume the confirmed scope boundary as a binding input.
-Preserve the operator-confirmed narrow or comprehensive outcome in the artifact.
-Do not put a materially broader scope into the stories artifact until the operator confirms it.
-Block any expansion beyond that boundary without operator confirmation.
-Block a material expansion beyond that boundary until the operator confirms it.
+Read the `Scope boundary:` from `.docs/track/<slug>.md` as binding; preserve the confirmed narrow/comprehensive breadth outcome; do not permit a materially broader expansion beyond it unless the operator confirms before it enters the artifact.
 
 **Correctness gate:** acceptance criteria become the definition of done. Apply the `/verify-claims`
 protocol — if a scenario encodes an assumption about expected behavior that was never confirmed
@@ -52,7 +47,6 @@ the documentation portion entirely and write stories only for the functional beh
 
 ### 1. Load Input
 
-- Read the `Scope boundary:` field in `.docs/track/<slug>.md` before deriving stories.
 - **Product track:** read the approved PRD from `.docs/specs/`; work through its **Functional
   Requirements (`FR-N`)** — each FR is the unit you extract stories from. **Technical track** (no
   PRD): derive acceptance criteria from the technical intent + the approved architecture/ADRs.
