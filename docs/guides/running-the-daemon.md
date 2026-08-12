@@ -288,8 +288,9 @@ There is no configuration for this; the timing is fixed.
 ## Provider preparation timeout and activity telemetry
 
 `daemon.log` records step boundaries, provider activity, build progress, and verdict-freshness
-decisions. The deterministic BUILD group appears as start/completion lines naming both
-`wiring_check` and `test_suite`, so their execution remains visible before `build_review`. For
+decisions. The deterministic BUILD group retains the `wiring_check` and `test_suite` names before
+`build_review`; `wiring_check` logs its deprecation notice and `test_suite` logs its verification.
+For
 `build_review`, `prd_audit`, `architecture_review_as_built`, and preserved
 `manual_test` evidence, the freshness line names the step and artifact:
 
@@ -303,18 +304,17 @@ decisions. The deterministic BUILD group appears as start/completion lines namin
 remains valid. `invalidated` means the judged surface changed and the stale verdict was rejected;
 the gate must run again. `rewritten` means the current judging attempt produced the artifact.
 
-After a BUILD repair, the group still dispatches every non-skipped `wiring_check` and `test_suite`
-member; a prior gate verdict on disk does not skip either one. Each successful member logs its own
-settle decision after the join evaluates current evidence:
+After a BUILD repair, the group still runs its non-skipped members. `wiring_check` remains an
+observable compatibility no-op; `test_suite` is the active verifier, and a prior evidence file does
+not skip it. The suite member logs its settle decision after the join evaluates current evidence:
 
 ```text
 · BUILD member test_suite settled: reuse (fingerprint-match)
-· BUILD member wiring_check settled: recompute (recorded-head-versus-current-head)
 ```
 
-`reuse` means the member's existing evidence remains valid; `recompute` means that member derived
-fresh evidence. The basis is a closed diagnostic classification, never command output, credentials,
-or an absolute host path. The group join remains the authority that marks a member satisfied.
+`reuse` means the suite's existing evidence remains valid; `recompute` means it derived fresh
+evidence. The basis is a closed diagnostic classification, never command output, credentials, or an
+absolute host path. The group join remains the authority that marks a member satisfied.
 
 Before a provider process is spawned, its candidate resolution, session setup, and self-host
 preparation are bounded by `provider_preparation_timeout_minutes` (default 5; see
@@ -777,8 +777,8 @@ once; a lock loser never runs it and never touches worktrees.
 Honouring the `REKICK` sentinel always rebases the feature onto the advanced base before any gate
 resumes, even when it is cleanly mergeable. This play-forward path is intentionally different from
 normal finish: the pending gate must observe the advanced base in its worktree.
-When that rebase changes code or test paths, the downstream judged gates — `wiring_check`,
-`test_suite`, `build_review`, and (when they ran) `manual_test`, `prd_audit`,
+When that rebase changes code or test paths, the downstream judged gates — `test_suite`,
+`build_review`, and (when they ran) `manual_test`, `prd_audit`,
 `architecture_review_as_built` — are candidates for re-opening, because their verdicts graded the
 pre-rebase diff. Which ones actually re-open depends on the delta: each judged gate declares the
 surface its verdict depends on, and only a delta that lands inside that surface invalidates it.
@@ -786,7 +786,7 @@ surface its verdict depends on, and only a delta that lands inside that surface 
 | Gate | Depends on | Re-opened when the rebase delta touches |
 | --- | --- | --- |
 | `test_suite` | the whole tree | any code or test path, anywhere |
-| `wiring_check`, `manual_test` | all runtime source | any runtime source path, feature-owned or not |
+| `manual_test` | all runtime source | any runtime source path, feature-owned or not |
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
 | `prd_audit`, `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
@@ -874,8 +874,8 @@ placeholder until someone cleared it by hand.
 
 The kickback budget is durable for each gate: it survives daemon re-dispatch while the feature's
 tree hash and resolved-task count are unchanged. After the cap is exhausted, the daemon writes a
-HALT that names the gate, lap count, and most recent gate reason. `build_review`, `wiring_check`,
-and the kickback-ping-pong guard classify that halt `needs-human`, so the re-kick sweep never
+HALT that names the gate, lap count, and most recent gate reason. `build_review` and the
+kickback-ping-pong guard classify that halt `needs-human`, so the re-kick sweep never
 clears it. `test_suite`'s cap halt stays `mechanical` and can still be cleared by the re-kick sweep
 on a base-branch advance.
 

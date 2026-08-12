@@ -73,7 +73,7 @@ not a tuning knob.
 | `acceptance_specs` | opus | gpt-5.6-sol | medium | 3 | auto |
 | `build` | sonnet | gpt-5.6-terra | medium | 3 | auto |
 | `build_review` | opus | gpt-5.6-sol | high | 3 | conditional |
-| `wiring_check` | sonnet | gpt-5.6-terra | low | 3 | auto |
+| `wiring_check` | — | — | — | 1 | auto |
 | `test_suite` | sonnet | gpt-5.6-terra | low | 1 | auto |
 | `manual_test` | sonnet | gpt-5.6-terra | medium | 3 | auto |
 | `prd_audit` | opus | gpt-5.6-sol | high | 3 | conditional |
@@ -103,8 +103,9 @@ escalations. The floor is 3, not 2, because the model-bump rung lives at attempt
 | `manual` | The operator reviews before the run proceeds |
 | `conditional` | Auto-approved **unless** the skill wrote `.pipeline/review-required-<step>` (`src/conductor/src/types/config.ts:14-21`) |
 
-`wiring_check` and `test_suite` read `auto` because they produce deterministic evidence files with no
-generative verdict to review. See [artifacts](artifacts.md).
+`wiring_check` reads `auto` because it is a compatibility no-op. `test_suite` reads `auto` because
+it produces deterministic evidence with no generative verdict to review. See
+[artifacts](artifacts.md).
 
 ## Tier overrides
 

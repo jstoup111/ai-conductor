@@ -690,7 +690,8 @@ Consumed at `src/conductor/src/engine/conductor.ts:4149`.
 
 ## wiring
 
-Roots for the wiring-reachability gate's Layer 2 import-graph walk.
+Production roots supplied to `build_review`'s static wiring rubric. The engine does not run an
+import-graph probe or create a wiring-evidence artifact.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
@@ -698,19 +699,13 @@ Roots for the wiring-reachability gate's Layer 2 import-graph walk.
 | `wiring.entry_points` | string[] | Array of non-empty strings, else hard error | absent |
 
 > **Known limitation.** `wiring` carries no inner allow-list: keys other than `entry_points` pass
-> validation silently (`config.ts:747-765`), so a typo such as `entrypoints` is accepted and Layer 2
-> is skipped as if no roots were configured. This is looser than `retry_routing` and `conductor`,
+> validation silently (`config.ts:747-765`), so a typo such as `entrypoints` is accepted and the
+> wiring rubric receives no configured roots. This is looser than `retry_routing` and `conductor`,
 > which reject an unknown key outright. Tracked in
 > [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
-Layer 2 applicability (`resolveLayer2Applicability`, `src/conductor/src/engine/wiring-probe.ts:671-704`):
-
-| Condition | Result |
-| --- | --- |
-| No `tsconfig.json` and no `package.json` at the root | Not applicable; Layer 2 is off |
-| TypeScript markers present but `entry_points` absent or empty | Skipped, recorded in `layer2.reason`; **no gap, no block** |
-| A listed root does not exist on disk | `scope-undeterminable` gap on `(unscoped)`; **the gate blocks** |
-| All roots exist | Layer 2 runs; unreachable new exports become `orphan-export` gaps |
+When `entry_points` is absent or empty, the grader is instructed to mark the wiring item as
+not judged rather than infer roots. A configured root is rendered verbatim into the review prompt.
 
 ```yaml
 wiring:
@@ -947,10 +942,8 @@ that tree-hash witness and reverts to re-kicking until the cap. It does not disa
 per-gate cap, which still bounds unchanged cross-dispatch loops; the `planRemediation` guard is
 also not gated by this flag (`src/conductor/src/types/config.ts:302-308`).
 
-The same flag also gates the pre-dispatch refusal of a repeated no-op `wiring_check` kickback
-cycle: with `enabled: false`, an identical no-movement cycle re-dispatches `build` again instead of
-halting immediately. See [`.pipeline/build-outcome.json`](artifacts.md#core-state) and the
-[refused no-op wiring kickback runbook](../runbooks/stalled-or-stuck-feature.md#refused-no-op-wiring-kickback).
+The flag applies to active build kickbacks only. `wiring_check` is a deprecated compatibility no-op
+and never produces a kickback. See [`.pipeline/build-outcome.json`](artifacts.md#core-state).
 
 ## daemon_verbose
 

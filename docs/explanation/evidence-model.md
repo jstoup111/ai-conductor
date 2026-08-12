@@ -53,7 +53,7 @@ Evidence splits into two classes by where it lives, and the split is deliberate.
 | Class | Location | Committed? | Examples | Lifetime |
 | --- | --- | --- | --- | --- |
 | Spec artifacts | `.docs/` | yes | plans, stories, PRDs, ADRs, conflict and coherence records, retros, shipped records | forever, on the branch |
-| Run evidence | `.pipeline/` | no — gitignored | task status and evidence sidecar, gate verdicts, build review, wiring evidence, suite evidence, audit results | one worktree, one run |
+| Run evidence | `.pipeline/` | no — gitignored | task status and evidence sidecar, gate verdicts, build-review verdicts, suite evidence, audit results | one worktree, one run |
 
 Spec artifacts are the durable contract. They travel with the branch, they are what a reviewer reads, and
 they are the input the SHIP audits compare the built code against.
