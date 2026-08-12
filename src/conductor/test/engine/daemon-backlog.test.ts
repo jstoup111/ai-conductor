@@ -11,6 +11,7 @@ import {
   resolveStoriesRef,
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
+import { writeOperatorPark } from '../../src/engine/park-marker.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { parseComplexityTier } from '../../src/engine/artifacts.js';
 import {
@@ -612,6 +613,57 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.blocked).toEqual([]);
     expect(result.items).toEqual([]);
     expect(isOperatorParked).toHaveBeenCalledWith('operator-parked');
+  });
+
+  it('Task 13: parked and content-hash-shipped re-kick specs are skipped before blocked discovery without mutating their worktrees', async () => {
+    const parkedSlug = 'parked-rekick';
+    const shippedSlug = 'shipped-rekick';
+    const plan = planWithDeps(`.docs/stories/${shippedSlug}.md`);
+    for (const slug of [parkedSlug, shippedSlug]) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`),
+        slug === shippedSlug ? plan : planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      const pipeline = join(dir, '.worktrees', slug, '.pipeline');
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'REKICK'), 'rekick\n');
+      await writeFile(join(pipeline, 'HALT'), 'operator decision\n');
+    }
+    await writeOperatorPark(dir, parkedSlug);
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/shipped/original.md'),
+      renderShippedRecord({
+        slug: 'original',
+        specHash: specHash(Buffer.from(plan, 'utf-8'), Buffer.from(APPROVED_STORIES, 'utf-8')).digest,
+      }),
+    );
+    const before = await Promise.all(
+      [parkedSlug, shippedSlug].flatMap((slug) => [
+        fsReadFile(join(dir, '.worktrees', slug, '.pipeline', 'REKICK'), 'utf-8'),
+        fsReadFile(join(dir, '.worktrees', slug, '.pipeline', 'HALT'), 'utf-8'),
+      ]),
+    );
+    const sentinelProbe = vi.fn(async () => true);
+    const persistBlocked = vi.fn(async () => {});
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+      hasRekickSentinel: sentinelProbe,
+      writeBlockedSnapshot: persistBlocked,
+    });
+
+    expect({ items: result.items, blocked: result.blocked, probes: sentinelProbe.mock.calls }).toEqual({
+      items: [], blocked: [], probes: [],
+    });
+    expect(await Promise.all(
+      [parkedSlug, shippedSlug].flatMap((slug) => [
+        fsReadFile(join(dir, '.worktrees', slug, '.pipeline', 'REKICK'), 'utf-8'),
+        fsReadFile(join(dir, '.worktrees', slug, '.pipeline', 'HALT'), 'utf-8'),
+      ]),
+    )).toEqual(before);
+    await expect(fsReadFile(join(dir, '.daemon/parked', parkedSlug), 'utf-8')).resolves.toContain('operator');
+    await expect(fsReadFile(join(dir, '.worktrees', parkedSlug, '.pipeline', 'REKICK'), 'utf-8')).resolves.toBe('rekick\n');
+    expect(persistBlocked).toHaveBeenCalledWith([]);
   });
 
   it('excludes an otherwise eligible spec when its durable marker has automatic provenance', async () => {

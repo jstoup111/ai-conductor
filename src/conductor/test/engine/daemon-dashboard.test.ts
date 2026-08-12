@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -445,6 +445,92 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       { slug: 'stranded-rekick', reason: 'no blocking gate identified' },
     ]);
     expect(state.inProgress).toEqual([]);
+  });
+
+  it('Task 13: park, halt, and processed states outrank a re-kick sentinel without dashboard side effects', async () => {
+    const processedSlug = 'processed-rekick';
+    const haltedSlug = 'halted-rekick';
+    const parkedSlug = 'parked-rekick';
+    for (const slug of [processedSlug, haltedSlug, parkedSlug]) {
+      await makeStateful(slug, { build: 'in_progress' });
+      await makeRekick(slug);
+    }
+    await makeProcessed(processedSlug);
+    await makeHalted(haltedSlug, 'operator decision\n');
+    await makeHalted(parkedSlug, 'operator decision\n');
+    await writeOperatorPark(root, parkedSlug);
+    const paths = [
+      join(worktreeBase, processedSlug, '.pipeline', 'REKICK'),
+      join(worktreeBase, haltedSlug, '.pipeline', 'REKICK'),
+      join(worktreeBase, haltedSlug, '.pipeline', 'HALT'),
+      join(worktreeBase, parkedSlug, '.pipeline', 'REKICK'),
+      join(worktreeBase, parkedSlug, '.pipeline', 'HALT'),
+      join(root, '.daemon', 'parked', parkedSlug),
+    ];
+    const before = await Promise.all(paths.map((path) => readFile(path, 'utf-8')));
+    const discover = vi.fn(async () => []);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover,
+      readBlocked: async () => ({
+        kind: 'ok' as const,
+        snapshot: {
+        schemaVersion: 1 as const,
+        writtenAt: new Date().toISOString(),
+          blocked: [
+            { slug: processedSlug, reason: 'missing-coherence', remedy: 'write coherence', strandedRekick: true },
+            { slug: haltedSlug, reason: 'missing-coherence', remedy: 'write coherence', strandedRekick: true },
+            { slug: parkedSlug, reason: 'missing-coherence', remedy: 'write coherence', strandedRekick: true },
+          ],
+        },
+      }),
+    });
+    const output = renderDashboard({
+      ...state,
+      parked: (await isOperatorParked(root, parkedSlug)) ? [parkedSlug] : [],
+    }, { includeCompleted: true });
+
+    expect({
+      processed: state.processed,
+      retained: state.retainedWorktrees,
+      halted: state.halted,
+      blocked: state.blocked,
+      stranded: state.stranded,
+      inProgress: state.inProgress,
+      discoveryCalls: discover.mock.calls.length,
+    }).toEqual({
+      processed: [{ slug: processedSlug, prUrl: undefined }],
+      retained: [{ slug: processedSlug, reason: 'shipped-no-pr-reference', prUrl: undefined }],
+      halted: [
+        { slug: haltedSlug, reason: 'operator decision', step: 'build' },
+        { slug: parkedSlug, reason: 'operator decision', step: 'build' },
+      ],
+      blocked: [],
+      stranded: [],
+      inProgress: [],
+      discoveryCalls: 1,
+    });
+    expect({
+      parked: output.includes(
+        `PARKED (1)\n  • ${parkedSlug} — operator-parked; remedy: run conduct daemon unpark for this row`,
+      ),
+      parkedOutsideParked: output.slice(output.indexOf('HALTED')).includes(`• ${parkedSlug}`),
+      processedStranded: output.includes(`• ${processedSlug} — no blocking gate identified`),
+      haltedStranded: output.includes(`• ${haltedSlug} — no blocking gate identified`),
+      worktreeExists: await Promise.all(
+        [processedSlug, haltedSlug, parkedSlug].map((slug) => readFile(join(worktreeBase, slug, '.pipeline', 'REKICK'), 'utf-8')),
+      ),
+      unchanged: await Promise.all(paths.map((path) => readFile(path, 'utf-8'))),
+    }).toEqual({
+      parked: true,
+      parkedOutsideParked: false,
+      processedStranded: false,
+      haltedStranded: false,
+      worktreeExists: ['rekick\n', 'rekick\n', 'rekick\n'],
+      unchanged: before,
+    });
   });
 
   it('keeps a worktree without REKICK outside every discovery group in progress', async () => {
