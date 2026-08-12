@@ -137,28 +137,30 @@ You can also run that command directly before bootstrap. It creates
 `.ai-conductor/config.yml` from the project-safe template and preserves an existing file
 byte-for-byte. See [reference/configuration.md](reference/configuration.md).
 
-## Run your first feature
+## Run your first feature with the daemon
 
 ```bash
-conduct-ts inline "add a CSV export to the reporting page"
+conduct-ts engineer --idea "add a CSV export to the reporting page"
 ```
 
-The `inline` subcommand is **mandatory**. A bare invocation is rejected:
+The engineer authors the DECIDE artifacts in an isolated worktree and opens a spec PR. Review and
+merge that PR, then start the daemon:
 
-```text
-conduct: the inline SDLC pipeline now runs under the `inline` subcommand.
-  Run:        conduct inline "<feature description>"
-  State ops:  conduct inline --status | --resume | --report | --diagnose | …
-  All commands: conduct --help
+```bash
+conduct-ts daemon start
 ```
 
-The run creates `.pipeline/`, writes `.claude/settings.json` if absent, and streams a dashboard as
-it walks the steps. It checkpoints for your approval at gate boundaries; `--auto` runs unattended
-and `--interactive` opens a REPL at every conversational step (the two are mutually exclusive).
-Flags are enumerated in [reference/cli.md](reference/cli.md).
+The daemon drains merged specs, builds each feature in an isolated worktree, retains its logs, and
+opens an implementation PR. Watch it with `conduct-ts daemon logs --follow` or check it with
+`conduct-ts daemon status`.
 
-For the full idea → spec PR → daemon build → implementation PR path, continue to
-[first feature](guides/first-feature.md).
+Continue with [first feature](guides/first-feature.md) for the complete idea → spec PR → daemon
+build → implementation PR walkthrough.
+
+For a supervised foreground run, use
+`conduct-ts inline --interactive "add a CSV export to the reporting page"`. The foreground
+`--auto` mode is deprecated; use the daemon for unattended work. Inline flags are enumerated in
+[reference/cli.md](reference/cli.md).
 
 ## First-run blockers
 

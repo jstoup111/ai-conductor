@@ -125,9 +125,11 @@ tool, delegation, credentials, or success result. A supported provider-native al
 valid path even when it differs from the other host's mechanism, and must proceed without a false
 unsupported-capability rejection.
 
-**Start here:** Two ways to run the flow:
-- **Interactive:** Run `/conduct` inside Claude Code to be guided step-by-step
-- **Automated:** Run `conduct-ts inline "feature description"` from your terminal for minimal intervention
+**Start here:** Prefer the daemon for autonomous work:
+- **Automated:** Author and merge a spec with `conduct-ts engineer`, then run `conduct-ts daemon start`
+- **Interactive:** Run `/conduct` inside Claude Code or `conduct-ts inline --interactive "feature description"`
+
+The foreground `conduct-ts inline --auto` mode is deprecated; use the daemon for unattended runs.
 
 ## Agent Personas
 
