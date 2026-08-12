@@ -95,6 +95,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_infrastructure_failure',
   'build_review_outer_verdict',
   'loop_halt',
+  'halt_marker_write_failed',
   'rebase_conflict_halt',
 ] satisfies Array<ConductorEvent['type']>;
 
