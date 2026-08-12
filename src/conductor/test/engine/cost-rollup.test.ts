@@ -122,6 +122,26 @@ describe('engine/cost-rollup', () => {
     expect(rollup.unmetered).toEqual({ count: 0, durationMs: 0 });
   });
 
+  it('counts a persisted loop_halt record from the local event ledger', async () => {
+    await writeEvents([
+      JSON.stringify({ type: 'loop_halt', reason: 'retry budget exhausted' }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.halts).toBe(1);
+  });
+
+  it('leaves halts at zero when the local event ledger has no loop_halt record', async () => {
+    await writeEvents([
+      JSON.stringify({ type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'tests failed' }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.halts).toBe(0);
+  });
+
   it('attributes every provider attempt without double-counting successful step totals', async () => {
     await writeEvents([
       JSON.stringify({
