@@ -3146,6 +3146,7 @@ export class Conductor {
         readText: (p) => this.readTextOrNull(p),
         versionFreeze,
         changedFiles: () => this.selfBuildChangedFiles(),
+        writeHalt: (projectRoot, reason) => writeSelfHostHalt(projectRoot, reason, this.events),
       });
       if (!verdict.ok) return verdict;
     }
@@ -3165,6 +3166,7 @@ export class Conductor {
         readText: (p) => this.readTextOrNull(p),
         changedFiles: () => this.selfBuildChangedFiles(),
         releaseMetadata: releaseMetadata.value,
+        writeHalt: (projectRoot, reason) => writeSelfHostHalt(projectRoot, reason, this.events),
       });
       if (!verdict.ok) return verdict;
     }
