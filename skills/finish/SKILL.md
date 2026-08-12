@@ -39,12 +39,10 @@ publication *mechanics* are the coordinator's.
 ### 1. Fresh Verification
 
 Before any provider receives FINISH work, the coordinator uses the engine's
-configured aggregate verifier for current completion evidence. A newly run
-verifier that passes produces an **EXECUTED** outcome; a valid current passing
-result produces a **REUSED** outcome. When evidence is missing or stale, the
-verifier obtains the required current result. A previous session's report,
-marker, or provider response does not substitute for current repository and
-external evidence.
+configured aggregate verifier for current completion evidence. It reuses a
+current passing result; when evidence is missing or stale, the verifier obtains
+the required current result. A previous session's report, marker, or provider
+response does not substitute for current repository and external evidence.
 
 When that verifier exits non-zero, the coordinator **STOP**s before any choice
 or options and leaves `.pipeline/finish-choice` unwritten. It preserves the
