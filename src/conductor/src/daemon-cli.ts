@@ -340,9 +340,7 @@ interface HaltClassMigrationStartupDeps {
  * file (via the `opts.runHaltClassMigration ?? runOwnedHaltClassMigration`
  * DI-seam default just below), and its unit tests drive it through that seam
  * (`runDaemonMode({ runHaltClassMigration: ... })`) rather than importing it
- * directly — an exported-but-only-test-imported symbol otherwise trips the
- * wiring-reachability gate's orphan backstop even though the seam is
- * genuinely wired (see wiring-probe.ts's `orphanBackstop`).
+ * directly.
  */
 async function runOwnedHaltClassMigration(
   lock: object | null,

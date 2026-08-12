@@ -293,7 +293,6 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
 import { makeProductionGh, makeProductionGit, prMergeState, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
-import { computeWiringEvidence } from './wiring-probe.js';
 import {
   createTaskEvidence,
   type TaskEvidence,
@@ -1564,24 +1563,6 @@ export class Conductor {
       gh: this.gh,
       repairFinishPr,
       releaseMetadataPreservationRequired: this.releaseDispositionFlowActive(),
-      // Live wiring-reachability probe (Task 18): computes fresh
-      // WiringEvidence via wiring-probe.ts's orchestrator when the
-      // wiring_check predicate finds no pre-existing evidence fixture,
-      // mirroring the isHeadPushed injection above (real work behind a
-      // thin closure over this.git/this.projectRoot/this.config). No
-      // plan anchor is threaded through completionCtx elsewhere in this
-      // engine, so '' is passed — computeWiringEvidence's base-derivation
-      // ladder falls through to the origin-ref/fork-point/merge-base
-      // rungs, same as every other anchor-less caller of runWiringProbe.
-      wiringProbe: () =>
-        computeWiringEvidence({
-          runGit: this.git,
-          projectRoot: this.projectRoot,
-          planPath,
-          config: this.config,
-          gh: this.gh,
-          anchor: '',
-        }),
       fullSuiteInspect: async () => {
         const retained = this.retainedFullSuiteInspection;
         this.retainedFullSuiteInspection = undefined;
