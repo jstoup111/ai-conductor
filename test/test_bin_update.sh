@@ -1129,6 +1129,22 @@ run_update "$REPO" "$HOME_DIR"
 assert "checked-out tag wins over forward-looking recorded version" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
 assert "checked-out tag repairs recorded tagged identity" "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
 
+# A checkout that has advanced past the newest released tag must report that
+# drift, without offering to change the checkout or prompting for consent.
+REPO=$(make_repo "i17-post-release-newest")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" commit -q --allow-empty -m "post-release one"
+git -C "$REPO" commit -q --allow-empty -m "post-release two"
+HOME_DIR=$(make_isolated_home)
+BEFORE_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+run_update "$REPO" "$HOME_DIR"
+assert "post-release newest tag: reports distance and baseline without prompting" \
+  "$([ "$CODE" -eq 0 ] && [ -n "$OUT" ] && case "$OUT" in *"2 commits past v0.4.0"*) true;; *) false;; esac && case "$OUT" in *"Update to"*) false;; *) true;; esac && echo 0 || echo 1)"
+assert "post-release newest tag: stamps lastCheckedAt" "$([ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
+assert "post-release newest tag: leaves HEAD unchanged" "$([ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && echo 0 || echo 1)"
+
 # A checkout between release tags with neither an exact tag nor a previously
 # recorded tagged identity cannot safely compare releases. It must report that
 # status as unverifiable instead of seeding from the latest remote tag.

@@ -146,6 +146,12 @@ check_harness_update_tagged() {
     conductor_cfg_set currentVersion "$baseline"
   fi
 
+  if [ "$_identity_kind" = "post-release" ] && [ "$baseline" = "$latest_tag" ]; then
+    warn "${_distance} commits past ${baseline}, no newer release exists"
+    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    return 0
+  fi
+
   if ! semver_lt "$baseline" "$latest_tag"; then
     conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     return 0
