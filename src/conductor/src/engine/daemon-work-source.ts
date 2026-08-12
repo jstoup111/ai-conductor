@@ -65,6 +65,7 @@ export interface LocalWorkSourceDeps {
    */
   featureWorktreePresent?: DiscoverBacklogOpts['featureWorktreePresent'];
   finishOutcomeRecorded?: DiscoverBacklogOpts['finishOutcomeRecorded'];
+  hasRekickSentinel?: DiscoverBacklogOpts['hasRekickSentinel'];
   fastForwardRoot: (root: string, log: (m: string) => void) => Promise<unknown>;
   discoverBacklog: (
     root: string,
@@ -181,6 +182,9 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
             : {}),
           ...(deps.finishOutcomeRecorded
             ? { finishOutcomeRecorded: deps.finishOutcomeRecorded }
+            : {}),
+          ...(deps.hasRekickSentinel
+            ? { hasRekickSentinel: deps.hasRekickSentinel }
             : {}),
           ...gateOpts,
         },

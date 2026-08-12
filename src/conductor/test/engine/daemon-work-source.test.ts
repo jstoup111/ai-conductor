@@ -297,6 +297,54 @@ describe('localWorkSource — owner-gate deps thread into discoverBacklog opts',
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Re-kick sentinel threading (Task 5): discovery needs the injected probe to
+// distinguish a stranded re-kick from an active feature. Its absence preserves
+// the legacy options shape.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('localWorkSource — re-kick sentinel probe threads into discoverBacklog opts', () => {
+  function baseDeps(overrides: Record<string, unknown> = {}) {
+    let capturedOpts: Record<string, unknown> | undefined;
+    const deps = {
+      projectRoot: '/repo',
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {}),
+      discoverBacklog: vi.fn(async (_r: string, _p: unknown, _l: unknown, opts: unknown) => {
+        capturedOpts = opts as Record<string, unknown>;
+        return { items: [], waiting: [], gated: [] };
+      }),
+      ...overrides,
+    };
+    return { deps, getOpts: () => capturedOpts };
+  }
+
+  it('forwards hasRekickSentinel when the probe is supplied', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+    const hasRekickSentinel = vi.fn().mockResolvedValue(false);
+    const { deps, getOpts } = baseDeps({ hasRekickSentinel });
+
+    await localWorkSource(deps).discover({ refresh: false });
+
+    expect(getOpts()!.hasRekickSentinel).toBe(hasRekickSentinel);
+  });
+
+  it('omits hasRekickSentinel when the probe is not supplied', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+    const { deps, getOpts } = baseDeps();
+
+    await localWorkSource(deps).discover({ refresh: false });
+
+    expect('hasRekickSentinel' in getOpts()!).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Fresh per-pass resolution (Task 18 / FR-14): the daemon owner is resolved on
 // EVERY discover() pass — there is no cross-pass cache. A reconfigured identity
 // takes effect on the next pass.
