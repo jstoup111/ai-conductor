@@ -79,6 +79,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'finish_publication_blocked',
   'finish_publication_disposition',
   'kickback',
+  'deprecated_step',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -132,6 +133,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'finish_publication_transition',
   'finish_publication_blocked',
   'finish_publication_disposition',
+  'deprecated_step',
   ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -294,8 +296,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 72 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(72);
+  it('is total over all 73 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(73);
   });
 
   it('routes verdict_freshness to every sink', () => {

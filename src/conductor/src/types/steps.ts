@@ -96,6 +96,11 @@ export interface StepDefinition {
    * — they can never be disabled. Built-ins: manual_test.
    */
   configDisableAllowed?: boolean;
+  /**
+   * Retained compatibility step that performs no work. The conductor emits a
+   * spine notice whenever it executes so operators can see the deprecation.
+   */
+  deprecated?: { adr: string };
 }
 
 /**

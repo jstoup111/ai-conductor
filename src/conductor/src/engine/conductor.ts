@@ -149,9 +149,6 @@ import {
   BUILD_REVIEW_VERDICT,
   buildReviewFailureDetails,
   validateBuildReviewVerdict,
-  WIRING_EVIDENCE,
-  validateWiringEvidence,
-  type WiringEvidence,
   FINISH_CHOICE_MARKER,
   type RemediationGap,
   type CompletionContext,
@@ -203,11 +200,8 @@ const execFileAsync = promisify(execFile);
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import {
   classifyBuildSettle,
-  composeBuildOutcomeHaltReason,
-  latestBuildOutcome,
   readBuildOutcome,
   resolveBuildOutcomeCategory,
-  sameNoOpCycle,
   writeBuildOutcome,
 } from './build-outcome.js';
 import type { BuildOutcomeRung, BuildOutcomeStore } from './build-outcome.js';
@@ -298,7 +292,6 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner, type GhRunner } from './owner-gate/identity.js';
 import { makeProductionGh, makeProductionGit, prMergeState, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
-import { computeWiringEvidence } from './wiring-probe.js';
 import {
   createTaskEvidence,
   type TaskEvidence,
@@ -437,22 +430,19 @@ const AGENT_DISPATCHING_ENGINE_NATIVE_STEPS: ReadonlySet<StepName> = new Set<Ste
  * True for a step the engine computes ENTIRELY in-process: declared
  * `kind: 'engine-native'` in STEP_SKILL_INVOCATIONS (so `renderSkillInvocation`
  * throws for it and no agent is ever dispatched) and not one of the
- * LLM-dispatching engine-native steps above. Today: `wiring_check` and
- * `test_suite`.
+ * LLM-dispatching engine-native steps above. Today: `test_suite`.
  *
  * Such a step is a deterministic function of the tree it runs against, so
  * re-running it over an unchanged tree cannot produce a different answer — every
- * retry is guaranteed waste. Observed on a live daemon (#982): wiring_check
- * failed three times with a byte-identical message in 357ms, then terminally
- * failed and cost a full build + build_review cycle. These steps get a retry
- * budget of ONE: they run, they are judged, they are done. A genuine failure
- * still routes exactly as before (kickback / recovery menu) — just immediately,
- * instead of after two redundant recomputations.
+ * retry is guaranteed waste. These steps get a retry budget of ONE: they run,
+ * they are judged, and they are done. A genuine failure still routes exactly as
+ * before (kickback / recovery menu) — just immediately, instead of after two
+ * redundant recomputations.
  */
 export function isEngineComputedStep(step: StepName): boolean {
   return (
     Object.prototype.hasOwnProperty.call(STEP_SKILL_INVOCATIONS, step) &&
-    STEP_SKILL_INVOCATIONS[step].kind === 'engine-native' &&
+    STEP_SKILL_INVOCATIONS[step]?.kind === 'engine-native' &&
     !AGENT_DISPATCHING_ENGINE_NATIVE_STEPS.has(step)
   );
 }
@@ -1572,24 +1562,6 @@ export class Conductor {
       gh: this.gh,
       repairFinishPr,
       releaseMetadataPreservationRequired: this.releaseDispositionFlowActive(),
-      // Live wiring-reachability probe (Task 18): computes fresh
-      // WiringEvidence via wiring-probe.ts's orchestrator when the
-      // wiring_check predicate finds no pre-existing evidence fixture,
-      // mirroring the isHeadPushed injection above (real work behind a
-      // thin closure over this.git/this.projectRoot/this.config). No
-      // plan anchor is threaded through completionCtx elsewhere in this
-      // engine, so '' is passed — computeWiringEvidence's base-derivation
-      // ladder falls through to the origin-ref/fork-point/merge-base
-      // rungs, same as every other anchor-less caller of runWiringProbe.
-      wiringProbe: () =>
-        computeWiringEvidence({
-          runGit: this.git,
-          projectRoot: this.projectRoot,
-          planPath,
-          config: this.config,
-          gh: this.gh,
-          anchor: '',
-        }),
       fullSuiteInspect: async () => {
         const retained = this.retainedFullSuiteInspection;
         this.retainedFullSuiteInspection = undefined;
@@ -3803,19 +3775,6 @@ export class Conductor {
       const ledger = await readKickbackLedger(this.projectRoot);
       const ctx = ledger.gates[sourceGate];
       if (!ctx || ctx.priorVerdict) return { halt: false };
-      const [outcomes, treeHash] = await Promise.all([
-        readBuildOutcome(this.projectRoot),
-        currentTreeHash(this.projectRoot),
-      ]);
-      const priorOutcome = latestBuildOutcome(outcomes);
-      if (kickbackEscalationEnabled && sourceGate === 'wiring_check' && sameNoOpCycle(priorOutcome, {
-        gate: sourceGate,
-        treeHash,
-        verdict: false,
-        rung: currentBuildRung(),
-      })) {
-        return { halt: true, reason: composeBuildOutcomeHaltReason(priorOutcome!, sourceGate) };
-      }
       // Consume the baseline before checking it. A later, unrelated failure
       // must not reuse this one even if the current check throws or halts.
       await writeKickbackLedger(this.projectRoot, {
@@ -4677,7 +4636,7 @@ export class Conductor {
                 const member = membership.dispatchable[idx]!;
                 const outcome = outcomes[idx];
                 if (
-                  (member.name !== 'wiring_check' && member.name !== 'test_suite') ||
+                  member.name !== 'test_suite' ||
                   outcome?.kind !== 'verdict' ||
                   outcome.verdict !== 'pass' ||
                   !gateVerdicts.get(member.name)?.satisfied
@@ -4696,14 +4655,12 @@ export class Conductor {
                 }
                 await emitTracked({
                   type: 'build_member_evidence_recomputed',
-                  member: member.name,
+                  member: 'test_suite',
                   decision: 'recompute',
-                  basis: member.name === 'wiring_check'
-                    ? 'recorded-head-versus-current-head'
-                    : verification?.status === 'EXECUTED' &&
-                        verification.freshness.reason === 'fingerprint_mismatch'
-                      ? 'fingerprint-mismatch'
-                      : 'fresh-evidence-required',
+                  basis: verification?.status === 'EXECUTED' &&
+                      verification.freshness.reason === 'fingerprint_mismatch'
+                    ? 'fingerprint-mismatch'
+                    : 'fresh-evidence-required',
                 });
               }
             }
@@ -4739,32 +4696,15 @@ export class Conductor {
                     : outcomes[failureIdx]!.kind === 'no-verdict'
                       ? (outcomes[failureIdx] as NoVerdictOutcome).reason
                     : (gateVerdicts.get(membership.dispatchable[failureIdx]!.name)?.reason ??
-                      'deterministic BUILD verification gate unsatisfied')
-                      .replace(/^wiring-reachability gaps found:\n/, ''),
+                      'deterministic BUILD verification gate unsatisfied'),
                 });
               }
-              const wiringFailure = deterministicFailures.find(
-                (failure) => failure.member.name === 'wiring_check',
-              );
               const testSuiteFailure = deterministicFailures.find(
                 (failure) => failure.member.name === 'test_suite',
               );
               const remediationRecord = testSuiteFailure && fullSuiteFailure?.status === 'FAILED'
                 ? await this.recordTestSuiteRebaseRepair(fullSuiteFailure)
                 : undefined;
-              if (wiringFailure) {
-                const escalation = await checkKickbackToBuildEscalation('wiring_check');
-                if (escalation.halt) {
-                  const reason = `wiring_check kickback-to-build no-op: ${escalation.reason}`;
-                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
-                  process.off('SIGINT', sigintHandler);
-                  if (!this.daemon) process.off('SIGTERM', sigterm);
-                  return;
-                }
-              }
               const kickbacks = [] as Awaited<ReturnType<typeof consumeKickbackBudget>>[];
               for (const failure of deterministicFailures) {
                 kickbacks.push(
@@ -5362,6 +5302,13 @@ export class Conductor {
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
         await emitTracked({ type: 'step_started', step: step.name, index: i });
+        if (step.deprecated && step.name !== 'wiring_check') {
+          await emitTracked({
+            type: 'deprecated_step',
+            step: step.name,
+            adr: step.deprecated.adr,
+          });
+        }
 
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
@@ -5499,6 +5446,10 @@ export class Conductor {
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
         let unchangedInputNote: string | undefined;
+        // An incompatible build-review verdict is a stable schema failure,
+        // not an exhausted-work retry. Keep its validator diagnostic for the
+        // terminal HALT instead of replacing it with the generic fallback.
+        let buildReviewSchemaFailureReason: string | undefined;
         // #569 Task 5: set when a build stall is diagnosed as no_task_progress —
         // consulted at the terminal fallback below to give the operator a
         // distinct, actionable HALT reason instead of the generic
@@ -5811,6 +5762,8 @@ export class Conductor {
                   ? await this.runWorktreeStep(state)
                   : step.name === 'rebase'
                       ? await this.runRebaseStep(state)
+                      : step.name === 'wiring_check'
+                        ? await this.runWiringCheckStep(state)
                       : step.name === 'test_suite'
                         ? await this.runTestSuiteStep()
                         : step.name === 'finish' && this.finishPublication
@@ -6362,6 +6315,12 @@ export class Conductor {
 
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
+              if (
+                step.name === 'build_review' &&
+                completion.reason?.startsWith(`${BUILD_REVIEW_VERDICT} `)
+              ) {
+                buildReviewSchemaFailureReason = completion.reason;
+              }
               finishPresentationDefect =
                 step.name === 'finish' && completion.missing === 'presentation'
                   ? (completion.reason ?? 'PR presentation is not a /pr-authored body')
@@ -7413,119 +7372,6 @@ export class Conductor {
               }
             }
 
-            // wiring_check kickback (Task 10 / Task 18): a gap-carrying
-            // evidence file at WIRING_EVIDENCE means newly-built code isn't
-            // reachable/wired in yet — an implementation gap by definition,
-            // same shape as a build_review FAIL. Route back to BUILD with the
-            // gap messages as the retry hint. Uses the durable kickback ledger
-            // keyed by 'wiring_check' (the same anti-ping-pong mechanism
-            // the gate-driven tail uses for other gates), bounded by
-            // MAX_KICKBACKS_PER_GATE like the other self-heal loops — kickback
-            // only, never an unconditional HALT until the cap is exceeded.
-            //
-            // NOT daemon-gated (unlike build_review's otherwise-identical
-            // block): the non-daemon execution-boundary case in
-            // test/wiring-gate-loop.test.ts drives a plain mode:'auto'
-            // Conductor and asserts the kickback fires there too —
-            // wiring_check's evidence is deterministically
-            // computed (no LLM grader session to gate behind daemon
-            // autonomy), so there's no reason to withhold the self-heal in
-            // interactive/non-daemon runs the way build_review's judgement
-            // gate does.
-            if (step.name === 'wiring_check') {
-              let evidenceRaw: unknown = null;
-              try {
-                evidenceRaw = JSON.parse(
-                  await readFile(join(this.projectRoot, WIRING_EVIDENCE), 'utf-8'),
-                );
-              } catch {
-                /* missing/unreadable — falls through to generic HALT below */
-              }
-              const validated =
-                evidenceRaw !== null ? validateWiringEvidence(evidenceRaw) : null;
-              const evidence = evidenceRaw as WiringEvidence | null;
-              // Prefer the fully-validated schema (real evidence written by
-              // the wiring_check predicate/probe); fall back to a lenient
-              // top-level "gaps" array read when the file doesn't parse as a
-              // complete WiringEvidence but still names gap messages — the
-              // kickback's job is to surface whatever gap text is on disk,
-              // not to re-enforce full artifact validity (that's the
-              // completion predicate's job).
-              let gapMessages: string[] = [];
-              if (validated?.ok && evidence) {
-                gapMessages = evidence.tasks.flatMap((task) => task.gaps.map((g) => g.message));
-              } else if (
-                evidenceRaw !== null &&
-                typeof evidenceRaw === 'object' &&
-                Array.isArray((evidenceRaw as Record<string, unknown>).gaps)
-              ) {
-                gapMessages = ((evidenceRaw as Record<string, unknown>).gaps as unknown[])
-                  .filter(
-                    (g): g is { message: string } =>
-                      typeof g === 'object' && g !== null && typeof (g as { message?: unknown }).message === 'string',
-                  )
-                  .map((g) => g.message);
-              }
-              if (gapMessages.length > 0) {
-                const evidenceText = gapMessages.join('\n');
-                // D2: a wiring_check gap that re-enters right after a prior
-                // kickback-to-build cycle made zero net progress escalates to
-                // HALT on this cycle instead of spending another kickback
-                // toward the cap.
-                const escalation = await checkKickbackToBuildEscalation('wiring_check');
-                if (escalation.halt) {
-                  const reason = `wiring_check kickback-to-build no-op: ${escalation.reason}`;
-                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
-                  process.off('SIGINT', sigintHandler);
-                  process.off('SIGTERM', sigterm);
-                  return;
-                }
-                const kickback = await consumeKickbackBudget('wiring_check', evidenceText);
-                const count = kickback.entry.count;
-                if (!kickback.exhausted) {
-                  await emitTracked({
-                    type: 'kickback',
-                    from: 'wiring_check',
-                    to: 'build',
-                    evidence: evidenceText,
-                    count,
-                  });
-                  pendingRetryHints.set(
-                    'build',
-                    `wiring_check found unreachable/undeclared code:\n${evidenceText}\nFix ` +
-                      `the flagged gap(s) in build, then COMMIT — wiring_check re-runs after ` +
-                      `this build.`,
-                  );
-
-                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
-                    return;
-                  }
-                  await captureKickbackToBuildContext('wiring_check');
-                  const navigationIndex = await this.navigateStateBack(state, 'build', steps);
-                  // markDownstreamStale only restages `done` steps; wiring_check
-                  // is `failed` here, so restage it (and manual_test) explicitly
-                  // for the tail.
-                  await this.commitStateChanges(state, 'restage wiring_check after BUILD kickback', {
-                    wiring_check: 'stale', manual_test: 'stale',
-                  });
-                  i = navigationIndex - 1; // for-loop i++ lands on build
-                  continue;
-                }
-                const reason =
-                  `wiring_check gap unresolved after ${count} build kickback(s) ` +
-                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
-                await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                const prUrl = await this.surfaceRemediationPr(reason);
-                await emitTracked({ type: 'loop_halt', reason, prUrl });
-                process.off('SIGINT', sigintHandler);
-                return;
-              }
-            }
-
             // Task 8: Stall remediation with error handling for degraded exits.
             // When a build stall is detected (stallQuestion is set), attempt to dispatch
             // /remediate to get the answer. Wrap in try/catch to handle dispatch throws,
@@ -7973,6 +7819,8 @@ export class Conductor {
                         ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
                         : unchangedInputNote
                           ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                          : buildReviewSchemaFailureReason
+                            ? buildReviewSchemaFailureReason
                           : `step '${step.name}' failed in auto mode (retries exhausted)`;
             if (!existingHalt || existingHalt.trim().length === 0) {
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
@@ -8517,7 +8365,13 @@ export class Conductor {
   }
 
   private async runWiringCheckStep(state: ConductState): Promise<StepRunResult> {
-    return this.stepRunner.run('wiring_check', state);
+    await this.events.emit({
+      type: 'deprecated_step',
+      step: 'wiring_check',
+      adr: 'adr-2026-08-11-wiring-judged-in-build-review',
+    });
+    void state;
+    return { success: true };
   }
 
   /**
@@ -8640,12 +8494,11 @@ export class Conductor {
         await this.events.emit({ type: 'loop_halt', reason });
         return 'halt';
       }
-      // FR-5: a file-changing rebase invalidated build (+wiring_check,
-      // +test_suite, +build_review, +manual_test) via kickback-shaped verdicts. Those
+      // FR-5: a file-changing rebase invalidated build (+test_suite,
+      // +build_review, +manual_test) via kickback-shaped verdicts. Those
       // gates aren't `kickbackTarget` steps, so emit the kickback event(s)
-      // here; the selector below routes back to them. wiring_check and
-      // test_suite form the deterministic BUILD group before build_review;
-      // every invalidated member must re-verify before review or SHIP.
+      // here; the selector below routes back to them. test_suite re-verifies
+      // before build_review judges the refreshed build.
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
         // Task 7 (ADR-2026-07-20): a judged gate that classifyGateInvalidation
@@ -8675,12 +8528,11 @@ export class Conductor {
         // them here, their step STATE never flips back to `pending` — the
         // verdict alone re-opens the gate's own predicate, but the selector
         // still sees `done` and never re-dispatches. Order matches the
-        // ALL_STEPS tail (wiring_check → test_suite → build_review →
+        // ALL_STEPS tail (test_suite → build_review →
         // manual_test → prd_audit →
         // architecture_review_as_built).
         for (const target of [
           'build',
-          'wiring_check',
           'test_suite',
           'build_review',
           'manual_test',

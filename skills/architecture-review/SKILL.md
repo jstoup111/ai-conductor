@@ -297,8 +297,8 @@ scheduled job, CLI subcommand, etc.), state at design time where/how it will be 
 in production — e.g. "invoked from the daemon loop's step dispatcher," "wired into
 `conduct-ts`'s command table," "consumed by the existing event bus subscriber in
 `src/x.ts`." This is a design-time commitment, not a code citation — no `file:line` is
-required yet since the code doesn't exist. It is the precursor `/plan` later derives its
-`Wired-into:` contract from for each task.
+required yet since the code doesn't exist. It informs the review's feasibility and overlap
+analysis; it is not a per-task plan contract.
 
 This is **DESIGN-TIME ONLY**. It does not affect, duplicate, or substitute for the §12
 As-Built Compliance Gate's production reachability sweep, which independently verifies the
@@ -374,6 +374,13 @@ runs; in interactive runs it runs serially, after `/prd-audit` and before `/retr
 it does **no** new design, creates no new feasibility/complexity assessment, and reuses the drift
 logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
 
+**Relationship to BUILD-time judgement:** [ADR: Wiring reachability becomes a
+`build_review` rubric item](../../.docs/decisions/adr-2026-08-11-wiring-judged-in-build-review.md)
+moves the static reachability judgement to the every-tier BUILD gate. This §12 sweep is
+unchanged: when it runs at SHIP, it independently verifies the approved architecture against
+the shipped source and remains authoritative for the SHIP compliance verdict. It does not rely
+on BUILD proof as authority.
+
 **Scope (only this):**
 - Load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`) and the approved
   architecture diagrams (`.docs/architecture/`). DRAFT/SUPERSEDED ADRs are not authoritative and
@@ -388,9 +395,9 @@ logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
   primitive's own module do not count as callers, except for the narrow same-file composition
   case below.
   - **Narrow same-file composition exception.** Independently verify the complete **root-to-caller-to-export** chain in the current shipped source: a configured production
-    entry point reaches the defining module through non-test edges; the task's declared caller in
-    that module is the exact caller implementation; and that implementation references the exact
-    changed export. Cite the root/module chain and caller-to-export reference as `file:line`.
+    entry point reaches the defining module through non-test edges; an actual production caller in
+    that module references the exact changed export. Derive that caller from current source rather
+    than from a plan declaration. Cite the root/module chain and caller-to-export reference as `file:line`.
     A same-file exception passes only with an exact caller-to-export reference and a production-entry-point root chain.
     An own-module caller alone, module reachability alone, or a name/text match alone does not count.
     This exception never permits a dead helper, a test-only path, a shadowed binding, or an

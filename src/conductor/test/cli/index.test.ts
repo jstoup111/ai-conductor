@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { execa } from 'execa';
+import { join } from 'node:path';
 import {
   parseArgs,
   createProgram,
@@ -63,6 +65,25 @@ describe('CLI', () => {
     const help = createProgram().helpInformation();
     expect(help).not.toContain('--step');
     expect(help).not.toContain('--output');
+  });
+
+  it('does not register or advertise the removed validate-wired-into subcommand', async () => {
+    const program = createProgram();
+    const stderr = vi.fn();
+    program.configureOutput({ writeErr: stderr });
+    program.exitOverride();
+    expect(program.commands.map((command) => command.name())).not.toContain('validate-wired-into');
+    expect(renderFullHelp()).not.toContain('validate-wired-into');
+    expect(() => program.parse(['node', 'conduct', 'validate-wired-into'])).toThrow();
+    expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/unknown command ['"]?validate-wired-into/i));
+
+    const result = await execa(
+      process.execPath,
+      ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'validate-wired-into'],
+      { reject: false, all: true },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.all).toMatch(/unknown command ['"]?validate-wired-into/i);
   });
 
   // --from is the real, documented way to start at a specific step and must

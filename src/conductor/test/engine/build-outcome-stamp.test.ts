@@ -119,23 +119,30 @@ describe('conductor build-outcome baseline capture', () => {
     const started: unknown[] = [];
     const failed: unknown[] = [];
     const dispatched: string[] = [];
+    let suiteVerified = false;
     const events = new ConductorEventEmitter();
     events.on('step_completed', (event) => {
       if (event.type === 'step_completed' && event.step === 'build') completed.push(event);
     });
     events.on('gate_blocked', (event) => { blocked.push(event); });
-    events.on('step_started', (event) => { started.push(event); });
+    events.on('step_started', (event) => {
+      started.push(event);
+      if (event.type === 'step_started') dispatched.push(event.step);
+    });
     events.on('step_failed', (event) => { failed.push(event); });
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
-        dispatched.push(step);
-        if (dispatched.length === 1) {
-          // The build moved HEAD: every probe from the settle onward observes
-          // the new commit, whatever the conductor probed before dispatch.
-          vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue('head-after-build');
-          return { success: true, output };
+        if (step === 'build_review') {
+          await writeFile(join(dir, '.pipeline', 'build-review.json'), JSON.stringify({
+            verdict: 'PASS', reasons: [],
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+          }));
+          return { success: true, output: 'complete build review pass' };
         }
-        return { success: false, output: 'sentinel stop after successful build settle' };
+        // The build moved HEAD: every probe from the settle onward observes
+        // the new commit, whatever the conductor probed before dispatch.
+        vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue('head-after-build');
+        return { success: true, output };
       }),
     };
     const conductor = new Conductor({
@@ -148,14 +155,31 @@ describe('conductor build-outcome baseline capture', () => {
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 1,
+      fullSuiteVerifier: {
+        inspect: async () => suiteVerified
+          ? ({ status: 'CURRENT', evidence: {} as never })
+          : ({ status: 'STALE', reason: 'source_changed' }),
+        ensure: async () => {
+          dispatched.push('test_suite');
+          suiteVerified = true;
+          return {
+            status: 'EXECUTED',
+            freshness: { status: 'STALE', reason: 'source_changed' },
+            evidence: {} as never,
+          } as const;
+        },
+      },
     });
 
     await conductor.run();
 
     expect(blocked).toEqual([]);
     expect(started).toContainEqual(expect.objectContaining({ step: 'build' }));
-    expect(failed).toContainEqual(expect.objectContaining({ step: 'build' }));
-    expect(dispatched[0]).toBe('build');
+    expect(dispatched).toContain('build_review');
+    expect(dispatched.indexOf('build_review')).toBeGreaterThan(dispatched.indexOf('test_suite'));
+    expect(dispatched).not.toContain('wiring_check');
+    expect(failed).not.toContainEqual(expect.objectContaining({ step: 'test_suite' }));
+    expect(failed).not.toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(completed).toContainEqual(expect.objectContaining({ step: 'build', status: 'done' }));
     const payload = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as {
       records: Array<Record<string, unknown>>;

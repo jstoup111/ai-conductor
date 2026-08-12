@@ -340,9 +340,7 @@ interface HaltClassMigrationStartupDeps {
  * file (via the `opts.runHaltClassMigration ?? runOwnedHaltClassMigration`
  * DI-seam default just below), and its unit tests drive it through that seam
  * (`runDaemonMode({ runHaltClassMigration: ... })`) rather than importing it
- * directly — an exported-but-only-test-imported symbol otherwise trips the
- * wiring-reachability gate's orphan backstop even though the seam is
- * genuinely wired (see wiring-probe.ts's `orphanBackstop`).
+ * directly.
  */
 async function runOwnedHaltClassMigration(
   lock: object | null,
@@ -2059,6 +2057,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
   switch (event.type) {
     case 'step_started':
       log(`${dot} ${chalk.cyan('▶')} ${event.step}`);
+      break;
+    case 'deprecated_step':
+      log(
+        chalk.yellow(
+          `${dot} ⚠ DEPRECATED: ${event.step} is a no-op — see ${event.adr}`,
+        ),
+      );
       break;
     case 'step_completed':
       {

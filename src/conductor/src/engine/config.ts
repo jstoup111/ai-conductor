@@ -305,7 +305,7 @@ export function validateConfig(
     'build_progress_halt',
     // Retry-routing kill-switch (retry-classify-rerun-vs-route).
     'retry_routing',
-    // Wiring-reachability gate Layer 2 (TS import-graph reachability).
+    // Build-review wiring-rubric entry points.
     'wiring',
     // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
     'kickback_escalation',
@@ -776,8 +776,8 @@ export function validateConfig(
     }
   }
 
-  // wiring — Layer 2 (TS import-graph reachability) entry points. Must be an
-  // object with an optional entry_points array of non-empty strings.
+  // wiring — build-review entry points. Must be an object with an optional
+  // entry_points array of non-empty strings.
   if (obj.wiring !== undefined) {
     if (!isPlainObject(obj.wiring)) {
       return errVal('wiring must be an object');

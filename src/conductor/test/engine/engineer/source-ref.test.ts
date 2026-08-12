@@ -86,13 +86,10 @@ describe('splitOwnerRepo — split an owner/repo slug', () => {
 });
 
 describe('grammar sweep — no competing owner/repo#N or #N regex outside source-ref.ts', () => {
-  it('finds the ref-splitting grammar only in source-ref.ts, plus two documented, unrelated exceptions', async () => {
+  it('finds the ref-splitting grammar only in source-ref.ts', async () => {
     // pr-labels.ts owns an independent URL-based parser (github.com/.../pull/N),
     // never delegated to source-ref.ts by design (different input shape: a PR
-    // URL, not a bare sourceRef). wired-into.ts's ISSUE_REF parses a DIFFERENT
-    // domain entirely — plan/story authoring annotations ("Wired-into: owner/repo#N")
-    // — not a runtime sourceRef value, so it is not a competing grammar for the
-    // same concern.
+    // URL, not a bare sourceRef).
     const { stdout } = await execFile(
       'grep',
       ['-rlE', "lastIndexOf\\('#'\\)|#\\(\\\\d\\+\\)\\$", CONDUCTOR_SRC],
@@ -105,6 +102,6 @@ describe('grammar sweep — no competing owner/repo#N or #N regex outside source
       .map((f) => f.replace(`${CONDUCTOR_SRC}/`, ''))
       .sort();
 
-    expect(files).toEqual(['engine/engineer/source-ref.ts', 'engine/wired-into.ts']);
+    expect(files).toEqual(['engine/engineer/source-ref.ts']);
   });
 });

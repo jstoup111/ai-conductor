@@ -843,49 +843,6 @@ On success the command prints `Resealed protected artifacts: <paths>` and exits 
 present and its class is the protected-artifact class, and reports the outcome (`No halt to clear.`,
 or why a present halt was not cleared) on a second line.
 
-## `conduct-ts validate-wired-into`
-
-```bash
-conduct-ts validate-wired-into <plan-file-path> [--cwd <dir>]
-```
-
-Resolves every task's `**Wired-into:**` declaration in a plan file against the real wiring
-machinery, at DECIDE time. Parsing and `same as Task N` inheritance come from `wired-into.ts`
-(`extractWiredIntoContracts`); the per-anchor check is `wiring-probe.ts`'s `verifyDeclaredSites` —
-the same function BUILD-time per-task completion verification and the `wiring_check` step call, so
-the validator's verdict cannot drift from what the build will accept.
-
-| Positional / Flag | Type | Default | Effect |
-| --- | --- | --- | --- |
-| `<plan-file-path>` | path | required | Plan to validate. Resolved against `--cwd`. |
-| `--cwd <dir>` | path | current directory | Repository root the plan's repo-relative anchor paths resolve against. |
-
-One report line per declaration:
-
-| Verdict | Meaning |
-| --- | --- |
-| `PASS` | Every declared `path#symbol` anchor's file exists and carries a non-test reference to the symbol. |
-| `SKIP` | A `none (no new production surface)` waiver, or a `none (inert until <ref>)` waiver whose `<ref>` is a path or an issue — deferred, no anchor to resolve yet. A `Task N` ref that names a real task in this plan also SKIPs. |
-| `FAIL` | A malformed declaration, a `**Wired-into:**` line declaring no call site at all, an unresolvable `same as Task N` target, a `none (inert until Task N)` ref naming a task absent from this plan, a declared file that does not exist, or a symbol with no reference in its declared file. |
-
-A `none (inert until <ref>)` ref must be a repo-relative path, an issue (`#N` or `owner/repo#N`), or
-`Task N` naming another task in the same plan; free prose is `FAIL`, not a waiver. The `Task N` form is
-the only inert ref resolved here, because a plan's task list is fully known at authoring time. Path and
-issue refs stay deferred to BUILD on purpose — a path ref legitimately names a file a later task creates,
-so resolving it at authoring time would fail plans that are valid by the time BUILD checks them.
-
-**Blocking by contract** — unlike `overlap-scan`, this command exits **1** on any `FAIL`, because an
-anchor that cannot resolve here is one per-task completion verification will never satisfy: the build
-advances no task past `pending` while committing real work, which is silent for hours. It also exits 1
-with a usage line when the plan positional is missing, and 1 with `validate-wired-into: cannot read
-plan <path> (<msg>)` when the plan file is unreadable. `skills/plan/SKILL.md` §5c requires running it
-before a plan is presented as complete. Reads files only; writes nothing.
-
-Running it is no longer the only enforcement. Land runs the same `validateWiredIntoPlan` check against
-the plan being landed, at every tier, and refuses the spec naming each failing task and anchor — so a
-plan cannot reach BUILD with an unresolvable anchor by skipping this command. Use the command while
-authoring to see the failures early; the gate is what makes them unavoidable.
-
 ## `conduct-ts evidence`
 
 ```bash

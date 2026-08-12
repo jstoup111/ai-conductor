@@ -67,11 +67,29 @@ function planBody(tasks: PlanTaskSpec[]): string {
 
 /** Canned provider that always reports the grader as PASS — the floor's
  * wiring must never change this outcome (non-blocking disposition). */
-function passingProvider(): { provider: LLMProvider; invokeCalls: InvokeOptions[] } {
+function passingProvider(
+  rubric: Record<string, boolean> = {
+    tautology: false,
+    scope: false,
+    rootCause: false,
+    completeness: false,
+    wiring: false,
+  },
+): { provider: LLMProvider; invokeCalls: InvokeOptions[] } {
   const invokeCalls: InvokeOptions[] = [];
   const provider: LLMProvider = {
     invoke: async (opts: InvokeOptions): Promise<InvokeResult> => {
       invokeCalls.push(opts);
+      const projectRoot = opts.cwd as string;
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectRoot, '.pipeline', 'build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric,
+        }),
+        'utf-8',
+      );
       return { success: true, output: 'PASS', exitCode: 0 };
     },
     invokeInteractive: async (): Promise<void> => {},
@@ -131,8 +149,12 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     );
   }
 
-  function makeRunner(featureDesc: string, config?: HarnessConfig) {
-    const { provider, invokeCalls } = passingProvider();
+  function makeRunner(
+    featureDesc: string,
+    config?: HarnessConfig,
+    providerFixture = passingProvider(),
+  ) {
+    const { provider, invokeCalls } = providerFixture;
     const runner = new DefaultStepRunner(provider, 'session-1', dir, {
       featureDesc,
       gitRunner: realGit(),
@@ -288,6 +310,29 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     await expect(
       runner.run('build_review', { feature_desc: slug } as ConductState),
     ).resolves.toMatchObject({ success: true });
+  });
+
+  it('refuses completion when the real build_review runner receives a legacy incomplete rubric', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'per-task-floor-incomplete-rubric-'));
+    await initRepo();
+    const slug = 'per-task-floor-incomplete-rubric';
+    await writePlan(slug, [{ id: '1', title: 'First' }]);
+    await commitWithTrailer('t1.txt', '1');
+    const legacyProvider = passingProvider({
+      tautology: false,
+      scope: false,
+      rootCause: false,
+      completeness: false,
+    });
+    const { runner, invokeCalls } = makeRunner(slug, undefined, legacyProvider);
+
+    await expect(
+      runner.run('build_review', { feature_desc: slug } as ConductState),
+    ).resolves.toMatchObject({
+      success: false,
+      output: expect.stringMatching(/rubric\.wiring/i),
+    });
+    expect(invokeCalls).toHaveLength(1);
   });
 
   // ── Story 6 — kill-switch disables emission entirely ────────────────────

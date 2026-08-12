@@ -172,10 +172,6 @@ import {
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
-import {
-  validateWiredIntoPlan,
-  renderWiredIntoValidationReport,
-} from './engine/validate-wired-into.js';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
@@ -453,81 +449,6 @@ export async function overlapScanCommand(
   }
 
   return 0;
-}
-
-// --- Validate-wired-into subcommand ---
-
-export interface ValidateWiredIntoDispatch {
-  kind: 'validate-wired-into';
-  /** Plan file path, resolved against `cwd`. Undefined when the positional is missing. */
-  plan?: string;
-  cwd?: string;
-}
-
-/**
- * Parse argv for the `validate-wired-into` subcommand.
- *   conduct-ts validate-wired-into <plan-file-path> [--cwd <dir>]
- * Mirrors the detectXCommand pattern used by the other non-interactive
- * subcommands (overlap-scan, evidence, task, ...): pure argv parsing, no I/O.
- */
-export function detectValidateWiredIntoCommand(argv: string[]): ValidateWiredIntoDispatch | null {
-  if (argv[2] !== 'validate-wired-into') return null;
-
-  const rest = argv.slice(3);
-  let plan: string | undefined;
-  let cwd: string | undefined;
-
-  for (let i = 0; i < rest.length; i++) {
-    const arg = rest[i];
-    if (arg === '--cwd') {
-      cwd = rest[++i];
-    } else if (!arg.startsWith('-') && plan === undefined) {
-      plan = arg;
-    }
-  }
-
-  return { kind: 'validate-wired-into', plan, cwd };
-}
-
-/**
- * Validate a plan's `**Wired-into:**` anchors against the real wiring
- * machinery, at authoring time. Unlike `overlap-scan`, this is NOT advisory:
- * it exits 1 on any unresolved anchor, because an anchor that cannot resolve
- * here is an anchor per-task completion verification will never satisfy at
- * BUILD time — the silent hours-long spin this command exists to prevent.
- */
-export async function validateWiredIntoCommand(
-  cmd: ValidateWiredIntoDispatch,
-  deps: { print?: (msg: string) => void; cwd?: string } = {},
-): Promise<number> {
-  const print = deps.print ?? console.log;
-  const cwd = deps.cwd ?? cmd.cwd ?? process.cwd();
-
-  if (!cmd.plan) {
-    print('usage: conduct-ts validate-wired-into <plan-file-path> [--cwd <dir>]');
-    return 1;
-  }
-
-  const planPath = cmd.plan;
-  let planText: string;
-  try {
-    planText = await readFile(resolvePath(cwd, planPath), 'utf-8');
-  } catch (err) {
-    print(
-      `validate-wired-into: cannot read plan ${planPath} (${err instanceof Error ? err.message : String(err)})`,
-    );
-    return 1;
-  }
-
-  // Declared-site paths are repo-relative by grammar, so they resolve against
-  // the repo root — the same base the build-time gate reads them from.
-  const result = await validateWiredIntoPlan(planText, (path) =>
-    readFile(resolvePath(cwd, path), 'utf-8'),
-  );
-
-  print(renderWiredIntoValidationReport(result, planPath));
-
-  return result.ok ? 0 : 1;
 }
 
 // --- Main ---
@@ -812,17 +733,6 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
-  // Validate-wired-into subcommand (`validate-wired-into <plan> [--cwd <dir>]`)
-  // runs NON-INTERACTIVELY and exits — a DECIDE-time gate that resolves every
-  // declared `Wired-into:` anchor through the same machinery BUILD-time
-  // completion verification uses. BLOCKING by contract: exits 1 on any
-  // unresolved anchor.
-  const validateWiredIntoCmd = detectValidateWiredIntoCommand(process.argv);
-  if (validateWiredIntoCmd) {
-    const code = await validateWiredIntoCommand(validateWiredIntoCmd, { cwd: process.cwd() });
-    process.exit(code);
-  }
-
   // `daemon --help` / `daemon -h`: print the daemon command surface (run flags +
   // status/logs + management verbs) and exit. MUST precede every daemon dispatcher
   // below — otherwise detectDaemonCommand treats `--help` as an unknown flag and
@@ -916,6 +826,14 @@ async function main(): Promise<void> {
   if (process.argv.slice(2).some((a) => a === '--help' || a === '-h')) {
     process.stdout.write(renderFullHelp());
     process.exit(0);
+  }
+
+  // `validate-wired-into` was a retired top-level command. Keep its failure
+  // diagnostic explicit rather than letting it fall through as an inline
+  // pipeline invocation, where the removal would be ambiguous to operators.
+  if (process.argv[2] === 'validate-wired-into') {
+    console.error("error: unknown command 'validate-wired-into'");
+    process.exit(1);
   }
 
   // The inline SDLC pipeline now requires an explicit `inline` subcommand

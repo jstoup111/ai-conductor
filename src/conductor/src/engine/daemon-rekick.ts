@@ -520,7 +520,7 @@ export async function resumeRebaseFirst(opts: {
 
   // FR-5 + adr-2026-07-08-post-rebase-gate-first-mechanical-reverify: when a
   // play-forward rebase touches code paths the downstream judged gates
-  // (build_review, wiring_check, prd_audit, architecture_review_as_built,
+  // (build_review, prd_audit, architecture_review_as_built,
   // manual_test) are still invalidated unconditionally — their predicates are
   // not tree-attesting. `build` is the one gate whose predicate mechanically
   // re-derives from the freshly-rebased history (`Task:` trailer union +

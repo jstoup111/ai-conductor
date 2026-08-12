@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { Conductor } from '../test-conductor.js';
 import { writeState, readState } from '../../src/engine/state.js';
-import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
+import { ALL_STEPS, BUILD_VERIFICATION_GROUP, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { resolveGroupMembership } from '../../src/engine/conductor.js';
 import { isOperatorParked } from '../../src/engine/park-marker.js';
@@ -931,24 +931,36 @@ describe('operator park boundary contract', () => {
   });
 
   it('joins the deterministic BUILD verification group before parking and blocks build review', async () => {
-    await writeState(statePath, {
-      ...stateWithPending('wiring_check', 'test_suite', 'build_review'),
+    const state: ConductState = {
+      ...stateWithPending('test_suite', 'build_review'),
       track: 'technical',
       complexity_tier: 'M',
+    };
+    // Bind this fixture to the production BUILD topology instead of merely
+    // hand-seeding compatible states: retired wiring_check is resolved, the
+    // live verification member is test_suite, and build_review remains the
+    // next semantic owner after the join.
+    const buildTopology = resolveGroupMembership(
+      BUILD_VERIFICATION_GROUP,
+      state,
+      'technical',
+      CLAUDE_MODEL_POLICY,
+    );
+    const buildReview = ALL_STEPS.find(({ name }) => name === 'build_review');
+    expect({
+      dispatchable: buildTopology.dispatchable.map(({ name }) => name),
+      reviewPrerequisites: buildReview?.prerequisites,
+    }).toEqual({
+      dispatchable: ['test_suite'],
+      reviewPrerequisites: ['wiring_check', 'test_suite'],
     });
-    const members = ['wiring_check', 'test_suite'] as const;
-    const wiringStarted = deferred();
+    await writeState(statePath, state);
+    const members = ['test_suite'] as const;
     const suiteStarted = deferred();
-    const releaseWiring = deferred();
     const releaseSuite = deferred();
     const settled: StepName[] = [];
     let parked = false;
     const run = vi.fn<StepRunner['run']>(async (step) => {
-      if (step === 'wiring_check') {
-        wiringStarted.resolve();
-        await releaseWiring.promise;
-        settled.push(step);
-      }
       return { success: true };
     });
     const ensure = vi.fn(async () => {
@@ -967,7 +979,7 @@ describe('operator park boundary contract', () => {
       stepRunner: { run },
       events: new ConductorEventEmitter(),
       config: { validation_concurrency: 2 },
-      fromStep: 'wiring_check',
+      fromStep: 'test_suite',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: false,
@@ -981,11 +993,10 @@ describe('operator park boundary contract', () => {
     });
 
     const resultPromise = conductor.run();
-    await Promise.all([wiringStarted.promise, suiteStarted.promise]);
+    await suiteStarted.promise;
     releaseSuite.resolve();
     await Promise.resolve();
     parked = true;
-    releaseWiring.resolve();
     const result = await resultPromise;
     const persisted = await readState(statePath);
     const raw = persisted.ok
@@ -993,6 +1004,7 @@ describe('operator park boundary contract', () => {
       : {};
 
     expect({
+      buildTopology: buildTopology.dispatchable.map(({ name }) => name),
       result,
       settled,
       memberStatuses: Object.fromEntries(members.map((member) => [member, raw[member]])),
@@ -1005,15 +1017,15 @@ describe('operator park boundary contract', () => {
       buildReviewDispatches: run.mock.calls.filter(([step]) => step === 'build_review').length,
       suiteEnsureCalls: ensure.mock.calls.length,
     }).toEqual({
+      buildTopology: ['test_suite'],
       result: {
         kind: 'operator-parked',
-        boundary: { kind: 'group', name: 'build_verification' },
+        boundary: { kind: 'step', name: 'test_suite' },
       },
-      settled: ['test_suite', 'wiring_check'],
-      memberStatuses: { wiring_check: 'done', test_suite: 'done' },
+      settled: ['test_suite'],
+      memberStatuses: { test_suite: 'done' },
       syntheticStatuses: {
-        build_verification__wiring_check: 'done',
-        build_verification__test_suite: 'done',
+        build_verification__test_suite: undefined,
       },
       buildReviewDispatches: 0,
       suiteEnsureCalls: 1,
@@ -1022,11 +1034,7 @@ describe('operator park boundary contract', () => {
 
   it.each([
     {
-      name: 'one dispatchable BUILD member',
-      pending: ['wiring_check', 'build_review'] as StepName[],
-    },
-    {
-      name: 'zero dispatchable BUILD members',
+      name: 'pending semantic build review',
       pending: ['build_review'] as StepName[],
     },
   ])('keeps $name semantics while parking blocks the next unit', async ({ pending }) => {
@@ -1048,6 +1056,7 @@ describe('operator park boundary contract', () => {
 
     const result = await conductor.run();
 
+    const persisted = await readState(statePath);
     expect({ result, runnerCalls: run.mock.calls }).toEqual({
       result: {
         kind: 'operator-parked',
@@ -1055,6 +1064,13 @@ describe('operator park boundary contract', () => {
       },
       runnerCalls: [],
     });
+    // build_review is the pending semantic gate. Parking must not dispatch the
+    // retired wiring_check compatibility step; its deterministic completion is
+    // persisted before the pending review boundary.
+    if (pending.length === 1 && pending[0] === 'build_review') {
+      expect(persisted.ok && persisted.value.wiring_check).toBe('done');
+      expect(run.mock.calls.map(([step]) => step)).not.toContain('wiring_check');
+    }
   });
 
   it('keeps interactive dispatch and checkpoint sequences identical with a repo-root park marker', async () => {

@@ -239,7 +239,7 @@ Every pattern declares one lifecycle scope:
 | `acceptance_specs` | 15 stack-convention test globs — `spec/acceptance/**/*`, `spec/requests/**/*`, `spec/system/**/*`, `test/acceptance/**/*`, `test/**/*`, `tests/**/*`, `__tests__/**/*`, and `*.{test,spec}.{js,ts,jsx,tsx}` — plus any `acceptance_spec_globs` the project declares | repository |
 | `build` | `.pipeline/task-status.json` | run |
 | `build_review` | `.pipeline/build-review.json` | run |
-| `wiring_check` | `.pipeline/wiring-evidence.json` | run |
+| `wiring_check` | *(none; deprecated compatibility no-op)* | — |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | run |
 | `manual_test` | `.pipeline/manual-test-results.md` | run |
 | `prd_audit` | `.pipeline/prd-audit.md` | run |
@@ -293,7 +293,7 @@ worktree removal.
 | `task-status.json` | `{ plan_ref?, tasks: [{ id, name?, status?, … }] }`. Duplicate rows merge by status rank: `completed`/`skipped` 3, `in_progress` 2, `pending` 1. A row restored from git evidence also carries `commit` and `restored_from: "task-trailer"` | `task-seed.ts::seedTaskStatus` | Re-seeded from the plan on **every** build-gate evaluation and at the build preflight. Written atomically (same-directory temp plus `rename(2)`) and re-read afterwards — a reconstruction that does not land throws rather than reporting success | Self-heals from the plan on the next evaluation, **with completions intact**: see reconstruction below |
 | `engine-state.json` | `{ activePlanPath?: string, … }` | `task-seed.ts`, `conductor.ts` (atomic) | Written when the active plan is resolved | Resolution falls back to stem match, then to a single plan on disk. With several plans and no match it returns nothing and the build gate **fails closed** rather than guessing |
 | `kickback-ledger.json` | `{ version: 1, gates: Record<gate, { count, treeHash, lastReason, priorVerdict, resolvedBefore }> }` | `kickback-ledger.ts` | Read-modify-write atomically (temp file + `rename(2)`) on every kickback-consuming gate check. A gate's `count` resets to 1 only when its tree hash or resolved-task count moved since the last entry; otherwise it survives daemon re-dispatch and increments toward `MAX_KICKBACKS_PER_GATE` (2). Cleared entirely on a fresh feature session | Missing, malformed, or version-mismatched ledgers fail open to an empty budget (never throw); a gate's cross-dispatch kickback count resets, so a HALT that should already have fired may take one more lap to trigger |
-| `build-outcome.json` | `{ version: 1, records: BuildOutcomeRecord[] }`. Each record carries `outcome` (`moved`/`no-movement`), `terminalOutcome` (`done`/`failed`/`no-verdict`), the kicking-back `gate` (or `null`), the gate `verdict` at entry, the `rung` (`model`, `effort`) dispatched at, both movement witnesses (`treeBefore`/`treeAfter`, `headBefore`/`headAfter`), and an optional bounded `note` (the same last-200-lines tail `step_completed` carries) plus an inferred or agent-declared `category` (`disputes-gate`/`belongs-to-decide`/`silent-no-movement`) | `build-outcome.ts`, appended to at every build-step terminal outcome from `conductor.ts` | Read before every `wiring_check` kickback re-entry to `build`: when the latest record matches the pending cycle exactly on tree hash, gate, verdict, and rung, the conductor refuses to re-dispatch and halts instead of paying for an identical no-op turn (`sameNoOpCycle`) | Missing, corrupt, or version-mismatched sidecars fail open to an empty record set (never throw, never block dispatch); a lost sidecar just means one already-observed no-op cycle may be repeated once before the guard has evidence again |
+| `build-outcome.json` | `{ version: 1, records: BuildOutcomeRecord[] }`. Each record carries `outcome` (`moved`/`no-movement`), `terminalOutcome` (`done`/`failed`/`no-verdict`), the kicking-back `gate` (or `null`), the gate `verdict` at entry, the `rung` (`model`, `effort`) dispatched at, both movement witnesses (`treeBefore`/`treeAfter`, `headBefore`/`headAfter`), and an optional bounded `note` (the same last-200-lines tail `step_completed` carries) plus an inferred or agent-declared `category` (`disputes-gate`/`belongs-to-decide`/`silent-no-movement`) | `build-outcome.ts`, appended to at every build-step terminal outcome from `conductor.ts` | Read when the conductor handles an active gate's kickback to `build`: an identical no-movement cycle can halt instead of paying for a repeat dispatch (`sameNoOpCycle`) | Missing, corrupt, or version-mismatched sidecars fail open to an empty record set (never throw, never block dispatch); a lost sidecar just means one already-observed no-op cycle may be repeated once before the guard has evidence again |
 | `build-dispute.json` | `{ category: 'disputes-gate' \| 'belongs-to-decide' \| 'silent-no-movement' }` | optional, hand- or agent-authored during a build step | `resolveBuildOutcomeCategory`, preferred over the note-text inference when present and well-formed | Absent, malformed, or shape-invalid content is ignored outright and the category is inferred from the build's note text instead — this artifact is never required for any behavior in the feature |
 
 ### Reconstruction: what self-heals and what must not
@@ -334,7 +334,7 @@ decision:
 `finish-choice`, `version-approval`, `conduct-state.json`, `gates/*.json`, `protected-artifact-seal.json`,
 and every verdict/evidence artifact in the two tables below (`build-review.json`,
 `test-suite-evidence.json`, `acceptance-specs-red.json`, `manual-test-results.md`, `prd-audit.md`,
-`architecture-review-as-built.md`, `wiring-evidence.json`, …). Losing one of these re-runs its step
+`architecture-review-as-built.md`, …). Losing one of these re-runs its step
 or restarts its phase; that cost is correct. `events.jsonl`, `otel.jsonl`, and the audit trail are
 append-only history — also never reconstructed, because a fabricated history is worse than none.
 
@@ -369,7 +369,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `attribution-verdict.json` | `{ schema?, anchor?: { head?, residue?[] }, results? }` | `attribution-verdict.ts` |
 | `audit-trail/` | Per-task `review.json`, `rework-N.json`, `commit.txt`, `summary.json`, plus `events.jsonl` and a `WRITE-FAILED` marker | `audit-trail.ts`, `pipeline` skill |
 | `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
-| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness }, codeStamp? }` | `build_review` step |
+| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness, wiring }, codeStamp? }`. `rubric.wiring: true` means wiring failed and requires a non-empty `findings.wiring`; `rubric.wiring: false` means wiring passed and needs no wiring finding. A missing or malformed item fails closed. | `build_review` step |
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
@@ -389,13 +389,9 @@ Agent-authored, engine-validated. Alphabetized.
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
 | `test-suite-evidence.json` | Version 3. PASS: `{ version, outcome: 'PASS', reason: 'exit_zero', fingerprint, categoryFingerprints, provenanceHeadSha, worktreeClean?: boolean, command, workingDirectory, startedAt, endedAt, durationMs, exitCode: 0, stdout, stderr }`. FAIL adds a `signal` discriminant and one of nine `reason` values. Diagnostics truncate at 16384 bytes | `full-suite-evidence.ts` |
 | `version-signal.json` | `{ verdict, level, files, classifiedAt }` — the PATCH auto-pass audit | `self-host/version-gate.ts` |
-| `wiring-evidence.json` | `{ schema, base, head, tasks: [{ id, contract, gaps: [{ kind, message }], proofs?: [{ kind: 'same-file-composition', export, caller, file, rootChain[] }] }], layer2: { applicable, reason? }, waivers[] }`; seven gap kinds; a `proofs` entry records an independently-verified same-file root-to-caller-to-export chain, corroborating context only — never authority on its own | `wiring-probe.ts` |
-
-In a post-repair BUILD-verification round, the presence of either gate artifact or its recorded PASS
-verdict does not exclude its member from dispatch. The member's own evidence rule decides reuse or
-recomputation: `wiring_check` compares its recorded head with the current head, and `test_suite`
-reuses only a matching content fingerprint. The round join, not a file left on disk, then decides
-whether the member is satisfied.
+In a post-repair BUILD-verification round, `wiring_check` still runs only to preserve compatibility
+and emits its deprecation notice. The active `test_suite` member reuses only matching content
+fingerprints; the round join, not a file left on disk, decides whether it is satisfied.
 
 All of these are ephemeral. Losing one re-runs its step; none of them is the durable record of anything.
 

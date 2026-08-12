@@ -1381,19 +1381,6 @@ describe('DefaultStepRunner', () => {
     expect(opts).toMatchObject({ model: 'gpt-5.6-luna', effort: 'low' });
   });
 
-  it('recognizes wiring_check as an engine-native gate without rendering or provider invocation', async () => {
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
-
-    const result = await runner.run('wiring_check', emptyState);
-
-    expect({
-      success: result.success,
-      invokeCalls: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls,
-      interactiveCalls: (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls,
-    }).toEqual({ success: true, invokeCalls: [], interactiveCalls: [] });
-  });
-
   it('all steps use invokeInteractive (stdio: inherit)', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
@@ -3127,6 +3114,54 @@ TIER: M`,
       await writeFile(planPath, '# Plan\n\nDo the thing.\n', 'utf-8');
     });
 
+    it('has no provider runner for the retired wiring_check step', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('wiring_check', emptyState);
+
+      expect(result.success).toBe(false);
+      expect(provider.invoke).not.toHaveBeenCalled();
+      expect(provider.invokeInteractive).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        name: 'complete five-flag PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        success: true,
+      },
+      ...(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const).map((missing) => ({
+        name: `PASS missing rubric.${missing}`,
+        rubric: Object.fromEntries(
+          ['tautology', 'scope', 'rootCause', 'completeness', 'wiring']
+            .filter((name) => name !== missing)
+            .map((name) => [name, false]),
+        ),
+        success: false,
+      })),
+    ])('returns $success for a $name verdict', async ({ rubric, success }) => {
+      const verdictPath = join(dir, '.pipeline', 'build-review.json');
+      const invoke = vi.fn().mockImplementation(async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric }), 'utf-8');
+        return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+      });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        { gitRunner: scriptedGit(), planPath },
+      );
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(success);
+    });
+
     afterEach(async () => {
       await rm(dir, { recursive: true, force: true });
     });
@@ -3319,7 +3354,7 @@ TIER: M`,
 
       const result = await runner.run('build_review', emptyState);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(invoke).toHaveBeenCalledOnce();
       const opts = invoke.mock.calls[0][0] as InvokeOptions;
       expect(opts.resume).toBe(false);
@@ -3384,7 +3419,7 @@ TIER: M`,
 
       const result = await runner.run('build_review', emptyState);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       const opts = invoke.mock.calls[0][0] as InvokeOptions;
       expect(opts.prompt).toContain('Grade against this one.');
       expect(opts.prompt).not.toContain('Wrong plan.');
@@ -3394,7 +3429,7 @@ TIER: M`,
     // freshness telemetry, carried on StepRunResult so the conductor can
     // emit a `build_review_base` event without step-runners.ts owning event
     // emission itself.
-    it('attaches baseFreshness from assembleBuildReviewInputs on success', async () => {
+    it('attaches baseFreshness from assembleBuildReviewInputs when the verdict is invalid', async () => {
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -3404,7 +3439,7 @@ TIER: M`,
 
       const result = await runner.run('build_review', emptyState);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
@@ -3489,7 +3524,7 @@ TIER: M`,
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: {} }), 'utf-8');
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }), 'utf-8');
           return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
         });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
@@ -3506,7 +3541,7 @@ TIER: M`,
         expect(written.verdict).toBe('PASS');
       });
 
-      it('still returns success when build-review.json is missing after a successful dispatch', async () => {
+      it('rejects a successful dispatch when build-review.json is missing', async () => {
         initGitRepo(dir);
         const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
@@ -3517,10 +3552,10 @@ TIER: M`,
 
         const result = await runner.run('build_review', emptyState);
 
-        expect(result.success).toBe(true);
+        expect(result.success).toBe(false);
       });
 
-      it('still returns success when build-review.json is unparseable after a successful dispatch', async () => {
+      it('rejects a successful dispatch when build-review.json is unparseable', async () => {
         initGitRepo(dir);
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
@@ -3536,7 +3571,7 @@ TIER: M`,
 
         const result = await runner.run('build_review', emptyState);
 
-        expect(result.success).toBe(true);
+        expect(result.success).toBe(false);
       });
 
       // Rework (cycle 1): gate_code_validity.enabled=false must restore
@@ -3547,7 +3582,7 @@ TIER: M`,
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: {} }), 'utf-8');
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }), 'utf-8');
           return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
         });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };

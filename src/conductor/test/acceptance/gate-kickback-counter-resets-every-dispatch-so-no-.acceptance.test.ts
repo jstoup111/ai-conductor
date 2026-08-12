@@ -165,32 +165,17 @@ function frontDone(): ConductState {
   };
 }
 
-function headSha(dir: string): string {
-  return execSync('git rev-parse HEAD', { cwd: dir }).toString().trim();
-}
-
-/** Evidence must be stamped with the CURRENT HEAD or the wiring_check
- * predicate rejects it as stale (`artifacts.ts:967`, `:2095`) and re-probes,
- * overwriting the fixture — unlike the pre-existing `wiring-gate-loop.test.ts`
- * fixture, this worktree is a REAL repo, so the sha has to be real too. */
-const GAP_EVIDENCE = (dir: string, message: string): string =>
+/** The kickback vehicle. `build_review` is the deterministic BUILD gate that
+ * still routes an unsatisfied verdict back to `build`: a non-completeness
+ * rubric FAIL takes `buildReviewFailRoute -> 'build'`, which is the cap path
+ * this file bounds. (`wiring_check`, the original 2026-07-26 vehicle, is now a
+ * deprecated no-op that never kicks back —
+ * adr-2026-08-11-wiring-judged-in-build-review.) */
+const FAIL_VERDICT = (message: string): string =>
   JSON.stringify({
-    schema: 1,
-    base: 'base',
-    head: headSha(dir),
-    layer2: { applicable: false },
-    waivers: [],
-    tasks: [{ id: 't1', contract: 'src/x.ts#foo', gaps: [{ kind: 'orphan-export', message }] }],
-  });
-
-const CLEAN_EVIDENCE = (dir: string): string =>
-  JSON.stringify({
-    schema: 1,
-    base: 'base',
-    head: headSha(dir),
-    layer2: { applicable: false },
-    waivers: [],
-    tasks: [{ id: 't1', contract: 'none (no new production surface)', gaps: [] }],
+    verdict: 'FAIL',
+    rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+    findings: { tautology: [message] },
   });
 
 describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
@@ -245,11 +230,9 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
         }),
       );
-    } else if (step === 'wiring_check') {
-      await writeFile(join(dir, '.pipeline/wiring-evidence.json'), CLEAN_EVIDENCE(dir));
     } else if (step === 'manual_test') {
       await writeFile(
         join(dir, '.pipeline/manual-test-results.md'),
@@ -315,14 +298,14 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
     } as never);
   }
 
-  /** Restage the SHIP tail so a second `Conductor` re-enters `wiring_check`,
+  /** Restage the SHIP tail so a second `Conductor` re-enters `build_review`,
    * exactly as the daemon's next dispatch does. `run_started_at` is left
    * intact — this is a re-dispatch of the SAME feature session, not a fresh
    * one, which is precisely the boundary the bound must survive. */
   async function restageForRedispatch(): Promise<void> {
     const res = await readState(statePath);
     const state = (res.ok ? res.value : {}) as Record<string, unknown>;
-    state.wiring_check = 'pending';
+    state.build_review = 'pending';
     state.test_suite = 'stale';
     state.manual_test = 'stale';
     state.finish = 'pending';
@@ -343,15 +326,15 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       let wiringRuns = 0;
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
+          if (step === 'build_review') {
             wiringRuns++;
             // Dispatch 1: gap once (consumes exactly 1 kickback), then clean
             // so the dispatch converges and ENDS with the budget partly spent.
             if (wiringRuns === 1) {
-              await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+              await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
               return { success: true };
             }
-            return satisfy('wiring_check');
+            return satisfy('build_review');
           }
           return satisfy(step);
         },
@@ -361,12 +344,12 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       await makeConductor(runner, { escalationEnabled: false }).run();
 
       const t1 = treeHash(dir);
-      const afterFirst = await readLedgerEntry(dir, 'wiring_check');
+      const afterFirst = await readLedgerEntry(dir, 'build_review');
       expect(afterFirst).not.toBeNull();
       expect(afterFirst?.count).toBe(1);
       expect(afterFirst?.treeHash).toBe(t1);
       expect(afterFirst?.lastReason).toContain('foo unreachable');
-      expect(kicks.filter((k) => k.from === 'wiring_check')).toHaveLength(1);
+      expect(kicks.filter((k) => k.from === 'build_review')).toHaveLength(1);
 
       // ── The dispatch boundary: a brand-new Conductor over the same worktree,
       // same feature session, unchanged tree. The budget must NOT refresh.
@@ -376,8 +359,8 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
       const alwaysGapping: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
-            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
             return { success: true };
           }
           return satisfy(step);
@@ -385,13 +368,13 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       };
       await makeConductor(alwaysGapping, {
         escalationEnabled: false,
-        fromStep: 'wiring_check',
+        fromStep: 'build_review',
       }).run();
 
       // Resumes at 1 → one more kickback reaches the cap → HALT. Today the
       // counter restarts at 0 and this dispatch spends the FULL budget again,
       // which is the livelock: every dispatch buys two more laps forever.
-      expect(kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build')).toHaveLength(1);
+      expect(kicks.filter((k) => k.from === 'build_review' && k.to === 'build')).toHaveLength(1);
       expect(halts).toHaveLength(1);
       expect(await exists(dir, HALT_MARKER)).toBe(true);
       expect(treeHash(dir)).toBe(t1);
@@ -408,8 +391,8 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
-            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
             return { success: true };
           }
           return satisfy(step);
@@ -419,10 +402,10 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
       // Fails OPEN: the missing ledger never short-circuits into a halt on the
       // first failing lap — the gate still gets its whole budget.
-      expect(kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build')).toHaveLength(
+      expect(kicks.filter((k) => k.from === 'build_review' && k.to === 'build')).toHaveLength(
         MAX_KICKBACKS_PER_GATE,
       );
-      expect(await readLedgerEntry(dir, 'wiring_check')).not.toBeNull();
+      expect(await readLedgerEntry(dir, 'build_review')).not.toBeNull();
     },
     60_000,
   );
@@ -443,8 +426,8 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
-            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
             return { success: true };
           }
           return satisfy(step);
@@ -452,12 +435,12 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       };
       await expect(makeConductor(runner, { escalationEnabled: false }).run()).resolves.not.toThrow();
 
-      expect(kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build')).toHaveLength(
+      expect(kicks.filter((k) => k.from === 'build_review' && k.to === 'build')).toHaveLength(
         MAX_KICKBACKS_PER_GATE,
       );
       expect(warn).toHaveBeenCalled();
       // The corrupt document is replaced, not left to poison the next dispatch.
-      const entry = await readLedgerEntry(dir, 'wiring_check');
+      const entry = await readLedgerEntry(dir, 'build_review');
       expect(entry).not.toBeNull();
       warn.mockRestore();
     },
@@ -476,7 +459,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
         JSON.stringify({
           version: 1,
           gates: {
-            wiring_check: {
+            build_review: {
               count: MAX_KICKBACKS_PER_GATE,
               treeHash: treeHash(dir),
               lastReason: 'stale reason from a prior feature',
@@ -489,8 +472,8 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
-            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
             return { success: true };
           }
           return satisfy(step);
@@ -499,7 +482,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       await makeConductor(runner, { escalationEnabled: false }).run();
 
       // A brand-new feature never starts already-exhausted.
-      expect(kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build')).toHaveLength(
+      expect(kicks.filter((k) => k.from === 'build_review' && k.to === 'build')).toHaveLength(
         MAX_KICKBACKS_PER_GATE,
       );
       const raw = await readFile(join(dir, KICKBACK_LEDGER), 'utf-8');
@@ -512,15 +495,15 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
   it(
     'Story 2 + Story 3 happy: a build that only mints a REAL empty commit is not progress — ' +
-      'wiring_check escalates on that cycle instead of spending the rest of its budget',
+      'build_review escalates on that cycle instead of spending the rest of its budget',
     async () => {
       await writeState(statePath, { ...frontDone(), track: 'technical' });
       const t0 = treeHash(dir);
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
+          if (step === 'build_review') {
             // Byte-identical gap every lap: the incident shape.
-            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+            await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
             return { success: true };
           }
           if (step === 'build') {
@@ -535,9 +518,9 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       await makeConductor(runner, { escalationEnabled: true }).run();
 
       // The empty commit advanced HEAD, so today's sha-keyed classifier scores
-      // 'did-work' and suppresses the escalation — and wiring_check never
+      // 'did-work' and suppresses the escalation — and the gate never
       // consults it at all. Both must change: exactly one kickback, then HALT.
-      expect(kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build')).toHaveLength(1);
+      expect(kicks.filter((k) => k.from === 'build_review' && k.to === 'build')).toHaveLength(1);
       expect(await exists(dir, HALT_MARKER)).toBe(true);
       const body = await readFile(join(dir, HALT_MARKER), 'utf-8');
       expect(body).toMatch(/no.?(work|progress)|unchanged|no-op/i);
@@ -559,8 +542,8 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       let builds = 0;
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
-            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
             return { success: true };
           }
           if (step === 'build') {
@@ -584,7 +567,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       expect(treeHash(dir)).not.toBe(t0);
       // The productive lap bought a second kickback rather than escalating.
       expect(
-        kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build').length,
+        kicks.filter((k) => k.from === 'build_review' && k.to === 'build').length,
       ).toBeGreaterThanOrEqual(2);
     },
     60_000,
@@ -597,8 +580,8 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       await writeState(statePath, { ...frontDone(), track: 'technical' });
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
-            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
             return { success: true };
           }
           if (step === 'build') {
@@ -610,7 +593,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       };
       await makeConductor(runner, { escalationEnabled: false }).run();
 
-      expect(kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build')).toHaveLength(
+      expect(kicks.filter((k) => k.from === 'build_review' && k.to === 'build')).toHaveLength(
         MAX_KICKBACKS_PER_GATE,
       );
       expect(halts).toHaveLength(1);
@@ -631,13 +614,13 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       let builds = 0;
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
+          if (step === 'build_review') {
             wiringRuns++;
             if (wiringRuns <= 2) {
-              await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+              await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
               return { success: true };
             }
-            return satisfy('wiring_check');
+            return satisfy('build_review');
           }
           if (step === 'build') {
             builds++;
@@ -655,7 +638,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       await makeConductor(runner, { escalationEnabled: false }).run();
 
       const t2 = treeHash(dir);
-      const entry = await readLedgerEntry(dir, 'wiring_check');
+      const entry = await readLedgerEntry(dir, 'build_review');
       expect(entry).not.toBeNull();
       // Two failing laps, but the tree moved between them: a full fresh budget,
       // no penalty carried from T1.
@@ -673,14 +656,14 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       let lap = 0;
       const nextRunner = (): StepRunner => ({
         run: async (step) => {
-          if (step === 'wiring_check') {
+          if (step === 'build_review') {
             lap++;
             // Every lap reports a DIFFERENT reason, the way build_review's
             // grader prose, manual_test's rows and test_suite's runner output
             // legitimately do. A reason-keyed counter would reset here forever.
             await writeFile(
-              join(dir, '.pipeline/wiring-evidence.json'),
-              GAP_EVIDENCE(dir, `unreachable symbol variant #${lap} at 0x${lap}abc`),
+              join(dir, '.pipeline/build-review.json'),
+              FAIL_VERDICT(`unreachable symbol variant #${lap} at 0x${lap}abc`),
             );
             return { success: true };
           }
@@ -690,22 +673,22 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
       await makeConductor(nextRunner(), { escalationEnabled: false, fromStep: 'build' }).run();
       // Dispatch 1 spends the budget it has; assert only that the ledger moved.
-      const afterFirst = await readLedgerEntry(dir, 'wiring_check');
+      const afterFirst = await readLedgerEntry(dir, 'build_review');
       expect(afterFirst).not.toBeNull();
       expect(afterFirst?.count).toBeGreaterThanOrEqual(1);
 
       await restageForRedispatch();
-      const kicksBefore = kicks.filter((k) => k.from === 'wiring_check').length;
+      const kicksBefore = kicks.filter((k) => k.from === 'build_review').length;
       await makeConductor(nextRunner(), {
         escalationEnabled: false,
-        fromStep: 'wiring_check',
+        fromStep: 'build_review',
       }).run();
 
       // Across BOTH dispatches the gate never exceeds its single budget, even
       // though no two laps share a reason string.
-      const total = kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build').length;
+      const total = kicks.filter((k) => k.from === 'build_review' && k.to === 'build').length;
       expect(total).toBe(MAX_KICKBACKS_PER_GATE);
-      expect(kicks.filter((k) => k.from === 'wiring_check').length).toBeGreaterThan(kicksBefore - 1);
+      expect(kicks.filter((k) => k.from === 'build_review').length).toBeGreaterThan(kicksBefore - 1);
       expect(halts.length).toBeGreaterThanOrEqual(1);
       expect(await exists(dir, HALT_MARKER)).toBe(true);
     },
@@ -719,8 +702,8 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       await writeState(statePath, { ...frontDone(), track: 'technical' });
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
-            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), GAP_EVIDENCE(dir, 'foo unreachable'));
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable'));
             return { success: true };
           }
           return satisfy(step);
@@ -728,7 +711,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       };
       await makeConductor(runner, { escalationEnabled: false }).run();
 
-      const spent = kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build').length;
+      const spent = kicks.filter((k) => k.from === 'build_review' && k.to === 'build').length;
       expect(spent).not.toBe(0);
       expect(spent).not.toBe(1);
       expect(spent).toBe(MAX_KICKBACKS_PER_GATE);
@@ -739,16 +722,15 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
   // ───────────────────────────── Story 5 ─────────────────────────────
 
   it(
-    'Story 5 happy: the wiring_check cap HALT names the gate, the laps consumed and the ' +
+    'Story 5 happy: the build_review cap HALT names the gate, the laps consumed and the ' +
       'recorded reason, and writes .pipeline/HALT.class as needs-human',
     async () => {
       await writeState(statePath, { ...frontDone(), track: 'technical' });
       const runner: StepRunner = {
         run: async (step) => {
-          if (step === 'wiring_check') {
+          if (step === 'build_review') {
             await writeFile(
-              join(dir, '.pipeline/wiring-evidence.json'),
-              GAP_EVIDENCE(dir, 'foo unreachable from any entry point'),
+              join(dir, '.pipeline/build-review.json'), FAIL_VERDICT('foo unreachable from any entry point'),
             );
             return { success: true };
           }
@@ -759,7 +741,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
       expect(await exists(dir, HALT_MARKER)).toBe(true);
       const body = await readFile(join(dir, HALT_MARKER), 'utf-8');
-      expect(body).toContain('wiring_check');
+      expect(body).toContain('build_review');
       expect(body).toContain(String(MAX_KICKBACKS_PER_GATE));
       expect(body).toContain('foo unreachable from any entry point');
       // Today this path hand-rolls writeFile and writes no class sidecar, so
@@ -770,8 +752,8 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
   );
 
   it(
-    'Story 5 negative: the build_review cap HALT — the second converted site — is also ' +
-      'classified needs-human and names its gate',
+    'Story 5 negative: a rubric FAIL authored inline — not through the shared vehicle — ' +
+      'reaches the same cap HALT, classified needs-human and naming its gate',
     async () => {
       await writeState(statePath, { ...frontDone(), track: 'technical' });
       const runner: StepRunner = {
@@ -784,7 +766,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'FAIL',
-                rubric: { tautology: true, scope: false, rootCause: false },
+                rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
                 findings: { tautology: ['assertion restates the implementation'] },
               }),
             );

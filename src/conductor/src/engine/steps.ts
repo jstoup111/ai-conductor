@@ -151,8 +151,9 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
-    // Wiring reachability is one branch of the deterministic BUILD
-    // verification group. The joined result gates model review below.
+    // Deprecated topology-compatibility no-op. build_review owns wiring
+    // judgement, but existing state and prerequisite contracts retain this
+    // slot until the scheduled retirement removes it deliberately.
     name: 'wiring_check',
     label: 'Wiring Check',
     phase: 'BUILD',
@@ -160,7 +161,7 @@ export const ALL_STEPS: StepDefinition[] = [
     prerequisites: ['build'],
     skippableForTiers: [],
     isCheckpoint: false,
-    loopGate: true,
+    deprecated: { adr: 'adr-2026-08-11-wiring-judged-in-build-review' },
   },
   {
     // Native aggregate verification is the other deterministic BUILD branch.
@@ -345,9 +346,9 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
 };
 
 /**
- * Deterministic BUILD verification group: wiring_check and test_suite run
- * after build and join before build_review. This wraps the existing members
- * without removing or reordering their individual StepDefinitions.
+ * Deterministic BUILD verification: the retained no-op wiring_check and
+ * test_suite run after build and join before the semantic build_review gate.
+ * Wiring judgement itself belongs to build_review.
  */
 export const BUILD_VERIFICATION_GROUP: StepGroup = {
   name: 'build_verification',

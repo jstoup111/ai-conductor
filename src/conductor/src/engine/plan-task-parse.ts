@@ -1,20 +1,9 @@
 // Shared plan-parsing utilities (relocated out of autoheal.ts).
 //
-// `parsePlanTaskPaths` and `TASK_ID_PATTERN` are consumed by wiring-probe.ts
-// and wired-into.ts (the wiring-reachability gate) as well as by
-// autoheal.ts's own evidence-derivation logic. A later phase deletes
-// autoheal's evidence-derivation logic, so this standalone module is the
-// stable home for the shared grammar/parser — autoheal.ts re-exports from
-// here for backward compatibility with its existing call sites.
-//
-// autoheal.ts imports WIRED_INTO_LINE from wired-into.ts, and wired-into.ts
-// imports TASK_ID_PATTERN from this module, creating a circular module
-// dependency (the same shape that previously existed directly between
-// autoheal.ts and wired-into.ts — see the comment at the top of
-// wired-into.ts). WIRED_INTO_LINE is only referenced inside
-// parsePlanTaskPaths' function body (never at module top level), so both
-// import orderings remain safe under ESM's circular-import resolution.
-import { WIRED_INTO_LINE } from './wired-into.js';
+// `parsePlanTaskPaths` and `TASK_ID_PATTERN` are consumed by autoheal.ts's
+// evidence-derivation logic. This standalone module remains the stable home
+// for the shared grammar/parser; autoheal.ts re-exports it for backward
+// compatibility with its existing call sites.
 import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-artifact-seal.js';
 
 // Task ID pattern: alphanumeric + dots, underscores, hyphens
@@ -48,6 +37,11 @@ export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
 // shorthand to inherit an earlier task's set. Matches `**Files:**`,
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+
+// Retired **Wired-into:** metadata must remain excluded from legacy fallback
+// paths in historical plans. This preserves only the old line grammar (case,
+// optional bullet, qualifier, and colon placement), not its wiring behavior.
+const RETIRED_WIRED_INTO_METADATA_LINE = /^\s*(?:[-*]\s+)?\*\*Wired-into(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 
 /** Path-looking tokens from a **Files:** line (plain text or backticked). */
 function extractFilesLinePaths(rest: string): string[] {
@@ -178,14 +172,10 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
       inFilesBlock = false;
     }
 
-    // A **Wired-into:** line is a distinct authoring-time declaration (the
-    // wiring reachability gate) — NOT a **Files:** corroboration source.
-    // It must be consumed and skipped here, BEFORE the legacy backtick
-    // prose-fallback below, or its `path#symbol` site(s) would otherwise be
-    // harvested as phantom **Files:** corroboration paths.
-    if (WIRED_INTO_LINE.test(line)) {
-      continue;
-    }
+    // Retired wiring metadata is prose, not a legacy file-list item. Consume
+    // its historical grammar before the fallback so it cannot authorize paths
+    // outside an explicit Files declaration.
+    if (RETIRED_WIRED_INTO_METADATA_LINE.test(line)) continue;
 
     // Legacy fallback source: backtick path tokens in a section that has no
     // **Files:** line. Restricted to dedicated file-list bullet items

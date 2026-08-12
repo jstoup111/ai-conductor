@@ -24,7 +24,12 @@ import {
 } from './complexity.js';
 import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt, CiFailureContext, CiFailureAttempt } from './rebase.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
-import { findArtifactFiles, resolveFeaturePlanPath, BUILD_REVIEW_VERDICT } from './artifacts.js';
+import {
+  findArtifactFiles,
+  resolveFeaturePlanPath,
+  BUILD_REVIEW_VERDICT,
+  validateBuildReviewVerdict,
+} from './artifacts.js';
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
@@ -523,9 +528,11 @@ export class DefaultStepRunner implements StepRunner {
       );
     }
     if (step === 'wiring_check') {
-      return { success: true };
+      return {
+        success: false,
+        output: 'wiring_check is retired; build_review owns wiring judgement',
+      };
     }
-
     // build_review is a one-shot grader dispatch — never resumes the main
     // conductor session (see runBuildReview() for the resolveRebaseConflict
     // fresh-uuid/resume:false pattern).
@@ -786,7 +793,7 @@ export class DefaultStepRunner implements StepRunner {
                   optionsForCandidate: (candidateKey: string) => ({
                     ...options,
                     prompt: renderSkillInvocation(
-                      STEP_SKILL_INVOCATIONS[step],
+                      STEP_SKILL_INVOCATIONS[step]!,
                       candidateKey,
                     ),
                   }),
@@ -873,7 +880,7 @@ export class DefaultStepRunner implements StepRunner {
                 optionsForCandidate: (candidateKey: string) => ({
                   ...options,
                   prompt: renderSkillInvocation(
-                    STEP_SKILL_INVOCATIONS[request.step],
+                    STEP_SKILL_INVOCATIONS[request.step]!,
                     candidateKey,
                   ),
                 }),
@@ -1709,6 +1716,7 @@ export class DefaultStepRunner implements StepRunner {
     try {
       inputs = {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath),
+        entryPoints: this.config?.wiring?.entry_points,
         acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
       };
     } catch (err) {
@@ -1925,6 +1933,16 @@ export class DefaultStepRunner implements StepRunner {
     }
     if (result.success) {
       await this.stampBuildReviewVerdict();
+      const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
+      try {
+        const validation = validateBuildReviewVerdict(JSON.parse(await readFile(verdictPath, 'utf-8')));
+        if (!validation.ok) return finalize({ success: false, output: validation.reason });
+      } catch {
+        return finalize({
+          success: false,
+          output: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must record a complete PASS/FAIL verdict`,
+        });
+      }
       return finalize({ success: true, output: result.output });
     }
 

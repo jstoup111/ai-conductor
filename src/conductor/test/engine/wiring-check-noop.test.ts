@@ -1,0 +1,128 @@
+import { describe, expect, it } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import {
+  CUSTOM_COMPLETION_PREDICATES,
+} from '../../src/engine/artifacts.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+
+async function withFixture(run: (dir: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), 'wiring-check-noop-'));
+  try {
+    await run(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function staleEvidence(): object {
+  return {
+    schema: 1,
+    base: 'base123',
+    head: 'old-head',
+    layer2: { applicable: true },
+    waivers: [],
+    tasks: [{ id: '1', contract: 'src/x.ts#entry', gaps: [] }],
+  };
+}
+
+describe('wiring_check — deprecated no-op completion predicate', () => {
+  it('has no remaining producer for a wiring_check to build kickback', async () => {
+    const conductorSource = await readFile(
+      new URL('../../src/engine/conductor.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(conductorSource).not.toContain("from: 'wiring_check'");
+    expect(conductorSource).not.toContain("checkKickbackToBuildEscalation('wiring_check')");
+  });
+
+  it('settles without dispatch, a stall, or a kickback', async () => {
+    const events = new ConductorEventEmitter();
+    const terminalEvents: string[] = [];
+    events.on('loop_halt', () => { terminalEvents.push('halt'); });
+    events.on('kickback', () => { terminalEvents.push('kickback'); });
+    let runnerCalls = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        runnerCalls++;
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(tmpdir(), 'wiring-check-noop-state.json'),
+      projectRoot: tmpdir(),
+      stepRunner: runner,
+      events,
+    });
+
+    await (conductor as unknown as {
+      runWiringCheckStep: (state: object) => Promise<unknown>;
+    }).runWiringCheckStep({});
+
+    expect({ terminalEvents, runnerCalls }).toEqual({
+      terminalEvents: [],
+      runnerCalls: 0,
+    });
+  });
+
+  it('reports done when the fixture contains no plan', async () => {
+    await withFixture(async (dir) => {
+      const result = await predicate(dir, {});
+
+      expect(result).toEqual({ done: true });
+    });
+  });
+
+  it('reports done without reading the current HEAD for an undeterminable diff base', async () => {
+    await withFixture(async (dir) => {
+      let headReads = 0;
+
+      const result = await predicate(dir, {
+        getHeadSha: async () => {
+          headReads++;
+          throw new Error('diff base is undeterminable');
+        },
+      });
+
+      expect(result).toEqual({ done: true });
+      expect(headReads).toBe(0);
+    });
+  });
+
+  it('reports done when .pipeline is unreadable', async () => {
+    await withFixture(async (dir) => {
+      await writeFile(join(dir, '.pipeline'), 'not a directory', 'utf-8');
+
+      const result = await predicate(dir, {});
+
+      expect(result).toEqual({ done: true });
+    });
+  });
+
+  it('reports done without reading stale wiring evidence', async () => {
+    await withFixture(async (dir) => {
+      await mkdir(join(dir, '.pipeline'));
+      await writeFile(
+        join(dir, '.pipeline/wiring-evidence.json'),
+        JSON.stringify(staleEvidence()),
+        'utf-8',
+      );
+      let headReads = 0;
+
+      const result = await predicate(dir, {
+        getHeadSha: async () => {
+          headReads++;
+          return 'current-head';
+        },
+      });
+
+      expect(result).toEqual({ done: true });
+      expect(headReads).toBe(0);
+    });
+  });
+});

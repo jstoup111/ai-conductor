@@ -573,18 +573,6 @@ export function createProgram(): Command {
     .command('plan-protected-targets <path>')
     .description('Blocking scan for plan tasks that target another feature’s protected artifact');
 
-  // Validate-wired-into subcommand. NON-INTERACTIVE: a DECIDE-time gate that
-  // resolves every declared `Wired-into:` anchor in a plan through the same
-  // machinery BUILD-time completion verification uses, so an anchor that can
-  // never resolve fails while the plan is being authored instead of stalling a
-  // build silently. Dispatched in index.ts (detectValidateWiredIntoCommand)
-  // before the pipeline boots; declared here so `--help` lists it. BLOCKING:
-  // exits 1 on any unresolved anchor.
-  program
-    .command('validate-wired-into <plan>')
-    .description('Resolve a plan\'s **Wired-into:** anchors against the real wiring machinery; exits 1 on any anchor that cannot resolve')
-    .option('--cwd <dir>', 'Repository directory the plan\'s repo-relative paths resolve against (default: process.cwd())');
-
   // Reseal is an operator-driven, non-interactive command. It is declared here
   // for discoverability; index.ts adds its pre-boot dispatch separately.
   program

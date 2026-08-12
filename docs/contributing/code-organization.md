@@ -150,11 +150,9 @@ Seven files sit at the top level of `src/conductor/src/`.
 Subcommand detection runs first; the `detectInline` check at `:670` is the last fallthrough, and a bare
 invocation with no subcommand is rejected with guidance rather than silently starting a run.
 
-The wiring-reachability gate walks the import graph from the roots declared in
-`.ai-conductor/config.yml` under `wiring.entry_points`: `src/conductor/src/index.ts`,
-`src/conductor/src/daemon-cli.ts`, `src/conductor/src/intake-loop-cli.ts`, and
-`src/conductor/src/engine/engineer-cli.ts`. A new root that `index.ts` cannot reach must be added there
-or the gate will not see files that only it reaches.
+`wiring.entry_points` in `.ai-conductor/config.yml` supplies the production roots that
+`build_review` gives its static wiring rubric. Keep it current when adding an independently invoked
+entry point so the reviewer can assess reachability from the complete production surface.
 
 ## Dependency direction
 

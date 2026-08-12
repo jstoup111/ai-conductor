@@ -818,7 +818,7 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['no plan task was ever resolved'],
-              rubric: { completeness: true },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
               codeStamp: headSha.trim(),
             }),
           );
@@ -857,6 +857,7 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
     // than once, each time via Task 8's routing branch (the plan never
     // resolves, so completion.done for `build` is never true).
     expect(stepStarts.filter((s) => s === 'build_review').length).toBeGreaterThan(1);
+    expect(stepStarts).not.toContain('wiring_check');
 
     // Kickback fired, from build_review to build, bounded by the cap — never
     // an unbounded route→FAIL loop.
@@ -935,7 +936,7 @@ describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['plan task 3 was never resolved'],
-              rubric: { completeness: true },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
               codeStamp: headSha.trim(),
             }),
           );
@@ -966,6 +967,7 @@ describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
     // Routed forward at least once — build_review was reached even though
     // task 3 never resolved.
     expect(stepStarts).toContain('build_review');
+    expect(stepStarts).not.toContain('wiring_check');
 
     // Kickback re-dispatch context (the retry hint `build` receives on its
     // NEXT dispatch, after build_review's FAIL) names task 3's gap.

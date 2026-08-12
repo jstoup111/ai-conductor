@@ -67,15 +67,10 @@ describe('BUILD repair re-dispatches every verification member without stranding
     );
     await writeVerdict(projectRoot, 'build', { satisfied: true, checkedAt: 1 });
 
-    let wiringRuns = 0;
     let buildRuns = 0;
     let reviewRuns = 0;
     const runner: StepRunner = {
       run: async (step) => {
-        if (step === 'wiring_check') {
-          wiringRuns += 1;
-          return { success: true };
-        }
         if (step === 'build') {
           buildRuns += 1;
           return { success: true };
@@ -91,8 +86,7 @@ describe('BUILD repair re-dispatches every verification member without stranding
                 tautology: false,
                 scope: false,
                 rootCause: false,
-                completeness: false,
-              },
+                completeness: false, wiring: false },
             }),
           );
           return { success: true };
@@ -150,10 +144,10 @@ describe('BUILD repair re-dispatches every verification member without stranding
 
     await conductor.run();
 
-    // The initial full round runs wiring once; the repaired full round runs it
-    // once more. Normal width-one reuse has dedicated regression coverage in
-    // deterministic-build-verification-flow.acceptance.test.ts.
-    expect(wiringRuns).toBe(2);
+    // wiring_check is a deprecated no-op that settles in-process, so it never
+    // reaches the runner in either round — the runner's `unexpected dispatch`
+    // throw is the regression lock. Normal width-one reuse has dedicated
+    // coverage in deterministic-build-verification-flow.acceptance.test.ts.
     // Repaired test_suite settles from its own content-addressed evidence;
     // a prior gate verdict is never the authority for this REUSED outcome.
     expect(suiteOutcomes).toEqual(['INDETERMINATE', 'REUSED']);

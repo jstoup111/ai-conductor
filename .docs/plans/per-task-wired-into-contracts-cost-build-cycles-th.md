@@ -85,6 +85,11 @@ already be a no-op. T15 is the regression fence, T16–T17 close documentation.
    `rubric` reads as not-judged and does NOT satisfy the gate; a `rubric.wiring` that is not a
    boolean fails closed; `rubric.wiring: false` with missing or empty `findings.wiring` fails closed
    naming the missing findings.
+
+> **Amended 2026-08-12 by operator recovery:** The final clause above has reversed polarity.
+> Each `rubric` boolean marks whether that item failed, so missing or empty `findings.wiring`
+> fails closed when `rubric.wiring: true`, not when it is `false`.
+
 2. Verify the tests fail because the validator has no `wiring` awareness.
 3. Implement: nothing.
 4. Commit: "test(build-review): specify wiring rubric key compatibility"
@@ -102,6 +107,11 @@ already be a no-op. T15 is the regression fence, T16–T17 close documentation.
 **Steps:**
 1. Add happy-path tests: a five-item verdict with all items true validates and passes; a verdict
    with `rubric.wiring: false` and a populated `findings.wiring` validates and fails the gate.
+
+> **Amended 2026-08-12 by operator recovery:** Both polarity statements above are corrected:
+> a five-item verdict with all items `false` validates and passes; a verdict with
+> `rubric.wiring: true` and populated `findings.wiring` validates and fails the gate.
+
 2. Verify they fail.
 3. Extend the verdict type and its validator with `rubric.wiring` and `findings.wiring`, treating an
    absent key as not-judged rather than as a pass.

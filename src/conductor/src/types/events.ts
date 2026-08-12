@@ -140,6 +140,12 @@ export interface ProviderAttemptEvent {
 export type ConductorEvent =
   | { type: 'step_started'; step: StepName; index: number }
   | {
+      /** A retained compatibility step ran as a deprecated no-op. */
+      type: 'deprecated_step';
+      step: StepName;
+      adr: string;
+    }
+  | {
       type: 'step_completed';
       step: StepName;
       status: StepStatus;

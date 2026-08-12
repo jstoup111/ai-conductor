@@ -1087,6 +1087,7 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
+        s.name !== 'wiring_check' &&
         s.name !== 'rebase',
     ).length;
     expect(runner.run).toHaveBeenCalledTimes(dispatchedSteps);
@@ -1164,6 +1165,7 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
+        s.name !== 'wiring_check' &&
         s.name !== 'rebase',
     ).map((s) => s.name);
     expect(callOrder).toEqual(expectedOrder);
@@ -1486,7 +1488,7 @@ describe('engine/conductor', () => {
         full,
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
         }),
       );
       if (mtimeMs !== undefined) {
@@ -5122,6 +5124,7 @@ describe('engine/conductor', () => {
         s.name !== 'complexity' &&
         s.name !== 'worktree' &&
         s.name !== 'test_suite' &&
+        s.name !== 'wiring_check' &&
         s.name !== 'rebase',
     ).map((s) => s.name);
     expect(stepsRun).toEqual(expectedOrder);
@@ -5199,6 +5202,7 @@ describe('engine/conductor', () => {
         n !== 'complexity' &&
         n !== 'worktree' &&
         n !== 'test_suite' &&
+        n !== 'wiring_check' &&
         n !== 'rebase',
     );
     expect(stepsRun).toEqual(expectedOrder);
@@ -8072,7 +8076,10 @@ describe('engine/conductor', () => {
       // Every downstream judged gate — including the audits that Task 7's
       // rebase-origin guard would otherwise preserve — is swept stale.
       expect(result.state['build_review']).toBe('stale');
-      expect(result.state['wiring_check']).toBe('stale');
+      // ...except a deprecated no-op, which has no work to redo and would
+      // otherwise burn a selection lap every round
+      // (adr-2026-08-11-deprecated-no-op-step-retirement).
+      expect(result.state['wiring_check']).toBe('done');
       expect(result.state['manual_test']).toBe('stale');
       expect(result.state['prd_audit']).toBe('stale');
       expect(result.state['architecture_review_as_built']).toBe('stale');
@@ -10989,7 +10996,7 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 verdict: 'PASS',
                 reasons: [],
-                rubric: { tautology: true, scope: true, rootCause: true, completeness: true },
+                rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
               }),
             );
           } else if (step === 'manual_test') {

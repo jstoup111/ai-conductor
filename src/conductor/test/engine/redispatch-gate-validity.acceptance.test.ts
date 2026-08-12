@@ -62,6 +62,7 @@ import {
   MANUAL_TEST_FAIL_EVIDENCE,
 } from '../../src/engine/artifacts.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 
 const execFile = promisify(execFileCb);
 
@@ -172,7 +173,10 @@ async function writeBuildReviewVerdict(
   codeStamp?: string,
 ): Promise<void> {
   const path = join(repo, '.pipeline/build-review.json');
-  const body: Record<string, unknown> = { verdict, rubric: {} };
+  const body: Record<string, unknown> = {
+    verdict,
+    rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+  };
   if (codeStamp) body.codeStamp = codeStamp;
   await writeFile(path, JSON.stringify(body, null, 2));
   await utimes(path, OLD_MTIME, OLD_MTIME);
@@ -249,6 +253,20 @@ describe('build_review: code-validity preserves a passed verdict across re-dispa
 
     const result = await checkStepCompletion(s.repo, 'build_review', ctxFor(s.repo));
     expect(result.done).toBe(false);
+  });
+
+  it('invalidates a stale stamped PASS for build_review without consulting the retired wiring_check gate', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
+    await writeBuildReviewVerdict(s.repo, 'PASS', baseline);
+    await commit(s, { 'src/a.ts': 'a2\n' }, 'kickback fix');
+
+    const result = await checkStepCompletion(s.repo, 'build_review', ctxFor(s.repo));
+
+    expect(result.done).toBe(false);
+    expect(ALL_STEPS.find((step) => step.name === 'build_review')?.loopGate).toBe(true);
+    expect(ALL_STEPS.find((step) => step.name === 'wiring_check')?.loopGate).not.toBe(true);
   });
 });
 

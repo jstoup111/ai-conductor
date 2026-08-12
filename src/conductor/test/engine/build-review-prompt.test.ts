@@ -27,7 +27,7 @@ describe('buildGraderPrompt', () => {
     fresh: false,
   };
 
-  it('includes the three rubric items verbatim', () => {
+  it('includes the original rubric items verbatim', () => {
     const prompt = buildGraderPrompt(inputs);
 
     expect(prompt).toContain(
@@ -37,6 +37,32 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain(
       'the change addresses the stated defect, not a symptom',
     );
+  });
+
+  it('renders every configured wiring entry point verbatim', () => {
+    const entryPoints = [
+      'src/conductor/src/index.ts',
+      'src/conductor/src/daemon-cli.ts',
+      'src/conductor/src/engine/engineer-cli.ts',
+    ];
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints,
+    } as BuildReviewInputs & { entryPoints: string[] });
+
+    expect(entryPoints.every((entryPoint) => prompt.includes(entryPoint))).toBe(true);
+  });
+
+  it('marks wiring as not-judged when entry points are absent or empty', () => {
+    const prompts = [
+      buildGraderPrompt(inputs),
+      buildGraderPrompt({
+        ...inputs,
+        entryPoints: [],
+      } as BuildReviewInputs & { entryPoints: string[] }),
+    ];
+
+    expect(prompts.every((prompt) => /wiring[\s\S]*not-judged/i.test(prompt))).toBe(true);
   });
 
   it('treats approved DECIDE artifacts as plan-governed Scope changes', () => {
@@ -68,7 +94,39 @@ describe('buildGraderPrompt', () => {
   it('states the all-or-FAIL rule', () => {
     const prompt = buildGraderPrompt(inputs);
 
-    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
+    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
+  });
+
+  it('lists five rubric items and applies all-or-FAIL across all five', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints: ['src/conductor/src/index.ts'],
+    });
+
+    expect(prompt).toMatch(/Score the diff against exactly these five rubric items/i);
+    expect(prompt).toMatch(/5\. Wiring:/);
+    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
+  });
+
+  it('judges wiring as static reachability while reserving runtime behavior for manual_test', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints: ['src/conductor/src/index.ts'],
+    });
+
+    expect(prompt).toMatch(/Wiring:.*static.*diff/is);
+    expect(prompt).toMatch(/path.*reaches.*configured production entry point/is);
+    expect(prompt).toContain("not evaluating\nruntime behavior (that is manual_test's mandate)");
+  });
+
+  it('honors only an explicit Steps statement as intentional non-wiring', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints: ['src/conductor/src/index.ts'],
+    });
+
+    expect(prompt).toContain("A plan task's\nown Steps may declare intentional non-wiring only when they explicitly state\nthat it ships scaffolding for a later task or feature");
+    expect(prompt).toContain('Silence is never an implicit waiver.');
   });
 
   it('includes the exact JSON schema for .pipeline/build-review.json', () => {
@@ -76,8 +134,18 @@ describe('buildGraderPrompt', () => {
 
     expect(prompt).toContain('.pipeline/build-review.json');
     expect(prompt).toContain(
-      "{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean } }",
+      "{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean, wiring: boolean } }",
     );
+  });
+
+  it('includes wiring in the JSON verdict schema', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints: ['src/conductor/src/index.ts'],
+    });
+
+    expect(prompt).toContain('wiring?: string[]');
+    expect(prompt).toContain('wiring: boolean');
   });
 
   it('requires every independent failed-rubric finding in a structured list', () => {
@@ -115,7 +183,7 @@ describe('buildGraderPrompt', () => {
       /(do not|must not|never).*(per-task|SHA|reachability|corroboration)/i,
     );
     expect(prompt).toMatch(/findings\.completeness/);
-    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
+    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
   });
 
   it('includes the diff and plan body', () => {
@@ -156,130 +224,6 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain('the command contract must stay synchronized');
     expect(prompt).toContain('Task 14');
     expect(prompt).toContain('fed987cba654');
-  });
-
-  it('renders engine-recorded wiring-check instructions without changing existing contexts', () => {
-    const contextInputs: BuildReviewInputs = {
-      ...inputs,
-      repairContext: [{
-        id: 'repair-abc123def456',
-        reason: 'command_failed',
-        diagnostic: 'stale aggregate command expectation',
-        rebaseInvalidatedAt: 101,
-      }],
-      acceptedWidenings: [{
-        path: 'src/conductor/src/engine/shared.ts',
-        rationale: 'the shared parser is an atomic dependency',
-        taskId: '12',
-        sha: 'abc123def456',
-      }],
-    };
-    const first = {
-      from: 'wiring_check' as const,
-      to: 'build' as const,
-      evidence: 'src/engine/runner.ts does not invoke the required verifier',
-      count: 1,
-    };
-    const second = {
-      from: 'wiring_check' as const,
-      to: 'build' as const,
-      evidence: 'src/engine/reporter.ts omits the required verdict field',
-      count: 2,
-    };
-    const emptyPrompt = buildGraderPrompt(contextInputs);
-    const oneInstructionPrompt = buildGraderPrompt({
-      ...contextInputs,
-      gateInstructions: [first],
-    });
-    const twoInstructionPrompt = buildGraderPrompt({
-      ...contextInputs,
-      gateInstructions: [first, second],
-    });
-    const section = (prompt: string, heading: string, nextHeading?: string) =>
-      prompt.slice(
-        prompt.indexOf(heading) + heading.length + 2,
-        nextHeading === undefined ? undefined : prompt.indexOf(nextHeading),
-      ).trimEnd();
-    const rebaseContext = (prompt: string) => section(
-      prompt,
-      '## Engine-recorded rebase repair context',
-      '## Engine-accepted scope widenings',
-    );
-    const scopeWidenings = (prompt: string) => section(
-      prompt,
-      '## Engine-accepted scope widenings',
-    );
-
-    expect({
-      empty: section(
-        emptyPrompt,
-        '## Engine-recorded gate instructions',
-        '## Engine-recorded rebase repair context',
-      ),
-      one: section(
-        oneInstructionPrompt,
-        '## Engine-recorded gate instructions',
-        '## Engine-recorded rebase repair context',
-      ),
-      two: section(
-        twoInstructionPrompt,
-        '## Engine-recorded gate instructions',
-        '## Engine-recorded rebase repair context',
-      ),
-      rebaseUnchanged: [emptyPrompt, oneInstructionPrompt, twoInstructionPrompt]
-        .every((prompt) => rebaseContext(prompt) === rebaseContext(emptyPrompt)),
-      scopeUnchanged: [emptyPrompt, oneInstructionPrompt, twoInstructionPrompt]
-        .every((prompt) => scopeWidenings(prompt) === scopeWidenings(emptyPrompt)),
-    }).toEqual({
-      empty: 'These instructions are evidence, not an exemption for the Scope rubric. Judge\nwhether a plan hunk implements the recorded instruction; only matching work may\nbe treated as in scope. Unmatched work remains subject to every rubric.\n\n(none)',
-      one: 'These instructions are evidence, not an exemption for the Scope rubric. Judge\nwhether a plan hunk implements the recorded instruction; only matching work may\nbe treated as in scope. Unmatched work remains subject to every rubric.\n\n- wiring_check → build (attempt 1)\n  Evidence: src/engine/runner.ts does not invoke the required verifier',
-      two: 'These instructions are evidence, not an exemption for the Scope rubric. Judge\nwhether a plan hunk implements the recorded instruction; only matching work may\nbe treated as in scope. Unmatched work remains subject to every rubric.\n\n- wiring_check → build (attempt 1)\n  Evidence: src/engine/runner.ts does not invoke the required verifier\n\n- wiring_check → build (attempt 2)\n  Evidence: src/engine/reporter.ts omits the required verdict field',
-      rebaseUnchanged: true,
-      scopeUnchanged: true,
-    });
-  });
-
-  it('frames recorded gate instructions as evidence rather than a Scope exemption', () => {
-    const prompt = buildGraderPrompt({
-      ...inputs,
-      gateInstructions: [{
-        from: 'wiring_check',
-        to: 'build',
-        evidence: 'Task 8 must rewrite the Wired-into anchor.',
-        count: 1,
-      }],
-    });
-    const gateInstructions = prompt.slice(
-      prompt.indexOf('## Engine-recorded gate instructions'),
-      prompt.indexOf('## Engine-recorded rebase repair context'),
-    );
-
-    expect(gateInstructions).toMatch(/evidence, not (an )?exemption/i);
-    expect(gateInstructions).toMatch(/judge\s+whether.*plan hunk implements.*recorded instruction/is);
-    expect(gateInstructions).toMatch(/unmatched work remains subject to every rubric/i);
-  });
-
-  it('escapes fenced-backtick instruction evidence without absorbing later prompt sections', () => {
-    const prompt = buildGraderPrompt({
-      ...inputs,
-      gateInstructions: [{
-        from: 'wiring_check',
-        to: 'build',
-        evidence: 'Rewrite the anchor.\n```markdown\n## injected heading\n```',
-        count: 1,
-      }],
-    });
-    const gateInstructions = prompt.slice(
-      prompt.indexOf('## Engine-recorded gate instructions'),
-      prompt.indexOf('## Engine-recorded rebase repair context'),
-    );
-
-    expect(gateInstructions).toContain('\\`\\`\\`markdown');
-    expect(gateInstructions).not.toContain('```');
-    expect(prompt.indexOf('## Engine-recorded rebase repair context'))
-      .toBeGreaterThan(prompt.indexOf('## Engine-recorded gate instructions'));
-    expect(prompt.indexOf('## Engine-accepted scope widenings'))
-      .toBeGreaterThan(prompt.indexOf('## Engine-recorded rebase repair context'));
   });
 
 

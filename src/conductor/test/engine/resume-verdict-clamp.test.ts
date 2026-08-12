@@ -39,6 +39,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { clampToRunnablePrerequisite, Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { checkGate } from '../../src/engine/gates.js';
 import { gateSatisfied } from '../../src/engine/selector.js';
 import { writeFile, mkdir } from 'fs/promises';
@@ -271,26 +272,48 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
   // ── Story 3: post-rebase kickback verdicts are honored on resume ──────────
   describe('Story 3: post-rebase kickback verdicts steer the resume entry', () => {
     it.each([
-      { staleGate: 'wiring_check' as const },
-      { staleGate: 'test_suite' as const },
-    ])('a stale $staleGate proof resumes before build_review', async ({ staleGate }) => {
+      {
+        name: 'an incomplete PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        done: false,
+      },
+      {
+        name: 'a complete current PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        done: true,
+      },
+    ])('clamps $name based on the build_review predicate', async ({ rubric, done }) => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'build-review.json'),
+        JSON.stringify({ verdict: 'PASS', rubric }),
+      );
+
+      const completion = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now() - 1_000,
+        attemptStartedAt: Date.now() - 1_000,
+      });
+
+      // Resume's clamp treats a non-current completion as pending; a complete
+      // current PASS remains done. wiring_check is deliberately not consulted.
+      expect(completion.done).toBe(done);
+      expect(ALL_STEPS.find((step) => step.name === 'wiring_check')?.loopGate).not.toBe(true);
+    });
+
+    // wiring_check is omitted: it is a deprecated no-op that settles
+    // in-process, so a stale wiring proof never steers a resume entry
+    // (adr-2026-08-11-wiring-judged-in-build-review).
+    it('a stale test_suite proof resumes before build_review', async () => {
+      const staleGate: StepName = 'test_suite';
       const seed = seedDoneThrough('manual_test');
       seed.build = 'done';
-      seed.wiring_check = staleGate === 'wiring_check' ? 'stale' : 'done';
-      seed.test_suite = staleGate === 'test_suite' ? 'stale' : 'done';
+      seed.wiring_check = 'done';
+      seed.test_suite = 'stale';
       seed.build_review = 'stale';
       await writeState(statePath, seed as ConductState);
       await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
-      await writeVerdict(dir, 'wiring_check', {
-        satisfied: staleGate !== 'wiring_check',
-        checkedAt: 1,
-        ...(staleGate === 'wiring_check' ? { kickback } : {}),
-      });
-      await writeVerdict(dir, 'test_suite', {
-        satisfied: staleGate !== 'test_suite',
-        checkedAt: 1,
-        ...(staleGate === 'test_suite' ? { kickback } : {}),
-      });
+      await writeVerdict(dir, 'wiring_check', { satisfied: true, checkedAt: 1 });
+      await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback });
       await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
 
       const sentinel = new Error(`observed:${staleGate}`);
@@ -538,17 +561,17 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   // ── Story 5: tail selection is clamped by the entry-gate predicate ──────
   describe('Story 5: tail selection cannot enter a gate its prerequisite rejects', () => {
-    async function selectTailWithBuildStatus(
-      buildStatus: 'done' | 'failed',
-      buildVerdictSatisfied = true,
+    async function selectTailWithTestSuiteStatus(
+      testSuiteStatus: 'done' | 'failed',
+      testSuiteVerdictSatisfied = true,
     ): Promise<number | null | 'halt'> {
       const seed = seedDoneThrough('finish');
-      seed.build = buildStatus;
-      seed.wiring_check = 'pending';
+      seed.test_suite = testSuiteStatus;
+      seed.build_review = 'pending';
       await writeState(statePath, seed as ConductState);
 
       for (const name of ALL_STEPS.filter((step) => step.loopGate).map((step) => step.name)) {
-        if (name !== 'wiring_check' && (name !== 'build' || buildVerdictSatisfied)) {
+        if (name !== 'build_review' && (name !== 'test_suite' || testSuiteVerdictSatisfied)) {
           await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
         }
       }
@@ -576,24 +599,24 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     }
 
     it('selects the failed prerequisite when the selector considers its verdict satisfied', async () => {
-      const selectedIndex = await selectTailWithBuildStatus('failed');
+      const selectedIndex = await selectTailWithTestSuiteStatus('failed');
 
-      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build'));
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'test_suite'));
     });
 
     it('selects the originally-unsatisfied gate once its prerequisite is fresh', async () => {
-      const selectedIndex = await selectTailWithBuildStatus('done');
+      const selectedIndex = await selectTailWithTestSuiteStatus('done');
 
-      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'wiring_check'));
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build_review'));
     });
 
     it('leaves an agreed-unsatisfied prerequisite as the ordinary bounded selection', async () => {
-      const selectedIndex = await selectTailWithBuildStatus('failed', false);
+      const selectedIndex = await selectTailWithTestSuiteStatus('failed', false);
 
       // With no satisfied verdict for build, both the selector and the entry
       // gate consider it unsatisfied. The clamp must not manufacture a new
       // outcome or choose another step.
-      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build'));
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'test_suite'));
     });
 
     it('halts with an explicit named verdict when repeated prerequisite dispatch cannot resolve', async () => {
@@ -637,18 +660,18 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it('uses only the existing selector and entry-gate predicates for a stale prerequisite', () => {
       const state = {
         ...seedDoneThrough('finish'),
-        build: 'stale',
-        wiring_check: 'pending',
+        test_suite: 'stale',
+        build_review: 'pending',
       } as ConductState;
-      const wiringIndex = ALL_STEPS.findIndex((step) => step.name === 'wiring_check');
-      const wiring = ALL_STEPS[wiringIndex];
+      const buildReviewIndex = ALL_STEPS.findIndex((step) => step.name === 'build_review');
+      const buildReview = ALL_STEPS[buildReviewIndex];
 
       // The existing predicates intentionally disagree for stale: selector
       // re-dispatches it while the entry gate admits its dependent step. The
       // clamp consumes checkGate only; it must not add a third authority.
-      expect(gateSatisfied('build', state, { build: { satisfied: true, checkedAt: 1 } })).toBe(false);
-      expect(checkGate(wiring, state)).toEqual({ passed: true });
-      expect(clampToRunnablePrerequisite(ALL_STEPS, state, wiringIndex)).toBe(wiringIndex);
+      expect(gateSatisfied('test_suite', state, { test_suite: { satisfied: true, checkedAt: 1 } })).toBe(false);
+      expect(checkGate(buildReview, state)).toEqual({ passed: true });
+      expect(clampToRunnablePrerequisite(ALL_STEPS, state, buildReviewIndex)).toBe(buildReviewIndex);
     });
   });
 });

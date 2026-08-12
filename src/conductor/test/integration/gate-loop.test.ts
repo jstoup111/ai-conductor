@@ -142,7 +142,7 @@ describe('integration/gate-loop', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
         }),
       );
     } else if (step === 'wiring_check') {
@@ -1260,8 +1260,8 @@ describe('integration/gate-loop', () => {
       verdicts: Array<{
         verdict: 'FAIL' | 'PASS';
         reasons: string[];
-        findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[] }>;
-        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
+        findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[]; wiring: string[] }>;
+        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean; wiring: boolean };
       }>,
       remediationDispositions?: unknown[],
     ): Promise<{
@@ -1325,7 +1325,9 @@ describe('integration/gate-loop', () => {
                 verdict: v.verdict,
                 reasons: v.reasons,
                 findings: v.findings,
-                rubric: v.rubric ?? { tautology: false, scope: false, rootCause: false },
+                rubric: v.rubric ?? (v.verdict === 'PASS'
+                  ? { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false }
+                  : { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false }),
               }),
             );
             return { success: true };
@@ -1391,6 +1393,39 @@ describe('integration/gate-loop', () => {
       expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
       expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
       expect(result.retryReasons.join('\n')).toContain('tautological test padding');
+      expect(result.ran.filter((step) => step === 'build_review')).toHaveLength(2);
+      expect(result.ran).not.toContain('wiring_check');
+      expect(result.completed).toBe(true);
+    });
+
+    it('rejects a PASS with an incomplete five-item rubric instead of advancing through a second semantic gate', async () => {
+      const result = await runWithGraderVerdicts([
+        {
+          verdict: 'PASS',
+          reasons: [],
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false } as never,
+        },
+      ]);
+
+      expect(result.completed).toBe(false);
+      expect(result.ran).toContain('build_review');
+      expect(result.ran).not.toContain('wiring_check');
+    });
+
+    it('routes a wiring finding through build_review\'s ordinary FAIL kickback, without dispatching wiring_check', async () => {
+      const result = await runWithGraderVerdicts([
+        {
+          verdict: 'FAIL',
+          reasons: ['declared daemon entry point does not reach the new gate'],
+          findings: { wiring: ['daemon entry point does not reach the new gate'] },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
+        },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toContain('[wiring] daemon entry point does not reach the new gate');
+      expect(result.ran).not.toContain('wiring_check');
       expect(result.completed).toBe(true);
     });
 
@@ -1427,12 +1462,12 @@ describe('integration/gate-loop', () => {
           {
             verdict: 'FAIL',
             reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
-            rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
           },
           {
             verdict: 'PASS',
             reasons: [],
-            rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
           },
         ],
         [
@@ -1503,7 +1538,7 @@ describe('integration/gate-loop', () => {
           findings: {
             rootCause: ['patched the symptom, not the cause', 'second symptom-only patch'],
           },
-          rubric: { tautology: false, scope: false, rootCause: true, completeness: false },
+          rubric: { tautology: false, scope: false, rootCause: true, completeness: false, wiring: false },
         },
         { verdict: 'PASS', reasons: [] },
       ]);
@@ -1543,7 +1578,8 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: isFail ? 'FAIL' : 'PASS',
                 reasons: isFail ? ['diff touches merged-pr.txt which is out of scope'] : [],
-                rubric: { tautology: false, scope: isFail, rootCause: false },
+                findings: isFail ? { scope: ['diff touches merged-pr.txt which is out of scope'] } : undefined,
+                rubric: { tautology: false, scope: isFail, rootCause: false, completeness: false, wiring: false },
               }),
             );
             // Simulate `runBuildReview` having assembled fresh-base evidence
@@ -1629,7 +1665,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`always fails (attempt ${buildRuns})`],
-                rubric: { tautology: true, scope: false, rootCause: false },
+                rubric: { tautology: false, scope: true, rootCause: true, completeness: true, wiring: false },
               }),
             );
             return { success: true };
@@ -1696,7 +1732,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`incomplete implementation (attempt ${buildRuns})`],
-                rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+                rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
               }),
             );
             return { success: true };
@@ -1762,7 +1798,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict,
                 reasons: verdict === 'FAIL' ? ['one-time grader nit'] : [],
-                rubric: { tautology: false, scope: false, rootCause: false },
+                rubric: { tautology: verdict === 'FAIL', scope: false, rootCause: false, completeness: false, wiring: false },
               }),
             );
             return { success: true };
@@ -1846,7 +1882,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`always fails (attempt ${buildRuns})`],
-                rubric: { tautology: true, scope: false, rootCause: false },
+                rubric: { tautology: false, scope: true, rootCause: true, completeness: true, wiring: false },
               }),
             );
             return { success: true };
@@ -2020,7 +2056,7 @@ describe('integration/gate-loop', () => {
                 JSON.stringify({
                   verdict: 'FAIL',
                   reasons: ['tighten the assertion, it currently tautologizes'],
-                  rubric: { tautology: true, scope: false, rootCause: false },
+                  rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
                 }),
               );
               return { success: true };
@@ -2029,7 +2065,7 @@ describe('integration/gate-loop', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'PASS',
-                rubric: { tautology: false, scope: false, rootCause: false },
+                rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
               }),
             );
             return { success: true };
@@ -2394,6 +2430,16 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
           }
           return { success: true };
         }
+        if (step === 'build_review') {
+          await writeFile(
+            join(repoDir, '.pipeline/build-review.json'),
+            JSON.stringify({
+              verdict: 'PASS',
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+            }),
+          );
+          return { success: true };
+        }
         if (step === 'prd_audit') {
           auditRuns += 1;
           if (auditRuns === 1) {
@@ -2432,7 +2478,11 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
         if (step === 'retro') {
           await writeFile(join(repoDir, '.pipeline/retro.md'), '# Retro\n');
         } else if (step === 'finish') {
-          await writeFile(join(repoDir, '.pipeline/finish-choice'), 'keep\n');
+          await writeFile(join(repoDir, '.pipeline/finish-choice'), 'pr\n');
+          const state = JSON.parse(await readFile(realStatePath, 'utf-8'));
+          state.pr_url = 'https://example.com/pr/1';
+          await writeFile(realStatePath, JSON.stringify(state));
+          await writeFile(join(repoDir, '.pipeline/conduct-state.json'), JSON.stringify(state));
         }
         return { success: true };
       },
@@ -2450,6 +2500,9 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
       maxRetries: 1,
       baseBranch: 'main',
       config: { steps: { manual_test: { disable: true } } },
+      git: async (args: string[]) => args.includes('--symbolic-full-name')
+        ? { stdout: 'refs/remotes/origin/feature/current-feature\n' }
+        : { stdout: '' },
       shipmentEvidence: validShipmentEvidence,
     };
 
@@ -2458,20 +2511,6 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
     expect(kicks).toContainEqual({ from: 'prd_audit', to: 'build' });
     expect(buildRuns).toBeGreaterThan(0);
     expect(staleReportWasPresentBeforeAudit).toBe(false);
-
-    // The coverage-only failure routed through /remediate into BUILD. Resume
-    // the real SHIP tail after recording BUILD's deterministic native evidence;
-    // this dispatch adds FR-3's ALIGNED row and is the convergence proof.
-    const afterBuild = await readRealState(realStatePath);
-    if (!afterBuild.ok) throw new Error(afterBuild.error.message);
-    await writeRealState(realStatePath, {
-      ...afterBuild.value,
-      wiring_check: 'done',
-      test_suite: 'done',
-      build_review: 'skipped',
-      prd_audit: 'stale',
-    });
-    await new RealConductor({ ...conductorOptions, fromStep: 'prd_audit' }).run();
 
     expect(auditRuns).toBe(2);
     const finalState = await readRealState(realStatePath);

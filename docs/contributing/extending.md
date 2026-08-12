@@ -243,11 +243,11 @@ verbs go in `MANAGEMENT_VERBS` (`:76`); every known sub-verb must appear in `DAE
 or `detectUnknownDaemonSubcommand` (`:131`) rejects it as a typo — which is deliberate, since the
 alternative is silently launching a daemon run.
 
-### Wiring reachability
+### Static wiring review
 
 If your command's entry file is a *root* that `index.ts` cannot reach, add it to `wiring.entry_points` in
-`.ai-conductor/config.yml`. The wiring-reachability gate walks the import graph from those roots only; an
-unlisted root means the gate never sees the files beneath it.
+`.ai-conductor/config.yml`. `build_review` receives those roots for its static reachability rubric; an
+unlisted root leaves the reviewer without the configured production context to assess that path.
 
 ### What catches a CLI mistake
 
@@ -256,7 +256,7 @@ unlisted root means the gate never sees the files beneath it.
 | Declared in `cli.ts` but never dispatched | Nothing — the command silently falls through to the inline rejection. Add a CLI test. |
 | Dispatched but not declared | Nothing — it works but is undiscoverable in `--help`. |
 | A daemon sub-verb missing from `DAEMON_SUBVERBS` | `detectUnknownDaemonSubcommand` at runtime |
-| Unreachable new entry root | The `wiring_check` gate |
+| Unreachable new entry root | `build_review`'s static wiring rubric; add the root to `wiring.entry_points` and cover the command with a CLI test. |
 
 ### CLI tests
 

@@ -30,13 +30,27 @@ describe('build_review copy equivalence', () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
-  function runner(invoke = vi.fn().mockResolvedValue({
-    success: true,
-    output: '{"verdict":"PASS"}',
-    exitCode: 0,
-  })) {
+  function runner(invoke?: LLMProvider['invoke']) {
+    const defaultInvoke: LLMProvider['invoke'] = async () => {
+      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectDir, '.pipeline', 'build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: {
+            tautology: false,
+            scope: false,
+            rootCause: false,
+            completeness: false,
+            wiring: false,
+          },
+        }),
+      );
+      return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+    };
+    const providerInvoke = invoke ?? vi.fn(defaultInvoke);
     const provider: LLMProvider = {
-      invoke,
+      invoke: providerInvoke,
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const gitRunner = async (args: string[]) => {
@@ -45,7 +59,7 @@ describe('build_review copy equivalence', () => {
       if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
       return { exitCode: 1, stdout: '', stderr: '' };
     };
-    return { invoke, runner: new DefaultStepRunner(provider, 'session', projectDir, { planPath, gitRunner }) };
+    return { invoke: providerInvoke, runner: new DefaultStepRunner(provider, 'session', projectDir, { planPath, gitRunner }) };
   }
 
   it('fails build_review when a resolved declaration does not match its derived target', async () => {
@@ -84,6 +98,37 @@ describe('build_review copy equivalence', () => {
     expect(result.success).toBe(true);
     expect(runCopyEquivalence).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a legacy incomplete grader rubric before accepting the complete five-key verdict', async () => {
+    await writeFile(planPath, '# Plan\n\nNo declared replication.\n');
+    let rubric: Record<string, boolean> = {
+      tautology: false,
+      scope: false,
+      rootCause: false,
+      completeness: false,
+    };
+    const invoke = vi.fn(async () => {
+      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectDir, '.pipeline', 'build-review.json'),
+        JSON.stringify({ verdict: 'PASS', rubric }),
+      );
+      return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+    });
+    const { runner: subject } = runner(invoke);
+
+    await expect(subject.run('build_review', {})).resolves.toMatchObject({
+      success: false,
+      output: expect.stringMatching(/rubric\.wiring/i),
+    });
+
+    rubric = { ...rubric, wiring: false };
+    await expect(subject.run('build_review', {})).resolves.toMatchObject({
+      success: true,
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(runCopyEquivalence).not.toHaveBeenCalled();
   });
 
   it('fails before equivalence or grading when the declaration is malformed', async () => {

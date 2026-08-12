@@ -9,8 +9,7 @@
 import { isCodeOrTestPath } from './rebase.js';
 
 /**
- * Test-path convention shared with the wiring-reachability gate
- * (`isTestPath` in wiring-probe.ts): a path is test-only if it matches
+ * Test-path convention: a path is test-only if it matches
  * `.test.` anywhere in the file name, or lives under a `test/` or
  * `__tests__/` directory.
  */
@@ -59,7 +58,6 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // Aggregate verification proves the exact tree; any code/test delta makes
   // that proof stale, while an empty delta preserves it.
   test_suite: 'any-codetest',
-  wiring_check: 'all-runtime',
   // Runtime behavior can be affected by foreign main-side runtime changes;
   // only a test/docs-only delta is safe to preserve (ADR-2026-07-20).
   manual_test: 'all-runtime',
@@ -134,7 +132,7 @@ export function featureTestPaths(D: string[], F: string[]): string[] {
  *   feature's own test paths are both empty — a foreign-only delta (runtime
  *   or test) cannot change the feature's own diff, so its plan-vs-diff grade
  *   survives the rebase.
- * - 'all-runtime' (wiring_check, manual_test): preserved iff both
+ * - 'all-runtime' (manual_test): preserved iff both
  *   `featureSrc` and `foreignSrc` are empty.
  * - 'any-codetest' (test_suite): preserved iff `D` is entirely empty
  *   (test ∪ featureSrc ∪ foreignSrc all empty). Aggregate verification

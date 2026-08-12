@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -613,8 +613,9 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'FAIL',
-                reasons: ['tautological assertion at x.ts:10'],
-                rubric: {},
+                reasons: ['missing wiring from command to handler'],
+                rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
+                findings: { wiring: ['missing wiring from command to handler'] },
               }),
             );
           } else if (step === 'manual_test') {
@@ -650,6 +651,9 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       await conductor.run();
 
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      expect(calls).not.toContain('wiring_check');
+      const verdict = JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'));
+      expect(verdict.findings.wiring).toContain('missing wiring from command to handler');
       expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
       expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
@@ -675,6 +679,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       await conductor.run();
 
       expect(calls.filter((s) => s === 'build').length).toBeGreaterThan(0);
+      expect(calls).not.toContain('wiring_check');
     });
   });
 

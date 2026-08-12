@@ -31,7 +31,6 @@ describe('GATE_SURFACE', () => {
         'manual_test',
         'prd_audit',
         'test_suite',
-        'wiring_check',
       ].sort(),
     );
     expect(GATE_SURFACE).not.toHaveProperty('build');
@@ -70,7 +69,6 @@ describe('classifyGateInvalidation', () => {
     expect(result.preserved.sort()).toEqual(
       [
         'build_review',
-        'wiring_check',
         'manual_test',
         'prd_audit',
         'architecture_review_as_built',
@@ -92,7 +90,6 @@ describe('classifyGateInvalidation', () => {
     expect(result.preserved.sort()).toEqual(
       [
         'build_review',
-        'wiring_check',
         'manual_test',
         'prd_audit',
         'architecture_review_as_built',
@@ -120,7 +117,6 @@ describe('classifyGateInvalidation', () => {
     expect(result.invalidated.sort()).toEqual(
       [
         'build_review',
-        'wiring_check',
         'manual_test',
         'prd_audit',
         'test_suite',
@@ -140,7 +136,7 @@ describe('classifyGateInvalidation', () => {
       ['build_review', 'prd_audit', 'architecture_review_as_built'].sort(),
     );
     expect(result.invalidated.sort()).toEqual(
-      ['wiring_check', 'test_suite', 'manual_test'].sort(),
+      ['test_suite', 'manual_test'].sort(),
     );
   });
 });

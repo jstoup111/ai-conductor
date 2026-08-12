@@ -152,13 +152,14 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(true);
     });
 
-    it('wiring_check is a BUILD/gating loop gate in the deterministic group after build', () => {
+    it('wiring_check is a deprecated BUILD/gating no-op in the deterministic group after build', () => {
       const s = ALL_STEPS[13];
       expect(s.name).toBe('wiring_check');
       expect(s.phase).toBe('BUILD');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['build']);
-      expect(s.loopGate).toBe(true);
+      expect(s.loopGate).toBeUndefined();
+      expect(s.deprecated).toEqual({ adr: 'adr-2026-08-11-wiring-judged-in-build-review' });
       expect(s.skippableForTiers).toEqual([]);
       expect(s.isCheckpoint).toBe(false);
     });

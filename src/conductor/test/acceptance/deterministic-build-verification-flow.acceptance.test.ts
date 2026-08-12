@@ -69,8 +69,17 @@ describe('Deterministic BUILD verification flow', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('joins wiring and suite passes before dispatching paid review or SHIP', async () => {
+  it('joins the BUILD verification group before dispatching paid review or SHIP', async () => {
     const timeline: string[] = [];
+    const deprecatedSteps: string[] = [];
+    const recomputedMembers: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('deprecated_step', (event) => {
+      if (event.type === 'deprecated_step') deprecatedSteps.push(event.step);
+    });
+    events.on('build_member_evidence_recomputed', (event) => {
+      if (event.type === 'build_member_evidence_recomputed') recomputedMembers.push(event.member);
+    });
     const runner: StepRunner = {
       run: async (step: StepName) => {
         timeline.push(step);
@@ -91,7 +100,7 @@ describe('Deterministic BUILD verification flow', () => {
     const conductor = new Conductor({
       stateFilePath,
       stepRunner: runner,
-      events: new ConductorEventEmitter(),
+      events,
       projectRoot,
       mode: 'auto',
       fromStep: 'wiring_check',
@@ -106,15 +115,54 @@ describe('Deterministic BUILD verification flow', () => {
 
     await conductor.run();
 
-    expect(timeline.slice(0, 3)).toEqual([
-      'wiring_check',
+    // wiring_check is a deprecated no-op: it resolves as a step name and
+    // passes without dispatching, so test_suite is the group's only live
+    // member (adr-2026-08-11-deprecated-no-op-step-retirement).
+    expect(timeline.slice(0, 2)).toEqual([
       'test_suite',
       'build_review',
     ]);
+    expect(timeline).not.toContain('wiring_check');
     expect(ensure).toHaveBeenCalledTimes(1);
+    expect(deprecatedSteps).toEqual(['wiring_check']);
+    expect(recomputedMembers).not.toContain('wiring_check');
     expect(timeline.indexOf('manual_test')).toBeGreaterThan(
       timeline.indexOf('build_review'),
     );
+  });
+
+  it('emits one deprecation notice when serial execution runs wiring_check', async () => {
+    const deprecatedSteps: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('deprecated_step', (event) => {
+      if (event.type === 'deprecated_step') deprecatedSteps.push(event.step);
+    });
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: {
+        run: async (step: StepName) => step === 'manual_test'
+          ? { success: false, output: 'stop after serial wiring_check event proof' }
+          : { success: true },
+      },
+      events,
+      projectRoot,
+      mode: 'default',
+      fromStep: 'wiring_check',
+      maxRetries: 1,
+      verifyArtifacts: false,
+      fullSuiteVerifier: {
+        ensure: async () => ({
+          status: 'REUSED',
+          freshness: { status: 'CURRENT', evidence: PASS_EVIDENCE },
+          evidence: PASS_EVIDENCE,
+        }),
+        inspect: async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE }),
+      },
+    });
+
+    await conductor.run();
+
+    expect(deprecatedSteps).toEqual(['wiring_check']);
   });
 
   it.each([
@@ -124,22 +172,13 @@ describe('Deterministic BUILD verification flow', () => {
       suitePasses: false,
       expectedDiagnostic: 'suite regression',
     },
-    {
-      label: 'wiring probe',
-      wiringPasses: false,
-      suitePasses: true,
-      expectedDiagnostic: 'unreachable production export',
-    },
   ])(
     'blocks paid review and SHIP when the $label branch fails',
-    async ({ wiringPasses, suitePasses, expectedDiagnostic }) => {
+    async ({ suitePasses, expectedDiagnostic }) => {
       const dispatched: string[] = [];
       const runner: StepRunner = {
         run: async (step: StepName) => {
           dispatched.push(step);
-          if (step === 'wiring_check' && !wiringPasses) {
-            return { success: false, output: expectedDiagnostic };
-          }
           return { success: true };
         },
       };
@@ -175,7 +214,6 @@ describe('Deterministic BUILD verification flow', () => {
 
       await conductor.run();
 
-      expect(dispatched).toContain('wiring_check');
       expect(dispatched).toContain('test_suite');
       expect(dispatched).not.toContain('build_review');
       expect(dispatched).not.toContain('manual_test');
@@ -184,7 +222,7 @@ describe('Deterministic BUILD verification flow', () => {
     },
   );
 
-  it('uses stable wiring-then-suite order at concurrency one before review', async () => {
+  it('dispatches the live verification member before review at concurrency one', async () => {
     const timeline: string[] = [];
     const runner: StepRunner = {
       run: async (step: StepName) => {
@@ -220,17 +258,16 @@ describe('Deterministic BUILD verification flow', () => {
 
     await conductor.run();
 
-    expect(timeline.slice(0, 3)).toEqual([
-      'wiring_check',
+    expect(timeline.slice(0, 2)).toEqual([
       'test_suite',
       'build_review',
     ]);
   });
 
-  it('allows a one-member BUILD round while review waits for the dispatched member', async () => {
-    // A satisfied persisted sibling verdict is normal resume state, not a
-    // BUILD repair. The already-done sibling retains its shortcut while the
-    // pending wiring member is the only branch that needs dispatch.
+  it('reuses a satisfied persisted verdict on resume without re-dispatching the group', async () => {
+    // A satisfied persisted verdict is normal resume state, not a BUILD
+    // repair. The already-done member retains its shortcut, and with
+    // wiring_check retired to a no-op the group needs no dispatch at all.
     await writeState(stateFilePath, {
       ...BUILD_COMPLETE,
       test_suite: 'done',
@@ -284,11 +321,11 @@ describe('Deterministic BUILD verification flow', () => {
 
     await conductor.run();
 
-    expect(timeline.slice(0, 2)).toEqual(['wiring_check', 'build_review']);
+    expect(timeline.slice(0, 1)).toEqual(['build_review']);
     expect(timeline).not.toContain('test_suite');
-    // A one-member round keeps the serial event shape. The declared
-    // wiring-then-suite ordering remains covered above when both dispatch;
-    // here review follows only after the sole dispatched member settles.
+    expect(timeline).not.toContain('wiring_check');
+    // A fully-satisfied group keeps the serial event shape — no parallel
+    // round is opened for a member that never needs dispatch.
     expect(parallelStarted.filter((event) => event.step === 'wiring_check')).toEqual([]);
     expect(parallelStarted.every((event) => !event.branches.includes('test_suite'))).toBe(true);
   });
