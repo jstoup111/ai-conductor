@@ -67,6 +67,7 @@ import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -341,6 +342,38 @@ describe('engine/conductor', () => {
 
     expect(constructor).toBeDefined();
     expect(constructor).not.toMatch(/operatorParkBoundary|featureSlug/);
+  });
+
+  it('persists a loop halt stamped with the last advanced manual_test step', async () => {
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+    persister.start();
+    const runner: StepRunner = {
+      run: vi.fn(async (step) =>
+        step === 'manual_test' ? { success: false, output: 'manual test failed' } : { success: true },
+      ),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 1,
+      verifyArtifacts: false,
+    });
+
+    await conductor.run();
+    persister.stop();
+
+    const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records.find((record) => record.type === 'loop_halt')).toMatchObject({
+      step: 'manual_test',
+    });
   });
 
   it('constructs the persistent filesystem state store by default', () => {

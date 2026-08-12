@@ -1216,6 +1216,8 @@ async function refreshPostFinishShippedRecord({
 
 export class Conductor {
   private stateFilePath: string;
+  /** Current run state, retained so terminal events can be step-stamped. */
+  private haltState: ConductState = {};
   private readonly stateStore: ConductStateStore<ConductState>;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
@@ -2731,6 +2733,16 @@ export class Conductor {
     }
   }
 
+  /** Emit a HALT event with the most recently advanced conductor step. */
+  private async emitLoopHalt(reason: string, prUrl?: string): Promise<void> {
+    await this.events.emit({
+      type: 'loop_halt',
+      step: resolveLastStep(this.haltState, this._breadcrumb) as StepName,
+      reason,
+      prUrl,
+    });
+  }
+
   /** Resolve the strict merged-history verdict for the recorded implementation PR. */
   private async recordedMergedShipment(
     state: ConductState,
@@ -2774,7 +2786,7 @@ export class Conductor {
     const reason = `durable shipment evidence: ${mergedShipment.reason}`;
     await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
     const prUrl = await this.surfaceRemediationPr(reason);
-    await this.events.emit({ type: 'loop_halt', reason, prUrl });
+    await this.emitLoopHalt(reason, prUrl);
 
     process.off('SIGINT', sigintHandler);
     process.off('SIGTERM', sigterm);
@@ -3496,6 +3508,7 @@ export class Conductor {
 
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
+    this.haltState = state;
     this.persistedStateSnapshot = { ...state };
 
     // Stamp this conductor invocation. SHIP-phase completion predicates
@@ -3881,7 +3894,7 @@ export class Conductor {
         await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
         await this.persistPendingStateChanges(state, 'persist conductor transition');
         const prUrl = await this.surfaceRemediationPr(reason);
-        await this.events.emit({ type: 'loop_halt', reason, prUrl });
+        await this.emitLoopHalt(reason, prUrl);
         process.off('SIGINT', sigintHandler);
         process.off('SIGTERM', sigterm);
         return { action: 'return' };
@@ -3930,7 +3943,7 @@ export class Conductor {
       await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
       await this.persistPendingStateChanges(state, 'persist conductor transition');
       const prUrl = await this.surfaceRemediationPr(reason);
-      await this.events.emit({ type: 'loop_halt', reason, prUrl });
+      await this.emitLoopHalt(reason, prUrl);
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
       return { action: 'return' };
@@ -4151,7 +4164,7 @@ export class Conductor {
                     : halt.reason,
             });
             await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-            await emitTracked({ type: 'loop_halt', reason });
+            await this.emitLoopHalt(reason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -4218,7 +4231,7 @@ export class Conductor {
           if (boundaryHalt) {
             await this.persistPendingStateChanges(state, 'persist conductor transition');
             const prUrl = await this.surfaceRemediationPr(boundaryHalt);
-            await emitTracked({ type: 'loop_halt', reason: boundaryHalt, prUrl });
+            await this.emitLoopHalt(boundaryHalt, prUrl);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -4565,7 +4578,7 @@ export class Conductor {
                 await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
-                await emitTracked({ type: 'loop_halt', reason: park.haltReason, prUrl });
+                await this.emitLoopHalt(park.haltReason, prUrl);
                 process.off('SIGINT', sigintHandler);
                 if (!this.daemon) {
                   process.off('SIGTERM', sigterm);
@@ -4607,7 +4620,7 @@ export class Conductor {
                   await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(haltReason);
-                  await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+                  await this.emitLoopHalt(haltReason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   if (!this.daemon) process.off('SIGTERM', sigterm);
                   return;
@@ -4638,7 +4651,7 @@ export class Conductor {
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
-              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+              await this.emitLoopHalt(haltReason, prUrl);
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) process.off('SIGTERM', sigterm);
               return;
@@ -4823,7 +4836,7 @@ export class Conductor {
               );
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await emitTracked({ type: 'loop_halt', reason, prUrl });
+              await this.emitLoopHalt(reason, prUrl);
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) process.off('SIGTERM', sigterm);
               return;
@@ -4872,7 +4885,7 @@ export class Conductor {
                 [step.name]: 'failed',
                 last_step: step.name,
               });
-              await emitTracked({ type: 'loop_halt', reason: haltReason });
+              await this.emitLoopHalt(haltReason);
               await emitTracked({
                 type: 'step_failed',
                 step: step.name,
@@ -5065,7 +5078,7 @@ export class Conductor {
                     remediationOutcome.detail;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -5138,7 +5151,7 @@ export class Conductor {
                     const reason = `${gapName} kickback-to-build no-op: ${gapEscalation.reason}`;
                     await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                     const prUrl = await this.surfaceRemediationPr(reason);
-                    await emitTracked({ type: 'loop_halt', reason, prUrl });
+                    await this.emitLoopHalt(reason, prUrl);
                     process.off('SIGINT', sigintHandler);
                     if (!this.daemon) {
                       process.off('SIGTERM', sigterm);
@@ -5206,7 +5219,7 @@ export class Conductor {
                     remediationOutcome.detail;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -5272,7 +5285,7 @@ export class Conductor {
               error: groupHaltReason,
               retryCount: 0,
             });
-            await emitTracked({ type: 'loop_halt', reason: groupHaltReason });
+            await this.emitLoopHalt(groupHaltReason);
             process.off('SIGINT', sigintHandler);
             if (!this.daemon) {
               process.off('SIGTERM', sigterm);
@@ -5338,7 +5351,7 @@ export class Conductor {
             await this.commitStateChanges(state, 'restage failed self-host finish gate', {
               [step.name]: 'stale',
             });
-            await emitTracked({ type: 'loop_halt', reason: verdict.reason });
+            await this.emitLoopHalt(verdict.reason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -5651,7 +5664,7 @@ export class Conductor {
             const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
             if (boundaryHalt) {
               const prUrl = await this.surfaceRemediationPr(boundaryHalt);
-              await emitTracked({ type: 'loop_halt', reason: boundaryHalt, prUrl });
+              await this.emitLoopHalt(boundaryHalt, prUrl);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6062,7 +6075,7 @@ export class Conductor {
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
-              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+              await this.emitLoopHalt(haltReason, prUrl);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6077,7 +6090,7 @@ export class Conductor {
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               // Escalate with the credentials-specific reason (not generic "retries exhausted").
               const prUrl = await this.surfaceRemediationPr(park.haltReason);
-              await emitTracked({ type: 'loop_halt', reason: park.haltReason, prUrl });
+              await this.emitLoopHalt(park.haltReason, prUrl);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6106,7 +6119,7 @@ export class Conductor {
               'Re-provision the provider home with the required skill, then re-queue this feature.';
             await writeHaltMarker(this.projectRoot, haltReason + '\n', 'mechanical');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
-            await emitTracked({ type: 'loop_halt', reason: haltReason });
+            await this.emitLoopHalt(haltReason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -6124,7 +6137,7 @@ export class Conductor {
               `Cannot dispatch '${step.name}': the feature worktree no longer exists.`;
             // No remediation-PR surfacing: that path runs git/gh from the very
             // directory that is missing.
-            await emitTracked({ type: 'loop_halt', reason: haltReason });
+            await this.emitLoopHalt(haltReason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -6146,7 +6159,7 @@ export class Conductor {
             await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
             const prUrl = await this.surfaceRemediationPr(haltReason);
-            await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+            await this.emitLoopHalt(haltReason, prUrl);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -6176,7 +6189,7 @@ export class Conductor {
                 await this.saveConductorStepStatus(state, 'finish', 'failed');
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
-                await emitTracked({ type: 'loop_halt', reason });
+                await this.emitLoopHalt(reason);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -6205,7 +6218,7 @@ export class Conductor {
                 await this.saveConductorStepStatus(state, 'finish', 'failed');
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
-                await emitTracked({ type: 'loop_halt', reason });
+                await this.emitLoopHalt(reason);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -6225,7 +6238,7 @@ export class Conductor {
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
-              await emitTracked({ type: 'loop_halt', reason });
+              await this.emitLoopHalt(reason);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6255,6 +6268,7 @@ export class Conductor {
                 // was failed, already stale, or absent.
                 (state as Record<string, unknown>).test_suite = 'stale';
                 (state as Record<string, unknown>).build_review = 'stale';
+                this.haltState = state;
                 // The failing FINISH step is not part of the done-only stale
                 // cascade, so explicitly restage it for the post-BUILD tail.
                 (state as Record<string, unknown>).finish = 'stale';
@@ -6268,7 +6282,7 @@ export class Conductor {
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
-              await emitTracked({ type: 'loop_halt', reason });
+              await this.emitLoopHalt(reason);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6278,7 +6292,7 @@ export class Conductor {
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, route.reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
-              await emitTracked({ type: 'loop_halt', reason: route.reason });
+              await this.emitLoopHalt(route.reason);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6347,7 +6361,7 @@ export class Conductor {
               if (stepWrittenHalt) {
                 state[step.name] = 'failed';
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
-                await emitTracked({ type: 'loop_halt', reason: stepWrittenHalt });
+                await this.emitLoopHalt(stepWrittenHalt);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -6683,7 +6697,7 @@ export class Conductor {
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   state[step.name] = 'failed';
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  await emitTracked({ type: 'loop_halt', reason });
+                  await this.emitLoopHalt(reason);
                   process.off('SIGINT', sigintHandler);
                   return;
                 }
@@ -6766,7 +6780,7 @@ export class Conductor {
                     await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                     state[step.name] = 'failed';
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    await emitTracked({ type: 'loop_halt', reason });
+                    await this.emitLoopHalt(reason);
                     process.off('SIGINT', sigintHandler);
                     return;
                   }
@@ -6839,7 +6853,7 @@ export class Conductor {
                       await writeHaltMarker(this.projectRoot, haltContent + '\n', 'mechanical');
                       await this.persistPendingStateChanges(state, 'persist conductor transition');
                       const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                      await this.emitLoopHalt(effectiveQuestion, prUrl);
                       process.off('SIGINT', sigintHandler);
                       process.off('SIGTERM', sigterm);
                       return;
@@ -6884,7 +6898,7 @@ export class Conductor {
                         });
                         await this.persistPendingStateChanges(state, 'persist conductor transition');
                         const prUrl = await this.surfaceRemediationPr(haltContent);
-                        await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        await this.emitLoopHalt(effectiveQuestion, prUrl);
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -6932,7 +6946,7 @@ export class Conductor {
                         });
                         await this.persistPendingStateChanges(state, 'persist conductor transition');
                         const prUrl = await this.surfaceRemediationPr(haltContent);
-                        await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        await this.emitLoopHalt(effectiveQuestion, prUrl);
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -6958,7 +6972,7 @@ export class Conductor {
                         });
                         await this.persistPendingStateChanges(state, 'persist conductor transition');
                         const prUrl = await this.surfaceRemediationPr(haltContent);
-                        await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        await this.emitLoopHalt(effectiveQuestion, prUrl);
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -6981,7 +6995,7 @@ export class Conductor {
                         });
                         await this.persistPendingStateChanges(state, 'persist conductor transition');
                         const prUrl = await this.surfaceRemediationPr(haltContent);
-                        await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
+                        await this.emitLoopHalt(effectiveQuestion, prUrl);
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -7043,7 +7057,7 @@ export class Conductor {
                 if (stepWrittenHalt) {
                   state[step.name] = 'failed';
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  await emitTracked({ type: 'loop_halt', reason: stepWrittenHalt });
+                  await this.emitLoopHalt(stepWrittenHalt);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -7313,7 +7327,7 @@ export class Conductor {
               await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await emitTracked({ type: 'loop_halt', reason, prUrl });
+              await this.emitLoopHalt(reason, prUrl);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -7389,7 +7403,7 @@ export class Conductor {
                     'build_review scope-FAIL disposition HALT: second stale-mirage ' +
                     'detection this feature-session';
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -7421,7 +7435,7 @@ export class Conductor {
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -7481,7 +7495,7 @@ export class Conductor {
                       await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                       await this.persistPendingStateChanges(state, 'persist conductor transition');
                       const prUrl = await this.surfaceRemediationPr(reason);
-                      await emitTracked({ type: 'loop_halt', reason, prUrl });
+                      await this.emitLoopHalt(reason, prUrl);
                       process.off('SIGINT', sigintHandler);
                       process.off('SIGTERM', sigterm);
                       return;
@@ -7565,7 +7579,7 @@ export class Conductor {
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await emitTracked({ type: 'loop_halt', reason, prUrl });
+                await this.emitLoopHalt(reason, prUrl);
                 process.off('SIGINT', sigintHandler);
                 return;
               }
@@ -7586,7 +7600,7 @@ export class Conductor {
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -7621,6 +7635,7 @@ export class Conductor {
 
                   const nav = navigateBack(state, outcome.target, steps);
                   state = nav.state;
+                  this.haltState = state;
                   (state as Record<string, unknown>).build = 'stale';
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = nav.index - 1; // for-loop i++ lands on the target step
@@ -7632,7 +7647,7 @@ export class Conductor {
                   await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -7644,7 +7659,7 @@ export class Conductor {
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -7654,7 +7669,7 @@ export class Conductor {
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
+                await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -7672,7 +7687,7 @@ export class Conductor {
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await emitTracked({ type: 'loop_halt', reason, prUrl });
+                await this.emitLoopHalt(reason, prUrl);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -7718,6 +7733,7 @@ export class Conductor {
                   }
                   const nav = navigateBack(state, outcome.target, steps);
                   state = nav.state;
+                  this.haltState = state;
                   (state as Record<string, unknown>).prd_audit = 'stale';
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = nav.index - 1; // for-loop i++ lands on the target step
@@ -7728,7 +7744,7 @@ export class Conductor {
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
@@ -7776,6 +7792,7 @@ export class Conductor {
                 await captureKickbackToBuildContext('prd_audit');
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
+                this.haltState = state;
                 // markDownstreamStale only restages `done` steps; prd_audit is
                 // `failed` here, so restage it explicitly to re-run on the tail.
                 (state as Record<string, unknown>).prd_audit = 'stale';
@@ -7792,7 +7809,7 @@ export class Conductor {
               // this writer only after autonomous self-healing is exhausted.
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await emitTracked({ type: 'loop_halt', reason, prUrl });
+              await this.emitLoopHalt(reason, prUrl);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -7860,7 +7877,7 @@ export class Conductor {
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await emitTracked({ type: 'loop_halt', reason, prUrl });
+              await this.emitLoopHalt(reason, prUrl);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -7889,7 +7906,7 @@ export class Conductor {
                   `kickback-to-build no-op: ${gateEscalation.reason}`;
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await emitTracked({ type: 'loop_halt', reason, prUrl });
+                await this.emitLoopHalt(reason, prUrl);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -7971,7 +7988,7 @@ export class Conductor {
                 }
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 const prUrl = await this.surfaceRemediationPr(reason);
-                await emitTracked({ type: 'loop_halt', reason, prUrl });
+                await this.emitLoopHalt(reason, prUrl);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -8033,7 +8050,7 @@ export class Conductor {
             // wraps escalation in try/catch — a throwing escalation must never
             // prevent the HALT path from returning cleanly (C1).
             const prUrl = await this.surfaceRemediationPr(`${reason}\n${lastError}`);
-            await emitTracked({ type: 'loop_halt', reason, prUrl });
+            await this.emitLoopHalt(reason, prUrl);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -8442,7 +8459,7 @@ export class Conductor {
         const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
         if (boundaryHalt) {
           const prUrl = await this.surfaceRemediationPr(boundaryHalt);
-          await this.events.emit({ type: 'loop_halt', reason: boundaryHalt, prUrl });
+          await this.emitLoopHalt(boundaryHalt, prUrl);
           return;
         }
       }
@@ -8478,7 +8495,7 @@ export class Conductor {
         await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
       }
       const prUrl = await this.surfaceRemediationPr(reason);
-      await this.events.emit({ type: 'loop_halt', reason, prUrl });
+      await this.emitLoopHalt(reason, prUrl);
     } finally {
       this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
@@ -8521,7 +8538,7 @@ export class Conductor {
         }
         await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
         const prUrl = await this.surfaceRemediationPr(reason);
-        await this.events.emit({ type: 'loop_halt', reason, prUrl });
+        await this.emitLoopHalt(reason, prUrl);
       }
     }
   }
@@ -8622,7 +8639,7 @@ export class Conductor {
             `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
           await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
-          await this.events.emit({ type: 'loop_halt', reason, prUrl });
+          await this.emitLoopHalt(reason, prUrl);
           return 'halt';
         }
         const hasContract = hasCompletionContract(target, this.config);
@@ -8641,7 +8658,7 @@ export class Conductor {
           const reason = renderDecideEntryHalt(disposition.halt);
           await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
-          await this.events.emit({ type: 'loop_halt', reason, prUrl });
+          await this.emitLoopHalt(reason, prUrl);
           return 'halt';
         }
         if (navigate) {
@@ -8687,13 +8704,13 @@ export class Conductor {
     // outcome stops the loop.
     if (step.name === 'rebase') {
       if (this.lastRebaseSealError) {
-        await this.events.emit({ type: 'loop_halt', reason: this.lastRebaseSealError });
+        await this.emitLoopHalt(this.lastRebaseSealError);
         return 'halt';
       }
       if (this.lastRebaseOutcome?.kind === 'conflict_halt') {
         const reason = `rebase conflict — parked for human resolution: ${this.lastRebaseOutcome.reason}`;
         // writeHalt already wrote .pipeline/HALT in runRebaseStep.
-        await this.events.emit({ type: 'loop_halt', reason });
+        await this.emitLoopHalt(reason);
         return 'halt';
       }
       // FR-5: a file-changing rebase invalidated build (+test_suite,
@@ -8982,7 +8999,7 @@ export class Conductor {
       const reason = `gate '${selectedStep.name}' selected ${sel} times without satisfying: ${decision.reason}`;
       await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
       const prUrl = await this.surfaceRemediationPr(reason);
-      await this.events.emit({ type: 'loop_halt', reason, prUrl });
+      await this.emitLoopHalt(reason, prUrl);
       return 'halt';
     }
 
