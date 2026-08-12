@@ -91,9 +91,10 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
   it('still rewinds to a configured BUILD target', async () => {
     await seedPlanTask();
     await writeFixtureState(fixture, resolvedState({ build: 'pending' }));
-    let reviewRuns = 0;
+    const dispatched: StepName[] = [];
     const runner: StepRunner = {
       run: async (step) => {
+        dispatched.push(step);
         if (step === 'build') {
           await writeVerdict(fixture.root, 'build_review', {
             satisfied: false,
@@ -101,7 +102,6 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
             kickback: { from: 'build', evidence: 'review must be re-run after BUILD work' },
           });
         }
-        if (step === 'build_review') reviewRuns += 1;
         return { success: true };
       },
     };
@@ -111,7 +111,8 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
       config: { build_review: { enabled: true } },
     }).run();
 
-    expect(reviewRuns).toBe(1);
+    expect(dispatched.filter((step) => step === 'build_review')).toHaveLength(1);
+    expect(dispatched).not.toContain('wiring_check');
   });
 
   it('keeps the ping-pong cap reason ahead of an unknown-target refusal', async () => {

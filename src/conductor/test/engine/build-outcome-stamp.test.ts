@@ -119,6 +119,7 @@ describe('conductor build-outcome baseline capture', () => {
     const started: unknown[] = [];
     const failed: unknown[] = [];
     const dispatched: string[] = [];
+    let suiteVerified = false;
     const events = new ConductorEventEmitter();
     events.on('step_completed', (event) => {
       if (event.type === 'step_completed' && event.step === 'build') completed.push(event);
@@ -155,11 +156,15 @@ describe('conductor build-outcome baseline capture', () => {
       verifyArtifacts: true,
       maxRetries: 1,
       fullSuiteVerifier: {
-        inspect: async () => ({ status: 'STALE', reason: 'source_changed' }),
+        inspect: async () => suiteVerified
+          ? ({ status: 'CURRENT', evidence: {} as never })
+          : ({ status: 'STALE', reason: 'source_changed' }),
         ensure: async () => {
           dispatched.push('test_suite');
+          suiteVerified = true;
           return {
-            status: 'REUSED',
+            status: 'EXECUTED',
+            freshness: { status: 'STALE', reason: 'source_changed' },
             evidence: {} as never,
           } as const;
         },
@@ -170,7 +175,8 @@ describe('conductor build-outcome baseline capture', () => {
 
     expect(blocked).toEqual([]);
     expect(started).toContainEqual(expect.objectContaining({ step: 'build' }));
-    expect(dispatched.slice(0, 3)).toEqual(['build', 'test_suite', 'build_review']);
+    expect(dispatched).toContain('build_review');
+    expect(dispatched.indexOf('build_review')).toBeGreaterThan(dispatched.indexOf('test_suite'));
     expect(dispatched).not.toContain('wiring_check');
     expect(failed).not.toContainEqual(expect.objectContaining({ step: 'test_suite' }));
     expect(failed).not.toContainEqual(expect.objectContaining({ step: 'build' }));

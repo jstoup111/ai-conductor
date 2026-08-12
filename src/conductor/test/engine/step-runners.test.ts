@@ -3123,7 +3123,7 @@ TIER: M`,
 
       const result = await runner.run('wiring_check', emptyState);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(provider.invoke).not.toHaveBeenCalled();
       expect(provider.invokeInteractive).not.toHaveBeenCalled();
     });
@@ -3354,7 +3354,7 @@ TIER: M`,
 
       const result = await runner.run('build_review', emptyState);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(invoke).toHaveBeenCalledOnce();
       const opts = invoke.mock.calls[0][0] as InvokeOptions;
       expect(opts.resume).toBe(false);
@@ -3419,7 +3419,7 @@ TIER: M`,
 
       const result = await runner.run('build_review', emptyState);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       const opts = invoke.mock.calls[0][0] as InvokeOptions;
       expect(opts.prompt).toContain('Grade against this one.');
       expect(opts.prompt).not.toContain('Wrong plan.');
@@ -3429,7 +3429,7 @@ TIER: M`,
     // freshness telemetry, carried on StepRunResult so the conductor can
     // emit a `build_review_base` event without step-runners.ts owning event
     // emission itself.
-    it('attaches baseFreshness from assembleBuildReviewInputs on success', async () => {
+    it('attaches baseFreshness from assembleBuildReviewInputs when the verdict is invalid', async () => {
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -3439,7 +3439,7 @@ TIER: M`,
 
       const result = await runner.run('build_review', emptyState);
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
@@ -3524,7 +3524,7 @@ TIER: M`,
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { wiring: false } }), 'utf-8');
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }), 'utf-8');
           return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
         });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
@@ -3541,7 +3541,7 @@ TIER: M`,
         expect(written.verdict).toBe('PASS');
       });
 
-      it('still returns success when build-review.json is missing after a successful dispatch', async () => {
+      it('rejects a successful dispatch when build-review.json is missing', async () => {
         initGitRepo(dir);
         const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
@@ -3552,10 +3552,10 @@ TIER: M`,
 
         const result = await runner.run('build_review', emptyState);
 
-        expect(result.success).toBe(true);
+        expect(result.success).toBe(false);
       });
 
-      it('still returns success when build-review.json is unparseable after a successful dispatch', async () => {
+      it('rejects a successful dispatch when build-review.json is unparseable', async () => {
         initGitRepo(dir);
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
@@ -3571,7 +3571,7 @@ TIER: M`,
 
         const result = await runner.run('build_review', emptyState);
 
-        expect(result.success).toBe(true);
+        expect(result.success).toBe(false);
       });
 
       // Rework (cycle 1): gate_code_validity.enabled=false must restore
@@ -3582,7 +3582,7 @@ TIER: M`,
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { wiring: false } }), 'utf-8');
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }), 'utf-8');
           return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
         });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };

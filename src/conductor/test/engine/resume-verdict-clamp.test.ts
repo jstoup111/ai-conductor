@@ -561,17 +561,17 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   // ── Story 5: tail selection is clamped by the entry-gate predicate ──────
   describe('Story 5: tail selection cannot enter a gate its prerequisite rejects', () => {
-    async function selectTailWithBuildStatus(
-      buildStatus: 'done' | 'failed',
-      buildVerdictSatisfied = true,
+    async function selectTailWithTestSuiteStatus(
+      testSuiteStatus: 'done' | 'failed',
+      testSuiteVerdictSatisfied = true,
     ): Promise<number | null | 'halt'> {
       const seed = seedDoneThrough('finish');
-      seed.build = buildStatus;
-      seed.wiring_check = 'pending';
+      seed.test_suite = testSuiteStatus;
+      seed.build_review = 'pending';
       await writeState(statePath, seed as ConductState);
 
       for (const name of ALL_STEPS.filter((step) => step.loopGate).map((step) => step.name)) {
-        if (name !== 'wiring_check' && (name !== 'build' || buildVerdictSatisfied)) {
+        if (name !== 'build_review' && (name !== 'test_suite' || testSuiteVerdictSatisfied)) {
           await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
         }
       }
@@ -599,24 +599,24 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     }
 
     it('selects the failed prerequisite when the selector considers its verdict satisfied', async () => {
-      const selectedIndex = await selectTailWithBuildStatus('failed');
+      const selectedIndex = await selectTailWithTestSuiteStatus('failed');
 
-      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build'));
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'test_suite'));
     });
 
     it('selects the originally-unsatisfied gate once its prerequisite is fresh', async () => {
-      const selectedIndex = await selectTailWithBuildStatus('done');
+      const selectedIndex = await selectTailWithTestSuiteStatus('done');
 
-      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'wiring_check'));
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build_review'));
     });
 
     it('leaves an agreed-unsatisfied prerequisite as the ordinary bounded selection', async () => {
-      const selectedIndex = await selectTailWithBuildStatus('failed', false);
+      const selectedIndex = await selectTailWithTestSuiteStatus('failed', false);
 
       // With no satisfied verdict for build, both the selector and the entry
       // gate consider it unsatisfied. The clamp must not manufacture a new
       // outcome or choose another step.
-      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build'));
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'test_suite'));
     });
 
     it('halts with an explicit named verdict when repeated prerequisite dispatch cannot resolve', async () => {
@@ -660,18 +660,18 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it('uses only the existing selector and entry-gate predicates for a stale prerequisite', () => {
       const state = {
         ...seedDoneThrough('finish'),
-        build: 'stale',
-        wiring_check: 'pending',
+        test_suite: 'stale',
+        build_review: 'pending',
       } as ConductState;
-      const wiringIndex = ALL_STEPS.findIndex((step) => step.name === 'wiring_check');
-      const wiring = ALL_STEPS[wiringIndex];
+      const buildReviewIndex = ALL_STEPS.findIndex((step) => step.name === 'build_review');
+      const buildReview = ALL_STEPS[buildReviewIndex];
 
       // The existing predicates intentionally disagree for stale: selector
       // re-dispatches it while the entry gate admits its dependent step. The
       // clamp consumes checkGate only; it must not add a third authority.
-      expect(gateSatisfied('build', state, { build: { satisfied: true, checkedAt: 1 } })).toBe(false);
-      expect(checkGate(wiring, state)).toEqual({ passed: true });
-      expect(clampToRunnablePrerequisite(ALL_STEPS, state, wiringIndex)).toBe(wiringIndex);
+      expect(gateSatisfied('test_suite', state, { test_suite: { satisfied: true, checkedAt: 1 } })).toBe(false);
+      expect(checkGate(buildReview, state)).toEqual({ passed: true });
+      expect(clampToRunnablePrerequisite(ALL_STEPS, state, buildReviewIndex)).toBe(buildReviewIndex);
     });
   });
 });

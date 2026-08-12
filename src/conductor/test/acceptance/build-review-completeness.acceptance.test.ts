@@ -249,4 +249,78 @@ describe('acceptance: build_review completeness gates a missing planned task end
       expect(result.value.build_review).not.toBe('done');
     }
   });
+
+  it.each([
+    ['tautology', { scope: false, rootCause: false, completeness: false, wiring: false }],
+    ['scope', { tautology: false, rootCause: false, completeness: false, wiring: false }],
+    ['rootCause', { tautology: false, scope: false, completeness: false, wiring: false }],
+    ['completeness', { tautology: false, scope: false, rootCause: false, wiring: false }],
+    ['wiring', { tautology: false, scope: false, rootCause: false, completeness: false }],
+  ] as const)('rejects a PASS whose %s rubric judgement is absent', async (_member, incompleteRubric) => {
+    dir = await mkdtemp(join(tmpdir(), 'build-review-incomplete-pass-'));
+    const statePath = join(dir, 'conduct-state.json');
+    await seedToBuildReview(statePath, dir);
+
+    const calls: StepName[] = [];
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: {
+        run: async (step: StepName) => {
+          calls.push(step);
+          if (step === 'build_review') {
+            await writeFile(
+              join(dir, BUILD_REVIEW_VERDICT_PATH),
+              JSON.stringify({ verdict: 'PASS', reasons: [], rubric: incompleteRubric }),
+            );
+          }
+          return { success: true };
+        },
+      },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    } as never);
+
+    await conductor.run();
+
+    const result = await readState(statePath);
+    expect(calls).toContain('build_review');
+    expect(result.ok && result.value.build_review).not.toBe('done');
+  });
+
+  it.each(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const)(
+    'rejects a PASS whose %s rubric judgement reports a finding',
+    async (member) => {
+      dir = await mkdtemp(join(tmpdir(), 'build-review-contradictory-pass-'));
+      const statePath = join(dir, 'conduct-state.json');
+      await seedToBuildReview(statePath, dir);
+      const rubric = { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false };
+      rubric[member] = true;
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step: StepName) => {
+            if (step === 'build_review') {
+              await writeFile(join(dir, BUILD_REVIEW_VERDICT_PATH), JSON.stringify({ verdict: 'PASS', reasons: [], rubric }));
+            }
+            return { success: true };
+          },
+        },
+        events: new ConductorEventEmitter(),
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+      } as never);
+
+      await conductor.run();
+      const result = await readState(statePath);
+      expect(result.ok && result.value.build_review).not.toBe('done');
+    },
+  );
 });

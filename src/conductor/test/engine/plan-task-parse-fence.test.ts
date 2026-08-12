@@ -44,7 +44,7 @@ describe('plan task Files convention fence', () => {
     expect(Array.from(parsed.entries())).toEqual([
       ['1', new Set(['src/one.ts', 'test/one.test.ts'])],
       ['2', new Set(['src/one.ts', 'test/one.test.ts'])],
-      ['3', new Set(['src/fallback.ts', 'src/legacy-wiring.ts'])],
+      ['3', new Set(['src/fallback.ts'])],
       ['4', new Set(['.docs/plans/other-feature.md', 'src/four.ts'])],
       ['5', new Set(['.docs/stories/this-feature.md'])],
     ]);

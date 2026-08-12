@@ -375,7 +375,7 @@ describe('operator park boundary contract', () => {
         },
       ],
       parkedBoundaries: [],
-      persisted: { buildReview: 'failed', wiringCheck: 'done' },
+      persisted: { buildReview: 'failed', wiringCheck: undefined },
     });
   });
 
@@ -932,11 +932,11 @@ describe('operator park boundary contract', () => {
 
   it('joins the deterministic BUILD verification group before parking and blocks build review', async () => {
     await writeState(statePath, {
-      ...stateWithPending('wiring_check', 'test_suite', 'build_review'),
+      ...stateWithPending('test_suite', 'build_review'),
       track: 'technical',
       complexity_tier: 'M',
     });
-    const members = ['wiring_check', 'test_suite'] as const;
+    const members = ['test_suite'] as const;
     const suiteStarted = deferred();
     const releaseSuite = deferred();
     const settled: StepName[] = [];
@@ -960,7 +960,7 @@ describe('operator park boundary contract', () => {
       stepRunner: { run },
       events: new ConductorEventEmitter(),
       config: { validation_concurrency: 2 },
-      fromStep: 'wiring_check',
+      fromStep: 'test_suite',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: false,
@@ -999,13 +999,12 @@ describe('operator park boundary contract', () => {
     }).toEqual({
       result: {
         kind: 'operator-parked',
-        boundary: { kind: 'group', name: 'build_verification' },
+        boundary: { kind: 'step', name: 'test_suite' },
       },
       settled: ['test_suite'],
-      memberStatuses: { wiring_check: 'done', test_suite: 'done' },
+      memberStatuses: { test_suite: 'done' },
       syntheticStatuses: {
-        build_verification__wiring_check: 'done',
-        build_verification__test_suite: 'done',
+        build_verification__test_suite: undefined,
       },
       buildReviewDispatches: 0,
       suiteEnsureCalls: 1,
@@ -1014,11 +1013,7 @@ describe('operator park boundary contract', () => {
 
   it.each([
     {
-      name: 'one dispatchable BUILD member',
-      pending: ['wiring_check', 'build_review'] as StepName[],
-    },
-    {
-      name: 'zero dispatchable BUILD members',
+      name: 'pending semantic build review',
       pending: ['build_review'] as StepName[],
     },
   ])('keeps $name semantics while parking blocks the next unit', async ({ pending }) => {
@@ -1051,8 +1046,7 @@ describe('operator park boundary contract', () => {
     // build_review is the pending semantic gate. Parking must not manufacture
     // a retired wiring_check wait/dispatch on its way to that boundary.
     if (pending.length === 1 && pending[0] === 'build_review') {
-      expect(persisted.ok && persisted.value.wiring_check).toBe('done');
-      expect(persisted.ok && persisted.value.build_verification__wiring_check).toBeUndefined();
+      expect(persisted.ok && persisted.value.wiring_check).toBeUndefined();
       expect(run.mock.calls.map(([step]) => step)).not.toContain('wiring_check');
     }
   });

@@ -1361,15 +1361,15 @@ export async function removeBuildReviewVerdict(dir: string): Promise<void> {
  */
 export interface BuildReviewRubric {
   /** Test asserts against its own implementation rather than real behavior. */
-  tautology?: boolean;
+  tautology: boolean;
   /** Change reaches outside the task's declared scope. */
-  scope?: boolean;
+  scope: boolean;
   /** Fix addresses a symptom rather than the underlying root cause. */
-  rootCause?: boolean;
+  rootCause: boolean;
   /** Implementation addresses only part of the task's declared scope. */
-  completeness?: boolean;
+  completeness: boolean;
   /** Configured entry points do not reach the delivered behavior. */
-  wiring?: boolean;
+  wiring: boolean;
 }
 
 /**
@@ -1453,18 +1453,16 @@ export function validateBuildReviewVerdict(
     };
   }
   const rubricSrc = e.rubric as Record<string, unknown>;
-  const rubric: BuildReviewRubric = {};
-  if (typeof rubricSrc.tautology === 'boolean') rubric.tautology = rubricSrc.tautology;
-  if (typeof rubricSrc.scope === 'boolean') rubric.scope = rubricSrc.scope;
-  if (typeof rubricSrc.rootCause === 'boolean') rubric.rootCause = rubricSrc.rootCause;
-  if (typeof rubricSrc.completeness === 'boolean') rubric.completeness = rubricSrc.completeness;
-  if (typeof rubricSrc.wiring !== 'boolean') {
-    return {
-      ok: false,
-      reason: `${BUILD_REVIEW_VERDICT} "rubric.wiring" must be a boolean`,
-    };
+  const rubric = {} as BuildReviewRubric;
+  for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
+    if (typeof rubricSrc[rubricName] !== 'boolean') {
+      return {
+        ok: false,
+        reason: `${BUILD_REVIEW_VERDICT} "rubric.${rubricName}" must be a boolean`,
+      };
+    }
+    rubric[rubricName] = rubricSrc[rubricName];
   }
-  rubric.wiring = rubricSrc.wiring;
 
   let findings: BuildReviewFindings | undefined;
   if (e.findings !== undefined) {

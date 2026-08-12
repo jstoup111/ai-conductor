@@ -13,6 +13,7 @@ const forbiddenReferences = [
   'WiringEvidence',
   'wiringProbe',
   'Layer 2',
+  'wiring-reachability gaps found',
   "sourceGate === 'wiring_check'",
 ];
 

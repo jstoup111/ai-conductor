@@ -1393,6 +1393,39 @@ describe('integration/gate-loop', () => {
       expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
       expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
       expect(result.retryReasons.join('\n')).toContain('tautological test padding');
+      expect(result.ran.filter((step) => step === 'build_review')).toHaveLength(2);
+      expect(result.ran).not.toContain('wiring_check');
+      expect(result.completed).toBe(true);
+    });
+
+    it('rejects a PASS with an incomplete five-item rubric instead of advancing through a second semantic gate', async () => {
+      const result = await runWithGraderVerdicts([
+        {
+          verdict: 'PASS',
+          reasons: [],
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false } as never,
+        },
+      ]);
+
+      expect(result.completed).toBe(false);
+      expect(result.ran).toContain('build_review');
+      expect(result.ran).not.toContain('wiring_check');
+    });
+
+    it('routes a wiring finding through build_review\'s ordinary FAIL kickback, without dispatching wiring_check', async () => {
+      const result = await runWithGraderVerdicts([
+        {
+          verdict: 'FAIL',
+          reasons: ['declared daemon entry point does not reach the new gate'],
+          findings: { wiring: ['daemon entry point does not reach the new gate'] },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
+        },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toContain('[wiring] daemon entry point does not reach the new gate');
+      expect(result.ran).not.toContain('wiring_check');
       expect(result.completed).toBe(true);
     });
 

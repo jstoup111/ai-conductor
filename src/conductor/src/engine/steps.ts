@@ -151,19 +151,6 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
-    // Deprecated topology-compatibility no-op. build_review owns wiring
-    // judgement; this retained step preserves existing workflow topology.
-    name: 'wiring_check',
-    label: 'Wiring Check',
-    phase: 'BUILD',
-    enforcement: 'gating',
-    prerequisites: ['build'],
-    skippableForTiers: [],
-    isCheckpoint: false,
-    loopGate: true,
-    deprecated: { adr: 'adr-2026-08-11-wiring-judged-in-build-review' },
-  },
-  {
     // Native aggregate verification is the other deterministic BUILD branch.
     // Task 16 wires execution through FullSuiteVerifier.
     name: 'test_suite',
@@ -182,7 +169,7 @@ export const ALL_STEPS: StepDefinition[] = [
     label: 'Build Review',
     phase: 'BUILD',
     enforcement: 'gating',
-    prerequisites: ['wiring_check', 'test_suite'],
+    prerequisites: ['test_suite'],
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,
@@ -346,13 +333,12 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
 };
 
 /**
- * Deterministic BUILD verification group: wiring_check and test_suite run
- * after build and join before build_review. This wraps the existing members
- * without removing or reordering their individual StepDefinitions.
+ * Deterministic BUILD verification: test_suite runs after build before the
+ * semantic build_review gate. Wiring judgement belongs to build_review.
  */
 export const BUILD_VERIFICATION_GROUP: StepGroup = {
   name: 'build_verification',
-  members: ['wiring_check', 'test_suite'],
+  members: ['test_suite'],
 };
 
 /**
@@ -375,7 +361,6 @@ export const VALIDATION_GROUP: StepGroup = {
  * the members of a declared group appear in `stepToGroupMap` below.
  */
 export const STEP_GROUPS: Record<string, StepGroup> = {
-  [BUILD_VERIFICATION_GROUP.name]: BUILD_VERIFICATION_GROUP,
   [VALIDATION_GROUP.name]: VALIDATION_GROUP,
 };
 

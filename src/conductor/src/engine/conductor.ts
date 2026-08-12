@@ -4401,16 +4401,7 @@ export class Conductor {
                     return runNativeGroupBranch(
                       member,
                       async () => {
-                        if (member.name === 'wiring_check') {
-                          await emitTracked({
-                            type: 'deprecated_step',
-                            step: member.name,
-                            adr: 'adr-2026-08-11-wiring-judged-in-build-review',
-                          });
-                        }
-                        const result = member.name === 'wiring_check'
-                          ? this.runWiringCheckStep(state)
-                          : this.runTestSuiteStep();
+                        const result = this.runTestSuiteStep();
                         const settled = await result;
                         nativeBranchResults.set(member.name, settled);
                         return settled;
@@ -4703,8 +4694,7 @@ export class Conductor {
                     : outcomes[failureIdx]!.kind === 'no-verdict'
                       ? (outcomes[failureIdx] as NoVerdictOutcome).reason
                     : (gateVerdicts.get(membership.dispatchable[failureIdx]!.name)?.reason ??
-                      'deterministic BUILD verification gate unsatisfied')
-                      .replace(/^wiring-reachability gaps found:\n/, ''),
+                      'deterministic BUILD verification gate unsatisfied'),
                 });
               }
               const testSuiteFailure = deterministicFailures.find(
@@ -5770,8 +5760,6 @@ export class Conductor {
                   ? await this.runWorktreeStep(state)
                   : step.name === 'rebase'
                       ? await this.runRebaseStep(state)
-                      : step.name === 'wiring_check'
-                        ? await this.runWiringCheckStep(state)
                       : step.name === 'test_suite'
                         ? await this.runTestSuiteStep()
                         : step.name === 'finish' && this.finishPublication
@@ -8501,8 +8489,7 @@ export class Conductor {
       // +build_review, +manual_test) via kickback-shaped verdicts. Those
       // gates aren't `kickbackTarget` steps, so emit the kickback event(s)
       // here; the selector below routes back to them. test_suite re-verifies
-      // before build_review judges the refreshed build; wiring_check remains
-      // only a topology-compatibility no-op.
+      // before build_review judges the refreshed build.
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
         // Task 7 (ADR-2026-07-20): a judged gate that classifyGateInvalidation
@@ -8532,12 +8519,11 @@ export class Conductor {
         // them here, their step STATE never flips back to `pending` — the
         // verdict alone re-opens the gate's own predicate, but the selector
         // still sees `done` and never re-dispatches. Order matches the
-        // ALL_STEPS tail (wiring_check → test_suite → build_review →
+        // ALL_STEPS tail (test_suite → build_review →
         // manual_test → prd_audit →
         // architecture_review_as_built).
         for (const target of [
           'build',
-          'wiring_check',
           'test_suite',
           'build_review',
           'manual_test',

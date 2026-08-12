@@ -186,6 +186,10 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
     // #519/#530), instead of contradicting valid evidence.
     const bulletBody = line.match(/^\s*[-*]\s+(.*)$/);
     if (!bulletBody) continue;
+    // This retired wiring declaration is prose, not a legacy file-list item.
+    // Keep the fallback narrowly limited to actual path bullets so it cannot
+    // turn a historical wiring note into required task corroboration.
+    if (/^\*\*[Ww]ired-into:\*\*/.test(bulletBody[1].trim())) continue;
     let m: RegExpExecArray | null;
     BACKTICK_TOKEN.lastIndex = 0;
     while ((m = BACKTICK_TOKEN.exec(bulletBody[1])) !== null) {

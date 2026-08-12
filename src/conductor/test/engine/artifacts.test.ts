@@ -3764,6 +3764,39 @@ Task 1 → Task 2
       });
     });
 
+    it.each([
+      'tautology',
+      'scope',
+      'rootCause',
+      'completeness',
+      'wiring',
+    ] as const)('rejects a verdict with missing or non-boolean rubric.%s', (member) => {
+      const completeRubric = {
+        tautology: false,
+        scope: false,
+        rootCause: false,
+        completeness: false,
+        wiring: false,
+      };
+      const missing = { ...completeRubric } as Record<string, unknown>;
+      delete missing[member];
+      const nonBoolean = { ...completeRubric, [member]: 'false' };
+
+      for (const rubric of [missing, nonBoolean]) {
+        expect(validateBuildReviewVerdict({ verdict: 'PASS', rubric })).toEqual({
+          ok: false,
+          reason: `.pipeline/build-review.json "rubric.${member}" must be a boolean`,
+        });
+      }
+    });
+
+    it.each([
+      ['PASS', { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true }],
+      ['FAIL', { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false }],
+    ] as const)('%s enforces all-or-FAIL across every complete rubric', (verdict, rubric) => {
+      expect(validateBuildReviewVerdict({ verdict, rubric }).ok).toBe(false);
+    });
+
     it('rejects malformed JSON (non-object) as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict('not an object');
       expect(result.ok).toBe(false);
@@ -3871,7 +3904,7 @@ Task 1 → Task 2
       });
       expect(result).toEqual({
         ok: false,
-        reason: '.pipeline/build-review.json "rubric.wiring" must be a boolean',
+        reason: '.pipeline/build-review.json "rubric.completeness" must be a boolean',
       });
     });
   });
