@@ -8,7 +8,7 @@
 
 Adds a cumulative, tree-movement-proof convergence bound to `build_review` that terminates in an
 operator-visible `needs-human` halt, and an engine-computed removal-evidence channel that narrows
-the Tautology rubric so removal maintenance stops being graded as a tautology. 20 tasks.
+the Tautology rubric so removal maintenance stops being graded as a tautology. 27 tasks.
 
 ## Technical Approach
 
@@ -17,14 +17,33 @@ Two independent changes that share no code and are sequenced only by convenience
 **The bound (Tasks 1–12).** `KickbackGateEntry` gains a `cumulative` counter. The existing
 `madeProgress` branch in `bumpKickbackGate` decides `count` exactly as it does today and is not
 touched; `cumulative` is incremented outside that branch, so tree movement cannot reset it. The
-type guard folds a missing `cumulative` to `0` rather than rejecting, so a ledger written by the
-current engine reads clean — an in-flight feature gets a fresh budget, never a spurious halt.
+type guard *accepts* a missing `cumulative` rather than rejecting, and `readKickbackLedger`
+normalizes it to `0` on the way out — a guard is a boolean predicate and cannot supply the value,
+so without that explicit normalization step the first bump computes `undefined + 1 → NaN`. A
+ledger written by the current engine therefore reads clean — an in-flight feature gets a fresh
+budget, never a spurious halt.
+
+`cumulative` also has a **second writer**: `captureKickbackToBuildContext`
+(`src/conductor/src/engine/conductor.ts#L3772`) reconstructs the gate entry field-by-field with no
+spread, and runs on the `build_review` kickback path (`conductor.ts#L7393`). Left alone it drops
+`cumulative` on every kickback, restarting the count at zero each lap and reproducing the exact
+churn this spec exists to bound. Task 4a covers it.
+
 A `build_review` PASS clears `cumulative` only. Exceeding the cap of 5 writes
 `writeHaltMarker(..., 'needs-human')` — required by `adr-2026-07-28` D1, since retry safety is not
 mechanically provable here, and required by `adr-013`'s sweep, which retains `needs-human` and
 recycles anything weaker. A config block mirroring `KickbackEscalationConfig` gates the halt only:
 when disabled the counter still increments and still rides the event, because the observability is
 what keeps the ledger field spine-compliant rather than a parallel channel.
+
+Mirroring `kickback_escalation` means mirroring **both** halves of it. It is a top-level key
+registered in `knownTopLevelKeys` (`src/conductor/src/engine/config.ts#L311`); an unregistered
+top-level key is a hard `Unknown top-level key` validation error (`config.ts#L326`), so declaring
+an interface alone leaves the switch unusable. And its resolution is a *total* contract
+(`config.ts#L1028-L1051`): absent/null → `{ enabled: true }`; `{ enabled: true|false }` → as given;
+malformed — non-object, **any unknown sibling key**, or non-boolean `enabled` → `{ enabled: true }`,
+fail-safe and without warning. An unknown sibling key therefore does **not** leave `enabled`
+honored; it resets the whole block to enabled. Tasks 13 and 13a follow that contract verbatim.
 
 **The evidence (Tasks 13–20).** A new deriver parses the diff `assembleBuildReviewInputs` has
 already produced, at the merge base it has already resolved, and issues no `git` subprocess of its
@@ -85,15 +104,20 @@ None. Every file and seam already exists.
 
 **Steps:**
 1. Write failing test: a ledger file whose `build_review` entry omits `cumulative` entirely is
-   accepted as valid and resolves that entry's `cumulative` to `0` — not rejected, not folded to an
-   empty ledger.
+   accepted as valid and `readKickbackLedger` returns that entry with `cumulative === 0` — not
+   rejected, not folded to an empty ledger, and not left `undefined`. Assert the returned value
+   strictly equals `0`, so a guard-only change that leaves the field absent fails RED.
 2. Verify test fails (RED)
-3. Implement: treat a missing `cumulative` as `0` in the guard rather than failing the shape check.
+3. Implement: two distinct changes. (a) Relax the type guard to accept a missing `cumulative`
+   (a guard returns a boolean and cannot supply a value). (b) Add an explicit normalization step
+   in `readKickbackLedger` that maps each entry's missing `cumulative` to `0` before returning,
+   rather than returning `parsed` verbatim as it does today. Without (b) the first bump computes
+   `undefined + 1 → NaN`.
 4. Verify test passes (GREEN)
 5. Commit with message: "read a pre-cumulative ledger entry as zero rather than rejecting it"
 
 **Files likely touched:**
-- `src/conductor/src/engine/kickback-ledger.ts` — type guard tolerance
+- `src/conductor/src/engine/kickback-ledger.ts` — type guard tolerance and reader normalization
 
 **Wired-into:** same as Task 1
 **Dependencies:** 1
@@ -136,6 +160,30 @@ None. Every file and seam already exists.
 
 **Wired-into:** same as Task 1
 **Dependencies:** 3
+
+### Task 4a: Preserve cumulative across the kickback-to-build capture
+**Story:** 1
+**Type:** negative-path
+
+**Steps:**
+1. Write failing test: with the `build_review` entry at `cumulative: 3`,
+   `captureKickbackToBuildContext('build_review')` leaves `cumulative` at `3` while still
+   overwriting `treeHash`, `priorVerdict` and `resolvedBefore` as it does today. Then assert the
+   composed sequence — capture, then consume — reads `cumulative: 4`, not `1`, so the counter
+   survives a full kickback lap.
+2. Verify test fails (RED)
+3. Implement: carry the existing entry's `cumulative` through the entry `captureKickbackToBuildContext`
+   reconstructs (`conductor.ts#L3772-L3791`), defaulting to `0` when there is no prior entry. This
+   writer rebuilds the entry field-by-field with no spread, so an unmodified capture silently drops
+   the field on every lap.
+4. Verify test passes (GREEN)
+5. Commit with message: "preserve the cumulative kickback count across the kickback-to-build capture"
+
+**Files likely touched:**
+- `src/conductor/src/engine/conductor.ts` — `captureKickbackToBuildContext`
+
+**Wired-into:** src/conductor/src/engine/conductor.ts#captureKickbackToBuildContext
+**Dependencies:** 4
 
 ### Task 5: Reproduce the eight-lap incident against the ledger
 **Story:** 1
@@ -296,19 +344,44 @@ None. Every file and seam already exists.
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: an absent block resolves to enabled; a block with `enabled: false` resolves
-   to disabled; an unknown sibling key is ignored and `enabled` is still honored.
+1. Write failing test: the config type exposes an optional block with a single optional boolean
+   `enabled`, and a config object carrying it type-checks.
 2. Verify test fails (RED)
 3. Implement: declare an optional config interface with a single optional `enabled` field and a doc
    comment stating that an absent block resolves to enabled, mirroring `KickbackEscalationConfig`.
+   Declaration only — registration and resolution are Task 13a.
 4. Verify test passes (GREEN)
 5. Commit with message: "add the cumulative convergence bound kill-switch config block"
 
 **Files likely touched:**
 - `src/conductor/src/types/config.ts` — config interface
 
-**Wired-into:** none (inert until Task 14)
+**Wired-into:** none (inert until Task 13a)
 **Dependencies:** none
+
+### Task 13a: Register and resolve the kill-switch key in the validator
+**Story:** 4
+**Type:** negative-path
+
+**Steps:**
+1. Write failing test, covering the same total contract `kickback_escalation` carries
+   (`config.ts#L1028-L1051`): a config carrying the new top-level key validates instead of failing
+   with `Unknown top-level key`; absent or `null` resolves to `{ enabled: true }`; `enabled: false`
+   resolves to disabled; and each malformed form — non-object, non-boolean `enabled`, **and a block
+   carrying any unknown sibling key** — resolves fail-safe to `{ enabled: true }` without a warning.
+   Note the last case deliberately does not honor a sibling `enabled: false`; it is the
+   `kickback_escalation` K3 behavior, not an "unknown keys are ignored" rule.
+2. Verify test fails (RED)
+3. Implement: add the key to `knownTopLevelKeys` and a resolution block mirroring
+   `kickback_escalation`'s K1/K2/K3, including its `materializeDefaults` handling.
+4. Verify test passes (GREEN)
+5. Commit with message: "register and resolve the cumulative bound kill-switch in config validation"
+
+**Files likely touched:**
+- `src/conductor/src/engine/config.ts` — `knownTopLevelKeys` and the resolution block
+
+**Wired-into:** src/conductor/src/engine/config.ts#validateConfig
+**Dependencies:** 13
 
 ### Task 14: Gate only the halt on the kill-switch
 **Story:** 4
@@ -327,7 +400,7 @@ None. Every file and seam already exists.
 - `src/conductor/src/engine/conductor.ts` — cap check
 
 **Wired-into:** same as Task 10
-**Dependencies:** 13
+**Dependencies:** 13a
 
 ### Task 15: Declare cumulativeCount on the kickback event
 **Story:** 5
@@ -413,10 +486,16 @@ None. Every file and seam already exists.
 **Steps:**
 1. Write failing test: a diff removing a member from an exported interface, type alias, or enum in
    a surviving file reports that member attributed to its declaring type — the case the incident's
-   five-key-verdict fixture depended on.
+   five-key-verdict fixture depended on. Cover a member removed further from its declaration than
+   the three context lines `git diff` emits by default, and a member of a declaration nested inside
+   a `namespace`/`module` block, where the enclosing name is not recoverable from the hunk header.
 2. Verify test fails (RED)
 3. Implement: extend the deriver to attribute removed member lines to their enclosing exported
-   declaration.
+   declaration. Prefer the hunk-header function context git already supplies — its default funcname
+   heuristic names the nearest column-0 declaration, so a top-level `export interface Foo {` is
+   present in the header regardless of how far below it the removal sits (verified). Fall back to
+   omitting the attribution when the enclosing declaration is indented or otherwise unrecoverable —
+   an unattributed removal simply means ordinary mutation-sensitivity applies.
 4. Verify test passes (GREEN)
 5. Commit with message: "derive removed members of exported types from the review diff"
 
@@ -552,11 +631,12 @@ None. Every file and seam already exists.
 
 ```text
 The bound
-  1 → 2 → 3 → 4 ┬→ 5
+  1 → 2 → 3 → 4 ┬→ 4a
+                ├→ 5
                 ├→ 6 → 7 → 8
                 └→ 9 → 10 → 11 → 12
-                          ↑
-  13 ─────────────────────┴→ 14
+                           ↑
+  13 → 13a ────────────────┴→ 14
   15 → 16 → 17
 
 The evidence
