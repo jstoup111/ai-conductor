@@ -137,6 +137,8 @@ so do NOT finalize silently — the operator must confirm. On confirmation write
 
 Track: product   # or: technical
 
+Scope boundary: <operator-confirmed breadth and exclusions>
+
 <one line of rationale>
 ```
 

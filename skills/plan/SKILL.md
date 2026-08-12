@@ -29,8 +29,11 @@ Open with a short **Technical Approach** (a paragraph or few bullets: the design
 key modules/files, and sequencing) before the task list, so `build` has the shape of the work
 before the steps.
 
+Read the `Scope boundary:` field in `.docs/track/<slug>.md` and consume the confirmed scope boundary as a binding input.
 Consume the confirmed scope boundary as a binding input.
 Preserve the operator-confirmed narrow or comprehensive outcome in the artifact.
+Do not put a materially broader scope into the plan until the operator confirms it.
+Block any expansion beyond that boundary without operator confirmation.
 Block a material expansion beyond that boundary until the operator confirms it.
 
 ### Documentation boundary
@@ -68,6 +71,8 @@ refusal is not a git conflict: do not invoke the rebase resolver or run `git reb
 If preconditions are not met, state which are missing and suggest the appropriate skill.
 
 ### 2. Read All Stories
+
+Read the `Scope boundary:` field in `.docs/track/<slug>.md` before breaking stories into tasks.
 
 **Skip redundant exploration:** If exploration was already performed in this session (e.g.,
 during explore), use the existing exploration results. Do not re-explore the same scope —

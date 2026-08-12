@@ -14,8 +14,11 @@ Catches technical infeasibility, hidden complexity, architectural drift, and dom
 early — when they're cheap to fix. This is where the *how* is resolved (so the PRD stays
 product-only) and captured as APPROVED ADRs.
 
+Read the `Scope boundary:` field in `.docs/track/<slug>.md` and consume the confirmed scope boundary as a binding input.
 Consume the confirmed scope boundary as a binding input.
 Preserve the operator-confirmed narrow or comprehensive outcome in the artifact.
+Do not put a materially broader scope into the artifact until the operator confirms it.
+Block any expansion beyond that boundary without operator confirmation.
 Block a material expansion beyond that boundary until the operator confirms it.
 
 **Run after `/prd` (product track) or `/explore` (technical track), and BEFORE `/stories`** (adr-2026-06-29-architecture-before-stories-convergent-kickback).
@@ -195,8 +198,8 @@ proposal establishes or revises one of these durable architectural shapes:
 - foundational technology, including a runtime, framework, database, messaging, queuing, or caching platform.
 
 Use the categories only after that structural prerequisite is met, to make the decision explicit
-and reviewable. Importance, breadth, workflow policy, prompt wording, and ordinary implementation
-detail are not sufficient ADR triggers. A small change may still warrant an ADR when it makes one
+and reviewable. Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail
+are not sufficient ADR triggers. A small change may still warrant an ADR when it makes one
 of the structural decisions above; a broad or important change does not when it does not.
 
 Before drafting, read `.docs/decisions/` for an APPROVED ADR that already governs the structural
