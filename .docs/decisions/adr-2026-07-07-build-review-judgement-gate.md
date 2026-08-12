@@ -40,6 +40,15 @@ Insert a first-class loopGate step `build_review` between `build` and `manual_te
    convention:
    - the diff: `git diff <merge-base(derived default branch, HEAD)>..HEAD` (full feature diff;
      stable during BUILD since the only sanctioned rebase is finish-time),
+
+     > **Amended 2026-08-11 by #1245:** the parenthetical no longer holds. The finish-time step is
+     > not the only sanctioned rebase during BUILD — the re-kick play-forward
+     > (`resumeRebaseFirst`) already rebases pre-loop on the sentinel path, and #1245 additionally
+     > plays forward at halt-resume whenever the feature's base has advanced. The graded range is
+     > therefore stable only *within* a dispatch, not across a BUILD phase spanning a resume. This
+     > is a correction to the stability claim only; the diff's definition, the rubric, and the
+     > verdict predicate are unchanged. A rebase before grading is what makes the range correct
+     > rather than stale — see `adr-2026-08-11-resume-time-base-advance-evaluation`.
    - the approved plan (`.docs/plans/<stem>.md`) — required to judge scope; it is an
      operator-approved DECIDE artifact, not maker self-report, so it does not breach isolation,
    - raw test output: the grader runs the diff's SCOPED tests (its own/changed test files) inside
