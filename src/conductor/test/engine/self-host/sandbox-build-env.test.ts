@@ -201,6 +201,39 @@ describe('minimal Claude self-host sandbox', () => {
     }
   });
 
+  it('releases the production-written scratch lease when Claude provisioning fails after acquisition', async () => {
+    const { baseDir: _explicitBaseDir, ...defaulted } = options();
+    const scratchHome = join(worktree, '.daemon', 'scratch', 'run-15', '2-claude');
+    let observedLease: Record<string, unknown> | undefined;
+    const failingFs: SandboxFs = {
+      ...realSandboxFs,
+      writeFile: async (path, value) => {
+        if (path.endsWith('settings.json')) {
+          observedLease = JSON.parse(await readFile(join(scratchHome, 'owner.json'), 'utf8'));
+          throw Object.assign(new Error('post-acquire Claude provisioning failure'), { path });
+        }
+        await realSandboxFs.writeFile(path, value);
+      },
+    };
+
+    await expect(provisionSandboxBuildEnv({
+      ...defaulted,
+      repository: 'owner/repository',
+      featureSlug: 'sandbox-build-env-failure',
+      runId: 'run-15',
+      attempt: 2,
+      fs: failingFs,
+    })).rejects.toThrow('post-acquire Claude provisioning failure');
+    expect(observedLease).toMatchObject({
+      repository: 'owner/repository',
+      featureSlug: 'sandbox-build-env-failure',
+      runId: 'run-15',
+      attempt: 2,
+      ownerPid: process.pid,
+    });
+    await expect(access(scratchHome)).rejects.toThrow();
+  });
+
 
   it('keeps the child env isolated and teardown idempotent on the crash path', async () => {
     const parentEnv = { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/operator/.claude' };

@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { access } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join, relative } from 'node:path';
 import {
   verifyTokenLiveness,
   type LivenessSpawner,
@@ -26,6 +29,22 @@ function makeSpawner(result: LivenessSpawnResult): {
 }
 
 describe('verifyTokenLiveness', () => {
+  it('uses and removes a system-temp liveness home outside worktree scratch by default', async () => {
+    let configDir = '';
+    const spawner: LivenessSpawner = async (_argv, env) => {
+      configDir = env.CLAUDE_CONFIG_DIR!;
+      return { exitCode: 0, stdout: JSON.stringify({ is_error: false }), timedOut: false };
+    };
+
+    await expect(verifyTokenLiveness({ token: TOKEN, spawner })).resolves.toMatchObject({ verdict: 'valid' });
+
+    const worktreeScratch = join(tmpdir(), 'worktree', '.daemon', 'scratch');
+    expect(isAbsolute(configDir)).toBe(true);
+    expect(relative(tmpdir(), configDir).startsWith('..')).toBe(false);
+    expect(relative(worktreeScratch, configDir).startsWith('..')).toBe(true);
+    await expect(access(configDir)).rejects.toThrow();
+  });
+
   it('maps a success envelope (is_error false, exit 0) to valid', async () => {
     const { spawner } = makeSpawner({
       exitCode: 0,

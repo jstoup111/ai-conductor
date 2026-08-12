@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { provisionProviderHome } from '../../../src/engine/self-host/provider-home.js';
-import { acquireScratchHome } from '../../../src/engine/self-host/provider-scratch.js';
 import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 
 const execFile = promisify(execFileCb);
@@ -171,29 +170,35 @@ describe('provider-aware self-host homes', () => {
     }
   });
 
-  it('releases its leased scratch attempt home when preparation fails after acquisition', async () => {
+  it('releases the production-written scratch lease when preparation fails after acquisition', async () => {
     const root = await mkdtemp(join(tmpdir(), 'provider-home-leased-failure-'));
     const worktree = join(root, 'worktree');
     const scratchHome = join(worktree, '.daemon', 'scratch', 'run-14', '3-claude');
     await mkdir(join(worktree, 'skills'), { recursive: true });
-    await acquireScratchHome({
-      worktreeRoot: worktree,
-      repository: 'owner/repository',
-      featureSlug: 'provider-home-failure',
-      runId: 'run-14',
-      attempt: 3,
-      provider: 'claude',
-    });
+    let observedLease: Record<string, unknown> | undefined;
 
     try {
       await expect(provisionProviderHome({
-        provider: { id: 'claude', prepareSelfHostAuth: async () => { throw new Error('post-acquire failure'); } },
+        provider: {
+          id: 'claude',
+          prepareSelfHostAuth: async () => {
+            observedLease = JSON.parse(await readFile(join(scratchHome, 'owner.json'), 'utf8'));
+            throw new Error('post-acquire failure');
+          },
+        },
         worktreeRoot: worktree,
         repository: 'owner/repository',
         featureSlug: 'provider-home-failure',
         runId: 'run-14',
         attempt: 3,
       })).rejects.toThrow('Failed to provision isolated claude self-host home: post-acquire failure');
+      expect(observedLease).toMatchObject({
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-failure',
+        runId: 'run-14',
+        attempt: 3,
+        ownerPid: process.pid,
+      });
       await expect(access(scratchHome)).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
