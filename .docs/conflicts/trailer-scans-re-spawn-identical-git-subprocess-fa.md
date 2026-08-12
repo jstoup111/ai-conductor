@@ -57,16 +57,20 @@ resolution means; this spec changes only *how many subprocesses* computing it co
 
 ---
 
-## Degrading overlap (non-blocking): `#879` — `wiring_check` / `build_review` reorder in `steps.ts`
+## Degrading overlap (non-blocking, now resolved): `#879` — `wiring_check` / `build_review` in `steps.ts`
 
 **Type:** none at the file level (`steps.ts` vs `autoheal.ts` + new
 `trailer-scan-cache.ts`); potential contention only in shared engine test fixtures.
-**Severity:** degrading, not blocking.
+**Severity:** degrading, not blocking. **Status:** resolved — #879 is closed and PR #1517
+has landed on `main`.
 
-**Description:** #879 changes step *ordering*; this spec changes the cost of a function
-called *within* steps. Reordering does not change what `listCommitsWithTrailers` returns
-for a given git state, and memoization does not change when a step runs. The only
-realistic friction is a merge conflict if both specs edit the same engine test file.
+**Description:** #879 would have changed step *ordering*; this spec changes the cost of a
+function called *within* steps. #1517 settled the question a different way — the wiring
+judgement moved into `build_review`'s verdict rubric and the per-task contract was retired,
+leaving `wiring_check` as an unconditional pass — so there is no pending reorder to contend
+with. Neither shape changes what `listCommitsWithTrailers` returns for a given git state,
+and memoization does not change when a step runs. The only realistic friction was a merge
+conflict if both specs edited the same engine test file.
 
 **Resolution rule (whichever lands second):** rebase and re-run the full engine suite;
 if a shared test file conflicts, keep both changes — they are additive (a

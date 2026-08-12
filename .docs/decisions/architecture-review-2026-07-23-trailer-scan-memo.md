@@ -47,12 +47,13 @@ Confirmed by direct read against `main` @ `3cc8e67b`:
   (`8dd28bb2`). This spec is written against the post-#859 3-scan world; there is no
   ordering dependency left, and the ADR here explicitly extends the #859 routing ADR
   rather than contradicting it. `resolveTaskIds` semantics are untouched.
-- **#879 (reordering `wiring_check` vs `build_review` in `steps.ts`)** — being specced
-  concurrently. **No file overlap**: this spec touches `autoheal.ts`, a new
-  `trailer-scan-cache.ts`, and engine tests; #879 touches `steps.ts`. The step *order*
-  change does not alter what `listCommitsWithTrailers` returns, and this cache does not
-  alter when steps run. Reviewed as **independent** — either can land first. Noted rather
-  than coordinated, per instruction.
+- **#879 (`wiring_check` / `build_review` in `steps.ts`)** — resolved since this review.
+  #879 is closed and PR #1517 landed, moving the wiring judgement into `build_review`'s
+  verdict rubric and retiring the per-task `**Wired-into:**` contract; `wiring_check` survives
+  only as an unconditional pass, so no reorder is outstanding. **No file overlap** either way:
+  this spec touches `autoheal.ts`, a new `trailer-scan-cache.ts`, and engine tests. Neither
+  the retired ordering nor the new rubric alters what `listCommitsWithTrailers` returns.
+  Reviewed as **independent**.
 - **#828 (per-task commit floor)** — `per-task-commit-floor.ts:37` is a no-anchor consumer
   and inherits the speedup with no change. No conflict.
 

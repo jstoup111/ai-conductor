@@ -11,11 +11,11 @@ Requirement tags trace to the ADR's decision clauses: **D1** trailer-scan memo, 
 origin-ref memo, **D3** failures bypass the cache, **D4** anchored path uncached,
 **D5** deep copy, **D6** bounded + resettable, **D7** status reads stay live.
 
-> **Coordination note (#879, no overlap):** a concurrent spec reorders `wiring_check` vs
-> `build_review` in `steps.ts`. This spec touches only `autoheal.ts`, a new
-> `trailer-scan-cache.ts`, and engine tests. Step ordering does not change what
-> `listCommitsWithTrailers` returns and this cache does not change when steps run — the
-> two are independent and may land in either order.
+> **Coordination note (#879, resolved — no overlap):** #879 is closed and PR #1517 has since
+> landed, moving the wiring judgement into `build_review`'s verdict rubric and retiring the
+> per-task contract; `wiring_check` remains only as an unconditional pass. No reorder is
+> pending. This spec touches only `autoheal.ts`, a new `trailer-scan-cache.ts`, and engine
+> tests, and remains independent of that change.
 
 > **Dependency note (#859):** the third trailer scan per completion check
 > (`artifacts.ts:1314`, `resolveTaskIds` in the build exit predicate) has **already
