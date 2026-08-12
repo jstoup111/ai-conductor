@@ -58,6 +58,7 @@ wiring:
 # in one operation. Harness integrity remains a separate self-host gate.
 test_suite:
   command: npm test
+  scoped_command: npx vitest run {selectors}
   working_directory: src/conductor
   timeout_seconds: 1800
 
