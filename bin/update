@@ -292,21 +292,24 @@ check_harness_update_stable() {
 check_harness_update_main() {
   timeout 5 git -C "$HARNESS_DIR" fetch --quiet 2>/dev/null || return 0
 
-  local branch local_head remote_head
+  local branch local_head remote_head local_sha behind_count
   branch=$(git -C "$HARNESS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   [ -z "$branch" ] && return 0
 
   local_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
   remote_head=$(git -C "$HARNESS_DIR" rev-parse "origin/${branch}" 2>/dev/null || echo "")
-  [ "$local_head" = "$remote_head" ] && return 0
   [ -z "$remote_head" ] && return 0
+
+  local_sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  behind_count=$(git -C "$HARNESS_DIR" rev-list --count "HEAD..origin/${branch}" 2>/dev/null || echo "0")
+  echo "Update identity: main@${local_sha} (branch: ${branch}; behind: ${behind_count})"
+
+  [ "$local_head" = "$remote_head" ] && return 0
 
   if ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD "origin/${branch}" 2>/dev/null; then
     return 0
   fi
 
-  local behind_count
-  behind_count=$(git -C "$HARNESS_DIR" rev-list --count "HEAD..origin/${branch}" 2>/dev/null || echo "0")
   [ "$behind_count" = "0" ] && return 0
 
   echo ""

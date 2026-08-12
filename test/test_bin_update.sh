@@ -1417,6 +1417,19 @@ make_main_repo() {
   echo "$clone|$origin"
 }
 
+# Task 8: a level main checkout must report its identity rather than returning
+# silently before the existing update-offer path.
+PAIR=$(make_main_repo "t8-main-current")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR" --set-channel main
+run_update "$REPO" "$HOME_DIR"
+MAIN_SHA=$(git -C "$REPO" rev-parse --short HEAD)
+assert "main current: prints exactly one identity with sha, branch, and behind count" \
+  "$( [ "$(printf '%s\n' "$OUT" | grep -Fxc "Update identity: main@${MAIN_SHA} (branch: main; behind: 0)" || true)" -eq 1 ] && [ "$(printf '%s\n' "$OUT" | grep -Fc 'Update identity:' || true)" -eq 1 ] && echo 0 || echo 1)"
+assert "main current: does not offer an update" \
+  "$(case "$OUT" in *"Harness update available"*|*"Pull latest?"*) echo 1;; *) echo 0;; esac)"
+
 PAIR=$(make_main_repo "s4-accept")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 HOME_DIR=$(make_isolated_home)
