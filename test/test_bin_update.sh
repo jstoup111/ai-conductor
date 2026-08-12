@@ -161,6 +161,35 @@ EOF
   echo "$dir"
 }
 
+# run_identity_resolver <repo_dir>
+# Calls the real shared-library binary against a disposable local Git checkout.
+# The resolver's tab-separated contract is: kind, identity, baseline, distance,
+# source.  Keep its invocation separate from bin/update so these tests pin the
+# checkout-derived identity rule before any caller starts consuming it.
+run_identity_resolver() {
+  local repo=$1
+  set +e
+  RESOLVER_OUT=$(cd "$repo" && bash -c 'source "$1"; resolve_harness_identity "$2"' \
+    _ "$repo/bin/lib/harness-common.sh" "$repo" 2>&1)
+  RESOLVER_CODE=$?
+  set -e
+}
+
+# assert_resolved_identity <description> <kind> <identity> <baseline> <distance> <source>
+assert_resolved_identity() {
+  local desc=$1 expected_kind=$2 expected_identity=$3 expected_baseline=$4
+  local expected_distance=$5 expected_source=$6
+  local kind identity baseline distance source
+
+  IFS=$'\t' read -r kind identity baseline distance source <<< "$RESOLVER_OUT"
+  assert "$desc: exits 0" "$([ "$RESOLVER_CODE" -eq 0 ] && echo 0 || echo 1)"
+  assert "$desc: kind is $expected_kind" "$([ "$kind" = "$expected_kind" ] && echo 0 || echo 1)"
+  assert "$desc: identity is $expected_identity" "$([ "$identity" = "$expected_identity" ] && echo 0 || echo 1)"
+  assert "$desc: baseline is $expected_baseline" "$([ "$baseline" = "$expected_baseline" ] && echo 0 || echo 1)"
+  assert "$desc: distance is $expected_distance" "$([ "$distance" = "$expected_distance" ] && echo 0 || echo 1)"
+  assert "$desc: source is $expected_source" "$([ "$source" = "$expected_source" ] && echo 0 || echo 1)"
+}
+
 # make_isolated_home
 # A throwaway HOME so tests never read/write the operator's real
 # ~/.ai-conductor/config.yml.
@@ -361,6 +390,71 @@ if [ ! -f "$UPDATE_SRC" ]; then
   echo -e "${BOLD}Summary: ${PASS}/${TOTAL} passed${NC}"
   exit 1
 fi
+
+# ─── Checkout-derived identity resolver (Task 1 RED) ───────────────────────
+
+echo ""
+echo -e "${BOLD}Checkout-derived identity resolver${NC}"
+
+REPO=$(make_repo "resolver-exact-tag")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+run_identity_resolver "$REPO"
+assert_resolved_identity "exact release tag" release v0.4.0 v0.4.0 0 "checked-out tag"
+
+REPO=$(make_repo "resolver-three-commits-post-tag")
+for commit_number in 1 2 3; do
+  git -C "$REPO" commit -q --allow-empty -m "post-release ${commit_number}"
+done
+run_identity_resolver "$REPO"
+assert_resolved_identity "three commits past a release" post-release v0.3.0+3 v0.3.0 3 checkout
+
+# The release tag exists in the repository, but an orphan checkout cannot
+# reach it.  This is a genuine undeterminable identity, rather than a missing
+# config record on a checkout that still has a release ancestor.
+REPO=$(make_repo "resolver-orphan-no-reachable-tag")
+git -C "$REPO" checkout -q --orphan no-release-history
+git -C "$REPO" rm -qrf --cached .
+git -C "$REPO" clean -qfd
+printf 'orphan checkout\n' > "$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m "orphan checkout"
+run_identity_resolver "$REPO"
+assert_resolved_identity "orphan checkout without a reachable release" undeterminable unknown "" "" none
+
+# v0.4.0 is the nearest release through the merged branch, but v0.5.0 is the
+# highest release reachable from HEAD.  The resolver must select the latter.
+REPO=$(make_repo "resolver-highest-reachable-not-nearest")
+BASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+PRIMARY_BRANCH=$(git -C "$REPO" symbolic-ref --short HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.5.0"
+git -C "$REPO" tag v0.5.0
+git -C "$REPO" checkout -q -b nearer-v0.4.0 "$BASE_SHA"
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$PRIMARY_BRANCH"
+git -C "$REPO" merge -q --no-ff nearer-v0.4.0 -m "merge nearer release"
+run_identity_resolver "$REPO"
+assert_resolved_identity "highest reachable release beats nearest release" post-release v0.5.0+2 v0.5.0 2 checkout
+
+# `git describe` silently considers only ten candidates by default.  Exercise
+# more than twice that many reachable releases to pin the unbounded lookup.
+REPO=$(make_repo "resolver-twenty-two-reachable-tags")
+for tag_number in $(seq 1 22); do
+  git -C "$REPO" commit -q --allow-empty -m "v0.4.${tag_number}"
+  git -C "$REPO" tag "v0.4.${tag_number}"
+done
+git -C "$REPO" commit -q --allow-empty -m "post twenty-second release"
+run_identity_resolver "$REPO"
+assert_resolved_identity "twenty-two reachable release tags" post-release v0.4.22+1 v0.4.22 1 checkout
+
+# Prerelease tags are not release baselines.  They must not displace the last
+# stable release even though the basic Git glob can match their names.
+REPO=$(make_repo "resolver-excludes-release-candidate")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0-rc1"
+git -C "$REPO" tag v0.4.0-rc1
+run_identity_resolver "$REPO"
+assert_resolved_identity "release candidate tag is excluded" post-release v0.3.0+1 v0.3.0 1 checkout
 
 # ─── Update config accessors: canonical conductor YAML ownership ───────────
 
