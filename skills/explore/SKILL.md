@@ -88,6 +88,10 @@ One at a time, each building on the last. Focus on **what** the user wants (not 
 it, **why** it matters, scope boundaries, and constraints. Stop when you have enough to propose
 approaches. Don't over-question.
 
+Ask how comprehensive the fix should be before recommending or confirming an approach.
+Do not default silently to minimal, balanced, or comprehensive scope.
+If the operator has not answered, stop before approach confirmation. Record the operator’s answer as the scope boundary.
+
 ### 3. Propose Approaches
 
 Present 2-3 approaches with clear trade-offs and a recommendation; the user decides.

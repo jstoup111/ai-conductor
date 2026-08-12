@@ -16,6 +16,8 @@ PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
 ENGINEER_SKILL_FILE="${HARNESS_DIR}/skills/engineer/SKILL.md"
 CONDUCT_SKILL_FILE="${HARNESS_DIR}/skills/conduct/SKILL.md"
 BOOTSTRAP_SKILL_FILE="${HARNESS_DIR}/skills/bootstrap/SKILL.md"
+EXPLORE_SKILL_FILE="${HARNESS_DIR}/skills/explore/SKILL.md"
+PLANNER_AGENT_FILE="${HARNESS_DIR}/agents/planner.md"
 CI_WORKFLOW_FILE="${HARNESS_DIR}/.github/workflows/ci.yml"
 AUTORESOLVE_FILE="${HARNESS_DIR}/src/conductor/src/engine/autoresolve.ts"
 CI_FIX_FILE="${HARNESS_DIR}/src/conductor/src/engine/ci-fix.ts"
@@ -60,6 +62,18 @@ conduct_suite_guidance_contract_holds() {
     && ! grep -qiE '(^|[^[:alnum:]_-])[/\$]test-suite\b|test-suite[[:space:]]+(skill|model)|(skill|model)[[:space:]]+test-suite' "$skill_file"
 }
 
+scope_choice_contract_holds() {
+  local harness_file="$1"
+  local explore_file="$2"
+  local planner_file="$3"
+
+  grep -qF 'The operator chooses the fix breadth before approach confirmation.' "$harness_file" \
+    && grep -qF 'Ask how comprehensive the fix should be before recommending or confirming an approach.' "$explore_file" \
+    && grep -qF 'Do not default silently to minimal, balanced, or comprehensive scope.' "$explore_file" \
+    && grep -qF 'Record the operator’s answer as the scope boundary.' "$explore_file" \
+    && grep -qF 'Expand scope only when the operator has confirmed that expansion.' "$planner_file"
+}
+
 if [ ! -f "$SKILL_FILE" ]; then
   fail "skills/pipeline/SKILL.md exists"
   exit 1
@@ -82,6 +96,12 @@ if [ -e "$LEGACY_TEST_SUITE_SKILL" ]; then
   fail "legacy skills/test-suite directory must be absent"
 else
   pass "legacy skills/test-suite directory is absent"
+fi
+
+if scope_choice_contract_holds "$HARNESS_DIR/HARNESS.md" "$EXPLORE_SKILL_FILE" "$PLANNER_AGENT_FILE"; then
+  pass "DECIDE requires an operator-selected fix breadth before approach confirmation"
+else
+  fail "DECIDE must ask and record the operator's fix breadth before approach confirmation, forbid silent scope defaults, and make planner expansion operator-controlled"
 fi
 
 if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \
