@@ -51,6 +51,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   'friction-mapped' | 'not-audited-by-design'
 > = {
   step_started: 'not-audited-by-design',
+  deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
   provider_attempt: 'not-audited-by-design',
@@ -133,6 +134,11 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
   step_started: { type: 'step_started', step: 'build', index: 0 },
+  deprecated_step: {
+    type: 'deprecated_step',
+    step: 'wiring_check',
+    adr: 'adr-2026-08-11-wiring-judged-in-build-review',
+  },
   step_completed: { type: 'step_completed', step: 'build', status: 'done' },
   step_failed: { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
   provider_attempt: {

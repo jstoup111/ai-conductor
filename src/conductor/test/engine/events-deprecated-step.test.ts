@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { persistedEventTypes } from '../../src/engine/event-sinks.js';
 import type { ConductorEvent } from '../../src/types/events.js';
+import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const deprecatedStepEvent: ConductorEvent = {
@@ -48,6 +49,16 @@ describe('deprecated step events', () => {
       step: 'wiring_check',
       adr: 'adr-2026-08-11-wiring-judged-in-build-review',
     });
+  });
+
+  it('renders the deprecation notice through the daemon event switch', () => {
+    const lines: string[] = [];
+
+    renderDaemonEvent(deprecatedStepEvent, (line) => lines.push(line));
+
+    expect(lines).toEqual([
+      expect.stringContaining('DEPRECATED: wiring_check is a no-op — see adr-2026-08-11-wiring-judged-in-build-review'),
+    ]);
   });
 
   it('ignores an unknown event variant without throwing', async () => {

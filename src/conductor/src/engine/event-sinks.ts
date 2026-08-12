@@ -8,6 +8,7 @@ export interface SinkDeclaration {
 
 export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   step_started: { render: true, persist: true, audit: false },
+  deprecated_step: { render: true, persist: true, audit: false },
   step_completed: { render: true, persist: true, audit: true },
   step_failed: { render: true, persist: true, audit: false },
   provider_attempt: { render: true, persist: true, audit: false },
