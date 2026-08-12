@@ -415,7 +415,7 @@ assert_resolved_identity "three commits past a release" post-release v0.3.0+3 v0
 REPO=$(make_repo "resolver-orphan-no-reachable-tag")
 git -C "$REPO" checkout -q --orphan no-release-history
 git -C "$REPO" rm -qrf --cached .
-git -C "$REPO" clean -qfd
+git -C "$REPO" clean -qfd -e bin/lib/harness-common.sh
 printf 'orphan checkout\n' > "$REPO/README.md"
 git -C "$REPO" add README.md
 git -C "$REPO" commit -q -m "orphan checkout"
