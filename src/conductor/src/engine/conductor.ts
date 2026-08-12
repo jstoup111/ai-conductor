@@ -4401,7 +4401,9 @@ export class Conductor {
                     return runNativeGroupBranch(
                       member,
                       async () => {
-                        const result = this.runTestSuiteStep();
+                        const result = member.name === 'wiring_check'
+                          ? this.runWiringCheckStep(state)
+                          : this.runTestSuiteStep();
                         const settled = await result;
                         nativeBranchResults.set(member.name, settled);
                         return settled;
@@ -5300,7 +5302,7 @@ export class Conductor {
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
         await emitTracked({ type: 'step_started', step: step.name, index: i });
-        if (step.deprecated) {
+        if (step.deprecated && step.name !== 'wiring_check') {
           await emitTracked({
             type: 'deprecated_step',
             step: step.name,
@@ -5760,6 +5762,8 @@ export class Conductor {
                   ? await this.runWorktreeStep(state)
                   : step.name === 'rebase'
                       ? await this.runRebaseStep(state)
+                      : step.name === 'wiring_check'
+                        ? await this.runWiringCheckStep(state)
                       : step.name === 'test_suite'
                         ? await this.runTestSuiteStep()
                         : step.name === 'finish' && this.finishPublication
@@ -8361,6 +8365,11 @@ export class Conductor {
   }
 
   private async runWiringCheckStep(state: ConductState): Promise<StepRunResult> {
+    await this.events.emit({
+      type: 'deprecated_step',
+      step: 'wiring_check',
+      adr: 'adr-2026-08-11-wiring-judged-in-build-review',
+    });
     void state;
     return { success: true };
   }
