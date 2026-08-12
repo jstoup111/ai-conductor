@@ -1721,6 +1721,18 @@ export function validateBuildReviewVerdict(
     };
   }
 
+  // Rubric booleans use the established inverse convention: false means the
+  // item failed. A grader cannot report PASS while any of the five evaluated
+  // items is false; otherwise a wiring-only failure could satisfy the gate.
+  const failedRubric = (['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const)
+    .find((name) => rubric[name] === false);
+  if (e.verdict === 'PASS' && failedRubric !== undefined) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} must be FAIL when rubric.${failedRubric} is false`,
+    };
+  }
+
   const result: {
     ok: true;
     verdict: 'PASS' | 'FAIL';
