@@ -20,6 +20,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can now run `conduct-ts reseal` from an interactive terminal to re-fingerprint approved, amended protected DECIDE artifacts, with every reseal and refusal recorded in the audit trail. ([implementation PR #1454](https://github.com/jstoup111/ai-conductor/pull/1454)).
 - conflict-check and coherence-check now detect and block contradictions between approved ADRs and stories before they reach BUILD, with the ADR corpus scoped by the new `conflict_check.adr_corpus` config key (default `change_set`, or `repo_wide` to compare against every approved decision). ([implementation PR #1453](https://github.com/jstoup111/ai-conductor/pull/1453)).
 
+### Changed
+
+- Unattended runs now use the daemon while foreground auto mode exits with migration guidance. ([implementation PR #1509](https://github.com/jstoup111/ai-conductor/pull/1509)).
+
 ### Fixed
 
 - Spec PRs opened into a repository that requires a release disposition now always declare one, so its required release-metadata check no longer fails on every landed spec. ([implementation PR #1448](https://github.com/jstoup111/ai-conductor/pull/1448)).
