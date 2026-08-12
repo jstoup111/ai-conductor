@@ -376,6 +376,88 @@ describe('engine/conductor', () => {
     });
   });
 
+  it('attributes a silent-exit backstop halt with no breadcrumb step to the explicit fallback', async () => {
+    const halts: Array<Extract<ConductorEvent, { type: 'loop_halt' }>> = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event);
+    });
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+    let conductor: Conductor;
+    events.on('gate_blocked', () => {
+      // Reproduce a silent exit before the loop has any reliable step
+      // breadcrumb. The finally backstop still has to emit a concrete step.
+      (conductor as unknown as { _breadcrumb: Record<string, never> })._breadcrumb = {};
+    });
+    conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      daemon: true,
+      fromStep: 'stories',
+    });
+
+    await conductor.run();
+
+    // The existing backstop reason remains unchanged while its event gains a
+    // concrete attribution instead of the pre-central-emitter undefined step.
+    expect(halts).toEqual([
+      expect.objectContaining({
+        reason: expect.stringContaining(
+          'loop exited without a terminal verdict (last step: no step recorded)',
+        ),
+        step: 'no step recorded',
+      }),
+    ]);
+  });
+
+  it('attributes a halt raised after a step settled before the next dispatch to that settled step', async () => {
+    const halts: Array<Extract<ConductorEvent, { type: 'loop_halt' }>> = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event);
+    });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      daemon: true,
+    });
+    (conductor as unknown as { haltState: ConductState }).haltState = { manual_test: 'done' };
+    const reason = 'deferred boundary halt after manual_test settled';
+
+    await (conductor as unknown as {
+      emitLoopHalt(reason: string): Promise<void>;
+    }).emitLoopHalt(reason);
+
+    expect(halts).toEqual([expect.objectContaining({ reason, step: 'manual_test' })]);
+  });
+
+  it('prefers state.last_step over a newer breadcrumb when a central halt is raised outside the loop', async () => {
+    const halts: Array<Extract<ConductorEvent, { type: 'loop_halt' }>> = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event);
+    });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      daemon: true,
+    });
+    (conductor as unknown as { haltState: ConductState }).haltState = { last_step: 'build' };
+    (conductor as unknown as { _breadcrumb: { lastAdvancedStep?: string } })._breadcrumb = {
+      lastAdvancedStep: 'manual_test',
+    };
+    const reason = 'central halt after state persisted build';
+
+    await (conductor as unknown as {
+      emitLoopHalt(reason: string): Promise<void>;
+    }).emitLoopHalt(reason);
+
+    expect(halts).toEqual([expect.objectContaining({ reason, step: 'build' })]);
+  });
+
   it('constructs the persistent filesystem state store by default', () => {
     const conductor = new Conductor({
       projectRoot: dir,
