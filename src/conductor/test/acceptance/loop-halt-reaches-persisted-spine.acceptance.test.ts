@@ -121,7 +121,7 @@ describe('acceptance: a loop halt reaches the persisted event spine (#1477)', ()
     expect(audit).toContainEqual(
       expect.objectContaining({
         origin: 'manual_test',
-        phase: 'ship',
+        phase: 'SHIP',
         event: 'intervention',
         cause: haltReason,
       }),
