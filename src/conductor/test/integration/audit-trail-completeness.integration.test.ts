@@ -402,6 +402,10 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     writer.subscribe(events);
 
     const stepsRun: StepName[] = [];
+    const deprecatedSteps: Array<Extract<ConductorEvent, { type: 'deprecated_step' }>> = [];
+    events.on('deprecated_step', (event) => {
+      if (event.type === 'deprecated_step') deprecatedSteps.push(event);
+    });
     const runner: StepRunner = {
       run: async (step: StepName): Promise<StepRunResult> => {
         stepsRun.push(step);
@@ -417,10 +421,19 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
 
     await conductor.run();
 
+    expect(deprecatedSteps).toEqual([
+      {
+        type: 'deprecated_step',
+        step: 'wiring_check',
+        adr: 'adr-2026-08-11-wiring-judged-in-build-review',
+      },
+    ]);
+
     expect(stepsRun).not.toContain('conflict_check');
     expect(stepsRun).not.toContain('architecture_diagram');
 
     const records = await readRecords(dir);
+    expect(records.some((record) => record.event === 'deprecated_step')).toBe(false);
     const recordedSteps = new Set(records.map((r) => r.origin));
 
     // executed ⊆ recorded

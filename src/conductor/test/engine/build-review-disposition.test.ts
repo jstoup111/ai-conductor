@@ -273,7 +273,7 @@ describe('engine/build-review-disposition — buildReviewFailRoute', () => {
     expect(
       buildReviewFailRoute({
         verdict: 'FAIL',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
       }),
     ).toBe('remediate');
   });
@@ -282,7 +282,7 @@ describe('engine/build-review-disposition — buildReviewFailRoute', () => {
     expect(
       buildReviewFailRoute({
         verdict: 'FAIL',
-        rubric: { tautology: false, scope: false, rootCause: false, wiring: false },
+        rubric: { tautology: false, scope: false, rootCause: false },
         findings: { completeness: ['missing teardown transition output'] },
       }),
     ).toBe('remediate');
@@ -292,7 +292,7 @@ describe('engine/build-review-disposition — buildReviewFailRoute', () => {
     expect(
       buildReviewFailRoute({
         verdict: 'FAIL',
-        rubric: { tautology: false, scope: true, rootCause: false, completeness: true, wiring: false },
+        rubric: { tautology: false, scope: true, rootCause: false, completeness: true },
       }),
     ).toBe('remediate');
   });
@@ -314,7 +314,7 @@ describe('engine/build-review-disposition — buildReviewFailRoute', () => {
     expect(
       buildReviewFailRoute({
         verdict: 'FAIL',
-        rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
+        rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
       }),
     ).toBe('remediate');
   });
@@ -323,21 +323,21 @@ describe('engine/build-review-disposition — buildReviewFailRoute', () => {
     expect(
       buildReviewFailRoute({
         verdict: 'FAIL',
-        rubric: { tautology: false, rootCause: false, completeness: false, wiring: false },
+        rubric: { tautology: false, rootCause: false, completeness: false },
         findings: { scope: ['CHANGELOG.md gains a second [Unreleased] entry'] },
       }),
     ).toBe('remediate');
   });
 
   it('routes a FAIL with no rubric detail to build (fail-open to today’s behavior)', () => {
-    expect(buildReviewFailRoute({ verdict: 'FAIL', rubric: { wiring: false } })).toBe('build');
+    expect(buildReviewFailRoute({ verdict: 'FAIL', rubric: {} })).toBe('build');
   });
 
   it('routes nowhere on a PASS verdict', () => {
     expect(
       buildReviewFailRoute({
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
       }),
     ).toBe('none');
   });
@@ -346,7 +346,7 @@ describe('engine/build-review-disposition — buildReviewFailRoute', () => {
     expect(
       buildReviewFailRoute({
         verdict: 'PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
         findings: { completeness: ['stale finding from a prior lap'] },
       }),
     ).toBe('none');
@@ -355,7 +355,7 @@ describe('engine/build-review-disposition — buildReviewFailRoute', () => {
   it('is idempotent across repeated calls with identical input', () => {
     const input = {
       verdict: 'FAIL' as const,
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
     };
     expect(buildReviewFailRoute(input)).toBe(buildReviewFailRoute(input));
   });

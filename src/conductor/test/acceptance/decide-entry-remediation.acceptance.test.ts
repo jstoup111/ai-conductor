@@ -25,7 +25,7 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
 
   async function runRemediation(
     targetCompletion: () => Promise<{ done: boolean; reason?: string }>,
-    options: { grant?: boolean; stopAfterPlan?: boolean } = {},
+    options: { grant?: boolean; stopAfterPlan?: boolean; legacyBuildReviewVerdict?: boolean } = {},
   ) {
     root = await mkdtemp(join(tmpdir(), 'decide-entry-remediation-'));
     const statePath = join(root, 'conduct-state.json');
@@ -56,7 +56,9 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['the approved plan lacks the tested remediation path'],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+              rubric: options.legacyBuildReviewVerdict
+                ? { tautology: false, scope: false, rootCause: false, completeness: true }
+                : { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
             }),
             'utf8',
           );
@@ -130,6 +132,18 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
     expect(result.halt).toContain('DECIDE entry refused — autonomous run may not enter DECIDE');
     expect(result.halt).toContain('Source gate:       remediate');
     expect(result.halt).toContain(refusal);
+  });
+
+  it('rejects a legacy build-review verdict before it can dispatch remediate or plan', async () => {
+    const result = await runRemediation(
+      async () => ({ done: false, reason: 'plan artifact is unsatisfied' }),
+      { legacyBuildReviewVerdict: true },
+    );
+
+    expect(result.calls).toContain('build_review');
+    expect(result.calls).not.toContain('remediate');
+    expect(result.calls).not.toContain('plan');
+    expect(result.halt).toMatch(/rubric\.wiring/);
   });
 
   it('a matching grant still refuses entry when remediation reopens a satisfied DECIDE artifact', async () => {

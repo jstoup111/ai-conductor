@@ -110,9 +110,10 @@ describe('dispatchableStepCommands', () => {
         }
       }));
 
-      const pipeline = STEP_SKILL_INVOCATIONS.build;
-      if (pipeline === undefined) throw new Error('build invocation fixture is missing');
-      const rendered = providers.map((provider) => renderSkillInvocation(pipeline, provider));
+      expect(STEP_SKILL_INVOCATIONS.build).toBeDefined();
+      expect(STEP_SKILL_INVOCATIONS).not.toHaveProperty('wiring_check');
+      const build = STEP_SKILL_INVOCATIONS.build!;
+      const rendered = providers.map((provider) => renderSkillInvocation(build, provider));
       expect(new Set(rendered)).toHaveLength(providers.length);
       expect(diagnostics).toEqual(rendered.map((command) => expect.stringContaining(command)));
     } finally {

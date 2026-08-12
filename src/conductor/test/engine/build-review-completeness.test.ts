@@ -52,6 +52,17 @@ describe('engine/artifacts — build_review predicate (completeness-driven, fail
     expect(r.routeClass).toBeUndefined();
   });
 
+  it('rejects a legacy PASS verdict that omits rubric.wiring', async () => {
+    await verdict({
+      verdict: 'PASS',
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+    });
+
+    const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt: Date.now() - 1000 });
+    expect(r.done).toBe(false);
+    expect(r.reason).toMatch(/rubric\.wiring/);
+  });
+
   it('uses the reviewer completeness verdict, not task-attribution telemetry, as completion authority', async () => {
     await verdict({
       verdict: 'PASS',

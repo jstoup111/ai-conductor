@@ -165,7 +165,7 @@ describe('conductor build-outcome baseline capture', () => {
     expect(blocked).toEqual([]);
     expect(started).toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(dispatched.slice(0, 2)).toEqual(['build', 'test_suite']);
-    expect(failed).toContainEqual(expect.objectContaining({ step: 'test_suite' }));
+    expect(failed).not.toContainEqual(expect.objectContaining({ step: 'test_suite' }));
     expect(failed).not.toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(completed).toContainEqual(expect.objectContaining({ step: 'build', status: 'done' }));
     const payload = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as {

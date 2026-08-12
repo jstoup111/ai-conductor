@@ -4779,12 +4779,6 @@ export class Conductor {
               );
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
-              await emitTracked({
-                type: 'step_failed',
-                step: exhausted.member.name as StepName,
-                error: reason,
-                retryCount: 0,
-              });
               await emitTracked({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) process.off('SIGTERM', sigterm);
