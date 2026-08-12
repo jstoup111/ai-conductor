@@ -14,7 +14,7 @@ describe('plan task Files convention fence', () => {
     expect(source).not.toMatch(/\bWIRED_INTO_LINE\b/);
   });
 
-  it('preserves Files declaration provenance and protected-target violations', () => {
+  it('preserves Files declaration provenance while ignoring retired Wired-into metadata', () => {
     const plan = `# Fixed regression fence
 
 ### Task 1: Declare ordinary implementation paths
@@ -22,6 +22,7 @@ describe('plan task Files convention fence', () => {
 
 ### Task 2: Cite a foreign specification without a Files declaration
 - \`src/conductor/src/engine/legacy.ts\`
+- **Wired-into:** \`src/conductor/src/engine/retired-wiring.ts#run\`
 Read \`.docs/specs/another-feature.md:42\` before changing it.
 
 ### Task 3: Declare a foreign sealed story
@@ -43,6 +44,7 @@ Read \`.docs/specs/files-convention-fence.md\` as context.
         'src/conductor/src/engine/parser.ts',
         'src/conductor/test/engine/parser.test.ts',
       ])],
+      // The retired declaration is not a Files fallback source.
       ['2', new Set(['src/conductor/src/engine/legacy.ts'])],
       ['3', new Set(['.docs/stories/another-feature.md'])],
       ['4', new Set([
