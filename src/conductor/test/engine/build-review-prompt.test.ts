@@ -39,6 +39,32 @@ describe('buildGraderPrompt', () => {
     );
   });
 
+  it('renders every configured wiring entry point verbatim', () => {
+    const entryPoints = [
+      'src/conductor/src/index.ts',
+      'src/conductor/src/daemon-cli.ts',
+      'src/conductor/src/engine/engineer-cli.ts',
+    ];
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints,
+    } as BuildReviewInputs & { entryPoints: string[] });
+
+    expect(entryPoints.every((entryPoint) => prompt.includes(entryPoint))).toBe(true);
+  });
+
+  it('marks wiring as not-judged when entry points are absent or empty', () => {
+    const prompts = [
+      buildGraderPrompt(inputs),
+      buildGraderPrompt({
+        ...inputs,
+        entryPoints: [],
+      } as BuildReviewInputs & { entryPoints: string[] }),
+    ];
+
+    expect(prompts.every((prompt) => /wiring[\s\S]*not-judged/i.test(prompt))).toBe(true);
+  });
+
   it('treats approved DECIDE artifacts as plan-governed Scope changes', () => {
     const prompt = buildGraderPrompt(inputs);
 
