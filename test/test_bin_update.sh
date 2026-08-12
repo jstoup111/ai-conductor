@@ -1082,6 +1082,38 @@ assert "no update prompt on first-run seed" "$(case "$OUT" in *"Update to"*) ech
 echo ""
 echo -e "${BOLD}#1005 — tagged install identity${NC}"
 
+# An exact checkout must be resolved by the shared resolver, rather than the
+# old exact-match `git describe` branch. Make that legacy probe unavailable
+# while leaving the resolver's `git tag --merged` and `git rev-list` calls
+# intact; a stale forward-looking cache must not affect the result.
+REPO=$(make_repo "i17-resolver-exact-tag")
+OLD_RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$OLD_RELEASE_SHA"
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.4.0
+GIT_DESCRIBE_BLOCKER="$TMP_ROOT/git-describe-blocker"
+mkdir -p "$GIT_DESCRIBE_BLOCKER"
+cat > "$GIT_DESCRIBE_BLOCKER/git" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "-C" ]; then
+  shift 2
+fi
+if [ "$1" = "describe" ]; then
+  exit 1
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$GIT_DESCRIBE_BLOCKER/git"
+REAL_GIT="$(command -v git)"
+set +e
+OUT=$(cd "$REPO" && HOME="$HOME_DIR" REAL_GIT="$REAL_GIT" PATH="$GIT_DESCRIBE_BLOCKER:$REPO/bin:$TEST_PATH" "$REPO/bin/update" < /dev/null 2>&1)
+CODE=$?
+set -e
+assert "resolver-derived exact tag offers v0.3.0 → v0.4.0 and repairs the cache" \
+  "$( [ "$CODE" -eq 0 ] && case "$OUT" in *"v0.3.0 → v0.4.0"*) true;; *) false;; esac && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
 # The post-release VERSION is intentionally ahead of the installed v0.3.0
 # checkout. A stale forward-looking config must not suppress the v0.4.0
 # update: the exact checked-out tag is the authority for tagged installs.
