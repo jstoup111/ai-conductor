@@ -1486,7 +1486,7 @@ describe('engine/conductor', () => {
         full,
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false },
+          rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
         }),
       );
       if (mtimeMs !== undefined) {
@@ -10989,7 +10989,7 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 verdict: 'PASS',
                 reasons: [],
-                rubric: { tautology: true, scope: true, rootCause: true, completeness: true },
+                rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
               }),
             );
           } else if (step === 'manual_test') {
