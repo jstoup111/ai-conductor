@@ -273,26 +273,17 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     // wiring_check is omitted: it is a deprecated no-op that settles
     // in-process, so a stale wiring proof never steers a resume entry
     // (adr-2026-08-11-wiring-judged-in-build-review).
-    it.each([
-      { staleGate: 'test_suite' as const },
-    ])('a stale $staleGate proof resumes before build_review', async ({ staleGate }) => {
+    it('a stale test_suite proof resumes before build_review', async () => {
+      const staleGate: StepName = 'test_suite';
       const seed = seedDoneThrough('manual_test');
       seed.build = 'done';
-      seed.wiring_check = staleGate === 'wiring_check' ? 'stale' : 'done';
-      seed.test_suite = staleGate === 'test_suite' ? 'stale' : 'done';
+      seed.wiring_check = 'done';
+      seed.test_suite = 'stale';
       seed.build_review = 'stale';
       await writeState(statePath, seed as ConductState);
       await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
-      await writeVerdict(dir, 'wiring_check', {
-        satisfied: staleGate !== 'wiring_check',
-        checkedAt: 1,
-        ...(staleGate === 'wiring_check' ? { kickback } : {}),
-      });
-      await writeVerdict(dir, 'test_suite', {
-        satisfied: staleGate !== 'test_suite',
-        checkedAt: 1,
-        ...(staleGate === 'test_suite' ? { kickback } : {}),
-      });
+      await writeVerdict(dir, 'wiring_check', { satisfied: true, checkedAt: 1 });
+      await writeVerdict(dir, 'test_suite', { satisfied: false, checkedAt: 1, kickback });
       await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
 
       const sentinel = new Error(`observed:${staleGate}`);
