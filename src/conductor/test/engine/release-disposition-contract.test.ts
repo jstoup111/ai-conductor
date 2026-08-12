@@ -39,9 +39,9 @@ describe('repository-local release-disposition contract', () => {
       claudeTarget: canonicalDir,
       byteIdentical: true,
       config: {
-        // Provider pinned to the configured Codex judgement lane (#1474).
-        llm_provider: 'codex',
-        model: 'gpt-5.6-terra',
+        // Provider remains pinned to the configured Claude judgement lane.
+        llm_provider: 'claude',
+        model: 'sonnet',
         after: 'maintain-documentation',
         skill: '.agents/skills/release-disposition/SKILL.md',
         enforcement: 'gating',
