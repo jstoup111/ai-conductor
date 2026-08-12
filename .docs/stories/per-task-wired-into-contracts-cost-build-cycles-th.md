@@ -143,6 +143,11 @@ As the conductor, I want older verdicts to be unambiguous so that a pre-change a
 
 - Given a `.pipeline/build-review.json` written before the change, with no `wiring` key, when it is parsed, then it is treated as not judged — the step is not considered complete on the strength of that artifact, and it is never read as a wiring pass.
 - Given a verdict where `rubric.wiring` is false but `findings.wiring` is missing or empty, when it is validated, then validation fails closed naming the missing findings rather than accepting the verdict.
+
+> **Amended 2026-08-12 by operator recovery:** The criterion above has reversed polarity.
+> Each `rubric` boolean marks whether that item failed, so the fail-closed requirement applies
+> when `rubric.wiring` is `true`; `false` is the passing value and requires no failure finding.
+
 - Given a verdict where `rubric.wiring` is present but not a boolean, when it is validated, then validation fails closed.
 
 ### Done When
