@@ -300,16 +300,14 @@ export interface ModelTableRow extends NamedRow {
   why: string;
 }
 
-/** All 24 engine-derived rows, in STEP_RATIONALE key order. */
+/** All engine-derived rows, in STEP_RATIONALE key order. */
 export function buildEngineRows(
   claudePolicy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
   codexPolicy: ProviderModelPolicy = CODEX_MODEL_POLICY,
 ): ModelTableRow[] {
   const modelFreeSteps = new Set<StepName>(MODEL_FREE_ENGINE_STEPS);
 
-  return (Object.keys(STEP_RATIONALE) as StepName[])
-    .filter((step) => step !== 'wiring_check')
-    .map((step) => {
+  return (Object.keys(STEP_RATIONALE) as StepName[]).map((step) => {
     if (modelFreeSteps.has(step)) {
       return {
         name: stepDisplayName(step),

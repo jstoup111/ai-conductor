@@ -154,7 +154,10 @@ describe('conductor build-outcome baseline capture', () => {
 
     expect(blocked).toEqual([]);
     expect(started).toContainEqual(expect.objectContaining({ step: 'build' }));
-    expect(failed).toContainEqual(expect.objectContaining({ step: 'build' }));
+    // The second dispatch is the sentinel stop that ends the run; which gate
+    // it lands on is incidental to this spec (it was `build` re-entering via
+    // the wiring kickback before that gate was retired).
+    expect(failed).not.toEqual([]);
     expect(dispatched[0]).toBe('build');
     expect(completed).toContainEqual(expect.objectContaining({ step: 'build', status: 'done' }));
     const payload = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as {

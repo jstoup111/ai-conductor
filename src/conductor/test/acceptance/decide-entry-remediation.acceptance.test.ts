@@ -56,7 +56,7 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['the approved plan lacks the tested remediation path'],
-              rubric: { tautology: true, scope: true, rootCause: true, completeness: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
             }),
             'utf8',
           );

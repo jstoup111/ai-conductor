@@ -99,7 +99,7 @@ function makeRunner(dir: string): { runner: StepRunner; calls: StepName[] } {
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ["task 2's planned work is absent from the diff"],
-              rubric: { tautology: true, scope: true, rootCause: true, completeness: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
             }),
           );
         } else {
@@ -110,7 +110,7 @@ function makeRunner(dir: string): { runner: StepRunner; calls: StepName[] } {
             JSON.stringify({
               verdict: 'PASS',
               reasons: [],
-              rubric: { tautology: true, scope: true, rootCause: true, completeness: true },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
             }),
           );
         }
@@ -194,7 +194,9 @@ describe('acceptance: build_review completeness gates a missing planned task end
       await readFile(join(dir, BUILD_REVIEW_VERDICT_PATH), 'utf-8'),
     ) as { verdict: string; rubric: { completeness?: boolean } };
     expect(finalVerdict.verdict).toBe('PASS');
-    expect(finalVerdict.rubric.completeness).toBe(true);
+    // Rubric booleans mark whether the item FAILED, so a passing completeness
+    // item is `false` (see the grader prompt's schema block).
+    expect(finalVerdict.rubric.completeness).toBe(false);
   });
 
   it('negative: a completeness FAIL under the kickback cap never marks build_review done off a stale/forged stamp alone', async () => {
@@ -214,7 +216,7 @@ describe('acceptance: build_review completeness gates a missing planned task end
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ["task 2's planned work is still absent from the diff"],
-              rubric: { tautology: true, scope: true, rootCause: true, completeness: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
             }),
           );
         }

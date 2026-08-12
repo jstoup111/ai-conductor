@@ -258,7 +258,7 @@ describe('integration/rebase-loop', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+          rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false },
         }),
       );
     } else if (step === 'manual_test') {

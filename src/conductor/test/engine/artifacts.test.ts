@@ -3711,7 +3711,7 @@ Task 1 → Task 2
             'The feature logger does not cover teardown transition output.',
           ],
         },
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
       });
 
       expect(result).toEqual({
@@ -3724,7 +3724,7 @@ Task 1 → Task 2
             'The feature logger does not cover teardown transition output.',
           ],
         },
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
       });
     });
 
@@ -3732,7 +3732,7 @@ Task 1 → Task 2
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
         findings: { completeness: 'two gaps' },
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
       });
 
       expect(result).toEqual({
@@ -3755,12 +3755,12 @@ Task 1 → Task 2
     it('accepts a valid PASS verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
       });
     });
 
@@ -3776,7 +3776,7 @@ Task 1 → Task 2
 
     it('rejects a verdict missing the "verdict" field as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
-        rubric: { tautology: false },
+        rubric: { tautology: false, wiring: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3790,25 +3790,25 @@ Task 1 → Task 2
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
         reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
-        rubric: { tautology: false, scope: false, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: true, scope: true, rootCause: false, completeness: false, wiring: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
         reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
-        rubric: { tautology: false, scope: false, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: true, scope: true, rootCause: false, completeness: false, wiring: false },
       });
     });
 
     it('accepts and round-trips a verdict containing rubric.completeness', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
       });
     });
 
@@ -3816,20 +3816,20 @@ Task 1 → Task 2
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
         reasons: ['implementation addresses only part of the task scope'],
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
         reasons: ['implementation addresses only part of the task scope'],
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
       });
     });
 
     it('rejects lowercase "pass" as invalid-or-FAIL (fail-closed, exact match only)', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'pass',
-        rubric: {},
+        rubric: { wiring: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3837,7 +3837,7 @@ Task 1 → Task 2
     it('rejects unrecognized string "APPROVED" as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'APPROVED',
-        rubric: {},
+        rubric: { wiring: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3845,7 +3845,7 @@ Task 1 → Task 2
     it('rejects an empty string verdict as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: '',
-        rubric: {},
+        rubric: { wiring: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3853,13 +3853,13 @@ Task 1 → Task 2
     it('accepts and round-trips a verdict carrying a codeStamp', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
         codeStamp: 'abc123def456',
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
         codeStamp: 'abc123def456',
       });
     });
@@ -3926,7 +3926,7 @@ Task 1 → Task 2
       const p = join(d, '.pipeline/build-review.json');
       const body: Record<string, unknown> = {
         verdict,
-        rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
       };
       if (codeStamp !== undefined) body.codeStamp = codeStamp;
       await writeFile(p, JSON.stringify(body, null, 2));
@@ -3985,7 +3985,7 @@ Task 1 → Task 2
       const p = join(gdir, '.pipeline/build-review.json');
       await writeFile(
         p,
-        JSON.stringify({ verdict: 'FAIL', reasons: ['nope'], rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true }, codeStamp: baseline }, null, 2),
+        JSON.stringify({ verdict: 'FAIL', reasons: ['nope'], rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false }, codeStamp: baseline }, null, 2),
       );
       // Fresh mtime (not backdated) — never touches the preserve path anyway.
       const result = await checkStepCompletion(gdir, 'build_review', ctxFor(gdir));

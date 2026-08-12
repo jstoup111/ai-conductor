@@ -117,7 +117,9 @@ describe('test_suite native gate loop', () => {
 
     const run = conductor.run();
     await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
-    expect(timeline).toEqual(['wiring_check', 'test_suite']);
+    // wiring_check is a deprecated no-op that settles in-process without a
+    // provider dispatch, so test_suite is the group's only timeline entry.
+    expect(timeline).toEqual(['test_suite']);
     expect(timeline).not.toContain('manual_test');
     expect(timeline).not.toContain('prd_audit');
     expect(timeline).not.toContain('architecture_review_as_built');
@@ -129,9 +131,9 @@ describe('test_suite native gate loop', () => {
     });
     await run;
 
-    expect(timeline.slice(0, 2)).toEqual(['wiring_check', 'test_suite']);
+    expect(timeline.slice(0, 1)).toEqual(['test_suite']);
     expect(timeline.indexOf('manual_test')).toBeGreaterThan(timeline.indexOf('test_suite'));
-    expect(timeline.slice(2).sort()).toEqual([
+    expect(timeline.slice(1).sort()).toEqual([
       'architecture_review_as_built',
       'manual_test',
       'prd_audit',
@@ -370,9 +372,12 @@ describe('test_suite native gate loop', () => {
           { evidence: routedEvidence, count: 1 },
           { evidence: routedEvidence, count: 2 },
         ],
+        // Both rounds take the serial path: wiring_check is a deprecated no-op
+        // that settles once and is never re-staled, so test_suite is the only
+        // live BUILD-verification member and the group never fans out.
         buildRetryReasons: [
           `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
-          `test_suite failed deterministic BUILD verification:\n${routedEvidence}`,
+          `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
         ],
         haltReason:
           `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}`,

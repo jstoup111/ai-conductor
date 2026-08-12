@@ -127,7 +127,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             JSON.stringify({
               verdict: 'FAIL',
               reasons: [`diff touches ${flaggedPath} which is out of scope`],
-              rubric: { wiring: true },
+              rubric: { wiring: false },
             }),
           );
           return {
@@ -235,7 +235,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               // feat.txt is the branch's OWN work — genuine out-of-scope,
               // not a stale-mirage, under any base.
               reasons: ['diff touches feat.txt which is out of scope'],
-              rubric: { wiring: true },
+              rubric: { wiring: false },
             }),
           );
           return {
@@ -320,7 +320,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: ['diff touches feat.txt which is out of scope'],
-                rubric: { wiring: true },
+                rubric: { wiring: false },
               }),
             );
             return {
@@ -340,7 +340,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
-                rubric: { wiring: true },
+                rubric: { wiring: false },
               }),
             );
             return {
@@ -363,7 +363,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['diff touches feat.txt which is out of scope'],
-              rubric: { wiring: true },
+              rubric: { wiring: false },
             }),
           );
           return {
@@ -433,7 +433,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
-                rubric: { wiring: true },
+                rubric: { wiring: false },
               }),
             );
             return {
@@ -455,7 +455,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             .catch(() => true);
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
-            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { wiring: true } }),
+            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { wiring: false } }),
           );
           return {
             success: true,
@@ -553,7 +553,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
-            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { wiring: true } }),
+            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { wiring: false } }),
           );
           return {
             success: true,

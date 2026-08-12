@@ -46,7 +46,7 @@ vi.mock('execa', async (importOriginal) => {
 // verdict written) because the rebase delta never touched the feature's own
 // runtime surface. This test drives a REAL git rebase whose delta is
 // foreign-runtime-only (`src/foreign-only.ts`, a path the feature branch
-// never touched) — `wiring_check`/`test_suite`/`build_review`/`manual_test` must be
+// never touched) — `test_suite`/`build_review`/`manual_test` must be
 // re-opened and re-dispatched (their surface includes foreign runtime), but
 // `prd_audit`/`architecture_review_as_built` (feature-runtime-scoped surface,
 // D_featureSrc empty) must remain `done` and NEVER be re-dispatched.
@@ -178,21 +178,7 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false },
-        }),
-      );
-    } else if (step === 'wiring_check') {
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      const head = (await currentCommitSha(dir)) ?? '2'.repeat(40);
-      await writeFile(
-        join(dir, '.pipeline/wiring-evidence.json'),
-        JSON.stringify({
-          schema: 1,
-          base: '1'.repeat(40),
-          head,
-          layer2: { applicable: false },
-          waivers: [],
-          tasks: [],
+          rubric: { tautology: false, scope: false, rootCause: false, wiring: false },
         }),
       );
     } else if (step === 'manual_test') {
@@ -232,7 +218,7 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     };
   }
 
-  it('preserves prd_audit/architecture_review_as_built (not re-dispatched) while re-opening build_review/wiring_check/manual_test on a foreign-runtime-only rebase delta', async () => {
+  it('preserves prd_audit/architecture_review_as_built (not re-dispatched) while re-opening build_review/manual_test on a foreign-runtime-only rebase delta', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
@@ -260,10 +246,10 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     // Re-run gates: the foreign runtime delta touches their surface, so each
     // must have been re-dispatched a second time after the rebase kickback.
     // (build_review is disabled by default config in this fixture, so it
-    // never dispatches at all here — the wiring/manual_test pair is enough
-    // to prove the invalidated set actually re-runs while the preserved
-    // judged gates above do not.)
-    expect(counts.wiring_check).toBeGreaterThanOrEqual(2);
+    // never dispatches at all here, and wiring_check is a deprecated no-op
+    // that settles in-process — manual_test is what proves the invalidated
+    // set actually re-runs while the preserved judged gates above do not.)
+    expect(counts.wiring_check ?? 0).toBe(0);
     expect(counts.manual_test).toBeGreaterThanOrEqual(2);
 
     // Final state confirms the preserved gates never left 'done' (no

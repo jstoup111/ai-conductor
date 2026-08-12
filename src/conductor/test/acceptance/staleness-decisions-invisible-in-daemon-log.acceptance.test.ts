@@ -234,7 +234,7 @@ async function writeBuildReviewVerdict(
   mtime: Date | null = OLD_MTIME,
 ): Promise<string> {
   const path = join(repo, '.pipeline/build-review.json');
-  const body: Record<string, unknown> = { verdict, rubric: {} };
+  const body: Record<string, unknown> = { verdict, rubric: { wiring: false } };
   if (codeStamp) body.codeStamp = codeStamp;
   await writeFile(path, JSON.stringify(body, null, 2));
   if (mtime) await utimes(path, mtime, mtime);

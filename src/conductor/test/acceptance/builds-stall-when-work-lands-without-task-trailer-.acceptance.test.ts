@@ -818,7 +818,7 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['no plan task was ever resolved'],
-              rubric: { completeness: true, wiring: true },
+              rubric: { completeness: true, wiring: false },
               codeStamp: headSha.trim(),
             }),
           );
@@ -935,7 +935,7 @@ describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['plan task 3 was never resolved'],
-              rubric: { completeness: true, wiring: true },
+              rubric: { completeness: true, wiring: false },
               codeStamp: headSha.trim(),
             }),
           );

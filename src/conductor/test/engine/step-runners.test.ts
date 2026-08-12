@@ -3476,7 +3476,7 @@ TIER: M`,
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: {} }), 'utf-8');
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { wiring: false } }), 'utf-8');
           return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
         });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
@@ -3534,7 +3534,7 @@ TIER: M`,
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: {} }), 'utf-8');
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { wiring: false } }), 'utf-8');
           return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
         });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };

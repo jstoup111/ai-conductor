@@ -98,7 +98,7 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
       wiring_check: STEP_RATIONALE.wiring_check,
       test_suite: STEP_RATIONALE.test_suite,
     }).toEqual({
-      wiring_check: expect.stringMatching(/deterministic|mechanical/i),
+      wiring_check: expect.stringMatching(/deprecated/i),
       test_suite: expect.stringMatching(
         /mechanical.*(?:aggregate|full).*test.*(?:verifier|proof)/i,
       ),

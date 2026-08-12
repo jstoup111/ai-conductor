@@ -142,7 +142,7 @@ describe('integration/gate-loop', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+          rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false },
         }),
       );
     } else if (step === 'wiring_check') {
@@ -1326,8 +1326,8 @@ describe('integration/gate-loop', () => {
                 reasons: v.reasons,
                 findings: v.findings,
                 rubric: v.rubric ?? (v.verdict === 'PASS'
-                  ? { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true }
-                  : { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true }),
+                  ? { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false }
+                  : { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false }),
               }),
             );
             return { success: true };
@@ -1429,12 +1429,12 @@ describe('integration/gate-loop', () => {
           {
             verdict: 'FAIL',
             reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
-            rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: true },
+            rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: false },
           },
           {
             verdict: 'PASS',
             reasons: [],
-            rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+            rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false },
           },
         ],
         [
@@ -1505,7 +1505,7 @@ describe('integration/gate-loop', () => {
           findings: {
             rootCause: ['patched the symptom, not the cause', 'second symptom-only patch'],
           },
-          rubric: { tautology: true, scope: true, rootCause: false, completeness: true, wiring: true },
+          rubric: { tautology: true, scope: true, rootCause: false, completeness: true, wiring: false },
         },
         { verdict: 'PASS', reasons: [] },
       ]);
@@ -1545,7 +1545,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: isFail ? 'FAIL' : 'PASS',
                 reasons: isFail ? ['diff touches merged-pr.txt which is out of scope'] : [],
-                rubric: { tautology: true, scope: !isFail, rootCause: true, completeness: true, wiring: true },
+                rubric: { tautology: true, scope: !isFail, rootCause: true, completeness: true, wiring: false },
               }),
             );
             // Simulate `runBuildReview` having assembled fresh-base evidence
@@ -1631,7 +1631,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`always fails (attempt ${buildRuns})`],
-                rubric: { tautology: false, scope: true, rootCause: true, completeness: true, wiring: true },
+                rubric: { tautology: false, scope: true, rootCause: true, completeness: true, wiring: false },
               }),
             );
             return { success: true };
@@ -1698,7 +1698,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`incomplete implementation (attempt ${buildRuns})`],
-                rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: true },
+                rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: false },
               }),
             );
             return { success: true };
@@ -1764,7 +1764,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict,
                 reasons: verdict === 'FAIL' ? ['one-time grader nit'] : [],
-                rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+                rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false },
               }),
             );
             return { success: true };
@@ -1848,7 +1848,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`always fails (attempt ${buildRuns})`],
-                rubric: { tautology: false, scope: true, rootCause: true, completeness: true, wiring: true },
+                rubric: { tautology: false, scope: true, rootCause: true, completeness: true, wiring: false },
               }),
             );
             return { success: true };
@@ -2022,7 +2022,7 @@ describe('integration/gate-loop', () => {
                 JSON.stringify({
                   verdict: 'FAIL',
                   reasons: ['tighten the assertion, it currently tautologizes'],
-                  rubric: { tautology: false, scope: true, rootCause: true, completeness: true, wiring: true },
+                  rubric: { tautology: false, scope: true, rootCause: true, completeness: true, wiring: false },
                 }),
               );
               return { success: true };
@@ -2031,7 +2031,7 @@ describe('integration/gate-loop', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'PASS',
-                rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+                rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false },
               }),
             );
             return { success: true };
@@ -2401,7 +2401,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
             join(repoDir, '.pipeline/build-review.json'),
             JSON.stringify({
               verdict: 'PASS',
-              rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+              rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false },
             }),
           );
           return { success: true };

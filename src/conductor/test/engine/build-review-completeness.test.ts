@@ -32,7 +32,7 @@ describe('engine/artifacts — build_review predicate (completeness-driven, fail
     await verdict({
       verdict: 'FAIL',
       reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
     });
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
@@ -44,7 +44,7 @@ describe('engine/artifacts — build_review predicate (completeness-driven, fail
   it('passes on a fresh valid PASS verdict that includes completeness: false', async () => {
     await verdict({
       verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
     });
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
@@ -55,7 +55,7 @@ describe('engine/artifacts — build_review predicate (completeness-driven, fail
   it('uses the reviewer completeness verdict, not task-attribution telemetry, as completion authority', async () => {
     await verdict({
       verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
     });
 
     const r = await checkGateCompletion(dir, 'build_review', {
@@ -219,7 +219,7 @@ describe('engine/conductor — build_review fails closed when the grader dispatc
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['the approved plan requires an operator decision'],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
             }),
           );
         }

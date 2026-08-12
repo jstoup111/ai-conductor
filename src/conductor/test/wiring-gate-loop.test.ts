@@ -184,7 +184,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
             scope: true,
             rootCause: true,
             completeness: true,
-            wiring: true,
+            wiring: false,
           },
         }),
       );

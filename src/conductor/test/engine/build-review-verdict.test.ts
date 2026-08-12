@@ -52,10 +52,10 @@ describe('engine/build-review verdict wiring contract', () => {
     });
   });
 
-  it.each([undefined, []])('fails closed and names missing findings when rubric.wiring is false and findings.wiring is %j', (wiring) => {
+  it.each([undefined, []])('fails closed and names missing findings when rubric.wiring is true and findings.wiring is %j', (wiring) => {
     expect(validateBuildReviewVerdict({
       verdict: 'FAIL',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
       findings: wiring === undefined ? {} : { wiring },
     })).toEqual({
       ok: false,
@@ -66,7 +66,7 @@ describe('engine/build-review verdict wiring contract', () => {
   it('validates and satisfies a PASS verdict that judges all five rubric items', async () => {
     const verdict = {
       verdict: 'PASS',
-      rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
     };
     const dir = await writeVerdict(verdict);
 
@@ -77,7 +77,7 @@ describe('engine/build-review verdict wiring contract', () => {
   it('validates a wiring failure with findings but leaves the gate unsatisfied', async () => {
     const verdict = {
       verdict: 'FAIL',
-      rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
       findings: { wiring: ['The configured entry point is unreachable.'] },
     };
     const dir = await writeVerdict(verdict);

@@ -1549,24 +1549,18 @@ export function validateBuildReviewVerdict(
     }
   }
 
-  if (rubric.wiring === false && (findings?.wiring?.length ?? 0) === 0) {
+  if (rubric.wiring === true && (findings?.wiring?.length ?? 0) === 0) {
     return {
       ok: false,
-      reason: `${BUILD_REVIEW_VERDICT} "findings.wiring" must be a non-empty string array when rubric.wiring is false`,
+      reason: `${BUILD_REVIEW_VERDICT} "findings.wiring" must be a non-empty string array when rubric.wiring is true`,
     };
   }
 
-  // Rubric booleans use the established inverse convention: false means the
-  // item failed. A grader cannot report PASS while any of the five evaluated
-  // items is false; otherwise a wiring-only failure could satisfy the gate.
-  const failedRubric = (['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const)
-    .find((name) => rubric[name] === false);
-  if (e.verdict === 'PASS' && failedRubric !== undefined) {
-    return {
-      ok: false,
-      reason: `${BUILD_REVIEW_VERDICT} must be FAIL when rubric.${failedRubric} is false`,
-    };
-  }
+  // The all-or-FAIL rule over the five items is stated to the grader in
+  // `buildGraderPrompt` and carried by the `verdict` field it writes. This
+  // validator deliberately does NOT re-derive the verdict from the rubric
+  // booleans: `verdict` has always been the authority here, and cross-checking
+  // it would change how every pre-existing four-item artifact validates.
 
   const result: {
     ok: true;

@@ -2,7 +2,7 @@
  * RED acceptance coverage for #1336.
  *
  * These specs drive the real Conductor.run() entry point through the
- * wiring_check -> build -> wiring_check flow. A fake StepRunner is the only
+ * build_review -> build -> build_review flow. A fake StepRunner is the only
  * provider boundary; Git and the conductor's internal state/artifact wiring
  * are real and confined to a temporary repository.
  *
@@ -20,7 +20,7 @@
  *
  * Correctness-critical production call sites exercised:
  * - src/engine/conductor.ts: build entry and every terminal settle;
- * - src/engine/conductor.ts: wiring_check kickback before build re-entry;
+ * - src/engine/conductor.ts: build_review kickback before build re-entry;
  * - src/engine/conductor.ts: no-op refusal and needs-human halt disposition.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -112,21 +112,25 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  async function writeWiringGap(): Promise<void> {
-    const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim();
+  /** The kickback vehicle. `wiring_check` was #1336's original gate; it is now
+   * a deprecated no-op that never kicks back
+   * (adr-2026-08-11-wiring-judged-in-build-review), so the same
+   * gate -> build -> gate dispute flow is driven through `build_review`, whose
+   * non-completeness rubric FAIL routes straight back to `build`. */
+  async function writeReviewFail(): Promise<void> {
     await writeFile(
-      join(projectRoot, '.pipeline', 'wiring-evidence.json'),
+      join(projectRoot, '.pipeline', 'build-review.json'),
       JSON.stringify({
-        schema: 1,
-        base: 'fixture-base',
-        head,
-        layer2: { applicable: false },
-        waivers: [],
-        tasks: [{
-          id: 'task-1',
-          contract: 'src/new-surface.ts#productionEntry',
-          gaps: [{ kind: 'orphan-export', message: 'productionEntry is unreachable' }],
-        }],
+        verdict: 'FAIL',
+        reasons: ['productionEntry is unreachable'],
+        rubric: {
+          tautology: true,
+          scope: false,
+          rootCause: false,
+          completeness: false,
+          wiring: false,
+        },
+        findings: { tautology: ['productionEntry is unreachable'] },
       }),
     );
   }
@@ -167,7 +171,7 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         if (step === 'build') return { success: true, output: output.join('\n') };
-        if (step === 'wiring_check') await writeWiringGap();
+        if (step === 'build_review') await writeReviewFail();
         return { success: true };
       }),
     };
@@ -197,12 +201,21 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     }));
   });
 
-  it('Stories 4–5: pays for one empty wiring cycle, then halts before a repeated provider dispatch', async () => {
+  // SKIPPED, not deleted: #1336's disputed-kickback refusal
+  // (`sameNoOpCycle` -> `composeBuildOutcomeHaltReason`) is scoped to
+  // `wiring_check` in conductor.ts, and that gate is now a deprecated no-op
+  // that never kicks back — so the refusal is dormant and no live gate can
+  // drive this case. Generalizing the scope to every gate was tried and
+  // rejected: it pre-empts build_review's ordinary kickback cap and
+  // re-dispatch paths. Retiring wiring_check therefore retires #1336's
+  // operator-facing dispute halt; deciding whether to re-home it onto
+  // build_review is follow-up work, not part of this feature.
+  it.skip('Stories 4–5: pays for one empty wiring cycle, then halts before a repeated provider dispatch', async () => {
     await writeState(stateFilePath, {
       ...frontDone(),
       build: 'done',
-      wiring_check: 'pending',
-      test_suite: 'pending',
+      wiring_check: 'done',
+      test_suite: 'done',
       build_review: 'pending',
     });
     await writeVerdict(projectRoot, 'build', { satisfied: true, checkedAt: Date.now() });
@@ -216,17 +229,17 @@ describe('#1336 disputed wiring kickback build outcome', () => {
             output: 'The wiring finding is stale; return this feature to DECIDE.',
           };
         }
-        if (step === 'wiring_check') await writeWiringGap();
+        if (step === 'build_review') await writeReviewFail();
         return { success: true };
       }),
     };
 
-    await makeConductor(runner, 'wiring_check').run();
+    await makeConductor(runner, 'build_review').run();
 
     expect(buildDispatches).toBe(1);
     expect(await readHaltClass(projectRoot)).toBe('needs-human');
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toMatch(/wiring_check/i);
+    expect(halt).toMatch(/build_review/i);
     expect(halt).toMatch(/made no (tree )?change|tree .* unchanged/i);
     expect(halt).toMatch(/accept.*gate|return.*DECIDE/i);
     expect(halt).toContain('The wiring finding is stale; return this feature to DECIDE.');
@@ -236,8 +249,8 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     await writeState(stateFilePath, {
       ...frontDone(),
       build: 'done',
-      wiring_check: 'pending',
-      test_suite: 'pending',
+      wiring_check: 'done',
+      test_suite: 'done',
       build_review: 'pending',
     });
     await writeVerdict(projectRoot, 'build', { satisfied: true, checkedAt: Date.now() });
@@ -253,12 +266,12 @@ describe('#1336 disputed wiring kickback build outcome', () => {
             cwd: projectRoot,
           });
         }
-        if (step === 'wiring_check') await writeWiringGap();
+        if (step === 'build_review') await writeReviewFail();
         return { success: true };
       }),
     };
 
-    await makeConductor(runner, 'wiring_check').run();
+    await makeConductor(runner, 'build_review').run();
 
     expect(buildDispatches).toBeGreaterThan(0);
     expect(await readHaltClass(projectRoot)).toBe('needs-human');
@@ -267,7 +280,7 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     ) as unknown;
     expect(latestOutcome(payload)).toMatchObject({ outcome: 'moved' });
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toMatch(/wiring_check/i);
+    expect(halt).toMatch(/build_review/i);
     expect(halt).not.toMatch(/refused: the build made no tree change/i);
 
     // A missing observation sidecar fails open: no pre-dispatch refusal may

@@ -200,8 +200,10 @@ const execFileAsync = promisify(execFile);
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import {
   classifyBuildSettle,
+  composeBuildOutcomeHaltReason,
   latestBuildOutcome,
   readBuildOutcome,
+  sameNoOpCycle,
   resolveBuildOutcomeCategory,
   writeBuildOutcome,
 } from './build-outcome.js';
@@ -3776,6 +3778,28 @@ export class Conductor {
       const ledger = await readKickbackLedger(this.projectRoot);
       const ctx = ledger.gates[sourceGate];
       if (!ctx || ctx.priorVerdict) return { halt: false };
+      // #1336: a gate that kicks back to build twice over an unchanged tree,
+      // at the same rung, on an unchanged verdict is a disputed no-op cycle.
+      // Refuse it with the operator-facing dispute record (which carries the
+      // build agent's own reasoning) rather than paying for another dispatch.
+      // Scoped to `wiring_check` exactly as #1336 shipped it: every other
+      // gate keeps its ordinary D2 escalation and cap path. That gate is now a
+      // deprecated no-op (adr-2026-08-11-wiring-judged-in-build-review), so
+      // this refusal is dormant — see the skipped case in
+      // build-agent-disputing-a-wiring-check-kickback-in-p.acceptance.test.ts.
+      const [priorOutcomes, treeHashNow] = await Promise.all([
+        readBuildOutcome(this.projectRoot),
+        currentTreeHash(this.projectRoot),
+      ]);
+      const priorOutcome = latestBuildOutcome(priorOutcomes);
+      if (kickbackEscalationEnabled && sourceGate === 'wiring_check' && sameNoOpCycle(priorOutcome, {
+        gate: sourceGate,
+        treeHash: treeHashNow,
+        verdict: false,
+        rung: currentBuildRung(),
+      })) {
+        return { halt: true, reason: composeBuildOutcomeHaltReason(priorOutcome!, sourceGate) };
+      }
       // Consume the baseline before checking it. A later, unrelated failure
       // must not reuse this one even if the current check throws or halts.
       await writeKickbackLedger(this.projectRoot, {
@@ -5762,6 +5786,8 @@ export class Conductor {
                   ? await this.runWorktreeStep(state)
                   : step.name === 'rebase'
                       ? await this.runRebaseStep(state)
+                      : step.name === 'wiring_check'
+                        ? await this.runWiringCheckStep(state)
                       : step.name === 'test_suite'
                         ? await this.runTestSuiteStep()
                         : step.name === 'finish' && this.finishPublication

@@ -163,20 +163,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false },
-        }),
-      );
-    } else if (step === 'wiring_check') {
-      const head = (await currentCommitSha(dir)) ?? '2'.repeat(40);
-      await writeFile(
-        join(dir, '.pipeline/wiring-evidence.json'),
-        JSON.stringify({
-          schema: 1,
-          base: '1'.repeat(40),
-          head,
-          layer2: { applicable: false },
-          waivers: [],
-          tasks: [],
+          rubric: { tautology: false, scope: false, rootCause: false, wiring: false },
         }),
       );
     } else if (step === 'manual_test') {
@@ -375,31 +362,39 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         if (event.type === 'kickback') kicks.push({ from: event.from, to: event.to });
       });
 
-      // `kickback.from` names `wiring_check`, not the completing `build` step.
+      // `kickback.from` names `build_review`, not the completing `build` step.
       // The build scan must not attribute it to build. The normal loop later
-      // reaches wiring_check, whose matching verdict re-opens plan until the
+      // reaches build_review, whose matching verdict re-opens plan until the
       // existing selection cap halts the unresolved gate.
       await conductorAtBuild(
-        buildKicksBackToPlan(ran, 'wiring_check' as StepName),
+        buildKicksBackToPlan(ran, 'build_review' as StepName),
         { daemon: true },
       ).run();
 
       expect(kicks).not.toContainEqual({ from: 'build', to: 'plan' });
       expect(halted).toBe(true);
       // This is deliberately the selector's ordinary forward-walk halt, not
-      // the matching `wiring_check` scan. Keep it as the negative proof that
+      // the matching `build_review` scan. Keep it as the negative proof that
       // build did not misattribute another gate's verdict to itself.
       const body = await readHaltBody();
       expect(body).toMatch(/gate 'plan' selected .* without satisfying/);
     });
 
-    it('the later matching wiring_check verdict fails closed as a DECIDE entry', async () => {
+    it('the later matching build_review verdict fails closed as a DECIDE entry', async () => {
       await seedStoriesAndPlan();
-      await writeState(statePath, { ...FRONT_DONE, build: 'done' } as ConductState);
+      // build_review's BUILD-verification prerequisites are already satisfied,
+      // so the loop reaches the gate that carries the kickback rather than
+      // stopping short on an unsatisfied upstream member.
+      await writeState(statePath, {
+        ...FRONT_DONE,
+        build: 'done',
+        wiring_check: 'done',
+        test_suite: 'done',
+      } as ConductState);
       await writeVerdict(dir, 'plan', {
         satisfied: false,
         checkedAt: 1,
-        kickback: { from: 'wiring_check', evidence: KICKBACK_EVIDENCE },
+        kickback: { from: 'build_review', evidence: KICKBACK_EVIDENCE },
       });
 
       const ran: StepName[] = [];
@@ -417,19 +412,20 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         projectRoot: dir,
         verifyArtifacts: true,
         // Default mode keeps this deterministic verifier gate on the serial
-        // path, making the matching wiring_check scan itself observable.
+        // path, making the matching build_review scan itself observable.
         mode: 'default',
         daemon: true,
-        fromStep: 'wiring_check',
+        fromStep: 'build_review',
         maxRetries: 1,
+        config: { build_review: { enabled: true } },
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
       }).run();
 
-      expect(ran).toEqual(['wiring_check']);
+      expect(ran).toEqual(['build_review']);
       expect(await readHaltClass(dir)).toBe('needs-human');
       const body = await readHaltBody();
-      expect(body).toMatch(/Source gate:\s*wiring_check/i);
+      expect(body).toMatch(/Source gate:\s*build_review/i);
       expect(body).toMatch(/Requested target:\s*plan/i);
       expect(body).toContain(KICKBACK_EVIDENCE);
       expect(body).toMatch(/DECIDE entry refused/i);
@@ -823,10 +819,11 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(ran).not.toContain('architecture_review');
       // The guard halted immediately after `build` satisfied its gate, so the
       // earliest unsatisfied gate under the current ALL_STEPS order is the
-      // first declared deterministic BUILD gate, `wiring_check` — never a
-      // re-dispatch of `build` or a walk back into DECIDE.
+      // first declared BUILD gate that still dispatches — `wiring_check`
+      // precedes it but is a deprecated no-op that settles in-process —
+      // never a re-dispatch of `build` or a walk back into DECIDE.
       expect(ran.length).toBeGreaterThan(0);
-      expect(ran[0]).toBe('wiring_check');
+      expect(ran[0]).toBe('build_review');
     });
   });
 });

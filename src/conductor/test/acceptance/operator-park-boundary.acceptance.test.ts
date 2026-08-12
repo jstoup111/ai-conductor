@@ -246,6 +246,11 @@ describe('boundary-aware operator parking acceptance', () => {
         'prd_audit',
         'architecture_review_as_built',
       ] as StepName[],
+      expectedCalls: [
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ] as StepName[],
       expectedGroup: 'validation',
       later: 'rebase' as StepName,
     },
@@ -257,12 +262,17 @@ describe('boundary-aware operator parking acceptance', () => {
         'build_review',
       ] as StepName[],
       expectedMembers: ['wiring_check', 'test_suite'] as StepName[],
+      // wiring_check is a deprecated no-op: it is still a group member and
+      // still settles 'done' at the join, but it settles in-process and never
+      // reaches a dispatch.
+      expectedCalls: ['test_suite'] as StepName[],
       expectedGroup: 'build_verification',
       later: 'build_review' as StepName,
     },
   ])('FR-8: $label built-in group joins before the accepted park boundary', async ({
     pending,
     expectedMembers,
+    expectedCalls,
     expectedGroup,
     later,
   }) => {
@@ -308,7 +318,7 @@ describe('boundary-aware operator parking acceptance', () => {
     const result = await conductor.run();
     const state = await readState(statePath);
 
-    expect(new Set(calls)).toEqual(new Set(expectedMembers));
+    expect(new Set(calls)).toEqual(new Set(expectedCalls));
     expect(calls).not.toContain(later);
     expect(ensure).toHaveBeenCalledTimes(
       expectedGroup === 'build_verification' ? 1 : 0,

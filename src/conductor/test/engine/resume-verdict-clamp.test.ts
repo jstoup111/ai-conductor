@@ -270,8 +270,10 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   // ── Story 3: post-rebase kickback verdicts are honored on resume ──────────
   describe('Story 3: post-rebase kickback verdicts steer the resume entry', () => {
+    // wiring_check is omitted: it is a deprecated no-op that settles
+    // in-process, so a stale wiring proof never steers a resume entry
+    // (adr-2026-08-11-wiring-judged-in-build-review).
     it.each([
-      { staleGate: 'wiring_check' as const },
       { staleGate: 'test_suite' as const },
     ])('a stale $staleGate proof resumes before build_review', async ({ staleGate }) => {
       const seed = seedDoneThrough('manual_test');
