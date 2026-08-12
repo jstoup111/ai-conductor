@@ -130,7 +130,14 @@ describe('conductor build-outcome baseline capture', () => {
     });
     events.on('step_failed', (event) => { failed.push(event); });
     const runner: StepRunner = {
-      run: vi.fn(async () => {
+      run: vi.fn(async (step) => {
+        if (step === 'build_review') {
+          await writeFile(join(dir, '.pipeline', 'build-review.json'), JSON.stringify({
+            verdict: 'PASS', reasons: [],
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+          }));
+          return { success: true, output: 'complete build review pass' };
+        }
         // The build moved HEAD: every probe from the settle onward observes
         // the new commit, whatever the conductor probed before dispatch.
         vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue('head-after-build');
@@ -152,9 +159,8 @@ describe('conductor build-outcome baseline capture', () => {
         ensure: async () => {
           dispatched.push('test_suite');
           return {
-            status: 'FAILED',
-            reason: 'nonzero_exit',
-            message: 'sentinel stop after successful build settle',
+            status: 'REUSED',
+            evidence: {} as never,
           } as const;
         },
       },
@@ -164,7 +170,8 @@ describe('conductor build-outcome baseline capture', () => {
 
     expect(blocked).toEqual([]);
     expect(started).toContainEqual(expect.objectContaining({ step: 'build' }));
-    expect(dispatched.slice(0, 2)).toEqual(['build', 'test_suite']);
+    expect(dispatched.slice(0, 3)).toEqual(['build', 'test_suite', 'build_review']);
+    expect(dispatched).not.toContain('wiring_check');
     expect(failed).not.toContainEqual(expect.objectContaining({ step: 'test_suite' }));
     expect(failed).not.toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(completed).toContainEqual(expect.objectContaining({ step: 'build', status: 'done' }));

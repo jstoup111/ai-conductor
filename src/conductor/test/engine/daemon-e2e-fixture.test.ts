@@ -375,6 +375,7 @@ describe('daemon E2E fixture', () => {
       );
       const state = JSON.parse(await readFile(statePath, 'utf-8')) as {
         build?: string;
+        build_review?: string;
         finish?: string;
       };
       const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
@@ -386,7 +387,9 @@ describe('daemon E2E fixture', () => {
         processed: daemonResult.processed.map((outcome) => outcome.slug),
         providerCalls: fake.calls.length,
         build: state.build,
+        buildReview: state.build_review,
         finish: state.finish,
+        wiringCheckPrompt: fake.calls.some((call) => call.prompt.includes('wiring_check')),
         commitBody: commitBody.trim(),
         done: existsSync(join(pipelineDir, 'DONE')),
         halt: existsSync(join(pipelineDir, 'HALT')),
@@ -397,7 +400,9 @@ describe('daemon E2E fixture', () => {
         processed: [slug],
         providerCalls: 3,
         build: 'done',
+        buildReview: 'done',
         finish: 'done',
+        wiringCheckPrompt: false,
         commitBody: 'test: complete fixture task\n\nTask: 1',
         done: true,
         halt: false,

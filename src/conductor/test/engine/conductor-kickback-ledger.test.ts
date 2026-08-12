@@ -56,7 +56,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       architecture_review: 'skipped',
       acceptance_specs: 'skipped',
       build: 'done',
-      wiring_check: 'done',
+      wiring_check: 'skipped',
       test_suite: 'done',
     });
 
@@ -72,7 +72,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
             join(dir, '.pipeline/build-review.json'),
             JSON.stringify({
               verdict: 'FAIL',
-              rubric: { tautology: true, scope: false, rootCause: false, wiring: false },
+              rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
               findings: lastReason === '' ? {} : { tautology: [lastReason] },
             }),
           );
@@ -165,5 +165,54 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         recordedReason: 'grader returned FAIL without reasons',
       });
     });
+  });
+
+  it('records actionable wiring findings under build_review and re-dispatches build without a wiring_check ledger entry', async () => {
+    await writeState(statePath, {
+      run_started_at: 1,
+      complexity_tier: 'S',
+      track: 'technical',
+      worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
+      conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
+      architecture_review: 'skipped', acceptance_specs: 'skipped',
+      wiring_check: 'skipped', test_suite: 'done',
+    });
+    const calls: string[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        calls.push(step);
+        if (step === 'build') {
+          await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+            tasks: [{ id: 't1', status: 'completed' }],
+          }));
+        }
+        if (step === 'build_review') {
+          await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
+            verdict: 'FAIL',
+            reasons: ['missing wiring from command to handler'],
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
+            findings: { wiring: ['missing wiring from command to handler'] },
+          }));
+        }
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
+      projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
+      fromStep: 'build_review', maxRetries: 1,
+      config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
+    } as never).run();
+
+    const ledger = await readKickbackLedger(dir);
+    expect(calls).toContain('build');
+    expect(calls).not.toContain('wiring_check');
+    expect(ledger.gates.build_review?.lastReason).toContain('missing wiring');
+    expect(ledger.gates.wiring_check).toBeUndefined();
   });
 });
