@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -417,6 +417,14 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.blocked).toEqual([]);
     expect(state.inProgress).toEqual([{ slug: 'active', step: 'build' }]);
     expect(state.eligible).toEqual([{ slug: 'eligible', tier: undefined, band: undefined }]);
+  });
+
+  it('wires the project blocked snapshot into startup parking candidates', async () => {
+    const daemonCli = await readFile(join(process.cwd(), 'src/daemon-cli.ts'), 'utf-8');
+
+    expect(daemonCli).toMatch(
+      /import \{ readBlockedSnapshot \} from '\.\/engine\/daemon-observe-cli\.js';[\s\S]*?readBlocked:\s*\(\)\s*=>\s*readBlockedSnapshot\(projectRoot\)[\s\S]*?\.\.\.\(state\.blocked \?\? \[\]\)\.map\(\(b\)\s*=>\s*b\.slug\)/,
+    );
   });
 
   it('reports an unconsumed REKICK outside every discovery group as stranded, not in progress', async () => {

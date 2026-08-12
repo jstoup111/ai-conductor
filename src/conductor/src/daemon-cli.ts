@@ -129,6 +129,7 @@ import {
   readPersistedBaseSha,
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
+import { readBlockedSnapshot } from './engine/daemon-observe-cli.js';
 import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
 import { reconcileParkedFeatures, type ParkClassification } from './engine/park-reconciliation.js';
 import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';
@@ -1606,6 +1607,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           worktreeBase,
           processedDir,
           discover: () => discoverTick({ refresh: true }),
+          readBlocked: () => readBlockedSnapshot(projectRoot),
           log,
           prStateProbe: async (prUrl) => {
             const { state } = await tracker.viewPullRequest(prUrl, projectRoot);
@@ -1623,6 +1625,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         // backlog entry) still renders instead of vanishing silently.
         const candidateSlugs = new Set<string>([
           ...state.halted.map((h) => h.slug),
+          ...(state.blocked ?? []).map((b) => b.slug),
           ...state.inProgress.map((p) => p.slug),
           ...state.eligible.map((e) => e.slug),
           ...state.processed.map((p) => p.slug),
