@@ -41,7 +41,6 @@ import { readState, writeState } from '../src/engine/state.js';
 import { Conductor } from '../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../src/engine/conductor.js';
 import { checkStepCompletion } from '../src/engine/artifacts.js';
-import type { WiringEvidence } from '../src/engine/artifacts.js';
 
 function frontDone(): ConductState {
   return {
@@ -455,65 +454,13 @@ describe('wiring_check predicate — deprecated no-op (Task 9)', () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'wiring-gate-loop-probe-'));
-    // Intentionally do NOT pre-create .pipeline/ — the predicate must
-    // ensure-dir before writing evidence when no pre-existing fixture exists.
+    dir = await mkdtemp(join(tmpdir(), 'wiring-gate-loop-noop-'));
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('does not invoke the injected probe and reports satisfied when the probe finds zero gaps', async () => {
-    const evidence: WiringEvidence = {
-      schema: 1,
-      base: 'base',
-      head: 'head',
-      layer2: { applicable: false },
-      waivers: [],
-      tasks: [{ id: 't1', contract: 'none (no new production surface)', gaps: [] }],
-    };
-    let probeCalls = 0;
-    const result = await checkStepCompletion(dir, 'wiring_check', {
-      getHeadSha: async () => 'head',
-      wiringProbe: async () => {
-        probeCalls++;
-        return evidence;
-      },
-    });
-
-    expect(probeCalls).toBe(0);
-    expect(result.done).toBe(true);
-  });
-
-  it('does not invoke the injected probe and remains satisfied when the probe finds a real gap', async () => {
-    const evidence: WiringEvidence = {
-      schema: 1,
-      base: 'base',
-      head: 'head',
-      layer2: { applicable: false },
-      waivers: [],
-      tasks: [
-        {
-          id: 't1',
-          contract: 'src/x.ts#foo',
-          gaps: [{ kind: 'orphan-export', message: 'foo unreachable' }],
-        },
-      ],
-    };
-    let probeCalls = 0;
-    const result = await checkStepCompletion(dir, 'wiring_check', {
-      getHeadSha: async () => 'head',
-      wiringProbe: async () => {
-        probeCalls++;
-        return evidence;
-      },
-    });
-
-    expect(result.done).toBe(true);
-    expect(probeCalls).toBe(0);
-  });
-
-  it('does not invoke the probe when a pre-existing fresh evidence file is already present', async () => {
+  it('reports satisfied despite pre-existing obsolete evidence', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
       join(dir, '.pipeline/wiring-evidence.json'),
@@ -526,16 +473,8 @@ describe('wiring_check predicate — deprecated no-op (Task 9)', () => {
         tasks: [{ id: 't1', contract: 'none (no new production surface)', gaps: [] }],
       }),
     );
-    let probeCalls = 0;
-    const result = await checkStepCompletion(dir, 'wiring_check', {
-      getHeadSha: async () => 'head',
-      wiringProbe: async () => {
-        probeCalls++;
-        throw new Error('should not be called');
-      },
-    });
+    const result = await checkStepCompletion(dir, 'wiring_check', {});
 
-    expect(probeCalls).toBe(0);
     expect(result.done).toBe(true);
   });
 });

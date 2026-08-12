@@ -999,16 +999,6 @@ export interface CompletionContext {
    */
   releaseMetadataPreservationRequired?: boolean;
   /**
-   * Injected wiring-reachability probe runner. When the
-   * wiring_check predicate finds no pre-existing evidence file, it invokes
-   * this to COMPUTE fresh evidence (rather than only reading a pre-written
-   * `.pipeline/wiring-evidence.json` fixture), then durably writes the
-   * result so subsequent reads (and audit trail) see the same evidence.
-   * Absent → predicate falls back to the pre-Task-18 read-only behavior
-   * (fail-closed "evidence not found" when no fixture exists).
-   */
-  wiringProbe?: () => Promise<WiringEvidence>;
-  /**
    * Process-free current-PASS inspection for the native test_suite gate.
    * Conductor injects its shared verifier; standalone completion checks use a
    * verifier rooted at `dir`. This must never call ensure()/launch the suite.
@@ -1337,59 +1327,6 @@ export function validateAcceptanceRedEvidence(
     };
   }
   return { ok: true };
-}
-
-export type WiringContractForm = 'declared' | 'none_no_surface' | 'inert' | 'malformed';
-export type WiringGapKind =
-  | 'no-reference'
-  | 'orphan-export'
-  | 'unreferenced-site'
-  | 'undeclared-surface'
-  | 'contradiction'
-  | 'scope-undeterminable'
-  | 'waiver-unresolved';
-
-export interface WiringGap {
-  kind: WiringGapKind;
-  /**
-   * The specific, human-readable gap message computed by the wiring-probe
-   * gap-producing functions.
-   */
-  message: string;
-}
-
-export type SameFileCompositionProof = {
-  kind: 'same-file-composition';
-  export: string;
-  caller: string;
-  file: string;
-  rootChain: string[];
-};
-
-export type WiringProof = SameFileCompositionProof;
-
-export interface WiringTaskResult {
-  id: string;
-  /** Freeform description of the task's declared contract (e.g. a
-   * `file#symbol` reference, or 'none (no new production surface)'). */
-  contract: string;
-  gaps: WiringGap[];
-  proofs?: WiringProof[];
-}
-
-export interface WiringLayer2 {
-  applicable: boolean;
-  /** Why Layer 2 did/didn't run (e.g. "no TS project detected"). */
-  reason?: string;
-}
-
-export interface WiringEvidence {
-  schema: number;
-  base: string;
-  head: string;
-  tasks: WiringTaskResult[];
-  layer2: WiringLayer2;
-  waivers: unknown[];
 }
 
 /**

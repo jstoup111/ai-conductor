@@ -5,7 +5,6 @@ import { join } from 'path';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import {
   CUSTOM_COMPLETION_PREDICATES,
-  type WiringEvidence,
 } from '../../src/engine/artifacts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -20,7 +19,7 @@ async function withFixture(run: (dir: string) => Promise<void>): Promise<void> {
   }
 }
 
-function staleEvidence(): WiringEvidence {
+function staleEvidence(): object {
   return {
     schema: 1,
     base: 'base123',
@@ -86,20 +85,19 @@ describe('wiring_check — deprecated no-op completion predicate', () => {
     });
   });
 
-  it('reports done without probing an undeterminable diff base', async () => {
+  it('reports done without reading the current HEAD for an undeterminable diff base', async () => {
     await withFixture(async (dir) => {
-      let probeCalls = 0;
+      let headReads = 0;
 
       const result = await predicate(dir, {
-        getHeadSha: async () => 'head456',
-        wiringProbe: async () => {
-          probeCalls++;
+        getHeadSha: async () => {
+          headReads++;
           throw new Error('diff base is undeterminable');
         },
       });
 
       expect(result).toEqual({ done: true });
-      expect(probeCalls).toBe(0);
+      expect(headReads).toBe(0);
     });
   });
 

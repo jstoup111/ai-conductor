@@ -10,6 +10,10 @@ const forbiddenReferences = [
   'orphanBackstop',
   'checkExportReachability',
   'evaluatePlanWiringDisposition',
+  'WiringEvidence',
+  'wiringProbe',
+  'Layer 2',
+  "sourceGate === 'wiring_check'",
 ];
 
 async function productionTypeScriptFiles(directory: string): Promise<string[]> {
