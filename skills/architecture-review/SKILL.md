@@ -309,7 +309,7 @@ with it.
 
 **APPROVED WITH CONDITIONS** — Proceed; conditions tracked in the plan. Evaluator checks at code review. Unmet conditions at `/finish` are blocking.
 
-**BLOCKED** — Pipeline HALTS. Present to the user: what is violated, resolution options with trade-offs, and which ADRs are in conflict. The user must explicitly approve a resolution. Do not auto-resolve. Capture the resolution as a new ADR and re-run the review.
+**BLOCKED** — Pipeline HALTS. Present to the user: what is violated, resolution options with trade-offs, and which ADRs are in conflict. The user must explicitly approve a resolution. Do not auto-resolve. Capture the resolution as a new ADR only when resolving it makes or changes a structural decision; resolve non-structural blockers without an ADR. Re-run the review.
 
 ### 10. Recurring Review (Pipeline Batch Boundaries)
 
@@ -322,7 +322,7 @@ At pipeline batch boundaries, perform a lightweight architecture check:
 - Escalation: non-blocking findings that appear in 2+ consecutive reviews become blocking
 
 If drift is detected at a batch boundary:
-1. For structural drift, write a new ADR documenting what changed and why (or that it was unintentional); otherwise record the drift without creating an ADR
+1. For drift that makes or changes a structural decision, write a new ADR documenting what changed and why (or that it was unintentional); otherwise record the drift without creating an ADR
 2. If the drift violates a prior ADR: BLOCK — human must decide whether to update the ADR
    or revert the code
 
@@ -372,8 +372,9 @@ on BUILD proof as authority.
 - Load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`) and the approved
   architecture diagrams (`.docs/architecture/`). DRAFT/SUPERSEDED ADRs are not authoritative and
   are not gated against (per §7b).
-- Compare the as-shipped code to those approved decisions: were new patterns introduced without an
-  ADR? Are domain boundaries respected in the actual code? Do diagrams still match reality?
+- Compare the as-shipped code to those approved decisions: were new structural patterns that embody
+  a structural decision introduced without an ADR? Are domain boundaries respected in the actual
+  code? Do diagrams still match reality?
 - **Production reachability sweep (green-but-unwired guard).** For each primitive this
   feature's diff introduces or materially changes — exported functions/modules, hook scripts,
   config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
@@ -410,8 +411,8 @@ on BUILD proof as authority.
 **Verdict:**
 - **APPROVED** — shipped code matches the approved architecture. Proceed to retro/finish.
 - **APPROVED WITH DRIFT NOTES** — minor, non-violating drift (e.g. a diagram is now slightly stale,
-  a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR if
-  warranted, but it does not block.
+  a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR only
+  when it makes or changes a structural decision; otherwise no ADR is needed, and it does not block.
 - **BLOCKED** — shipped code **violates an APPROVED ADR**. The loop HALTS. A human must resolve it:
   either fix the code to comply, or supersede the ADR with a new, human-APPROVED ADR
   (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
