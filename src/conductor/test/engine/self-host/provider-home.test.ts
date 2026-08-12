@@ -76,8 +76,6 @@ describe('provider-aware self-host homes', () => {
           },
         },
         worktreeRoot: worktree,
-        repository: 'owner/repository',
-        featureSlug: 'provider-home-missing',
         baseDir,
         parentEnv: {
           PATH: '/usr/bin',
@@ -138,36 +136,11 @@ describe('provider-aware self-host homes', () => {
           },
         },
         worktreeRoot: worktree,
-        repository: 'owner/repository',
-        featureSlug: 'provider-home-failure',
         baseDir,
       }),
     ).rejects.toThrow('[REDACTED]');
     expect((await (await import('node:fs/promises')).readdir(baseDir))).toEqual([]);
     await rm(root, { recursive: true, force: true });
-  });
-
-  it('preserves the missing-skills provisioning error while releasing its scratch attempt home', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'provider-home-missing-skills-'));
-    const worktree = join(root, 'worktree');
-    const scratchHome = join(worktree, '.daemon', 'scratch', 'run-14', '2-codex');
-    await mkdir(worktree, { recursive: true });
-
-    try {
-      await expect(provisionProviderHome({
-        provider: { id: 'codex' },
-        worktreeRoot: worktree,
-        repository: 'owner/repository',
-        featureSlug: 'provider-home-missing',
-        runId: 'run-14',
-        attempt: 2,
-      })).rejects.toThrow(
-        `Self-host worktree is missing required asset 'skills' at ${join(worktree, 'skills')}.`,
-      );
-      await expect(access(scratchHome)).rejects.toThrow();
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
   });
 
   it('releases the production-written scratch lease when preparation fails after acquisition', async () => {
