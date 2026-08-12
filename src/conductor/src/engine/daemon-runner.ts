@@ -362,6 +362,7 @@ export function makeRunFeature(
                 log: featureLog,
                 triageEvidence: triageOutcome,
                 slug: item.slug,
+              events: featureRun?.events,
               });
               await deps.teardownWorktree(worktree, true);
               return {
@@ -497,7 +498,8 @@ export function makeRunFeature(
           park: false,
           log: featureLog,
           slug: item.slug,
-        });
+        events: featureRun?.events,
+              });
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -557,7 +559,8 @@ export function makeRunFeature(
         log: featureLog,
         triageEvidence: triageEvidenceForHalt,
         slug: item.slug,
-      });
+      events: featureRun?.events,
+              });
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -584,7 +587,8 @@ export function makeRunFeature(
           park: false,
           log: featureLog,
           slug: item.slug,
-        });
+        events: featureRun?.events,
+              });
       }
       if (worktree) {
         await deps.teardownWorktree(worktree, true).catch(() => {});
@@ -608,6 +612,7 @@ export interface TerminateFeatureOptions {
   triageEvidence?: unknown;
   slug?: string;
   projectRoot?: string;
+  events?: ConductorEventEmitter;
 }
 
 type AutoParkWriteOutcome = 'not-requested' | 'written' | 'failed';
@@ -624,6 +629,7 @@ export async function terminateFeature({
   triageEvidence,
   slug,
   projectRoot,
+  events,
 }: TerminateFeatureOptions): Promise<void> {
   let autoParkWriteError: string | undefined;
   const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug
@@ -674,7 +680,11 @@ export async function terminateFeature({
   note +=
     `\nResume procedure:\n` +
     resumeProcedure;
-  await writeHaltMarker(worktreePath, note, 'needs-human');
+  const markerWrite = await writeHaltMarker(worktreePath, note, 'needs-human', events);
+  if (markerWrite.status === 'failed') {
+    log?.(`[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${markerWrite.reason}`);
+    return;
+  }
   await Promise.all([
     readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8'),
     readFile(join(worktreePath, '.pipeline', 'HALT.class'), 'utf-8'),

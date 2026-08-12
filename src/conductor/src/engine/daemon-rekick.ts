@@ -454,7 +454,7 @@ export async function resumeRebaseFirst(opts: {
   // completion evidence: every refusal and unavailable dependency parks the
   // worktree without writing synthetic success markers.
   if (opts.prUrl && !opts.slug) {
-    await writeHalt(opts.worktreePath, [], 'durable shipment evidence: shipment-evidence-inputs-incomplete');
+    await writeHalt(opts.worktreePath, [], 'durable shipment evidence: shipment-evidence-inputs-incomplete', opts.events);
     return 'halted';
   }
   if (opts.runGh && opts.prUrl && opts.slug) {
@@ -466,7 +466,7 @@ export async function resumeRebaseFirst(opts: {
       return 'already_shipped';
     }
     if (verifiedMerge.kind === 'halt') {
-      await writeHalt(opts.worktreePath, [], `durable shipment evidence: ${verifiedMerge.reason}`);
+      await writeHalt(opts.worktreePath, [], `durable shipment evidence: ${verifiedMerge.reason}`, opts.events);
       opts.log?.(`re-kick ${basename(opts.worktreePath)}: halted — ${verifiedMerge.reason}`);
       return 'halted';
     }
@@ -487,7 +487,7 @@ export async function resumeRebaseFirst(opts: {
     outcome = await performRebase(git, opts.worktreePath, opts.localBase, { translateAfterRebase });
   } catch (err) {
     if (err instanceof ProtectedArtifactSealRejection) {
-      await writeSealHalt(opts.worktreePath, err.message);
+      await writeSealHalt(opts.worktreePath, err.message, opts.events);
       opts.log?.(`re-kick ${basename(opts.worktreePath)}: protected-artifact seal error — re-parked`);
       return 'halted';
     }
@@ -564,7 +564,7 @@ export async function resumeRebaseFirst(opts: {
 
   if (outcome.kind === 'conflict_halt') {
     // Re-conflict on the new base → re-park via 9.0's existing HALT path.
-    await writeHalt(opts.worktreePath, outcome.conflicts, outcome.reason);
+    await writeHalt(opts.worktreePath, outcome.conflicts, outcome.reason, opts.events);
     opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
     return 'halted';
   }
