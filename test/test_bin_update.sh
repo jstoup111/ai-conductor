@@ -369,6 +369,18 @@ run_update_tty() {
   set -e
 }
 
+# Task 6's operator-facing contract is deliberately a single, stable line.
+# The structured resolver supplies the identity and its source; this boundary
+# assertion keeps every tagged decision outcome accountable for rendering both.
+assert_update_identity_line() {
+  local desc=$1 output=$2 identity=$3 source=$4 expected count identity_count
+  expected="Update identity: ${identity} (source: ${source})"
+  count=$(printf '%s\n' "$output" | grep -Fxc "$expected" || true)
+  identity_count=$(printf '%s\n' "$output" | grep -Fc 'Update identity:' || true)
+  assert "$desc: prints exactly one identity line naming identity and source" \
+    "$( [ "$count" -eq 1 ] && [ "$identity_count" -eq 1 ] && echo 0 || echo 1)"
+}
+
 if [ ! -f "$UPDATE_SRC" ]; then
   echo -e "${RED}${BOLD}bin/update does not exist yet (RED phase) — failing every acceptance criterion explicitly${NC}"
   echo -e "${BOLD}instead of running detailed assertions, which would trivially pass for the wrong reason${NC}"
@@ -1016,9 +1028,9 @@ chmod +x "$REPO_NOGIT/bin/update" 2>/dev/null || true
 HOME_DIR2=$(make_isolated_home)
 if [ -f "$REPO_NOGIT/bin/update" ]; then
   run_update "$REPO_NOGIT" "$HOME_DIR2"
-  assert "non-git dir: exits 0 without error" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+  assert "non-git dir: exits 0 silently without an identity" "$([ "$CODE" -eq 0 ] && [ -z "$OUT" ] && echo 0 || echo 1)"
 else
-  assert "non-git dir: exits 0 without error" 1
+  assert "non-git dir: exits 0 silently without an identity" 1
 fi
 
 # ─── Story 7: --auto gating + -h/--help usage (T4 argument dispatch) ──────
@@ -1036,6 +1048,7 @@ set_conductor_cfg "$HOME_DIR" currentVersion v0.3.0
 run_update "$REPO" "$HOME_DIR" --auto
 assert "--auto with autoCheck=false: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "--auto with autoCheck=false: silent no-op (no lastCheckedAt)" "$([ -z "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
+assert "--auto with autoCheck=false: emits no identity or other output" "$([ -z "$OUT" ] && echo 0 || echo 1)"
 
 REPO=$(make_repo "s7-auto-enabled")
 HOME_DIR=$(make_isolated_home)
@@ -1189,6 +1202,60 @@ set_current_version "$HOME_DIR" v0.3.0
 
 run_update "$REPO" "$HOME_DIR"
 assert "recorded tagged identity remains update authority off-tag" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
+
+# ─── Task 6: tagged decision identity line ─────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Task 6 — tagged decision identity line${NC}"
+
+# The matrix covers both update offers and nominal decisions. Each tagged
+# result must emit the same single identity/source line before its
+# outcome-specific text.
+REPO=$(make_repo "t6-release-update")
+RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$RELEASE_SHA"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "release before newer tag" "$OUT" "v0.3.0" "checked-out tag"
+
+REPO=$(make_repo "t6-release-current")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "release at newest tag (up to date)" "$OUT" "v0.4.0" "checked-out tag"
+
+REPO=$(make_repo "t6-post-release-update")
+git -C "$REPO" commit -q --allow-empty -m "one commit past v0.3.0"
+POST_RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$POST_RELEASE_SHA"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "post-release before newer tag" "$OUT" "v0.3.0+1" "checkout"
+
+REPO=$(make_repo "t6-post-release-current")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" commit -q --allow-empty -m "one commit past v0.4.0"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "post-release with no newer tag" "$OUT" "v0.4.0+1" "checkout"
+
+# A tag elsewhere in the repository does not make an orphan checkout
+# determinable. Keep update and its shared resolver untracked but available.
+REPO=$(make_repo "t6-undeterminable")
+git -C "$REPO" checkout -q --orphan no-release-history
+git -C "$REPO" reset -q
+printf 'orphan checkout\n' > "$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m "orphan checkout"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "undeterminable checkout" "$OUT" "unknown" "none"
 
 # ─── Story 5: no-TTY guidance ───────────────────────────────────────────────
 
