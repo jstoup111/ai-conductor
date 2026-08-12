@@ -1429,7 +1429,7 @@ describe('integration/gate-loop', () => {
           {
             verdict: 'FAIL',
             reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
-            rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: false },
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
           },
           {
             verdict: 'PASS',
@@ -1698,7 +1698,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`incomplete implementation (attempt ${buildRuns})`],
-                rubric: { tautology: true, scope: true, rootCause: true, completeness: false, wiring: false },
+                rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
               }),
             );
             return { success: true };

@@ -124,18 +124,17 @@ describe('conductor build-outcome baseline capture', () => {
       if (event.type === 'step_completed' && event.step === 'build') completed.push(event);
     });
     events.on('gate_blocked', (event) => { blocked.push(event); });
-    events.on('step_started', (event) => { started.push(event); });
+    events.on('step_started', (event) => {
+      started.push(event);
+      if (event.type === 'step_started') dispatched.push(event.step);
+    });
     events.on('step_failed', (event) => { failed.push(event); });
     const runner: StepRunner = {
-      run: vi.fn(async (step) => {
-        dispatched.push(step);
-        if (dispatched.length === 1) {
-          // The build moved HEAD: every probe from the settle onward observes
-          // the new commit, whatever the conductor probed before dispatch.
-          vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue('head-after-build');
-          return { success: true, output };
-        }
-        return { success: false, output: 'sentinel stop after successful build settle' };
+      run: vi.fn(async () => {
+        // The build moved HEAD: every probe from the settle onward observes
+        // the new commit, whatever the conductor probed before dispatch.
+        vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue('head-after-build');
+        return { success: true, output };
       }),
     };
     const conductor = new Conductor({
@@ -148,17 +147,26 @@ describe('conductor build-outcome baseline capture', () => {
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 1,
+      fullSuiteVerifier: {
+        inspect: async () => ({ status: 'STALE', reason: 'source_changed' }),
+        ensure: async () => {
+          dispatched.push('test_suite');
+          return {
+            status: 'FAILED',
+            reason: 'nonzero_exit',
+            message: 'sentinel stop after successful build settle',
+          } as const;
+        },
+      },
     });
 
     await conductor.run();
 
     expect(blocked).toEqual([]);
     expect(started).toContainEqual(expect.objectContaining({ step: 'build' }));
-    // The second dispatch is the sentinel stop that ends the run; which gate
-    // it lands on is incidental to this spec (it was `build` re-entering via
-    // the wiring kickback before that gate was retired).
-    expect(failed).not.toEqual([]);
-    expect(dispatched[0]).toBe('build');
+    expect(dispatched.slice(0, 2)).toEqual(['build', 'test_suite']);
+    expect(failed).toContainEqual(expect.objectContaining({ step: 'test_suite' }));
+    expect(failed).not.toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(completed).toContainEqual(expect.objectContaining({ step: 'build', status: 'done' }));
     const payload = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as {
       records: Array<Record<string, unknown>>;

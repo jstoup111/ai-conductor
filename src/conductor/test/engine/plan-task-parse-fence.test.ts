@@ -17,6 +17,7 @@ const fixture = `# Implementation Plan
 ### Task 3: Keep legacy fallback and protected citations separate
 Read \`.docs/specs/other-feature.md\` before editing.
 - \`src/fallback.ts\`
+- **Wired-into:** \`src/legacy-wiring.ts\`
 
 ### Task 4: Use the template Files block
 **Files likely touched:**
@@ -43,7 +44,7 @@ describe('plan task Files convention fence', () => {
     expect(Array.from(parsed.entries())).toEqual([
       ['1', new Set(['src/one.ts', 'test/one.test.ts'])],
       ['2', new Set(['src/one.ts', 'test/one.test.ts'])],
-      ['3', new Set(['src/fallback.ts'])],
+      ['3', new Set(['src/fallback.ts', 'src/legacy-wiring.ts'])],
       ['4', new Set(['.docs/plans/other-feature.md', 'src/four.ts'])],
       ['5', new Set(['.docs/stories/this-feature.md'])],
     ]);

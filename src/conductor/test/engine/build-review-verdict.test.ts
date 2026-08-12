@@ -67,10 +67,16 @@ describe('engine/build-review verdict wiring contract', () => {
     const verdict = {
       verdict: 'PASS',
       rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+      findings: { wiring: [] },
     };
     const dir = await writeVerdict(verdict);
 
-    expect(validateBuildReviewVerdict(verdict)).toEqual({ ok: true, ...verdict });
+    const validated = validateBuildReviewVerdict(verdict);
+    expect(validated).toEqual({ ok: true, ...verdict });
+    expect(validated).toMatchObject({
+      rubric: { wiring: false },
+      findings: { wiring: [] },
+    });
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({ done: true });
   });
 

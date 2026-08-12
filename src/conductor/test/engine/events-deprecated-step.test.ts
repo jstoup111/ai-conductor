@@ -42,13 +42,16 @@ describe('deprecated step events', () => {
 
     expect(persistedEventTypes()).toContain('deprecated_step');
     await events.emit(deprecatedStepEvent);
+    const persisted = await readFile(eventsPath, 'utf8');
+    await events.emit({ type: 'future_event' } as unknown as ConductorEvent);
     persister.stop();
 
-    expect(JSON.parse(await readFile(eventsPath, 'utf8'))).toMatchObject({
+    expect(JSON.parse(persisted)).toMatchObject({
       type: 'deprecated_step',
       step: 'wiring_check',
       adr: 'adr-2026-08-11-wiring-judged-in-build-review',
     });
+    await expect(readFile(eventsPath, 'utf8')).resolves.toBe(persisted);
   });
 
   it('renders the deprecation notice through the daemon event switch', () => {
@@ -59,18 +62,5 @@ describe('deprecated step events', () => {
     expect(lines).toEqual([
       expect.stringContaining('DEPRECATED: wiring_check is a no-op — see adr-2026-08-11-wiring-judged-in-build-review'),
     ]);
-  });
-
-  it('ignores an unknown event variant without throwing', async () => {
-    const events = new ConductorEventEmitter();
-    const persister = new EventPersister(
-      join(tempDir, '.pipeline', 'events.jsonl'),
-      events,
-    );
-    persister.start();
-
-    await expect(events.emit({ type: 'future_event' } as unknown as ConductorEvent)).resolves.toBeUndefined();
-
-    persister.stop();
   });
 });
