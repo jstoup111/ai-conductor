@@ -960,6 +960,8 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       '── inherited state ──────────────────────────────────────────',
       'PARKED (0)',
       'HALTED (0)',
+      'BLOCKED (0)',
+      'STRANDED (0)',
       'IN-PROGRESS (0)',
       'ELIGIBLE (0)',
       '─────────────────────────────────────────────────────────────',
@@ -1087,6 +1089,39 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
     expect(out).toContain('IN-PROGRESS (0)');
     expect(out).toContain('ELIGIBLE (0)');
     expect(out).toContain('PROCESSED (0)');
+  });
+
+  it('renders BLOCKED and STRANDED groups with their recovery guidance and zero-state headers', () => {
+    const populated = renderDashboard({
+      halted: [],
+      blocked: [{
+        slug: 'missing-coherence',
+        reason: 'missing-coherence',
+        remedy: 'Write the coherence table.',
+        strandedRekick: true,
+      }],
+      stranded: [{ slug: 'gateless-rekick', reason: 'no blocking gate identified' }],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    });
+    const empty = renderDashboard({
+      halted: [],
+      blocked: [],
+      stranded: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    });
+
+    expect({ populated, empty }).toMatchObject({
+      populated: expect.stringMatching(
+        /BLOCKED \(1\)[\s\S]*missing-coherence[\s\S]*Write the coherence table\.[\s\S]*holds an unconsumed re-kick sentinel[\s\S]*STRANDED \(1\)[\s\S]*gateless-rekick[\s\S]*no blocking gate identified[\s\S]*stalled-or-stuck-feature[\s\S]*IN-PROGRESS \(0\)/,
+      ),
+      empty: expect.stringMatching(/BLOCKED \(0\)[\s\S]*STRANDED \(0\)/),
+    });
   });
 });
 

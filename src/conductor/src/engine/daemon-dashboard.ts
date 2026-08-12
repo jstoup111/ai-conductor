@@ -820,7 +820,33 @@ export function renderDashboard(
     lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}; remedy: clear this row's .pipeline/HALT to resume`);
   }
 
-  const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
+  const blocked = (state.blocked ?? []).filter(
+    (entry) => !parkedSet.has(entry.slug) && !haltedSet.has(entry.slug),
+  );
+  const blockedSlugs = new Set(blocked.map((entry) => entry.slug));
+  lines.push(`BLOCKED (${blocked.length})`);
+  for (const entry of blocked) {
+    const stranded = entry.strandedRekick === true ? ' — holds an unconsumed re-kick sentinel' : '';
+    lines.push(`  • ${entry.slug} — ${entry.reason} — ${entry.remedy}${stranded}`);
+  }
+
+  const stranded = (state.stranded ?? []).filter(
+    (entry) =>
+      !parkedSet.has(entry.slug) && !haltedSet.has(entry.slug) && !blockedSlugs.has(entry.slug),
+  );
+  const strandedSlugs = new Set(stranded.map((entry) => entry.slug));
+  lines.push(`STRANDED (${stranded.length})`);
+  for (const entry of stranded) {
+    lines.push(`  • ${entry.slug} — ${entry.reason}; remedy: see docs/runbooks/stalled-or-stuck-feature.md`);
+  }
+
+  const inProgress = state.inProgress.filter(
+    (p) =>
+      !parkedSet.has(p.slug) &&
+      !haltedSet.has(p.slug) &&
+      !blockedSlugs.has(p.slug) &&
+      !strandedSlugs.has(p.slug),
+  );
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
