@@ -11,7 +11,6 @@ import { writeState, readState } from '../../src/engine/state.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
-import { currentCommitSha } from '../../src/engine/project-prelude.js';
 import {
   performRebase,
   applyRebaseVerdicts,
@@ -259,28 +258,7 @@ describe('integration/rebase-loop', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false },
-        }),
-      );
-    } else if (step === 'wiring_check') {
-      // The wiring-reachability gate (Task 9) requires a fresh, valid,
-      // zero-gap evidence artifact at .pipeline/wiring-evidence.json (see
-      // WIRING_EVIDENCE/validateWiringEvidence in artifacts.ts). The
-      // predicate compares evidence.head against ctx.getHeadSha(), which
-      // shells out to `git rev-parse HEAD` in `dir` — resolve it
-      // dynamically so it matches whatever HEAD the fixture's real repo is
-      // actually at (these are real-git-repo suites throughout).
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      const head = (await currentCommitSha(dir)) ?? '2'.repeat(40);
-      await writeFile(
-        join(dir, '.pipeline/wiring-evidence.json'),
-        JSON.stringify({
-          schema: 1,
-          base: '1'.repeat(40),
-          head,
-          layer2: { applicable: false },
-          waivers: [],
-          tasks: [],
+          rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
         }),
       );
     } else if (step === 'manual_test') {
@@ -765,11 +743,11 @@ describe('integration/rebase-loop', () => {
   // APPROVED ADR (adr-2026-07-20-post-rebase-delta-aware-invalidation.md),
   // `prd_audit`/`architecture_review_as_built` should be PRESERVED (state
   // stays `done`, never re-dispatched) when `D_featureSrc = ∅`, and
-  // `wiring_check`/`manual_test` preserved when the delta contains no
+  // `manual_test` preserved when the delta contains no
   // runtime source at all. None of `classifyGateInvalidation`, `partitionDelta`
   // (new module `src/conductor/src/engine/gate-invalidation.ts`), or
   // `RebaseOutcome.changed.featureSurface` exist yet — today's code
-  // invalidates a FIXED set `{build, build_review, wiring_check, +manual_test}`
+  // invalidates a FIXED set `{build, build_review, +manual_test}`
   // on ANY `changed` rebase and lets `markDownstreamStale` blanket-cascade the
   // judged audits, so every spec below fails on its behavioral assertion
   // (dispatch counts, verdict shape, or the two new audit-trail events), not
@@ -1196,10 +1174,10 @@ describe('integration/rebase-loop', () => {
       });
     });
 
-    // ── Story: Foreign main-side runtime change re-runs manual_test/
-    // wiring_check but preserves the audits ───────────────────────────────────
-    describe('Story: foreign-only runtime delta re-runs manual_test/wiring_check but preserves the audits', () => {
-      it('invalidates wiring_check and manual_test while preserving prd_audit and architecture_review_as_built', async () => {
+    // ── Story: Foreign main-side runtime change re-runs manual_test while
+    // preserving the audits ──────────────────────────────────────────────────
+    describe('Story: foreign-only runtime delta re-runs manual_test but preserves the audits', () => {
+      it('invalidates manual_test while preserving prd_audit and architecture_review_as_built', async () => {
         await initRepoOnFeatureBranch({
           path: 'src/feature.ts',
           content: 'export const foo = 1;\n',
@@ -1218,12 +1196,10 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        expect(counts.wiring_check).toBe(2);
         expect(counts.manual_test).toBe(2);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
 
-        expect(invalidated.find((i) => i.gate === 'wiring_check')).toBeDefined();
         expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
         expect(invalidated.find((i) => i.gate === 'manual_test')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'prd_audit')).toBeDefined();
@@ -1256,7 +1232,7 @@ describe('integration/rebase-loop', () => {
         expect(invalidated.find((i) => i.gate === 'manual_test')).toBeUndefined();
       });
 
-      it('preserves manual_test and wiring_check too when the delta is test-only (no runtime at all)', async () => {
+      it('preserves manual_test when the delta is test-only (no runtime at all)', async () => {
         await initRepoOnFeatureBranch({
           path: 'src/feature.ts',
           content: 'export const foo = 1;\n',
@@ -1275,12 +1251,10 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        expect(counts.wiring_check).toBe(1);
         expect(counts.manual_test).toBe(1);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
         expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
-        expect(preserved.find((p) => p.gate === 'wiring_check')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'manual_test')).toBeDefined();
       });
     });
@@ -1374,7 +1348,6 @@ describe('integration/rebase-loop', () => {
           }).toEqual({
             kickedBack: [
               'build',
-              'wiring_check',
               'test_suite',
               'build_review',
               ...manualTarget,
@@ -1422,7 +1395,6 @@ describe('integration/rebase-loop', () => {
         // Full legacy invalidation set (fail-closed fallback), no preservations.
         expect(result.kickedBack).toEqual([
           'build',
-          'wiring_check',
           'test_suite',
           'build_review',
           'manual_test',

@@ -723,7 +723,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
@@ -733,12 +732,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
-    // The deterministic BUILD group must be invalidated before build_review —
-    // a file-changing rebase can falsify both reachability and aggregate-suite
-    // evidence just as easily as build_review's grading.
-    const wiringCheck = await readVerdict(dir, 'wiring_check');
-    expect(wiringCheck?.satisfied).toBe(false);
-    expect(wiringCheck?.kickback?.from).toBe('rebase');
   });
 
   it('changed but manual_test did not run (featureSurface uncomputable) → build/deterministic group/build_review/audits kicked back, manual_test excluded', async () => {
@@ -746,7 +739,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, false);
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'prd_audit',
@@ -771,7 +763,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
@@ -810,7 +801,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // build is reverified, NOT in kickedBack (featureSurface uncomputable —
     // fail-closed set, includes the judged audits per the ADR amendment)
     expect(r.kickedBack).toEqual([
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
@@ -853,7 +843,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // fail-closed set, includes the judged audits per the ADR amendment)
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
@@ -898,7 +887,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // uncomputable here too — fail-closed set includes the judged audits)
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
@@ -943,7 +931,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // uncomputable here too, so the fail-closed set still includes the
     // judged audits (ADR amendment) regardless of ranManualTest.
     expect(r.kickedBack).toEqual([
-      'wiring_check',
       'test_suite',
       'build_review',
       'prd_audit',
@@ -985,7 +972,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // audits (featureSurface uncomputable, ADR amendment).
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'prd_audit',
@@ -1009,7 +995,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(manualTest).toBeNull();
   });
 
-  it('Task 6: delta-aware — foreign runtime + feature test file → audits preserved, wiring_check/manual_test invalidated', async () => {
+  it('Task 6: delta-aware — foreign runtime + feature test file → audits preserved, manual_test invalidated', async () => {
     // Feature's claimed surface is src/feature.ts only. The rebase delta
     // touches a foreign runtime file (src/foreign.ts) and one of the
     // feature's own test files (src/feature.test.ts) — no feature runtime
@@ -1032,22 +1018,17 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true);
 
     expect(r.satisfied).toBe(true);
-    // build_review/test_suite ('any-codetest') and wiring_check/manual_test
+    // build_review/test_suite ('any-codetest') and manual_test
     // ('all-runtime', foreignSrc non-empty) are invalidated; the two
     // feature-runtime audits are preserved (featureSrc is empty).
     expect(r.kickedBack).toEqual([
       'build',
       'build_review',
       'test_suite',
-      'wiring_check',
       'manual_test',
     ]);
     expect(r.kickedBack).not.toContain('prd_audit');
     expect(r.kickedBack).not.toContain('architecture_review_as_built');
-
-    const wiringCheck = await readVerdict(dir, 'wiring_check');
-    expect(wiringCheck?.satisfied).toBe(false);
-    expect(wiringCheck?.kickback?.from).toBe('rebase');
 
     const manualTest = await readVerdict(dir, 'manual_test');
     expect(manualTest?.satisfied).toBe(false);
@@ -1068,7 +1049,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // Same delta as the Task 6 fixture above: feature surface is
     // src/feature.ts only; the rebase delta touches a foreign runtime file
     // (src/foreign.ts) and a feature test file (src/feature.test.ts). That
-    // invalidates build_review/test_suite ('any-codetest') and wiring_check/manual_test
+    // invalidates build_review/test_suite ('any-codetest') and manual_test
     // ('all-runtime', foreignSrc non-empty), while preserving the
     // feature-runtime-scoped audits (featureSrc is empty).
     const outcome: RebaseOutcome = {
@@ -1089,11 +1070,10 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     const byGate = Object.fromEntries(invalidated.map((e) => [e.gate, e.matchedPaths]));
     expect(Object.keys(byGate).sort()).toEqual(
-      ['build_review', 'test_suite', 'manual_test', 'wiring_check'].sort(),
+      ['build_review', 'test_suite', 'manual_test'].sort(),
     );
-    // wiring_check/manual_test are 'all-runtime' — matchedPaths is
+    // manual_test is 'all-runtime' — matchedPaths is
     // featureSrc ∪ foreignSrc (foreignSrc: src/foreign.ts; featureSrc empty).
-    expect(byGate.wiring_check).toEqual(['src/foreign.ts']);
     expect(byGate.manual_test).toEqual(['src/foreign.ts']);
     // build_review is 'feature-codetest' — matchedPaths is featureSrc ∪ the
     // feature's OWN test paths. src/foreign.ts is outside F and so justifies
@@ -1149,7 +1129,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(byGate.architecture_review_as_built.deltaConsidered).toEqual([]);
     // Invalidated gates must not appear in the preserved set.
     expect(byGate.build_review).toBeUndefined();
-    expect(byGate.wiring_check).toBeUndefined();
     expect(byGate.manual_test).toBeUndefined();
   });
 
@@ -1174,7 +1153,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       'build',
       'build_review',
       'test_suite',
-      'wiring_check',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -1212,7 +1190,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
@@ -1807,7 +1784,6 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
@@ -1862,7 +1838,6 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
@@ -1941,7 +1916,6 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'wiring_check',
       'test_suite',
       'build_review',
       'manual_test',
