@@ -401,9 +401,11 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
     await writeFile(join(dir, '.docs/stories/missing-coherence.md'), APPROVED_STORIES);
     const logs: string[] = [];
+    const hasRekickSentinel = vi.fn(async () => true);
 
     const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
       treeSource: fsTreeSource(dir),
+      hasRekickSentinel,
     });
 
     expect(result.blocked).toEqual([
@@ -411,8 +413,10 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
         slug: 'missing-coherence',
         reason: 'missing-coherence',
         remedy: 'Author a valid coherence table in .docs/coherence/missing-coherence.md on the default branch.',
+        strandedRekick: true,
       },
     ]);
+    expect(hasRekickSentinel).toHaveBeenCalledOnce();
     expect(logs).toContain(
       'skip missing-coherence: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/missing-coherence.md) required for tier unresolved. Author it on the default branch; logged once.',
     );

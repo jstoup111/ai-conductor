@@ -465,6 +465,8 @@ export interface DiscoverBacklogOpts {
    */
   hasWarned?: (slug: string) => Promise<boolean>;
   markWarned?: (slug: string) => Promise<void>;
+  /** Optional probe for a re-kick sentinel that stranded a blocked feature. */
+  hasRekickSentinel?: (slug: string) => Promise<boolean>;
   /**
    * Owner-gate injectables (all optional → backward compatible). When the four
    * are absent the discovery behaves EXACTLY as before: no gate, no gate logs.
@@ -606,6 +608,7 @@ export interface BlockedSpecItem {
     | 'no-dependency-tree'
     | 'missing-coherence';
   remedy: string;
+  strandedRekick?: boolean;
 }
 
 /**
@@ -1020,10 +1023,12 @@ export async function discoverBacklog(
       tier !== 'S' &&
       !hasCoherenceTableDataRow(coherenceContent)
     ) {
+      const strandedRekick = (await opts.hasRekickSentinel?.(slug)) === true;
       blockedItems.push({
         slug,
         reason: 'missing-coherence',
         remedy: `Author a valid coherence table in .docs/coherence/${slug}.md on the default branch.`,
+        ...(strandedRekick ? { strandedRekick: true } : {}),
       });
       await warnOnce(
         slug,
