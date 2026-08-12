@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
@@ -32,14 +32,30 @@ function staleEvidence(): WiringEvidence {
 }
 
 describe('wiring_check — deprecated no-op completion predicate', () => {
+  it('has no remaining producer for a wiring_check to build kickback', async () => {
+    const conductorSource = await readFile(
+      new URL('../../src/engine/conductor.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(conductorSource).not.toContain("from: 'wiring_check'");
+    expect(conductorSource).not.toContain("checkKickbackToBuildEscalation('wiring_check')");
+  });
+
   it('emits one deprecation notice per execution without a stall or kickback', async () => {
     const events = new ConductorEventEmitter();
     const deprecated: unknown[] = [];
     const terminalEvents: string[] = [];
-    events.on('deprecated_step', (event) => deprecated.push(event));
-    events.on('loop_halt', () => terminalEvents.push('halt'));
-    events.on('kickback', () => terminalEvents.push('kickback'));
-    const runner: StepRunner = { run: async () => ({ success: true }) };
+    events.on('deprecated_step', (event) => { deprecated.push(event); });
+    events.on('loop_halt', () => { terminalEvents.push('halt'); });
+    events.on('kickback', () => { terminalEvents.push('kickback'); });
+    let runnerCalls = 0;
+    const runner: StepRunner = {
+      run: async () => {
+        runnerCalls++;
+        return { success: true };
+      },
+    };
     const conductor = new Conductor({
       stateFilePath: join(tmpdir(), 'wiring-check-noop-state.json'),
       projectRoot: tmpdir(),
@@ -51,13 +67,14 @@ describe('wiring_check — deprecated no-op completion predicate', () => {
       runWiringCheckStep: (state: object) => Promise<unknown>;
     }).runWiringCheckStep({});
 
-    expect({ deprecated, terminalEvents }).toEqual({
+    expect({ deprecated, terminalEvents, runnerCalls }).toEqual({
       deprecated: [{
         type: 'deprecated_step',
         step: 'wiring_check',
         adr: 'adr-2026-08-11-wiring-judged-in-build-review',
       }],
       terminalEvents: [],
+      runnerCalls: 0,
     });
   });
 

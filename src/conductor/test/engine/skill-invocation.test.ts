@@ -47,7 +47,6 @@ const EXPECTED_INVOCATIONS = {
   },
   build: { kind: 'skill', skillName: 'pipeline', arguments: [] },
   build_review: { kind: 'engine-native' },
-  wiring_check: { kind: 'engine-native' },
   test_suite: { kind: 'engine-native' },
   manual_test: { kind: 'skill', skillName: 'manual-test', arguments: [] },
   prd_audit: { kind: 'skill', skillName: 'prd-audit', arguments: [] },
@@ -61,7 +60,7 @@ const EXPECTED_INVOCATIONS = {
   finish: { kind: 'skill', skillName: 'finish', arguments: [] },
   remediate: { kind: 'skill', skillName: 'remediate', arguments: [] },
   attribution_verify: { kind: 'engine-native' },
-} as const satisfies Record<StepName, SkillInvocationDescriptor>;
+} as const satisfies Partial<Record<StepName, SkillInvocationDescriptor>>;
 
 describe('provider-native skill invocation', () => {
   it('defines the exhaustive semantic invocation map', () => {
@@ -106,14 +105,13 @@ describe('provider-native skill invocation', () => {
 
   it.each([
     'build_review',
-    'wiring_check',
     'test_suite',
     'attribution_verify',
   ] as const)(
     'rejects rendering the %s engine-native sentinel as a skill',
     (stepName) => {
       expect(() =>
-        renderSkillInvocation(STEP_SKILL_INVOCATIONS[stepName], 'claude'),
+        renderSkillInvocation(STEP_SKILL_INVOCATIONS[stepName]!, 'claude'),
       ).toThrow(/engine-native/i);
     },
   );

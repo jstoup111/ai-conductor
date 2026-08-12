@@ -522,10 +522,6 @@ export class DefaultStepRunner implements StepRunner {
         'rebase is handled by the engine (native git rebase-on-latest); it must not be dispatched to run()',
       );
     }
-    if (step === 'wiring_check') {
-      return { success: true };
-    }
-
     // build_review is a one-shot grader dispatch — never resumes the main
     // conductor session (see runBuildReview() for the resolveRebaseConflict
     // fresh-uuid/resume:false pattern).
@@ -786,7 +782,7 @@ export class DefaultStepRunner implements StepRunner {
                   optionsForCandidate: (candidateKey: string) => ({
                     ...options,
                     prompt: renderSkillInvocation(
-                      STEP_SKILL_INVOCATIONS[step],
+                      STEP_SKILL_INVOCATIONS[step]!,
                       candidateKey,
                     ),
                   }),
@@ -873,7 +869,7 @@ export class DefaultStepRunner implements StepRunner {
                 optionsForCandidate: (candidateKey: string) => ({
                   ...options,
                   prompt: renderSkillInvocation(
-                    STEP_SKILL_INVOCATIONS[request.step],
+                    STEP_SKILL_INVOCATIONS[request.step]!,
                     candidateKey,
                   ),
                 }),

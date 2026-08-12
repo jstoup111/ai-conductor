@@ -1381,19 +1381,6 @@ describe('DefaultStepRunner', () => {
     expect(opts).toMatchObject({ model: 'gpt-5.6-luna', effort: 'low' });
   });
 
-  it('recognizes wiring_check as an engine-native gate without rendering or provider invocation', async () => {
-    const provider = createMockProvider();
-    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
-
-    const result = await runner.run('wiring_check', emptyState);
-
-    expect({
-      success: result.success,
-      invokeCalls: (provider.invoke as ReturnType<typeof vi.fn>).mock.calls,
-      interactiveCalls: (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls,
-    }).toEqual({ success: true, invokeCalls: [], interactiveCalls: [] });
-  });
-
   it('all steps use invokeInteractive (stdio: inherit)', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');

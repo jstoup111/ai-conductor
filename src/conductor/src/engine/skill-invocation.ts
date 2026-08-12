@@ -9,7 +9,7 @@ export type SkillInvocationDescriptor =
   | { readonly kind: 'engine-native' };
 
 export const STEP_SKILL_INVOCATIONS: Readonly<
-  Record<StepName, SkillInvocationDescriptor>
+  Partial<Record<StepName, SkillInvocationDescriptor>>
 > = {
   bootstrap: { kind: 'skill', skillName: 'bootstrap', arguments: [] },
   memory: { kind: 'skill', skillName: 'memory', arguments: [] },
@@ -28,12 +28,6 @@ export const STEP_SKILL_INVOCATIONS: Readonly<
   build: { kind: 'skill', skillName: 'pipeline', arguments: [] },
   // Grader dispatch is assembled by engine logic, not by invoking a skill.
   build_review: { kind: 'engine-native' },
-  // The engine computes wiring-reachability evidence directly; no skill dispatch.
-  // Evidence recorded at a prior HEAD is re-derived in-process (single-shot) by
-  // the completion predicate rather than rejected as stale — see `wiringProbe`
-  // in artifacts.ts. That re-derivation is still engine-native: it never
-  // dispatches a skill.
-  wiring_check: { kind: 'engine-native' },
   // The engine runs the aggregate verifier directly; no skill dispatch.
   test_suite: { kind: 'engine-native' },
   manual_test: { kind: 'skill', skillName: 'manual-test', arguments: [] },
