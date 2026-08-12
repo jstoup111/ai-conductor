@@ -91,6 +91,12 @@ export interface BlockedEntry {
   strandedRekick?: unknown;
 }
 
+/** A re-kick sentinel that discovery did not classify under a named gate. */
+export interface StrandedEntry {
+  slug: string;
+  reason: 'no blocking gate identified';
+}
+
 export interface RetainedWorktreeEntry {
   slug: string;
   /** PR URL recorded in the processed ledger, when available. */
@@ -150,6 +156,8 @@ export interface InheritedState {
    * Optional so pre-blocked callers can continue constructing dashboard state.
    */
   blocked?: BlockedEntry[];
+  /** Re-kick sentinels not accounted for by a discovery result. */
+  stranded?: StrandedEntry[];
   inProgress: InProgressEntry[];
   eligible: EligibleEntry[];
   processed: ProcessedEntry[];
@@ -438,6 +446,7 @@ export async function scanInheritedState(
   const halted: HaltedEntry[] = [];
   const haltedSlugs = new Set<string>();
   const inProgress: InProgressEntry[] = [];
+  const rekickCandidates = new Set<string>();
   const retainedWorktrees: RetainedWorktreeEntry[] = [];
   const neverStarted: string[] = [];
 
@@ -515,6 +524,7 @@ export async function scanInheritedState(
         }
         continue; // no conduct-state → never-started, not in-progress
       }
+
       if (donePresent) {
         // Finished pipeline, stale HALT, not (yet) in the processed ledger —
         // a closed-unmerged feature the sweep pruned from the watch registry
@@ -527,6 +537,25 @@ export async function scanInheritedState(
 
       if (blockedSlugs.has(slug)) {
         continue; // BLOCKED outranks IN-PROGRESS.
+      }
+
+      let rekickPresent = false;
+      try {
+        await readFile(join(wt, '.pipeline/REKICK'), 'utf-8');
+        rekickPresent = true;
+      } catch (err) {
+        if (!(err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT')) {
+          deps.log?.(
+            `dashboard: skipped worktree ${slug} (REKICK probe failed: ${err instanceof Error ? err.message : String(err)})`,
+          );
+          continue;
+        }
+      }
+      if (rekickPresent) {
+        // Discovery below determines whether this sentinel has an eligible
+        // route. Until then, never represent it as live forward progress.
+        rekickCandidates.add(slug);
+        continue;
       }
 
       // Has state, no HALT, not processed → IN-PROGRESS. Malformed JSON still
@@ -572,6 +601,7 @@ export async function scanInheritedState(
   // WAITING: specs held back by an unresolved dependency gate (FR-6) — a
   // bare-array `discover()` (pre-widened callers) yields no waiting items.
   let eligible: EligibleEntry[] = [];
+  let stranded: StrandedEntry[] = [];
   let waiting: WaitingEntry[] = [];
   let gated: GatedItem[] = [];
   let priorityResolution: PriorityResolution | undefined;
@@ -596,6 +626,15 @@ export async function scanInheritedState(
       tier: b.tier,
       band: (b as BacklogItem & { band?: PriorityBand }).band,
     }));
+    const enumeratedSlugs = new Set([
+      ...eligible.map((entry) => entry.slug),
+      ...waiting.map((entry) => entry.slug),
+      ...gated.filter((entry): entry is GatedItem & { kind: 'spec' } => entry.kind === 'spec')
+        .map((entry) => entry.slug),
+    ]);
+    stranded = [...rekickCandidates]
+      .filter((slug) => !enumeratedSlugs.has(slug))
+      .map((slug) => ({ slug, reason: 'no blocking gate identified' }));
 
     // Detect the priority resolution mode from the items (set by orderBacklog in the WorkSource):
     // - If any eligible item has resolutionMode='banded', it's banded mode with band annotations
@@ -618,6 +657,7 @@ export async function scanInheritedState(
   return {
     halted,
     blocked,
+    stranded,
     inProgress,
     eligible,
     processed,

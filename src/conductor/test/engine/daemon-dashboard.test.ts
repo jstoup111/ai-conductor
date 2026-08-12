@@ -46,6 +46,11 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       'utf-8',
     );
   }
+  async function makeRekick(slug: string): Promise<void> {
+    const p = join(worktreeBase, slug, '.pipeline');
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'REKICK'), 'rekick\n', 'utf-8');
+  }
   async function makeLifecycleEvent(
     slug: string,
     step: string,
@@ -414,6 +419,110 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.eligible).toEqual([{ slug: 'eligible', tier: undefined, band: undefined }]);
   });
 
+  it('reports an unconsumed REKICK outside every discovery group as stranded, not in progress', async () => {
+    await makeStateful('stranded-rekick', { build: 'in_progress' });
+    await makeRekick('stranded-rekick');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      readBlocked: async () => ({
+        kind: 'ok' as const,
+        snapshot: { schemaVersion: 1 as const, writtenAt: new Date().toISOString(), blocked: [] },
+      }),
+    });
+
+    expect(state.stranded).toEqual([
+      { slug: 'stranded-rekick', reason: 'no blocking gate identified' },
+    ]);
+    expect(state.inProgress).toEqual([]);
+  });
+
+  it('keeps a worktree without REKICK outside every discovery group in progress', async () => {
+    await makeStateful('legacy-active', { build: 'in_progress' });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      readBlocked: async () => ({
+        kind: 'ok' as const,
+        snapshot: { schemaVersion: 1 as const, writtenAt: new Date().toISOString(), blocked: [] },
+      }),
+    });
+
+    expect(state.stranded).toEqual([]);
+    expect(state.inProgress).toEqual([{ slug: 'legacy-active', step: 'build' }]);
+  });
+
+  it('keeps a REKICK worktree in a named waiting group instead of stranding it', async () => {
+    await makeStateful('waiting-rekick', { build: 'in_progress' });
+    await makeRekick('waiting-rekick');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => ({
+        items: [],
+        waiting: [{
+          slug: 'waiting-rekick',
+          verdict: { kind: 'indeterminate' as const, detail: 'dependency unavailable' },
+        }],
+      }),
+    });
+
+    expect(state.stranded).toEqual([]);
+    expect(state.waiting?.map((entry) => entry.slug)).toEqual(['waiting-rekick']);
+    expect(state.inProgress).toEqual([]);
+  });
+
+  it('keeps a REKICK worktree in a named gated group instead of stranding it', async () => {
+    await makeStateful('gated-rekick', { build: 'in_progress' });
+    await makeRekick('gated-rekick');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => ({
+        items: [],
+        waiting: [],
+        gated: [{
+          kind: 'spec' as const,
+          slug: 'gated-rekick',
+          reason: 'other-owner' as const,
+          otherOwner: 'another-operator',
+          remedy: 'wait for the owner',
+        }],
+      }),
+    });
+
+    expect(state.stranded).toEqual([]);
+    expect(state.gated?.map((entry) => entry.kind === 'spec' ? entry.slug : undefined)).toEqual([
+      'gated-rekick',
+    ]);
+    expect(state.inProgress).toEqual([]);
+  });
+
+  it('logs and skips a worktree when its REKICK sentinel cannot be read', async () => {
+    await makeStateful('rekick-read-error', { build: 'in_progress' });
+    await mkdir(join(worktreeBase, 'rekick-read-error', '.pipeline', 'REKICK'));
+    const logs: string[] = [];
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      log: (message) => logs.push(message),
+    });
+
+    expect(state.stranded).toEqual([]);
+    expect(state.inProgress).toEqual([]);
+    expect(logs.some(
+      (message) => message.includes('REKICK') && message.includes('rekick-read-error'),
+    )).toBe(true);
+  });
+
   it('excludes a halted/processed slug from ELIGIBLE', async () => {
     await makeHalted('h', 'parked');
     await makeProcessed('done1');
@@ -520,6 +629,22 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       neverStarted: ['never-started'],
       retainedWorktrees: [],
     });
+  });
+
+  it('keeps a no-state worktree with a stale HALT and DONE marker never-started', async () => {
+    const pipeline = join(worktreeBase, 'no-state-stale-markers', '.pipeline');
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(join(pipeline, 'HALT'), 'stale halt\n', 'utf-8');
+    await writeFile(join(pipeline, 'DONE'), 'done\n', 'utf-8');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.neverStarted).toEqual(['no-state-stale-markers']);
+    expect(state.retainedWorktrees).toEqual([]);
   });
 
   it('renders a never-started eligible slug in ELIGIBLE', async () => {
