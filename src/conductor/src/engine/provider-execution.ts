@@ -37,6 +37,7 @@ import { evaluateSafetyBoundary, type SafetyDiagnosticGap, type SafetyProtection
 import { redactSafetyText } from './safety-diagnostics.js';
 import { ModelAvailability } from './model-availability.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
+import type { HaltMarkerWriteResult } from './halt-marker.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -80,6 +81,8 @@ export interface ProviderExecutionResult extends InvokeResult, ProviderAttributi
   resolvedModel?: string;
   resolvedEffort?: EffortLevel;
   attempts: ProviderAttemptMetadata[];
+  /** Lifecycle-supervisor marker outcome, when preparation recovery was exhausted. */
+  haltMarkerWrite?: HaltMarkerWriteResult;
 }
 
 export type ProviderTransitionWarning =
