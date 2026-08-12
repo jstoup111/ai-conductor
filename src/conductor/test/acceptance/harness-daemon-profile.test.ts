@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile, access, writeFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -32,6 +32,7 @@ vi.mock('execa', () => ({
 
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
@@ -202,6 +203,37 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
 
     // No stale pass record — a HALT must never leave an audit file claiming a pass.
     expect(await exists(join(dir, '.pipeline/version-signal.json'))).toBe(false);
+  });
+
+  it('persists halt_marker_write_failed when the real version gate cannot write its HALT marker', async () => {
+    gitDiffOutput.current = 'A\tskills/new-thing/SKILL.md\n';
+    await writeState(statePath, preBuildDoneState());
+    // A directory at the marker path makes the real marker writer fail while
+    // leaving the existing `.pipeline/events.jsonl` spine writable.
+    await mkdir(join(dir, '.pipeline', 'HALT'), { recursive: true });
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+
+    try {
+      const releaseGate = vi.fn(async () => ({ ok: true as const }));
+      const { conductor, seen } = realVersionGateConductor(releaseGate);
+
+      await conductor.run();
+
+      expect(releaseGate).not.toHaveBeenCalled();
+      expect(seen.some((s) => s.step === 'finish')).toBe(false);
+      const records = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as { type: string; path?: string; reason?: string });
+      expect(records).toContainEqual(expect.objectContaining({
+        type: 'halt_marker_write_failed',
+        path: join(dir, '.pipeline', 'HALT'),
+        reason: expect.stringMatching(/EISDIR|directory/i),
+      }));
+    } finally {
+      persister.stop();
+    }
   });
 
   it('config version_approval_gate: false → versionGate never called, no version-signal.json', async () => {

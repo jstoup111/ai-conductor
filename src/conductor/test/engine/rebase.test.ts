@@ -13,6 +13,7 @@ import {
   isCodeOrTestPath,
   filterCodeOrTestPaths,
   writeHalt,
+  writeSealHalt,
   applyRebaseVerdicts,
   recordRebaseStepCompletion,
   emitRebaseEvent,
@@ -643,7 +644,7 @@ describe('engine/rebase — HALT (FR-8)', () => {
   });
 
   it('writes .pipeline/HALT listing conflicted files + resume steps', async () => {
-    await writeHalt(dir, ['src/feature.ts']);
+    expect(await writeHalt(dir, ['src/feature.ts'])).toEqual({ status: 'written' });
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
     const note = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
     expect(note).toContain('src/feature.ts');
@@ -655,6 +656,10 @@ describe('engine/rebase — HALT (FR-8)', () => {
     await writeHalt(dir, ['src/feature.ts']);
     const cls = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
     expect(cls).toBe('needs-human');
+  });
+
+  it('returns the marker write result for seal HALTs without an emitter', async () => {
+    expect(await writeSealHalt(dir, 'protected artifact changed')).toEqual({ status: 'written' });
   });
 
   it('leaves a CHANGELOG conflict paused for the generic resolver', async () => {
