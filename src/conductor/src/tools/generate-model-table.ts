@@ -307,7 +307,9 @@ export function buildEngineRows(
 ): ModelTableRow[] {
   const modelFreeSteps = new Set<StepName>(MODEL_FREE_ENGINE_STEPS);
 
-  return (Object.keys(STEP_RATIONALE) as StepName[]).map((step) => {
+  return (Object.keys(STEP_RATIONALE) as StepName[])
+    .filter((step) => step !== 'wiring_check')
+    .map((step) => {
     if (modelFreeSteps.has(step)) {
       return {
         name: stepDisplayName(step),
@@ -329,7 +331,7 @@ export function buildEngineRows(
       codexEffort: renderTieredField(codexPolicy, 'Codex', step, 'effort'),
       why: STEP_RATIONALE[step],
     };
-  });
+    });
 }
 
 const CLAUDE_NATIVE_MODEL_ALIAS = /\b(?:haiku|sonnet|opus|fable)\b/i;

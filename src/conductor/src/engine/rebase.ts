@@ -1103,8 +1103,8 @@ export async function applyRebaseVerdicts(
     }
   }
 
-  // wiring_check and test_suite form the deterministic BUILD group after
-  // build; build_review follows their join. A file-changing rebase can stale
+  // test_suite forms the deterministic BUILD gate after build; build_review
+  // follows it. A file-changing rebase can stale
   // any of those proofs, so each must be invalidated before SHIP can resume.
   // Task 6 (ADR-2026-07-20): when the feature's claimed surface (F) is
   // available, select the invalidation set via classifyGateInvalidation
@@ -1131,7 +1131,6 @@ export async function applyRebaseVerdicts(
       : ranManualTest
         ? ([
             'build',
-            'wiring_check',
             'test_suite',
             'build_review',
             'manual_test',
@@ -1140,7 +1139,6 @@ export async function applyRebaseVerdicts(
           ] as StepName[])
         : ([
             'build',
-            'wiring_check',
             'test_suite',
             'build_review',
             'prd_audit',
@@ -1194,7 +1192,7 @@ export async function recordRebaseStepCompletion(
  *   - 'feature-runtime' (prd_audit, architecture_review_as_built): featureSrc.
  *   - 'feature-codetest' (build_review): featureSrc ∪ the feature's own test
  *     paths.
- *   - 'all-runtime' (wiring_check, manual_test): featureSrc ∪ foreignSrc.
+ *   - 'all-runtime' (manual_test): featureSrc ∪ foreignSrc.
  *   - 'any-codetest' (test_suite): the full delta (test ∪ featureSrc ∪
  *     foreignSrc).
  *

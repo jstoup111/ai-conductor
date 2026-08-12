@@ -999,9 +999,7 @@ export interface CompletionContext {
    */
   releaseMetadataPreservationRequired?: boolean;
   /**
-   * Injected wiring-reachability probe runner (Task 18 — ties Layer 1's
-   * `runWiringProbe`/`verifyDeclaredSites`/`orphanBackstop`/
-   * `checkContractConsistency` orchestration into the gate live). When the
+   * Injected wiring-reachability probe runner. When the
    * wiring_check predicate finds no pre-existing evidence file, it invokes
    * this to COMPUTE fresh evidence (rather than only reading a pre-written
    * `.pipeline/wiring-evidence.json` fixture), then durably writes the
@@ -1355,7 +1353,7 @@ export interface WiringGap {
   kind: WiringGapKind;
   /**
    * The specific, human-readable gap message computed by the wiring-probe
-   * gap-producing functions (e.g. `orphanBackstop`, `verifyDeclaredSites`).
+   * gap-producing functions.
    */
   message: string;
 }

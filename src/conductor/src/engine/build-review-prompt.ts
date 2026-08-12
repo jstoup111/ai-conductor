@@ -19,17 +19,11 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
     planBody,
     repairContext = [],
     acceptedWidenings = [],
-    gateInstructions = [],
     entryPoints = [],
   } = inputs;
   const renderedEntryPoints = entryPoints.length > 0
     ? entryPoints.map((entryPoint) => `- ${entryPoint}`).join('\n')
     : '(not-judged: config.wiring.entry_points is absent or empty; do not infer entry points)';
-  const renderedGateInstructions = gateInstructions.length > 0
-    ? gateInstructions.map((instruction) =>
-        `- ${instruction.from} → ${instruction.to} (attempt ${instruction.count})\n  Evidence: ${instruction.evidence.replaceAll('`', '\\`')}`,
-      ).join('\n\n')
-    : '(none)';
   const renderedRepairContext = repairContext.length > 0
     ? repairContext.map((repair) =>
         `- ${repair.id} [${repair.reason}]: ${repair.diagnostic}`,
@@ -117,14 +111,6 @@ ${diff}
 ## Approved plan
 
 ${planBody}
-
-## Engine-recorded gate instructions
-
-These instructions are evidence, not an exemption for the Scope rubric. Judge
-whether a plan hunk implements the recorded instruction; only matching work may
-be treated as in scope. Unmatched work remains subject to every rubric.
-
-${renderedGateInstructions}
 
 ## Engine-recorded rebase repair context
 
