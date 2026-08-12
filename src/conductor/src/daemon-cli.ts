@@ -2190,6 +2190,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'loop_halt':
       log(`${dot} ${chalk.red('✋')} ${chalk.red(`loop halted: ${event.reason}`)}`);
       break;
+    case 'halt_marker_write_failed':
+      log(`${dot} ${chalk.red('✋')} ${chalk.red(`halt marker write failed: ${event.path} — ${event.reason}`)}`);
+      break;
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;
@@ -2205,6 +2208,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'rebase_conflict_halt':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(
+          `rebase conflict halted: ${event.reason} (${event.conflicts.join(', ')})`,
+        )}`,
+      );
+      break;
     case 'ci_failed':
       log(
         `${dot} ${chalk.red('✋')} ${chalk.red(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`)}`,
