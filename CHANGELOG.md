@@ -24,6 +24,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Unattended runs now use the daemon while foreground auto mode exits with migration guidance. ([implementation PR #1509](https://github.com/jstoup111/ai-conductor/pull/1509)).
 
+### Deprecated
+
+- Deprecates the per-task Wired-into contract layer in favor of the build_review wiring rubric while retaining compatibility for existing plan annotations and wiring_check state. ([implementation PR #1517](https://github.com/jstoup111/ai-conductor/pull/1517)).
+
 ### Fixed
 
 - Spec PRs opened into a repository that requires a release disposition now always declare one, so its required release-metadata check no longer fails on every landed spec. ([implementation PR #1448](https://github.com/jstoup111/ai-conductor/pull/1448)).
@@ -35,6 +39,23 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The prd_audit gate now fails closed when the audit report is missing a verdict row for any functional requirement in the feature's approved PRD, instead of passing on a partial report. ([implementation PR #1457](https://github.com/jstoup111/ai-conductor/pull/1457)).
 - Protected artifact seal rotation no longer refuses when a base-ahead path was never touched by the feature, avoiding false "seal rebaseline refused" halts. ([implementation PR #1498](https://github.com/jstoup111/ai-conductor/pull/1498)).
 - `conduct-ts scoped-run` now runs in `test_suite.working_directory` and rebases project-root-relative selectors onto it, so scoped test runs work in monorepo layouts. ([implementation PR #1520](https://github.com/jstoup111/ai-conductor/pull/1520)).
+
+## Migration
+
+```bash migration
+# The `conduct-ts validate-wired-into <plan>` subcommand no longer exists.
+# Remove any script, CI step, or pre-plan hook that invokes it directly:
+#   conduct-ts validate-wired-into <plan-file-path> [--cwd <dir>]
+#
+# Plans no longer need `**Wired-into:**` task annotations — the engineer
+# step and land no longer parse or require them. Existing plans that still
+# carry the annotation are unaffected; new plans can omit it.
+#
+# No config file changes are required: `wiring.entry_points` in
+# .ai-conductor/config.yml keeps its existing shape and is now consumed by
+# the build_review wiring rubric prompt instead of the retired import-graph
+# probe.
+```
 
 ## [0.101.1] - 2026-08-10
 
