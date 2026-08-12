@@ -74,7 +74,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_member_evidence_reused: { render: true, persist: true, audit: false },
   build_member_evidence_recomputed: { render: true, persist: true, audit: false },
   kickback: { render: true, persist: true, audit: true },
-  loop_halt: { render: true, persist: false, audit: true },
+  loop_halt: { render: true, persist: true, audit: true },
   loop_converged: { render: true, persist: false, audit: false },
   rebase_noop: { render: false, persist: false, audit: false },
   rebase_mergeable_skip: { render: true, persist: false, audit: false },

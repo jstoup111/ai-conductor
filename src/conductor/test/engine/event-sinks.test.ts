@@ -94,6 +94,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_cache_hit',
   'build_review_rubric_infrastructure_failure',
   'build_review_outer_verdict',
+  'loop_halt',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -213,6 +214,23 @@ describe('event sink subscriptions', () => {
         .trim().split('\n').map((line) => JSON.parse(line));
       expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
     } finally {
+  it('persists loop_halt events through the emitter into the pipeline ledger', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'loop-halt-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+
+    try {
+      persister.start();
+      expect(persistedEventTypes()).toContain('loop_halt');
+      await events.emit({ type: 'loop_halt', reason: 'kickback cap exceeded' });
+      persister.stop();
+
+      expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8'))).toMatchObject({
+        type: 'loop_halt',
+        reason: 'kickback cap exceeded',
+      });
+    } finally {
+      persister.stop();
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
