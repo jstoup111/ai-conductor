@@ -85,6 +85,23 @@ confirmed_breadth_contract_holds() {
     && grep -qF 'Block a material expansion beyond that boundary until the operator confirms it.' "$skill_file"
 }
 
+adr_creation_contract_holds() {
+  local skill_file="$1"
+  local skill_text
+
+  skill_text="$(tr '\n' ' ' < "$skill_file")"
+
+  grep -qF 'A new ADR is warranted only for a real structural decision.' <<<"$skill_text" \
+    && grep -qF 'Structural change is a necessary prerequisite: decision categories never independently require an ADR.' <<<"$skill_text" \
+    && grep -qF 'system boundary' <<<"$skill_text" \
+    && grep -qF 'component or service decomposition' <<<"$skill_text" \
+    && grep -qF 'integration pattern' <<<"$skill_text" \
+    && grep -qF 'state or data architecture' <<<"$skill_text" \
+    && grep -qF 'foundational technology' <<<"$skill_text" \
+    && grep -qF 'Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail are not sufficient ADR triggers.' <<<"$skill_text" \
+    && grep -qF 'Reuse an existing governing ADR rather than duplicate it.' <<<"$skill_text"
+}
+
 if [ ! -f "$SKILL_FILE" ]; then
   fail "skills/pipeline/SKILL.md exists"
   exit 1
@@ -125,6 +142,56 @@ for downstream_skill in \
     fail "$(basename "$(dirname "$downstream_skill")") must consume confirmed breadth, preserve narrow and comprehensive outcomes, and block material expansion without operator confirmation"
   fi
 done
+
+if [ ! -f "$ARCHITECTURE_REVIEW_SKILL_FILE" ]; then
+  fail "skills/architecture-review/SKILL.md exists for ADR-creation guidance"
+else
+  missing_structural_prerequisite_fixture="$(mktemp "${TMPDIR:-/tmp}/adr-missing-structural-prerequisite.XXXXXX")"
+  small_structural_change_fixture="$(mktemp "${TMPDIR:-/tmp}/adr-small-structural-change.XXXXXX")"
+  trap 'rm -f "$mutated_conduct_skill" "$missing_structural_prerequisite_fixture" "$small_structural_change_fixture"' EXIT
+
+  # Negative control: category labels without the structural prerequisite must
+  # not qualify a change for an ADR.
+  cat >"$missing_structural_prerequisite_fixture" <<'EOF'
+system boundary
+component or service decomposition
+integration pattern
+state or data architecture
+foundational technology
+EOF
+
+  # A small change can still be ADR-eligible when it makes a real structural
+  # decision; size is not a substitute for, or bar to, that prerequisite.
+  cat >"$small_structural_change_fixture" <<'EOF'
+A new ADR is warranted only for a real structural decision.
+Structural change is a necessary prerequisite: decision categories never independently require an ADR.
+system boundary
+component or service decomposition
+integration pattern
+state or data architecture
+foundational technology
+Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail are not sufficient ADR triggers.
+Reuse an existing governing ADR rather than duplicate it.
+EOF
+
+  if adr_creation_contract_holds "$missing_structural_prerequisite_fixture"; then
+    fail "ADR predicate rejects category-only changes without a structural prerequisite"
+  else
+    pass "ADR predicate rejects category-only changes without a structural prerequisite"
+  fi
+
+  if adr_creation_contract_holds "$small_structural_change_fixture"; then
+    pass "ADR predicate accepts a small change with a real structural decision"
+  else
+    fail "ADR predicate accepts a small change with a real structural decision"
+  fi
+
+  if adr_creation_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE"; then
+    pass "ADR creation requires structural change and reuses governing decisions"
+  else
+    fail "ADR creation must require structural change before category triggers, reject non-structural rationales, and reuse governing ADRs"
+  fi
+fi
 
 if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \
   | grep -vF "${CONDUCT_SKILL_FILE}:" \
