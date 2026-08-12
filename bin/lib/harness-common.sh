@@ -161,7 +161,7 @@ PY
 # as an identity source.
 # Usage: resolve_harness_identity <harness_dir>
 resolve_harness_identity() {
-  local harness_dir=$1 baseline distance tag tags
+  local harness_dir=$1 baseline="" distance tag tags
 
   if ! tags=$(git -C "$harness_dir" tag --merged HEAD -l 'v*.*.*' --sort=-v:refname 2>/dev/null); then
     printf 'undeterminable\tunknown\t\t\tnone\n'
