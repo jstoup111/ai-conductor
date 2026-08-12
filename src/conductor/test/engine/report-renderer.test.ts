@@ -90,6 +90,31 @@ describe('report-renderer', () => {
     expect(halts).toEqual([{ reason: 'retry budget exhausted' }]);
   });
 
+  it('uses unknown for loop_halt records with a missing reason', () => {
+    const halts = aggregateHalts(parseEvents(makeLines([
+      { event: { type: 'loop_halt' }, ts: '2026-01-01T00:00:00.000Z' },
+    ])));
+
+    expect(halts).toEqual([{ reason: 'unknown' }]);
+  });
+
+  it('uses unknown for loop_halt records with a non-string reason', () => {
+    const halts = aggregateHalts(parseEvents(makeLines([
+      { event: { type: 'loop_halt', reason: 42 }, ts: '2026-01-01T00:00:00.000Z' },
+    ])));
+
+    expect(halts).toEqual([{ reason: 'unknown' }]);
+  });
+
+  it('skips malformed JSONL while retaining well-formed loop_halt records', () => {
+    const events = parseEvents(`not valid JSON\n${makeLines([
+      { event: { type: 'loop_halt', reason: 'retry budget exhausted' }, ts: '2026-01-01T00:00:00.000Z' },
+    ])}`);
+
+    expect(events).toHaveLength(1);
+    expect(aggregateHalts(events)).toEqual([{ reason: 'retry budget exhausted' }]);
+  });
+
   // ─── Task 9: step durations table ─────────────────────────────────────────
 
   it('renders Step Durations table from step_started/step_completed pairs', async () => {
