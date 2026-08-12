@@ -227,7 +227,7 @@ worktree. Task 13 pins that as a test.
   `blockedSpecLine`
 - `src/conductor/test/engine/daemon-observe-cli.test.ts` — new cases
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** `src/conductor/src/daemon-cli.ts#readBlockedSnapshot`
 
 **Dependencies:** Task 1
 
@@ -249,7 +249,7 @@ worktree. Task 13 pins that as a test.
 - `src/conductor/src/engine/daemon-observe-cli.ts` — export declarations
 - `src/conductor/test/engine/daemon-observe-cli.test.ts` — new case
 
-**Wired-into:** none (inert until `src/conductor/src/engine/daemon-dashboard.ts`)
+**Wired-into:** same as Task 7
 
 **Dependencies:** Task 7
 
