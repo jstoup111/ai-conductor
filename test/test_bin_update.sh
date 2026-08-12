@@ -1145,6 +1145,21 @@ assert "post-release newest tag: reports distance and baseline without prompting
 assert "post-release newest tag: stamps lastCheckedAt" "$([ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
 assert "post-release newest tag: leaves HEAD unchanged" "$([ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && echo 0 || echo 1)"
 
+# A checkout one commit past v0.3.0 remains a tagged install even though it is
+# off-tag. With v0.4.0 reachable as the newest release, it must identify that
+# drift and still offer the release to an interactive operator.
+REPO=$(make_repo "i17-post-release-offer-newer")
+git -C "$REPO" commit -q --allow-empty -m "post-release after v0.3.0"
+DRIFT_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$DRIFT_SHA"
+HOME_DIR=$(make_isolated_home)
+
+run_update_tty "$REPO" "$HOME_DIR" n
+assert "post-release before newer tag: reports identity and offers v0.3.0 → v0.4.0" \
+  "$( [ "$CODE" -eq 0 ] && case "$OUT" in *"1 commit past v0.3.0"*) true;; *) false;; esac && case "$OUT" in *"v0.3.0 → v0.4.0"*) true;; *) false;; esac && echo 0 || echo 1)"
+
 # A checkout between release tags with neither an exact tag nor a previously
 # recorded tagged identity cannot safely compare releases. It must report that
 # status as unverifiable instead of seeding from the latest remote tag.
