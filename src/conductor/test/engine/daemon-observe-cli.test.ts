@@ -565,6 +565,45 @@ describe('engine/daemon-observe-cli', () => {
         }
       });
 
+      it('renders a stranded re-kick sentinel only when its marker is strictly true', async () => {
+        const repo = join(root, 'repo-stranded-rekick');
+        await mkdir(repo, { recursive: true });
+        await writeBlockedSnapshot(repo, {
+          schemaVersion: 1,
+          writtenAt: '2026-08-05T12:00:00.000Z',
+          blocked: [
+            {
+              slug: 'stranded',
+              reason: 'missing-coherence',
+              remedy: 'Write the coherence table.',
+              strandedRekick: true,
+            },
+            {
+              slug: 'ordinary',
+              reason: 'missing-stories',
+              remedy: 'Create the stories file.',
+            },
+            {
+              slug: 'malformed-marker',
+              reason: 'missing-prd',
+              remedy: 'Create the PRD.',
+              strandedRekick: 'true',
+            },
+          ],
+        });
+        const registryPath = await registry([record('repo-stranded-rekick', repo)]);
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
+
+        expect(out.join('\n')).toContain(
+          'stranded — missing-coherence — Write the coherence table. — holds an unconsumed re-kick sentinel',
+        );
+        expect(out.join('\n')).toContain('ordinary — missing-stories — Create the stories file.');
+        expect(out.join('\n')).toContain('malformed-marker — missing-prd — Create the PRD.');
+        expect(out.join('\n')).not.toContain('malformed-marker — missing-prd — Create the PRD. — holds an unconsumed re-kick sentinel');
+      });
+
       it('reports blocked state as unknown when no blocked snapshot has been recorded', async () => {
         const repo = join(root, 'repo-no-blocked-snapshot');
         await mkdir(repo, { recursive: true });

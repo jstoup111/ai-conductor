@@ -334,7 +334,7 @@ function formatGatedAge(writtenAt: string, now: Date): string {
 interface BlockedSnapshot {
   schemaVersion: 1;
   writtenAt: string;
-  blocked: Array<{ slug: string; reason: string; remedy: string }>;
+  blocked: Array<{ slug: string; reason: string; remedy: string; strandedRekick?: unknown }>;
 }
 
 type BlockedSnapshotRead =
@@ -378,7 +378,8 @@ async function readBlockedSnapshot(repoPath: string): Promise<BlockedSnapshotRea
 
 /** Render a blocked-spec line from the daemon's per-pass local read model. */
 function blockedSpecLine(blocked: BlockedSnapshot['blocked'][number]): string {
-  return `    • ${blocked.slug} — ${blocked.reason} — ${blocked.remedy}`;
+  const stranded = blocked.strandedRekick === true ? ' — holds an unconsumed re-kick sentinel' : '';
+  return `    • ${blocked.slug} — ${blocked.reason} — ${blocked.remedy}${stranded}`;
 }
 
 /** Render the per-repository BLOCKED section without querying any external state. */
