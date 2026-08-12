@@ -366,6 +366,54 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.inProgress).toEqual([]);
   });
 
+  it('reports discovery-blocked state instead of IN-PROGRESS while preserving higher-precedence groups', async () => {
+    await makeStateful('blocked', { build: 'in_progress' });
+    await makeStateful('unblocked', { build: 'in_progress' });
+    await makeHalted('halted-blocked', 'needs human');
+    await makeStateful('halted-blocked', { build: 'in_progress' });
+
+    const readBlocked = async () => ({
+      kind: 'ok' as const,
+      snapshot: {
+        schemaVersion: 1 as const,
+        writtenAt: new Date().toISOString(),
+        blocked: [
+          { slug: 'blocked', reason: 'missing-coherence', remedy: 'write coherence' },
+          { slug: 'halted-blocked', reason: 'missing-coherence', remedy: 'write coherence' },
+        ],
+      },
+    });
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      readBlocked,
+    });
+
+    expect(state.blocked).toEqual([
+      { slug: 'blocked', reason: 'missing-coherence', remedy: 'write coherence' },
+    ]);
+    expect(state.inProgress).toEqual([{ slug: 'unblocked', step: 'build' }]);
+    expect(state.halted.map((entry) => entry.slug)).toEqual(['halted-blocked']);
+
+    const parkedOutput = renderDashboard({ ...state, parked: ['blocked'] });
+    expect(parkedOutput.slice(parkedOutput.indexOf('HALTED'))).not.toContain('\n  • blocked ');
+  });
+
+  it('returns an empty blocked group when no blocked reader is supplied', async () => {
+    await makeStateful('active', { build: 'in_progress' });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [item('eligible')],
+    });
+
+    expect(state.blocked).toEqual([]);
+    expect(state.inProgress).toEqual([{ slug: 'active', step: 'build' }]);
+    expect(state.eligible).toEqual([{ slug: 'eligible', tier: undefined, band: undefined }]);
+  });
+
   it('excludes a halted/processed slug from ELIGIBLE', async () => {
     await makeHalted('h', 'parked');
     await makeProcessed('done1');

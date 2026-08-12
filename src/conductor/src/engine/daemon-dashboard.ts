@@ -7,6 +7,7 @@ import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
 import type { GatedItem } from './daemon-backlog.js';
+import type { BlockedSnapshotRead } from './daemon-observe-cli.js';
 import { readStepHeartbeat, formatHeartbeatAge } from './step-heartbeat.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
@@ -81,6 +82,15 @@ export interface ProcessedEntry {
   prUrl?: string;
 }
 
+/** A spec discovery held back by a named gate. */
+export interface BlockedEntry {
+  slug: string;
+  reason: string;
+  remedy: string;
+  /** Whether the blocked worktree still holds an unconsumed re-kick sentinel. */
+  strandedRekick?: unknown;
+}
+
 export interface RetainedWorktreeEntry {
   slug: string;
   /** PR URL recorded in the processed ledger, when available. */
@@ -135,6 +145,11 @@ export interface ParkedEntry {
 
 export interface InheritedState {
   halted: HaltedEntry[];
+  /**
+   * Discovery-blocked specs, after PARKED / HALTED / PROCESSED precedence.
+   * Optional so pre-blocked callers can continue constructing dashboard state.
+   */
+  blocked?: BlockedEntry[];
   inProgress: InProgressEntry[];
   eligible: EligibleEntry[];
   processed: ProcessedEntry[];
@@ -197,6 +212,8 @@ export interface ScanInheritedStateDeps {
     | BacklogItem[]
     | { items: BacklogItem[]; waiting: WaitingEntry[]; gated?: GatedItem[] }
   >;
+  /** Optional blocked-snapshot reader, injected by the startup dashboard caller. */
+  readBlocked?: () => Promise<BlockedSnapshotRead>;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
   /** Optional PR-state lookup for refining processed-ledger retained reasons. */
@@ -411,6 +428,13 @@ export async function scanInheritedState(
   const processedBySlug = new Map(processed.map((entry) => [entry.slug, entry]));
   const slugs = await listWorktreeSlugs(deps.worktreeBase);
 
+  let rawBlocked: BlockedEntry[] = [];
+  if (deps.readBlocked) {
+    const result = await deps.readBlocked();
+    if (result.kind === 'ok') rawBlocked = result.snapshot.blocked;
+  }
+  const blockedSlugs = new Set(rawBlocked.map((entry) => entry.slug));
+
   const halted: HaltedEntry[] = [];
   const haltedSlugs = new Set<string>();
   const inProgress: InProgressEntry[] = [];
@@ -501,6 +525,10 @@ export async function scanInheritedState(
         continue;
       }
 
+      if (blockedSlugs.has(slug)) {
+        continue; // BLOCKED outranks IN-PROGRESS.
+      }
+
       // Has state, no HALT, not processed → IN-PROGRESS. Malformed JSON still
       // appears, with step `unknown` and no enrichment (FR-3).
       const entry: InProgressEntry = {
@@ -533,6 +561,10 @@ export async function scanInheritedState(
       );
     }
   }
+
+  const blocked = rawBlocked.filter(
+    (entry) => !haltedSlugs.has(entry.slug) && !processedSlugs.has(entry.slug),
+  );
 
   // ELIGIBLE: build-ready items this scan that are neither halted nor processed,
   // carrying their tier so the operator sees the size of what's queued.
@@ -585,6 +617,7 @@ export async function scanInheritedState(
 
   return {
     halted,
+    blocked,
     inProgress,
     eligible,
     processed,
