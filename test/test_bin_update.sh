@@ -1255,7 +1255,42 @@ git -C "$REPO" add README.md
 git -C "$REPO" commit -q -m "orphan checkout"
 HOME_DIR=$(make_isolated_home)
 run_update "$REPO" "$HOME_DIR"
-assert_update_identity_line "undeterminable checkout" "$OUT" "unknown" "none"
+assert_update_identity_line "undeterminable checkout" "$OUT" "unverifiable" "none"
+
+# ─── Task 7: undeterminable tagged identity ────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Task 7 — undeterminable tagged identity${NC}"
+
+# No release tag is reachable from this orphan checkout, even though the
+# repository holds v0.3.0 elsewhere. The tagged check must report that it is
+# unverifiable, decline to offer an update, and never invent a cache value.
+REPO=$(make_repo "t7-undeterminable-no-record")
+git -C "$REPO" checkout -q --orphan no-release-history
+git -C "$REPO" reset -q
+printf 'orphan checkout\n' > "$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m "orphan checkout"
+HOME_DIR=$(make_isolated_home)
+
+run_update "$REPO" "$HOME_DIR"
+assert "undeterminable checkout: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "undeterminable checkout: identity line names it unverifiable" \
+  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
+assert "undeterminable checkout: offers no update" \
+  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
+assert "undeterminable checkout: writes no currentVersion" \
+  "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
+
+# A stale cache is deliberately not an identity source. It must remain
+# untouched and must not turn an undeterminable checkout into an update offer.
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR"
+assert "undeterminable checkout: stale record does not resurrect an offer" \
+  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
+assert "undeterminable checkout: leaves pre-existing currentVersion untouched" \
+  "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
 
 # ─── Story 5: no-TTY guidance ───────────────────────────────────────────────
 

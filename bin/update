@@ -141,6 +141,12 @@ check_harness_update_tagged() {
   # intentionally empty undeterminable baseline and distance fields.
   [ "$_identity_kind" = "undeterminable" ] && _source="none"
 
+  if [ "$_identity_kind" = "undeterminable" ]; then
+    echo "Update identity: unverifiable (source: ${_source})"
+    warn "Installed tagged release is unverifiable; cannot check for tagged updates."
+    return 0
+  fi
+
   echo "Update identity: ${_display_identity} (source: ${_source})"
 
   if ! [[ "$baseline" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
