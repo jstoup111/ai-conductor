@@ -60,8 +60,10 @@ head -1 .worktrees/<slug>/.pipeline/HALT
 cat .worktrees/<slug>/.pipeline/HALT.class
 ```
 
-`.pipeline/HALT` is a full stop for that feature: the daemon never advances, opens a PR, or
-merges past it. The first non-empty line of the body is the reason the dashboard surfaces.
+`.pipeline/HALT` is the durable park state for that feature: the daemon never advances, opens a PR,
+or merges past it. The first non-empty line of the body is the reason the dashboard surfaces. Read
+it by name during recovery; persisted halt events in `.pipeline/events.jsonl` supplement this marker
+and do not replace it.
 
 `.pipeline/HALT.class` classifies it. Every HALT the daemon writes now carries one — the daemon
 stamps any HALT still missing a class at startup as `legacy`, once per feature, so the sidecar is
@@ -501,10 +503,11 @@ Read-only. Renders three tables from `.pipeline/events.jsonl` — Step Durations
 and Token Spend — then exits 0. An unreadable events log exits 1. Run it from inside the
 worktree; it reads `.pipeline/` relative to the current directory.
 
-> **Known limitation.** `--report` cannot show halts or kickbacks. `loop_halt` and `kickback`
-> are among the 28 of 62 event types the engine emits but never registers as readable, so they
-> never reach `events.jsonl` and no report can surface them. Use `.pipeline/HALT` and
-> `.pipeline/gates/<step>.json` instead. Tracked in [#1023](https://github.com/jstoup111/ai-conductor/issues/1023) and [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+> **Known limitation.** `--report` does not yet render halt or kickback tables, although
+> `loop_halt`, `rebase_conflict_halt`, `halt_marker_write_failed`, and `kickback` now persist in
+> `events.jsonl`. Use `.pipeline/HALT` as the durable park state and `.pipeline/gates/<step>.json`
+> for the gate verdict. Tracked in [#1023](https://github.com/jstoup111/ai-conductor/issues/1023)
+> and [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
 ### 5. Read the daemon's own narrative
 

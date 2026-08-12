@@ -596,11 +596,10 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **87 variants**. `EventPersister` subscribes to the **58** event types
+`ConductorEvent` defines **88 variants**. `EventPersister` subscribes to the **59** event types
 marked `persist: true` in `event-sinks.ts` and writes only those:
 
-`build_review_rubric_started`, `build_review_rubric_prompt`,
-`build_review_rubric_result`, `build_review_rubric_skipped`,
+`build_review_rubric_started`, `build_review_rubric_result`, `build_review_rubric_skipped`,
 `build_review_cache_hit`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `provider_attempt`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
@@ -614,8 +613,9 @@ marked `persist: true` in `event-sinks.ts` and writes only those:
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
 `build_no_progress`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
 `parallel_failure`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
-`rebase_changed`, `rebase_gate_invalidated`,
-`unattributed_progress`, `attribution_divergence`, `acceptance_red`.
+`loop_halt`, `halt_marker_write_failed`, `rebase_changed`, `rebase_gate_invalidated`,
+`rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`, and `acceptance_red`.
+>>>>>>> a25b8f60d (docs: correct halt ledger coverage)
 
 `build_review_disposition_accepted` and `build_review_disposition_refused` are declared `persist:
 false` deliberately: they are written by the external build-review CLI to its own pipeline-owned
