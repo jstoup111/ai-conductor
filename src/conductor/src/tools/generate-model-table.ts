@@ -300,7 +300,7 @@ export interface ModelTableRow extends NamedRow {
   why: string;
 }
 
-/** All engine-derived rows, in STEP_RATIONALE key order. */
+/** All 24 engine-derived rows, in STEP_RATIONALE key order. */
 export function buildEngineRows(
   claudePolicy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
   codexPolicy: ProviderModelPolicy = CODEX_MODEL_POLICY,
@@ -329,7 +329,7 @@ export function buildEngineRows(
       codexEffort: renderTieredField(codexPolicy, 'Codex', step, 'effort'),
       why: STEP_RATIONALE[step],
     };
-    });
+  });
 }
 
 const CLAUDE_NATIVE_MODEL_ALIAS = /\b(?:haiku|sonnet|opus|fable)\b/i;

@@ -35,6 +35,12 @@ Read \`.docs/specs/another-feature.md\` as context.
 ### Task 5: Declare no paths for this feature's specification
 **Files:** none
 Read \`.docs/specs/files-convention-fence.md\` as context.
+
+### Task 6: Retired metadata remains case-insensitive
+- **WIRED-INTO**: \`src/conductor/src/engine/uppercase-retired.ts#run\`
+
+### Task 7: Retired metadata permits qualifiers and colon placement
+- **Wired-into call site** : \`src/conductor/src/engine/qualified-retired.ts#run\`
 `;
 
     const parsed = parsePlanTaskPaths(plan, 'files-convention-fence');
@@ -52,6 +58,10 @@ Read \`.docs/specs/files-convention-fence.md\` as context.
         'src/conductor/test/engine/parser.test.ts',
       ])],
       ['5', new Set()],
+      // Retired metadata variants must remain excluded from legacy fallback
+      // paths without becoming a Files declaration.
+      ['6', new Set()],
+      ['7', new Set()],
     ]);
     expect(parsed.hasFilesLineByTaskId).toEqual(new Map([
       ['1', true],
@@ -59,9 +69,13 @@ Read \`.docs/specs/files-convention-fence.md\` as context.
       ['3', true],
       ['4', true],
       ['5', true],
+      ['6', false],
+      ['7', false],
     ]));
     expect(parsed.foreignProtectedReferencesByTaskId).toEqual(new Map([
       ['2', new Set(['.docs/specs/another-feature.md'])],
+      ['6', new Set()],
+      ['7', new Set()],
     ]));
     expect(scanPlanProtectedTargets(plan, 'files-convention-fence')).toEqual([
       { taskId: '2', path: '.docs/specs/another-feature.md' },

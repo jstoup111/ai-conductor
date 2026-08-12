@@ -100,6 +100,37 @@ describe('build_review copy equivalence', () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
+  it('rejects a legacy incomplete grader rubric before accepting the complete five-key verdict', async () => {
+    await writeFile(planPath, '# Plan\n\nNo declared replication.\n');
+    let rubric: Record<string, boolean> = {
+      tautology: false,
+      scope: false,
+      rootCause: false,
+      completeness: false,
+    };
+    const invoke = vi.fn(async () => {
+      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectDir, '.pipeline', 'build-review.json'),
+        JSON.stringify({ verdict: 'PASS', rubric }),
+      );
+      return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+    });
+    const { runner: subject } = runner(invoke);
+
+    await expect(subject.run('build_review', {})).resolves.toMatchObject({
+      success: false,
+      output: expect.stringMatching(/rubric\.wiring/i),
+    });
+
+    rubric = { ...rubric, wiring: false };
+    await expect(subject.run('build_review', {})).resolves.toMatchObject({
+      success: true,
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(runCopyEquivalence).not.toHaveBeenCalled();
+  });
+
   it('fails before equivalence or grading when the declaration is malformed', async () => {
     await writeFile(planPath, '**Pattern-source:** src/source-widget.ts\n');
     const { invoke, runner: subject } = runner();

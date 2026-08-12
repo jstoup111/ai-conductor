@@ -189,7 +189,6 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
             verdict: 'FAIL',
-            reasons: ['missing wiring from command to handler'],
             rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
             findings: { wiring: ['missing wiring from command to handler'] },
           }));
@@ -212,7 +211,12 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const ledger = await readKickbackLedger(dir);
     expect(calls).toContain('build');
     expect(calls).not.toContain('wiring_check');
-    expect(ledger.gates.build_review?.lastReason).toContain('missing wiring');
+    // Only build_review's structured rubric evidence may own this rework.
+    // A generic FAIL reason would leave this vulnerable to the retired
+    // wiring_check path satisfying the same assertion.
+    expect(ledger.gates.build_review?.lastReason).toBe(
+      '[wiring] missing wiring from command to handler',
+    );
     expect(ledger.gates.wiring_check).toBeUndefined();
   });
 });

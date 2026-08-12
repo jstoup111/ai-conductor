@@ -1538,7 +1538,7 @@ describe('integration/gate-loop', () => {
           findings: {
             rootCause: ['patched the symptom, not the cause', 'second symptom-only patch'],
           },
-          rubric: { tautology: true, scope: true, rootCause: false, completeness: true, wiring: false },
+          rubric: { tautology: false, scope: false, rootCause: true, completeness: false, wiring: false },
         },
         { verdict: 'PASS', reasons: [] },
       ]);

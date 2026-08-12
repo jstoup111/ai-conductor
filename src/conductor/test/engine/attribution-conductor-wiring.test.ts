@@ -188,6 +188,12 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       exitCode: 0,
     }));
     const claudeInteractive = vi.fn().mockResolvedValue(undefined);
+    let buildReviewRubric: Record<string, boolean> = {
+      tautology: false,
+      scope: false,
+      rootCause: false,
+      completeness: false,
+    };
     const codexInvoke = vi.fn(
       async (options: InvokeOptions): Promise<InvokeResult> => {
         const attribution = options.systemPrompt?.includes('attribution_verify');
@@ -196,13 +202,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
             join(projectRoot, '.pipeline', 'build-review.json'),
             JSON.stringify({
               verdict: 'PASS',
-              rubric: {
-                tautology: false,
-                scope: false,
-                rootCause: false,
-                completeness: false,
-                wiring: false,
-              },
+              rubric: buildReviewRubric,
             }),
           );
         }
@@ -265,7 +265,8 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       },
     ]);
     const sessionIds = [
-      'build-review-codex-session',
+      'legacy-build-review-codex-session',
+      'complete-build-review-codex-session',
       'attribution-codex-session',
     ][Symbol.iterator]();
     const sessions = new ProviderSessionStore({
@@ -320,6 +321,14 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       },
     );
 
+    const legacyBuildReview = await runner.run('build_review', {});
+    buildReviewRubric = {
+      tautology: false,
+      scope: false,
+      rootCause: false,
+      completeness: false,
+      wiring: false,
+    };
     const buildReview = await runner.run('build_review', {});
     const attribution = await runner.dispatchVerifier({
       residueIds: ['7'],
@@ -344,6 +353,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         model: options.model,
         effort: options.effort,
       })),
+      legacyBuildReview,
       buildReview,
       attribution,
     }).toEqual({
@@ -351,11 +361,19 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       claudeRuntimeCalls: { invoke: [], interactive: [] },
       beginBranchCalls: [
         ['build_review'],
+        ['build_review'],
         ['attribution_verify'],
       ],
       codexCalls: [
         {
-          sessionId: 'build-review-codex-session',
+          sessionId: 'legacy-build-review-codex-session',
+          resume: false,
+          cwd: projectRoot,
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+        {
+          sessionId: 'complete-build-review-codex-session',
           resume: false,
           cwd: projectRoot,
           model: 'gpt-5.6-sol',
@@ -369,6 +387,12 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           effort: 'high',
         },
       ],
+      legacyBuildReview: expect.objectContaining({
+        success: false,
+        output: expect.stringMatching(/rubric\.wiring/i),
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+      }),
       buildReview: expect.objectContaining({
         success: true,
         preferredProvider: 'codex',

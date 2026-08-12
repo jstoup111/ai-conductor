@@ -8,6 +8,7 @@ import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import {
   MAX_KICKBACKS_PER_GATE,
+  readKickbackLedger,
   writeKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
 import {
@@ -88,7 +89,7 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
     expect(emittedReason).toBe(expected);
   });
 
-  it('still rewinds to a configured BUILD target', async () => {
+  it('routes a configured BUILD target through build_review, not the retired wiring_check path', async () => {
     await seedPlanTask();
     await writeFixtureState(fixture, resolvedState({ build: 'pending' }));
     const dispatched: StepName[] = [];
@@ -113,6 +114,13 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
 
     expect(dispatched.filter((step) => step === 'build_review')).toHaveLength(1);
     expect(dispatched).not.toContain('wiring_check');
+    // The failed verdict is owned by build_review: its durable budget entry,
+    // unlike the retired compatibility step, records the BUILD rewind.
+    const ledger = await readKickbackLedger(fixture.root);
+    expect(ledger.gates.build_review?.lastReason).toContain(
+      'review must be re-run after BUILD work',
+    );
+    expect(ledger.gates.wiring_check).toBeUndefined();
   });
 
   it('keeps the ping-pong cap reason ahead of an unknown-target refusal', async () => {

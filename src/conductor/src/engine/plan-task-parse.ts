@@ -38,6 +38,11 @@ export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 
+// Retired **Wired-into:** metadata must remain excluded from legacy fallback
+// paths in historical plans. This preserves only the old line grammar (case,
+// optional bullet, qualifier, and colon placement), not its wiring behavior.
+const RETIRED_WIRED_INTO_METADATA_LINE = /^\s*(?:[-*]\s+)?\*\*Wired-into(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+
 /** Path-looking tokens from a **Files:** line (plain text or backticked). */
 function extractFilesLinePaths(rest: string): string[] {
   const paths: string[] = [];
@@ -167,6 +172,11 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
       inFilesBlock = false;
     }
 
+    // Retired wiring metadata is prose, not a legacy file-list item. Consume
+    // its historical grammar before the fallback so it cannot authorize paths
+    // outside an explicit Files declaration.
+    if (RETIRED_WIRED_INTO_METADATA_LINE.test(line)) continue;
+
     // Legacy fallback source: backtick path tokens in a section that has no
     // **Files:** line. Restricted to dedicated file-list bullet items
     // (`- \`path\``) — NOT backtick tokens embedded in a prose sentence.
@@ -186,10 +196,6 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
     // #519/#530), instead of contradicting valid evidence.
     const bulletBody = line.match(/^\s*[-*]\s+(.*)$/);
     if (!bulletBody) continue;
-    // This retired wiring declaration is prose, not a legacy file-list item.
-    // Keep the fallback narrowly limited to actual path bullets so it cannot
-    // turn a historical wiring note into required task corroboration.
-    if (/^\*\*[Ww]ired-into:\*\*/.test(bulletBody[1].trim())) continue;
     let m: RegExpExecArray | null;
     BACKTICK_TOKEN.lastIndex = 0;
     while ((m = BACKTICK_TOKEN.exec(bulletBody[1])) !== null) {

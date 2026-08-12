@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { Conductor } from '../test-conductor.js';
 import { writeState, readState } from '../../src/engine/state.js';
-import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
+import { ALL_STEPS, BUILD_VERIFICATION_GROUP, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { resolveGroupMembership } from '../../src/engine/conductor.js';
 import { isOperatorParked } from '../../src/engine/park-marker.js';
@@ -931,11 +931,30 @@ describe('operator park boundary contract', () => {
   });
 
   it('joins the deterministic BUILD verification group before parking and blocks build review', async () => {
-    await writeState(statePath, {
+    const state: ConductState = {
       ...stateWithPending('test_suite', 'build_review'),
       track: 'technical',
       complexity_tier: 'M',
+    };
+    // Bind this fixture to the production BUILD topology instead of merely
+    // hand-seeding compatible states: retired wiring_check is resolved, the
+    // live verification member is test_suite, and build_review remains the
+    // next semantic owner after the join.
+    const buildTopology = resolveGroupMembership(
+      BUILD_VERIFICATION_GROUP,
+      state,
+      'technical',
+      CLAUDE_MODEL_POLICY,
+    );
+    const buildReview = ALL_STEPS.find(({ name }) => name === 'build_review');
+    expect({
+      dispatchable: buildTopology.dispatchable.map(({ name }) => name),
+      reviewPrerequisites: buildReview?.prerequisites,
+    }).toEqual({
+      dispatchable: ['test_suite'],
+      reviewPrerequisites: ['wiring_check', 'test_suite'],
     });
+    await writeState(statePath, state);
     const members = ['test_suite'] as const;
     const suiteStarted = deferred();
     const releaseSuite = deferred();
@@ -985,6 +1004,7 @@ describe('operator park boundary contract', () => {
       : {};
 
     expect({
+      buildTopology: buildTopology.dispatchable.map(({ name }) => name),
       result,
       settled,
       memberStatuses: Object.fromEntries(members.map((member) => [member, raw[member]])),
@@ -997,6 +1017,7 @@ describe('operator park boundary contract', () => {
       buildReviewDispatches: run.mock.calls.filter(([step]) => step === 'build_review').length,
       suiteEnsureCalls: ensure.mock.calls.length,
     }).toEqual({
+      buildTopology: ['test_suite'],
       result: {
         kind: 'operator-parked',
         boundary: { kind: 'step', name: 'test_suite' },
