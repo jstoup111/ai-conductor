@@ -178,7 +178,7 @@ export class AuditTrailWriter {
           ...(event.kickback_outcome ? { kickback_outcome: event.kickback_outcome } : {}),
         };
       case 'loop_halt':
-        return { origin: 'build', event: 'intervention', cause: event.reason };
+        return { origin: event.step ?? 'build', event: 'intervention', cause: event.reason };
       case 'halt_cleared':
         return {
           origin: event.step ?? 'build',

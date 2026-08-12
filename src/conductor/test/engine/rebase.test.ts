@@ -1346,13 +1346,17 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
   it('emits the matching event per outcome', async () => {
     const events = new ConductorEventEmitter();
     const seen: string[] = [];
+    let conflictHalt: { step?: string } | undefined;
     for (const t of [
       'rebase_noop',
       'rebase_mergeable_skip',
       'rebase_changed',
       'rebase_conflict_halt',
     ] as const) {
-      events.on(t, (e) => { seen.push(e.type); });
+      events.on(t, (e) => {
+        seen.push(e.type);
+        if (e.type === 'rebase_conflict_halt') conflictHalt = e;
+      });
     }
     await emitRebaseEvent(events, { kind: 'noop' });
     await emitRebaseEvent(events, {
@@ -1369,6 +1373,7 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_changed',
       'rebase_conflict_halt',
     ]);
+    expect(conflictHalt).toMatchObject({ step: 'rebase' });
   });
 
   it('best-effort: emission failure does not throw', async () => {

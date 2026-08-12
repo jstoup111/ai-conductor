@@ -1519,6 +1519,7 @@ export async function emitRebaseEvent(
       case 'conflict_halt':
         await events.emit({
           type: 'rebase_conflict_halt',
+          step: 'rebase',
           reason: outcome.reason,
           conflicts: outcome.conflicts,
         });
