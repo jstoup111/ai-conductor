@@ -62,4 +62,30 @@ describe('engine/build-review verdict wiring contract', () => {
       reason: expect.stringMatching(/findings\.wiring/i),
     });
   });
+
+  it('validates and satisfies a PASS verdict that judges all five rubric items', async () => {
+    const verdict = {
+      verdict: 'PASS',
+      rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+    };
+    const dir = await writeVerdict(verdict);
+
+    expect(validateBuildReviewVerdict(verdict)).toEqual({ ok: true, ...verdict });
+    await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({ done: true });
+  });
+
+  it('validates a wiring failure with findings but leaves the gate unsatisfied', async () => {
+    const verdict = {
+      verdict: 'FAIL',
+      rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: false },
+      findings: { wiring: ['The configured entry point is unreachable.'] },
+    };
+    const dir = await writeVerdict(verdict);
+
+    expect(validateBuildReviewVerdict(verdict)).toEqual({ ok: true, ...verdict });
+    await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({
+      done: false,
+      reason: expect.stringContaining('[wiring] The configured entry point is unreachable.'),
+    });
+  });
 });

@@ -1596,6 +1596,8 @@ export interface BuildReviewRubric {
   rootCause?: boolean;
   /** Implementation addresses only part of the task's declared scope. */
   completeness?: boolean;
+  /** Configured entry points do not reach the delivered behavior. */
+  wiring?: boolean;
 }
 
 /**
@@ -1632,7 +1634,7 @@ export interface BuildReviewVerdict {
  */
 export function buildReviewFailureDetails(verdict: Pick<BuildReviewVerdict, 'reasons' | 'findings'>): string[] {
   const details = [...(verdict.reasons ?? [])];
-  for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+  for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
     for (const finding of verdict.findings?.[rubric] ?? []) {
       details.push(`[${rubric}] ${finding}`);
     }
@@ -1684,6 +1686,13 @@ export function validateBuildReviewVerdict(
   if (typeof rubricSrc.scope === 'boolean') rubric.scope = rubricSrc.scope;
   if (typeof rubricSrc.rootCause === 'boolean') rubric.rootCause = rubricSrc.rootCause;
   if (typeof rubricSrc.completeness === 'boolean') rubric.completeness = rubricSrc.completeness;
+  if (typeof rubricSrc.wiring !== 'boolean') {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "rubric.wiring" must be a boolean`,
+    };
+  }
+  rubric.wiring = rubricSrc.wiring;
 
   let findings: BuildReviewFindings | undefined;
   if (e.findings !== undefined) {
@@ -1692,7 +1701,7 @@ export function validateBuildReviewVerdict(
     }
     const source = e.findings as Record<string, unknown>;
     findings = {};
-    for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+    for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
       const candidate = source[rubricName];
       if (candidate === undefined) continue;
       if (!Array.isArray(candidate) || candidate.some((finding) => typeof finding !== 'string')) {
@@ -1703,6 +1712,13 @@ export function validateBuildReviewVerdict(
       }
       findings[rubricName] = candidate;
     }
+  }
+
+  if (rubric.wiring === false && (findings?.wiring?.length ?? 0) === 0) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "findings.wiring" must be a non-empty string array when rubric.wiring is false`,
+    };
   }
 
   const result: {
