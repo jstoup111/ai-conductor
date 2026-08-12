@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { firstNonEmptyLine, writeSelfHostHalt, type GateVerdict } from './gate-halt.js';
 import { classifyVersionSignal, type VersionSignal } from './version-signal.js';
 import { resolveFreshBase, type GitRunner } from '../rebase.js';
+import type { HaltMarkerWriteResult } from '../halt-marker.js';
 
 /** Where the operator records the approved VERSION bump for a self-build. */
 export const VERSION_APPROVAL_MARKER = '.pipeline/version-approval';
@@ -194,7 +195,7 @@ export interface VersionGateOptions {
   /** Declared version freeze (`harness_self_host.version_freeze`), or null. */
   versionFreeze?: string | null;
   /** HALT writer (defaults to the shared self-host HALT). */
-  writeHalt?: (projectRoot: string, reason: string) => Promise<void>;
+  writeHalt?: (projectRoot: string, reason: string) => Promise<void | HaltMarkerWriteResult>;
   /** Marker writer for a freeze auto-approval (defaults to fs writeFile). */
   writeText?: (path: string, content: string) => Promise<void>;
   /** Optional signal to escalate classification on absent marker (Task 11). */
@@ -221,6 +222,13 @@ export interface VersionGateOptions {
  */
 export async function runVersionApprovalGate(opts: VersionGateOptions): Promise<GateVerdict> {
   const writeHalt = opts.writeHalt ?? writeSelfHostHalt;
+  const halt = async (verdict: Extract<GateVerdict, { ok: false }>): Promise<GateVerdict> => {
+    const markerWrite = await writeHalt(opts.projectRoot, verdict.reason);
+    if (markerWrite?.status === 'failed') {
+      return { ok: false, reason: `${verdict.reason}\n\nHALT marker write failed: ${markerWrite.reason}` };
+    }
+    return verdict;
+  };
   const writeText = opts.writeText ?? ((p: string, c: string) => writeFile(p, c, 'utf-8'));
   const writeAudit = opts.writeAudit ?? ((p: string, c: string) => writeFile(p, c, 'utf-8'));
   const markerPath = join(opts.projectRoot, VERSION_APPROVAL_MARKER);
@@ -246,8 +254,7 @@ export async function runVersionApprovalGate(opts: VersionGateOptions): Promise<
     signal,
   });
   if (!verdict.ok) {
-    await writeHalt(opts.projectRoot, verdict.reason);
-    return verdict;
+    return halt(verdict);
   }
 
   // Task 12: On PATCH auto-pass, write audit record
@@ -265,8 +272,7 @@ export async function runVersionApprovalGate(opts: VersionGateOptions): Promise<
       // Audit write failure is a gate failure — cannot claim a pass without proof
       const errorMsg = err instanceof Error ? err.message : String(err);
       const haltReason = `Audit record write failed: ${errorMsg}`;
-      await writeHalt(opts.projectRoot, haltReason);
-      return { ok: false, reason: haltReason };
+      return halt({ ok: false, reason: haltReason });
     }
   }
 

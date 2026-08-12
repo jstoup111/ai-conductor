@@ -13,6 +13,7 @@ import { access as fsAccess, constants } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isRunnableMigrationBlock, type ReleaseDisposition } from '../release-metadata.js';
 import { writeSelfHostHalt, type GateVerdict } from './gate-halt.js';
+import type { HaltMarkerWriteResult } from '../halt-marker.js';
 
 export const INTEGRITY_SCRIPT = 'test/test_harness_integrity.sh';
 export const DEFAULT_INTEGRITY_TIMEOUT_MS = 120_000;
@@ -301,7 +302,7 @@ export interface ReleaseGateOptions {
   releaseMetadata?: ReleaseDisposition;
   /** The build's changed files (git name-status), or null if undeterminable. */
   changedFiles: () => Promise<ChangedFile[] | null>;
-  writeHalt?: (projectRoot: string, reason: string) => Promise<void>;
+  writeHalt?: (projectRoot: string, reason: string) => Promise<void | HaltMarkerWriteResult>;
   timeoutMs?: number;
   access?: (path: string, mode: number) => Promise<void>;
   exec?: IntegrityExec;
@@ -314,6 +315,13 @@ export interface ReleaseGateOptions {
  */
 export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<GateVerdict> {
   const writeHalt = opts.writeHalt ?? writeSelfHostHalt;
+  const halt = async (verdict: Extract<GateVerdict, { ok: false }>): Promise<GateVerdict> => {
+    const markerWrite = await writeHalt(opts.projectRoot, verdict.reason);
+    if (markerWrite?.status === 'failed') {
+      return { ok: false, reason: `${verdict.reason}\n\nHALT marker write failed: ${markerWrite.reason}` };
+    }
+    return verdict;
+  };
 
   const integrity = await runIntegritySuite({
     harnessRoot: opts.harnessRoot,
@@ -322,8 +330,7 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
     exec: opts.exec,
   });
   if (!integrity.ok) {
-    await writeHalt(opts.projectRoot, integrity.reason);
-    return integrity;
+    return halt(integrity);
   }
 
   const changedFiles = await opts.changedFiles();
@@ -338,8 +345,7 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
     // Rule 4: an uncertain (null) change set can never prove freshness (rule 1),
     // so it stays fail-closed and unwaivable — never even mention the waiver path.
     if (surfaces.uncertain) {
-      await writeHalt(opts.projectRoot, migration.reason);
-      return migration;
+      return halt(migration);
     }
     const waiver = await evaluateWaiver({
       harnessRoot: opts.harnessRoot,
@@ -349,8 +355,7 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
     });
     if (!waiver.ok) {
       const reason = `${migration.reason} ${waiver.reason}`;
-      await writeHalt(opts.projectRoot, reason);
-      return { ok: false, reason };
+      return halt({ ok: false, reason });
     }
     return { ok: true };
   }
