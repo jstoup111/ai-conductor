@@ -169,7 +169,7 @@ EOF
 run_identity_resolver() {
   local repo=$1
   set +e
-  RESOLVER_OUT=$(cd "$repo" && bash -c 'source "$1"; resolve_harness_identity "$2"' \
+  RESOLVER_OUT=$(cd "$repo" && bash -c 'set -euo pipefail; source "$1"; resolve_harness_identity "$2"' \
     _ "$repo/bin/lib/harness-common.sh" "$repo" 2>&1)
   RESOLVER_CODE=$?
   set -e
@@ -413,18 +413,21 @@ done
 run_identity_resolver "$REPO"
 assert_resolved_identity "three commits past a release" post-release v0.3.0+3 v0.3.0 3 checkout
 
-# The release tag exists in the repository, but an orphan checkout cannot
-# reach it.  This is a genuine undeterminable identity, rather than a missing
-# config record on a checkout that still has a release ancestor.
-REPO=$(make_repo "resolver-orphan-no-reachable-tag")
+# The stable release tag exists in the repository, but an orphan checkout can
+# reach only a release candidate.  This is a genuine undeterminable identity,
+# rather than a missing config record on a checkout with a stable ancestor.
+REPO=$(make_repo "resolver-orphan-no-reachable-stable-tag")
 git -C "$REPO" checkout -q --orphan no-release-history
 git -C "$REPO" rm -qrf --cached .
 git -C "$REPO" clean -qfd -e bin/lib/harness-common.sh
 printf 'orphan checkout\n' > "$REPO/README.md"
 git -C "$REPO" add README.md
 git -C "$REPO" commit -q -m "orphan checkout"
+git -C "$REPO" tag v0.4.0-rc1
 run_identity_resolver "$REPO"
-assert_resolved_identity "orphan checkout without a reachable release" undeterminable unknown "" "" none
+assert_resolved_identity "checkout without a reachable stable release" undeterminable unknown "" "" none
+assert "checkout without a reachable stable release: leaks no diagnostic" \
+  "$([ "$RESOLVER_OUT" = $'undeterminable\tunknown\t\t\tnone' ] && echo 0 || echo 1)"
 
 # A real Git query failure has the same fail-closed contract as an empty
 # result.  Keep the library present while making only its checkout argument
