@@ -9,8 +9,7 @@
 import { isCodeOrTestPath } from './rebase.js';
 
 /**
- * Test-path convention shared with the wiring-reachability gate
- * (`isTestPath` in wiring-probe.ts): a path is test-only if it matches
+ * Test-path convention: a path is test-only if it matches
  * `.test.` anywhere in the file name, or lives under a `test/` or
  * `__tests__/` directory.
  */
