@@ -14,6 +14,10 @@ Catches technical infeasibility, hidden complexity, architectural drift, and dom
 early — when they're cheap to fix. This is where the *how* is resolved (so the PRD stays
 product-only) and captured as APPROVED ADRs.
 
+Consume the confirmed scope boundary as a binding input.
+Preserve the operator-confirmed narrow or comprehensive outcome in the artifact.
+Block a material expansion beyond that boundary until the operator confirms it.
+
 **Run after `/prd` (product track) or `/explore` (technical track), and BEFORE `/stories`** (adr-2026-06-29-architecture-before-stories-convergent-kickback).
 The review's input is the PRD's functional requirements (product) or the explore output + technical
 intent (technical) — stories and the plan do not exist yet at this point.

@@ -29,6 +29,10 @@ Open with a short **Technical Approach** (a paragraph or few bullets: the design
 key modules/files, and sequencing) before the task list, so `build` has the shape of the work
 before the steps.
 
+Consume the confirmed scope boundary as a binding input.
+Preserve the operator-confirmed narrow or comprehensive outcome in the artifact.
+Block a material expansion beyond that boundary until the operator confirms it.
+
 ### Documentation boundary
 
 Never create plan tasks, subtasks, requirements, verification items, or notes for writing or
