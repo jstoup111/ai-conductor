@@ -87,6 +87,73 @@ describe('scoped-run CLI adapter', () => {
     });
   });
 
+  it('runs the scoped command in test_suite.working_directory and rebases project-root selectors onto it', async () => {
+    const cli = await import('../../src/engine/scoped-run-cli.js');
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    const exitCode = await cli.dispatchScopedRunCommand(
+      { kind: 'run', selectors: ['src/conductor/test/selected.test.ts'] },
+      {
+        projectRoot: '/repo',
+        loadProjectConfig: async () => ({
+          ok: true,
+          config: {
+            test_suite: {
+              scoped_command: 'npx vitest run {selectors}',
+              working_directory: 'src/conductor',
+            },
+          },
+          warnings: [],
+        }),
+        fileExists: (path) => path === '/repo/src/conductor/test/selected.test.ts',
+        runner,
+      },
+    );
+
+    expect({ exitCode, calls: runner.mock.calls }).toEqual({
+      exitCode: 0,
+      calls: [[
+        'npx vitest run test/selected.test.ts',
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+          cwd: '/repo/src/conductor',
+        }),
+      ]],
+    });
+  });
+
+  it('leaves a selector already relative to the working directory unchanged', async () => {
+    const cli = await import('../../src/engine/scoped-run-cli.js');
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    const exitCode = await cli.dispatchScopedRunCommand(
+      { kind: 'run', selectors: ['test/selected.test.ts', '--reporter=dot'] },
+      {
+        projectRoot: '/repo',
+        loadProjectConfig: async () => ({
+          ok: true,
+          config: {
+            test_suite: {
+              scoped_command: 'npx vitest run {selectors}',
+              working_directory: 'src/conductor',
+            },
+          },
+          warnings: [],
+        }),
+        fileExists: (path) => path === '/repo/src/conductor/test/selected.test.ts',
+        runner,
+      },
+    );
+
+    expect({ exitCode, calls: runner.mock.calls }).toEqual({
+      exitCode: 0,
+      calls: [[
+        'npx vitest run test/selected.test.ts --reporter=dot',
+        expect.objectContaining({ cwd: '/repo/src/conductor' }),
+      ]],
+    });
+  });
+
   it('registers the scoped-run detector and dispatcher before normal pipeline parsing', async () => {
     const source = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
 

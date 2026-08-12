@@ -605,6 +605,12 @@ the `{selectors}` placeholder in `test_suite.scoped_command`; see [configuration
 It does not run the aggregate `test_suite.command` or create, replace, or reuse aggregate verification
 evidence.
 
+The command runs in `test_suite.working_directory` (project root when unset), the same directory the
+aggregate `test_suite.command` runs in. Selectors are named the way the repository names them —
+relative to the project root — and a selector that only resolves from the root is rebased onto the
+working directory before expansion. A selector that already resolves from the working directory, an
+absolute path, a flag (leading `-`), and a non-path name pattern all pass through unchanged.
+
 At least one non-blank selector is required. An empty selection exits 1 and directs the caller to the
 shared aggregate verifier. If `test_suite.scoped_command` is not configured, it exits 1 without falling
 back to the aggregate command. A selected-test failure returns that command's nonzero exit code; a
