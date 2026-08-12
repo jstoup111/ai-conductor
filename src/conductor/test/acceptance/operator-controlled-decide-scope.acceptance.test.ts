@@ -64,7 +64,11 @@ describe('Story 2: ADRs only for structural change', () => {
   });
 
   it('keeps small structural changes eligible and reuses an existing governing ADR', () => {
-    expect(architectureReview).toMatch(/(?:size|line count).+(?:not|does not).+(?:waive|exempt|skip)/is);
-    expect(architectureReview).toMatch(/existing.+(?:governing )?ADR.+(?:reference|reuse).+(?:instead|rather).+(?:duplicate|new)/is);
+    expect(architectureReview).toContain(
+      'A small change may still warrant an ADR when it makes one\nof the structural decisions above;',
+    );
+    expect(architectureReview).toContain(
+      'Reuse an existing governing ADR rather than duplicate it.',
+    );
   });
 });
