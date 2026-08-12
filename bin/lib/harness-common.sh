@@ -152,6 +152,41 @@ PY
   fi
 }
 
+# Resolve the installed harness identity from its checkout.
+#
+# Output is tab-separated: kind, identity, baseline, distance, source.
+# The baseline is the highest stable release tag reachable from HEAD.  An
+# absent baseline or an unqueryable checkout is intentionally undeterminable:
+# callers must decline to guess rather than treating persisted configuration
+# as an identity source.
+# Usage: resolve_harness_identity <harness_dir>
+resolve_harness_identity() {
+  local harness_dir=$1 baseline distance
+
+  if ! baseline=$(set -o pipefail; git -C "$harness_dir" tag --merged HEAD -l 'v*.*.*' --sort=-v:refname 2>/dev/null \
+    | grep -E '^v[0-9]+(\.[0-9]+)+$' \
+    | head -1); then
+    printf 'undeterminable\tunknown\t\t\tnone\n'
+    return 0
+  fi
+
+  if [ -z "$baseline" ]; then
+    printf 'undeterminable\tunknown\t\t\tnone\n'
+    return 0
+  fi
+
+  if ! distance=$(git -C "$harness_dir" rev-list --count "$baseline"..HEAD 2>/dev/null); then
+    printf 'undeterminable\tunknown\t\t\tnone\n'
+    return 0
+  fi
+
+  if [ "$distance" -eq 0 ]; then
+    printf 'release\t%s\t%s\t%s\tchecked-out tag\n' "$baseline" "$baseline" "$distance"
+  else
+    printf 'post-release\t%s+%s\t%s\t%s\tcheckout\n' "$baseline" "$distance" "$baseline" "$distance"
+  fi
+}
+
 # Read a scalar or array from ~/.ai-conductor/config.yml using dotted paths
 # (e.g. "markdown_viewer.command"). Arrays come back space-joined. Falls back
 # to the default if the file or path is missing.
