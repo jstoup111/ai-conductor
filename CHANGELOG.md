@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.102.0] - 2026-08-11
+## [0.102.0] - 2026-08-12
 
 ### Added
 
