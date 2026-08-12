@@ -41,11 +41,9 @@ describe('wiring_check — deprecated no-op completion predicate', () => {
     expect(conductorSource).not.toContain("checkKickbackToBuildEscalation('wiring_check')");
   });
 
-  it('emits one deprecation notice per execution without a stall or kickback', async () => {
+  it('settles without dispatch, a stall, or a kickback', async () => {
     const events = new ConductorEventEmitter();
-    const deprecated: unknown[] = [];
     const terminalEvents: string[] = [];
-    events.on('deprecated_step', (event) => { deprecated.push(event); });
     events.on('loop_halt', () => { terminalEvents.push('halt'); });
     events.on('kickback', () => { terminalEvents.push('kickback'); });
     let runnerCalls = 0;
@@ -66,12 +64,7 @@ describe('wiring_check — deprecated no-op completion predicate', () => {
       runWiringCheckStep: (state: object) => Promise<unknown>;
     }).runWiringCheckStep({});
 
-    expect({ deprecated, terminalEvents, runnerCalls }).toEqual({
-      deprecated: [{
-        type: 'deprecated_step',
-        step: 'wiring_check',
-        adr: 'adr-2026-08-11-wiring-judged-in-build-review',
-      }],
+    expect({ terminalEvents, runnerCalls }).toEqual({
       terminalEvents: [],
       runnerCalls: 0,
     });

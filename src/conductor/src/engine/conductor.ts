@@ -4401,6 +4401,13 @@ export class Conductor {
                     return runNativeGroupBranch(
                       member,
                       async () => {
+                        if (member.name === 'wiring_check') {
+                          await emitTracked({
+                            type: 'deprecated_step',
+                            step: member.name,
+                            adr: 'adr-2026-08-11-wiring-judged-in-build-review',
+                          });
+                        }
                         const result = member.name === 'wiring_check'
                           ? this.runWiringCheckStep(state)
                           : this.runTestSuiteStep();
@@ -4636,7 +4643,7 @@ export class Conductor {
                 const member = membership.dispatchable[idx]!;
                 const outcome = outcomes[idx];
                 if (
-                  (member.name !== 'wiring_check' && member.name !== 'test_suite') ||
+                  member.name !== 'test_suite' ||
                   outcome?.kind !== 'verdict' ||
                   outcome.verdict !== 'pass' ||
                   !gateVerdicts.get(member.name)?.satisfied
@@ -4655,14 +4662,12 @@ export class Conductor {
                 }
                 await emitTracked({
                   type: 'build_member_evidence_recomputed',
-                  member: member.name,
+                  member: 'test_suite',
                   decision: 'recompute',
-                  basis: member.name === 'wiring_check'
-                    ? 'recorded-head-versus-current-head'
-                    : verification?.status === 'EXECUTED' &&
-                        verification.freshness.reason === 'fingerprint_mismatch'
-                      ? 'fingerprint-mismatch'
-                      : 'fresh-evidence-required',
+                  basis: verification?.status === 'EXECUTED' &&
+                      verification.freshness.reason === 'fingerprint_mismatch'
+                    ? 'fingerprint-mismatch'
+                    : 'fresh-evidence-required',
                 });
               }
             }
@@ -8356,11 +8361,6 @@ export class Conductor {
   }
 
   private async runWiringCheckStep(state: ConductState): Promise<StepRunResult> {
-    await this.events.emit({
-      type: 'deprecated_step',
-      step: 'wiring_check',
-      adr: 'adr-2026-08-11-wiring-judged-in-build-review',
-    });
     void state;
     return { success: true };
   }

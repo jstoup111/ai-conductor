@@ -71,6 +71,15 @@ describe('Deterministic BUILD verification flow', () => {
 
   it('joins the BUILD verification group before dispatching paid review or SHIP', async () => {
     const timeline: string[] = [];
+    const deprecatedSteps: string[] = [];
+    const recomputedMembers: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('deprecated_step', (event) => {
+      if (event.type === 'deprecated_step') deprecatedSteps.push(event.step);
+    });
+    events.on('build_member_evidence_recomputed', (event) => {
+      if (event.type === 'build_member_evidence_recomputed') recomputedMembers.push(event.member);
+    });
     const runner: StepRunner = {
       run: async (step: StepName) => {
         timeline.push(step);
@@ -91,7 +100,7 @@ describe('Deterministic BUILD verification flow', () => {
     const conductor = new Conductor({
       stateFilePath,
       stepRunner: runner,
-      events: new ConductorEventEmitter(),
+      events,
       projectRoot,
       mode: 'auto',
       fromStep: 'wiring_check',
@@ -115,9 +124,45 @@ describe('Deterministic BUILD verification flow', () => {
     ]);
     expect(timeline).not.toContain('wiring_check');
     expect(ensure).toHaveBeenCalledTimes(1);
+    expect(deprecatedSteps).toEqual(['wiring_check']);
+    expect(recomputedMembers).not.toContain('wiring_check');
     expect(timeline.indexOf('manual_test')).toBeGreaterThan(
       timeline.indexOf('build_review'),
     );
+  });
+
+  it('emits one deprecation notice when serial execution runs wiring_check', async () => {
+    const deprecatedSteps: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('deprecated_step', (event) => {
+      if (event.type === 'deprecated_step') deprecatedSteps.push(event.step);
+    });
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: {
+        run: async (step: StepName) => step === 'manual_test'
+          ? { success: false, output: 'stop after serial wiring_check event proof' }
+          : { success: true },
+      },
+      events,
+      projectRoot,
+      mode: 'default',
+      fromStep: 'wiring_check',
+      maxRetries: 1,
+      verifyArtifacts: false,
+      fullSuiteVerifier: {
+        ensure: async () => ({
+          status: 'REUSED',
+          freshness: { status: 'CURRENT', evidence: PASS_EVIDENCE },
+          evidence: PASS_EVIDENCE,
+        }),
+        inspect: async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE }),
+      },
+    });
+
+    await conductor.run();
+
+    expect(deprecatedSteps).toEqual(['wiring_check']);
   });
 
   it.each([
