@@ -95,6 +95,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_infrastructure_failure',
   'build_review_outer_verdict',
   'loop_halt',
+  'rebase_conflict_halt',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -135,6 +136,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'navigation_back',
   'loop_halt',
   'loop_converged',
+  'rebase_conflict_halt',
   'ci_failed',
   'build_review_base',
   'build_review_stale_mirage_regrade',
@@ -228,6 +230,36 @@ describe('event sink subscriptions', () => {
       expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8'))).toMatchObject({
         type: 'loop_halt',
         reason: 'kickback cap exceeded',
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists and renders rebase conflict halts with their conflict details', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'rebase-conflict-halt-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const halt = {
+      type: 'rebase_conflict_halt' as const,
+      reason: 'manual resolution required',
+      conflicts: ['src/engine/rebase.ts'],
+    };
+
+    try {
+      persister.start();
+      await events.emit(halt);
+      persister.stop();
+
+      expect({
+        persisted: persistedEventTypes().includes(halt.type),
+        rendered: renderedEventTypes().includes(halt.type),
+        ledger: JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')),
+      }).toMatchObject({
+        persisted: true,
+        rendered: true,
+        ledger: { ...halt, ts: expect.any(String) },
       });
     } finally {
       persister.stop();
