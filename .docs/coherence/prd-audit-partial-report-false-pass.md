@@ -74,14 +74,16 @@ already resolved there. No `fail` rows. The pairs most at risk, and why each hol
 
 ## Assumptions surfaced
 
-- **Anchor strength, not a coverage gap.** `conduct-ts validate-wired-into` reports zero failures,
-  but several anchors resolve against comments or registry lines rather than genuine call sites
-  (task-3's `findArtifactFiles` matched a doc comment; task-6, task-7 and task-10's `prd_audit`
-  matched the artifact-pattern entry; task-12 through task-14's `run` matched a comment). This is
-  expected, since the true call sites do not exist until these tasks create them — which is why the
-  genuinely-new surfaces use the deferred `none (inert until ...)` form. Recorded so BUILD does not
-  read those passing rows as stronger evidence of wiring than they are. Confidence this is benign:
-  about 85 percent, basis inferred from the validator's text-resolution behavior.
+- **Wiring evidence is no longer a per-task anchor check.** This section originally recorded that
+  `conduct-ts validate-wired-into` reported zero failures while several anchors resolved against
+  comments or registry lines rather than genuine call sites (task-3's `findArtifactFiles` matched a
+  doc comment; task-6, task-7 and task-10's `prd_audit` matched the artifact-pattern entry; task-12
+  through task-14's `run` matched a comment). PR #1517 retired that validator and the per-task
+  `**Wired-into:**` contract, moving the wiring judgement into `build_review`'s verdict rubric, so
+  the command now exits with `unknown command 'validate-wired-into'` and the assumption no longer
+  holds either way. The plans' remaining `**Wired-into:**` lines are inert metadata that
+  `plan-task-parse.ts` tolerates and excludes; wiring for these tasks is judged at `build_review`
+  against the shipped diff.
 - **Architecture-review Condition 3 has no plan task, deliberately.** Updating
   `docs/explanation/gates.md` and `docs/reference/steps.md` is required in the same PR by
   `CLAUDE.md`, but `/plan`'s documentation boundary forbids authoring documentation tasks. This
