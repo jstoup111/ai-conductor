@@ -88,7 +88,6 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'rebase_gate_invalidated',
   'build_review_repair_context',
   'build_review_rubric_started',
-  'build_review_rubric_prompt',
   'build_review_rubric_result',
   'build_review_rubric_skipped',
   'build_review_cache_hit',
@@ -428,8 +427,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 87 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(87);
+  it('is total over all 88 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(88);
   });
 
   it('routes verdict_freshness to every sink', () => {
