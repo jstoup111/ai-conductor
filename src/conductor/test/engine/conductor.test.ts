@@ -9499,6 +9499,53 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('writes the authoritative lease before cleanup on the legacy Claude self-host path', async () => {
+    await mkdir(join(dir, 'skills'), { recursive: true });
+    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
+    const leasePath = join(dir, '.daemon', 'scratch', 'legacy-held-run', '1-claude', 'owner.json');
+    let lease: unknown;
+    const runner: StepRunner = {
+      selfHostRunId: () => 'legacy-held-run',
+      run: vi.fn(async () => {
+        lease = JSON.parse(await readFile(leasePath, 'utf8'));
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      featureSlug: 'legacy-self-host-identity',
+      config: {
+        llm_provider: 'claude',
+        harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } },
+      } as HarnessConfig,
+      selfHostGuardrails: {
+        resolveHarnessRoot: vi.fn(),
+        resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
+        relink: vi.fn(),
+        provisionSandbox: sandboxModule.provisionSandboxBuildEnv,
+        versionGate: vi.fn(),
+        releaseGate: vi.fn(),
+      } as any,
+    });
+
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', {} as ConductState);
+
+    expect(lease).toMatchObject({
+      repository: dir,
+      featureSlug: 'legacy-self-host-identity',
+      runId: 'legacy-held-run',
+      attempt: 1,
+    });
+    await expect(readFile(leasePath, 'utf8')).rejects.toThrow();
+  });
+
   it('keeps shared provider CLI overrides authoritative for ordinary step dispatch', async () => {
     await writeState(statePath, {
       worktree: 'done',

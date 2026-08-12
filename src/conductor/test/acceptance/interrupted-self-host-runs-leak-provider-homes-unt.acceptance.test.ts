@@ -200,8 +200,22 @@ describe('Story 6 — production worktree removal is the final scratch backstop'
     const externalRunState = join(root, 'durable-runs', 'scratch-feature');
     await mkdir(join(root, '.worktrees'), { recursive: true });
     await git('worktree', 'add', '-q', '-b', 'feat/scratch-feature', worktree, 'main');
-    await mkdir(join(worktree, '.daemon', 'scratch', 'R', '2-codex'), { recursive: true });
-    await writeFile(join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json'), '{}\n');
+    const providerHome = await provisionProviderHome({
+      provider: { id: 'codex' },
+      worktreeRoot: worktree,
+      repository: root,
+      featureSlug: 'scratch-feature',
+      runId: 'R',
+      attempt: 2,
+    });
+    const leasePath = join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json');
+    expect(JSON.parse(await readFile(leasePath, 'utf8'))).toMatchObject({
+      repository: root,
+      featureSlug: 'scratch-feature',
+      runId: 'R',
+      attempt: 2,
+    });
+    expect(await exists(providerHome.homeDir)).toBe(true);
     await mkdir(externalRunState, { recursive: true });
     await writeFile(join(externalRunState, 'conduct-state.json'), '{}\n');
 
@@ -219,6 +233,13 @@ describe('Story 6 — production worktree removal is the final scratch backstop'
     );
 
     expect(await exists(worktree)).toBe(false);
+    expect(await exists(leasePath)).toBe(false);
+    expect(await exists(join(externalRunState, 'conduct-state.json'))).toBe(true);
+
+    await expect(deps.teardownWorktree(
+      { path: worktree, branch: 'feat/scratch-feature' },
+      false,
+    )).resolves.toBeUndefined();
     expect(await exists(join(externalRunState, 'conduct-state.json'))).toBe(true);
   });
 });
