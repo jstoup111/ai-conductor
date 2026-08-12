@@ -179,6 +179,13 @@ export class AuditTrailWriter {
         };
       case 'loop_halt':
         return { origin: event.step ?? 'build', event: 'intervention', cause: event.reason };
+      case 'halt_marker_write_failed':
+        return {
+          origin: 'build',
+          event: event.type,
+          path: event.path,
+          reason: event.reason,
+        };
       case 'halt_cleared':
         return {
           origin: event.step ?? 'build',

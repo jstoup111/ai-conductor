@@ -446,6 +446,27 @@ describe('engine/audit-trail', () => {
     });
   });
 
+  it('subscribe() audits a failed halt-marker write with its path and reason', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'halt_marker_write_failed',
+      path: '/tmp/project/.pipeline/HALT',
+      reason: 'disk full',
+    });
+
+    const contents = await readFile(join(dir, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8');
+    const [line] = contents.split('\n').filter((value) => value.length > 0);
+    expect(JSON.parse(line) as AuditRecord).toMatchObject({
+      origin: 'build',
+      event: 'halt_marker_write_failed',
+      path: '/tmp/project/.pipeline/HALT',
+      reason: 'disk full',
+    });
+  });
+
   it('subscribe() keeps both records in order when a kickback is immediately followed by loop_halt (cap exceeded)', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();

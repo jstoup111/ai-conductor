@@ -601,6 +601,12 @@ export type ConductorEvent =
       prUrl?: string;
     }
   | {
+      /** Writing the durable HALT marker failed, so the feature may not be parked. */
+      type: 'halt_marker_write_failed';
+      path: string;
+      reason: string;
+    }
+  | {
       /** The gate loop reached a fully-satisfied state (.pipeline/DONE). */
       type: 'loop_converged';
     }
