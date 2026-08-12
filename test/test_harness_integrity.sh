@@ -1344,27 +1344,12 @@ else
   fi
 fi
 
-# ── 21. Wiring-anchor judged layer agrees with the deterministic gate ──────
-# The `Wired-into:` contract is now enforced in two halves that MUST NOT drift
-# apart. The deterministic half is `validateWiredIntoPlan`, wired into
-# `landSpec` as a blocking every-tier gate: it decides resolvability. The
-# judged half lives in skills/plan/SKILL.md §5c and covers only what a literal
-# text search provably cannot decide (a self-referential anchor into a file
-# that already exists; a match that is a comment/import/re-export/string rather
-# than a call site).
-#
-# Two failure modes make this worth pinning mechanically:
-#   * If the engine gate is ever unwired, §5c's "these already resolve" premise
-#     becomes false and the judged layer silently starts re-litigating
-#     resolvability from prose — the exact drift the Design Principle forbids.
-#   * If §5c loses its DECIDE-only scoping or its no-false-waiver rule, the
-#     judged layer can instruct a mid-BUILD plan rewrite (issue #1399: a gate
-#     instructed a plan-contract change, build_review flagged the compliance as
-#     an unauthorized scope violation, and the remediation re-triggered the same
-#     gate — a non-terminating loop costing a needs-human HALT), or push an
-#     author into a `none (...)` waiver that the deterministic gate happily SKIPs.
+# ── 21. Removed wiring-contract residue ─────────────────────────────────────
+# The per-task `Wired-into:` contract and its deterministic land gate were
+# retired. Keep their implementation and authoring guidance from silently
+# returning while architecture review retains its independent SHIP sweep.
 echo ""
-echo -e "${BOLD}21. Wiring-anchor judged layer agrees with the deterministic gate${NC}"
+echo -e "${BOLD}21. Removed wiring-contract residue${NC}"
 
 plan_skill="${HARNESS_DIR}/skills/plan/SKILL.md"
 land_spec_ts="${HARNESS_DIR}/src/conductor/src/engine/engineer/land-spec.ts"
@@ -1372,43 +1357,33 @@ land_spec_ts="${HARNESS_DIR}/src/conductor/src/engine/engineer/land-spec.ts"
 if [ ! -f "$plan_skill" ] || [ ! -f "$land_spec_ts" ]; then
   assert "skills/plan/SKILL.md and src/conductor/src/engine/engineer/land-spec.ts exist" 1
 else
-  # The deterministic gate is actually wired. §5c's premise depends on it.
-  if grep -qF 'validateWiredIntoPlan' "$land_spec_ts"; then
-    assert "landSpec still runs validateWiredIntoPlan (deterministic anchor gate wired)" 0
+  if ! grep -qF 'validateWiredIntoPlan' "$land_spec_ts"; then
+    assert "landSpec no longer runs the retired validateWiredIntoPlan gate" 0
   else
-    echo "    land-spec.ts no longer calls validateWiredIntoPlan." | sed 's/^/  /'
-    echo "    skills/plan/SKILL.md §5c assumes resolvability is already gated;" | sed 's/^/  /'
-    echo "    re-wire the gate or rewrite §5c's judged layer together." | sed 's/^/  /'
-    assert "landSpec still runs validateWiredIntoPlan (deterministic anchor gate wired)" 1
+    echo "    land-spec.ts still calls retired validateWiredIntoPlan." | sed 's/^/  /'
+    assert "landSpec no longer runs the retired validateWiredIntoPlan gate" 1
   fi
 
-  # §5c must tell the reviewer the anchors already resolve, so the judged pass
-  # cannot re-decide a question the engine already answered authoritatively.
-  if grep -qiE 'already resolve' "$plan_skill"; then
-    assert "skills/plan/SKILL.md §5c states the anchors already resolve before judging" 0
+  if ! grep -qiE 'Wired-into|validate-wired-into' "$plan_skill"; then
+    assert "skills/plan/SKILL.md contains no retired wiring-contract guidance" 0
   else
-    echo "    §5c must state that the deterministic gate already proved" | sed 's/^/  /'
-    echo "    resolvability, or the judged pass re-litigates it from prose." | sed 's/^/  /'
-    assert "skills/plan/SKILL.md §5c states the anchors already resolve before judging" 1
+    echo "    skills/plan/SKILL.md still teaches the retired wiring contract." | sed 's/^/  /'
+    assert "skills/plan/SKILL.md contains no retired wiring-contract guidance" 1
   fi
 
-  # DECIDE-only scoping — the #1399 guard.
-  if grep -qiE 'never run (this|the)[a-z ]*(pass|layer) during BUILD' "$plan_skill"; then
-    assert "skills/plan/SKILL.md §5c scopes the judged pass to DECIDE only (#1399 guard)" 0
+  architecture_review_skill="${HARNESS_DIR}/skills/architecture-review/SKILL.md"
+  if grep -qF 'adr-2026-08-11-wiring-judged-in-build-review.md' "$architecture_review_skill"; then
+    assert "architecture-review relates its unchanged SHIP sweep to BUILD-time judgement" 0
   else
-    echo "    §5c must forbid running the judged pass during BUILD. A gate that" | sed 's/^/  /'
-    echo "    instructs a mid-build plan rewrite reproduces issue #1399." | sed 's/^/  /'
-    assert "skills/plan/SKILL.md §5c scopes the judged pass to DECIDE only (#1399 guard)" 1
+    echo "    architecture-review lacks the BUILD-time wiring judgement ADR citation." | sed 's/^/  /'
+    assert "architecture-review relates its unchanged SHIP sweep to BUILD-time judgement" 1
   fi
 
-  # A judged finding must never be resolved by downgrading to a waiver form,
-  # which the deterministic gate SKIPs — a silent pass, not a fix.
-  if grep -qiE 'never .*downgrad' "$plan_skill"; then
-    assert "skills/plan/SKILL.md §5c forbids resolving a judged finding with a none(...) waiver" 0
+  if grep -qiE 'unchanged.*SHIP|SHIP.*unchanged' "$architecture_review_skill"; then
+    assert "architecture-review keeps the SHIP sweep unchanged" 0
   else
-    echo "    §5c must forbid downgrading a judged finding to a none (...) form;" | sed 's/^/  /'
-    echo "    the deterministic gate SKIPs waivers, so that silently passes." | sed 's/^/  /'
-    assert "skills/plan/SKILL.md §5c forbids resolving a judged finding with a none(...) waiver" 1
+    echo "    architecture-review does not state that the SHIP sweep is unchanged." | sed 's/^/  /'
+    assert "architecture-review keeps the SHIP sweep unchanged" 1
   fi
 fi
 
