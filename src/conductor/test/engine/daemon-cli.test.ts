@@ -20,11 +20,11 @@ import { readFileSync } from 'node:fs';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
-import { acquireScratchHome, sweepFeatureWorktreeScratch } from '../../src/engine/self-host/provider-scratch.js';
+import { acquireScratchHome } from '../../src/engine/self-host/provider-scratch.js';
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
-import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import { renderDaemonEvent, runDaemonMode } from '../../src/daemon-cli.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -449,20 +449,39 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
   });
 
-  it('reclaims a dead lease across concrete worktrees while retaining live and lease-less homes', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'daemon-worktree-scratch-'));
-    const base = join(root, '.worktrees');
-    const dead = join(base, 'dead'); const live = join(base, 'live'); const unleased = join(base, 'unleased');
+  it('wires the CLI-created provider scratch sweep across concrete worktrees', async () => {
+    const worktreeBase = join(root, '.worktrees');
+    const dead = join(worktreeBase, 'dead');
+    const live = join(worktreeBase, 'live');
+    const unleased = join(worktreeBase, 'unleased');
     await Promise.all([mkdir(dead, { recursive: true }), mkdir(live, { recursive: true }), mkdir(unleased, { recursive: true })]);
     const deadHome = await acquireScratchHome({ worktreeRoot: dead, repository: 'owner/repo', featureSlug: 'dead', runId: 'R', attempt: 1, provider: 'codex', ownerPid: 99999999 });
     const liveHome = await acquireScratchHome({ worktreeRoot: live, repository: 'owner/repo', featureSlug: 'live', runId: 'R', attempt: 1, provider: 'claude', ownerPid: process.pid });
-    const noLease = join(unleased, '.daemon', 'scratch', 'R', '1-codex'); await mkdir(noLease, { recursive: true });
+    const noLease = join(unleased, '.daemon', 'scratch', 'R', '1-codex');
+    await mkdir(noLease, { recursive: true });
+    const daemonModule = await import('../../src/engine/daemon.js');
+    const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async (deps) => {
+      await deps.sweepProviderScratch?.();
+      return { processed: [], stoppedReason: 'backlog_drained' };
+    });
     try {
-      await sweepFeatureWorktreeScratch({ worktreeBase: base, events: { emit: async () => {} } as never, log: () => {} });
+      await runDaemonMode({
+        projectRoot: root,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        runHaltClassMigration: async () => worktreeBase,
+        workSource: { discover: async () => [] },
+        watch: false,
+      });
+
+      expect(runDaemonSpy).toHaveBeenCalledOnce();
       await expect(access(deadHome)).rejects.toThrow();
       await expect(access(liveHome)).resolves.toBeUndefined();
       await expect(access(noLease)).resolves.toBeUndefined();
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 
