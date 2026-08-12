@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
+import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execFile as execFileCb } from 'child_process';
@@ -171,7 +171,6 @@ describe('engine/worktree', () => {
         const branches = await git(tempDir, 'branch', '--list', 'feature/cleanup-target');
         expect(branches).toBe('');
       });
-
     });
   });
 
