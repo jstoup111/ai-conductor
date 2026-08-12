@@ -78,6 +78,32 @@ export interface SweepScratchOptions {
   readonly events?: ConductorEventEmitter;
 }
 
+/**
+ * Sweep every feature worktree at the daemon dispatch boundary. Enumeration
+ * and individual worktree failures are deliberately contained: a stale
+ * scratch directory must never prevent the daemon from dispatching work.
+ */
+export async function sweepFeatureWorktreeScratch(options: {
+  readonly worktreeBase: string;
+  readonly events: ConductorEventEmitter;
+  readonly log: (message: string) => void;
+}): Promise<void> {
+  let entries: string[] = [];
+  try {
+    entries = await fsp.readdir(options.worktreeBase);
+  } catch (error) {
+    options.log(`provider scratch worktree enumeration failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  for (const slug of entries) {
+    try {
+      await sweepScratch({ worktreeRoot: join(options.worktreeBase, slug), events: options.events });
+    } catch (error) {
+      options.log(`provider scratch sweep failed for ${slug}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  await collectLegacyScratch({ events: options.events });
+}
+
 export type ScratchSweepDecision =
   | { readonly kind: 'reclaimed'; readonly home: string }
   | { readonly kind: 'failed'; readonly home: string; readonly error: string }

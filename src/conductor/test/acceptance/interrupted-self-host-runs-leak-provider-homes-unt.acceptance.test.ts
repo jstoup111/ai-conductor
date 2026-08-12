@@ -37,7 +37,7 @@ import { makeFeatureRunnerDeps } from '../../src/engine/daemon-deps.js';
 import { runDaemon, type BacklogItem, type DaemonDeps } from '../../src/engine/daemon.js';
 import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 import { provisionSandboxBuildEnv } from '../../src/engine/self-host/sandbox-build-env.js';
-import { sweepFeatureWorktreeScratch } from '../../src/daemon-cli.js';
+import { sweepFeatureWorktreeScratch } from '../../src/engine/self-host/provider-scratch.js';
 
 const execFile = promisify(execFileCb);
 const roots: string[] = [];

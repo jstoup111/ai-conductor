@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
-import { access, mkdir, rm, readFile, writeFile, readlink, readdir } from 'node:fs/promises';
+import { access, mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
@@ -32,7 +32,7 @@ import {
 } from './engine/resolved-config.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
-import { collectLegacyScratch, sweepScratch } from './engine/self-host/provider-scratch.js';
+import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
@@ -182,20 +182,6 @@ export function createDiscoveryLogger(log: (msg: string) => void): DiscoveryLogg
       }
     },
   };
-}
-
-/** Sweep each concrete feature worktree; one bad checkout never blocks dispatch. */
-export async function sweepFeatureWorktreeScratch(options: { worktreeBase: string; events: ConductorEventEmitter; log: (message: string) => void }): Promise<void> {
-  let entries: string[] = [];
-  try { entries = await readdir(options.worktreeBase); } catch (error) {
-    options.log(`provider scratch worktree enumeration failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  for (const slug of entries) {
-    try { await sweepScratch({ worktreeRoot: join(options.worktreeBase, slug), events: options.events }); } catch (error) {
-      options.log(`provider scratch sweep failed for ${slug}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  await collectLegacyScratch({ events: options.events });
 }
 
 /**
