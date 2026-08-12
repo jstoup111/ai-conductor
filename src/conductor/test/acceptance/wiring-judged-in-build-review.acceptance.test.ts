@@ -18,10 +18,16 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { landSpec } from '../../src/engine/engineer/land-spec.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { readState, writeState } from '../../src/engine/state.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { StepRunner } from '../../src/engine/conductor.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
+import { Conductor } from '../test-conductor.js';
 
 const execFile = promisify(execFileCallback);
 const dirs: string[] = [];
@@ -45,7 +51,7 @@ afterEach(async () => {
 });
 
 describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () => {
-  it('renders configured entry points and carries an unwired-symbol FAIL through the real verdict boundary', async () => {
+  it('runs the named build_review-to-build kickback for a wiring-only grader FAIL', async () => {
     const dir = await initRepo('build-review-wiring-');
     const planPath = join(dir, '.docs', 'plans', 'fixture.md');
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
@@ -85,13 +91,7 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
               'orphanedProductionSurface is unreached; searched paths: src/entry.ts, src/orphan.ts',
             ],
           },
-          rubric: {
-            tautology: true,
-            scope: true,
-            rootCause: true,
-            completeness: true,
-            wiring: false,
-          },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
         }),
       );
       return { success: true, output: 'graded', exitCode: 0 };
@@ -103,20 +103,67 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
     const config: HarnessConfig = {
       wiring: { entry_points: ['src/entry.ts'] },
     };
-    const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
+    const buildReviewRunner = new DefaultStepRunner(provider, 'maker-session', dir, {
       config,
       planPath,
     });
 
-    const dispatch = await runner.run('build_review', { complexity_tier: 'S' });
-    const completion = await checkStepCompletion(dir, 'build_review', { config });
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build_review') break;
+      state[step.name] = 'done';
+    }
+    state.build_review = 'pending';
+    state.complexity_tier = 'S';
+    state.feature_desc = 'wiring-review-fixture';
+    state.track = 'technical';
+    const stateFilePath = join(dir, 'conduct-state.json');
+    await writeState(stateFilePath, state as ConductState);
 
-    expect(dispatch.success).toBe(true);
+    const calls: StepName[] = [];
+    let buildStateAtDispatch: ConductState['build'];
+    const runner: StepRunner = {
+      run: async (step) => {
+        calls.push(step);
+        if (step === 'build_review') {
+          return buildReviewRunner.run(step, { complexity_tier: 'S' });
+        }
+        // The assertion target is the named-route transition. A bounded
+        // unsuccessful build dispatch stops subsequent retries after the
+        // conductor has returned the failed review to BUILD.
+        if (step === 'build') {
+          const persisted = await readState(stateFilePath);
+          if (!persisted.ok) throw new Error(persisted.error.message);
+          buildStateAtDispatch = persisted.value.build;
+          return { success: false, output: 'stop after named-route observation' };
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      config,
+      maxRetries: 1,
+    } as never);
+
+    await conductor.run();
+
     expect(invoke).toHaveBeenCalledOnce();
     expect(capturedPrompt).toContain('src/entry.ts');
     expect(capturedPrompt).toMatch(/exactly these five rubric items/i);
     expect(capturedPrompt).toMatch(/wiring/i);
+    expect(calls).toContain('build_review');
+    expect(calls).toContain('build');
+    expect(buildStateAtDispatch).toBe('in_progress');
+    const completion = await checkStepCompletion(dir, 'build_review', { config });
     expect(completion.done).toBe(false);
+    expect(completion.routeClass).toBe('named-route');
     expect(completion.reason).toContain('orphanedProductionSurface');
   });
 });

@@ -1493,11 +1493,20 @@ export function validateBuildReviewVerdict(
     };
   }
 
-  // The all-or-FAIL rule over the five items is stated to the grader in
-  // `buildGraderPrompt` and carried by the `verdict` field it writes. This
-  // validator deliberately does NOT re-derive the verdict from the rubric
-  // booleans: `verdict` has always been the authority here, and cross-checking
-  // it would change how every pre-existing four-item artifact validates.
+  const failedRubrics = ['tautology', 'scope', 'rootCause', 'completeness', 'wiring']
+    .filter((name) => rubric[name as keyof BuildReviewRubric] === true);
+  if (e.verdict === 'PASS' && failedRubrics.length > 0) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "verdict" PASS requires every rubric flag to be false (failed: ${failedRubrics.join(', ')})`,
+    };
+  }
+  if (e.verdict === 'FAIL' && failedRubrics.length === 0) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "verdict" FAIL requires at least one rubric flag to be true`,
+    };
+  }
 
   const result: {
     ok: true;
@@ -1525,8 +1534,8 @@ export function validateBuildReviewVerdict(
  * Return the current HEAD SHA to stamp onto a freshly-written judged-gate
  * verdict (gate-code-validity-on-redispatch, #817), or `null` when no HEAD
  * is available (non-git checkout, or `ctx.getHeadSha` is absent/throws).
- * Reuses the sanctioned HEAD-read (`CompletionContext.getHeadSha`, the same
- * one `wiring_check` uses) rather than introducing a new git call site.
+ * Reuses the sanctioned HEAD-read (`CompletionContext.getHeadSha`) rather
+ * than introducing a new git call site.
  * Never throws — safe to call unconditionally at every verdict write point.
  */
 export async function stampCode(ctx: CompletionContext): Promise<string | null> {

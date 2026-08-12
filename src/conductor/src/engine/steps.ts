@@ -151,8 +151,8 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
-    // Wiring reachability is one branch of the deterministic BUILD
-    // verification group. The joined result gates model review below.
+    // Deprecated topology-compatibility no-op. build_review owns wiring
+    // judgement; this retained step preserves existing workflow topology.
     name: 'wiring_check',
     label: 'Wiring Check',
     phase: 'BUILD',

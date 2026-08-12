@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { scanPlanProtectedTargets } from '../../src/engine/plan-protected-targets.js';
@@ -26,6 +28,15 @@ Read \`.docs/specs/other-feature.md\` before editing.
 `;
 
 describe('plan task Files convention fence', () => {
+  it('does not retain the retired WIRED_INTO_LINE parser machinery', async () => {
+    const source = await readFile(
+      fileURLToPath(new URL('../../src/engine/plan-task-parse.ts', import.meta.url)),
+      'utf8',
+    );
+
+    expect(source).not.toMatch(/\bWIRED_INTO_LINE\b/);
+  });
+
   it('preserves Files grammar, metadata, and protected-target violations after wiring removal', () => {
     const parsed = parsePlanTaskPaths(fixture, featureStem);
 

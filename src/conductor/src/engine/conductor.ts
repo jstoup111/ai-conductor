@@ -8485,12 +8485,12 @@ export class Conductor {
         await this.events.emit({ type: 'loop_halt', reason });
         return 'halt';
       }
-      // FR-5: a file-changing rebase invalidated build (+wiring_check,
-      // +test_suite, +build_review, +manual_test) via kickback-shaped verdicts. Those
+      // FR-5: a file-changing rebase invalidated build (+test_suite,
+      // +build_review, +manual_test) via kickback-shaped verdicts. Those
       // gates aren't `kickbackTarget` steps, so emit the kickback event(s)
-      // here; the selector below routes back to them. wiring_check and
-      // test_suite form the deterministic BUILD group before build_review;
-      // every invalidated member must re-verify before review or SHIP.
+      // here; the selector below routes back to them. test_suite re-verifies
+      // before build_review judges the refreshed build; wiring_check remains
+      // only a topology-compatibility no-op.
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
         // Task 7 (ADR-2026-07-20): a judged gate that classifyGateInvalidation

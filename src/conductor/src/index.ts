@@ -828,6 +828,14 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // `validate-wired-into` was a retired top-level command. Keep its failure
+  // diagnostic explicit rather than letting it fall through as an inline
+  // pipeline invocation, where the removal would be ambiguous to operators.
+  if (process.argv[2] === 'validate-wired-into') {
+    console.error("error: unknown command 'validate-wired-into'");
+    process.exit(1);
+  }
+
   // The inline SDLC pipeline now requires an explicit `inline` subcommand
   // (`conduct inline "<feature>"`) — the foreground counterpart to `daemon`. A
   // bare feature/flags invocation is no longer accepted; reject it with guidance

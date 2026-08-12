@@ -201,50 +201,6 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     }));
   });
 
-  // SKIPPED, not deleted: #1336's disputed-kickback refusal
-  // (`sameNoOpCycle` -> `composeBuildOutcomeHaltReason`) is scoped to
-  // `wiring_check` in conductor.ts, and that gate is now a deprecated no-op
-  // that never kicks back — so the refusal is dormant and no live gate can
-  // drive this case. Generalizing the scope to every gate was tried and
-  // rejected: it pre-empts build_review's ordinary kickback cap and
-  // re-dispatch paths. Retiring wiring_check therefore retires #1336's
-  // operator-facing dispute halt; deciding whether to re-home it onto
-  // build_review is follow-up work, not part of this feature.
-  it.skip('Stories 4–5: pays for one empty wiring cycle, then halts before a repeated provider dispatch', async () => {
-    await writeState(stateFilePath, {
-      ...frontDone(),
-      build: 'done',
-      wiring_check: 'done',
-      test_suite: 'done',
-      build_review: 'pending',
-    });
-    await writeVerdict(projectRoot, 'build', { satisfied: true, checkedAt: Date.now() });
-    let buildDispatches = 0;
-    const runner: StepRunner = {
-      run: vi.fn(async (step) => {
-        if (step === 'build') {
-          buildDispatches += 1;
-          return {
-            success: true,
-            output: 'The wiring finding is stale; return this feature to DECIDE.',
-          };
-        }
-        if (step === 'build_review') await writeReviewFail();
-        return { success: true };
-      }),
-    };
-
-    await makeConductor(runner, 'build_review').run();
-
-    expect(buildDispatches).toBe(1);
-    expect(await readHaltClass(projectRoot)).toBe('needs-human');
-    const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toMatch(/build_review/i);
-    expect(halt).toMatch(/made no (tree )?change|tree .* unchanged/i);
-    expect(halt).toMatch(/accept.*gate|return.*DECIDE/i);
-    expect(halt).toContain('The wiring finding is stale; return this feature to DECIDE.');
-  });
-
   it('Stories 6–7: a moving but unfixed build is never refused and still reaches the existing cap halt', async () => {
     await writeState(stateFilePath, {
       ...frontDone(),

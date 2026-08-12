@@ -74,6 +74,28 @@ describe('engine/build-review verdict wiring contract', () => {
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({ done: true });
   });
 
+  it.each(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const)(
+    'rejects PASS when rubric.%s reports a failure',
+    (failedRubric) => {
+      const rubric = { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false };
+      rubric[failedRubric] = true;
+      expect(validateBuildReviewVerdict({ verdict: 'PASS', rubric, findings: failedRubric === 'wiring' ? { wiring: ['Named wiring failure.'] } : undefined })).toEqual({
+        ok: false,
+        reason: expect.stringMatching(new RegExp(`PASS requires every rubric flag.*${failedRubric}`, 'i')),
+      });
+    },
+  );
+
+  it('rejects FAIL when all five rubric flags pass', () => {
+    expect(validateBuildReviewVerdict({
+      verdict: 'FAIL',
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+    })).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/FAIL requires at least one rubric flag/i),
+    });
+  });
+
   it('validates a wiring failure with findings but leaves the gate unsatisfied', async () => {
     const verdict = {
       verdict: 'FAIL',
