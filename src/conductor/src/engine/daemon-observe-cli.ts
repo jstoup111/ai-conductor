@@ -337,7 +337,7 @@ interface BlockedSnapshot {
   blocked: Array<{ slug: string; reason: string; remedy: string; strandedRekick?: unknown }>;
 }
 
-type BlockedSnapshotRead =
+export type BlockedSnapshotRead =
   | { kind: 'ok'; snapshot: BlockedSnapshot }
   | { kind: 'unknown'; why: 'missing' | 'unreadable' | 'schema-mismatch' };
 
@@ -346,7 +346,7 @@ type BlockedSnapshotRead =
  * read: daemon status must not invoke git, GitHub, or a network boundary merely
  * to explain the latest completed scan.
  */
-async function readBlockedSnapshot(repoPath: string): Promise<BlockedSnapshotRead> {
+export async function readBlockedSnapshot(repoPath: string): Promise<BlockedSnapshotRead> {
   try {
     const raw = await readFile(join(repoPath, '.daemon', 'blocked.json'), 'utf-8');
     const parsed: unknown = JSON.parse(raw);

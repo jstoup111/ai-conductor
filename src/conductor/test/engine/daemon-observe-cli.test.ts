@@ -10,6 +10,8 @@ import {
   runDaemonStatus,
   runDaemonLogs,
   detectDaemonObserveCommand,
+  readBlockedSnapshot,
+  type BlockedSnapshotRead,
 } from '../../src/engine/daemon-observe-cli.js';
 
 // Liveness probes: ALIVE = no throw; DEAD = throw ESRCH.
@@ -59,6 +61,32 @@ describe('engine/daemon-observe-cli', () => {
       registeredAt: '2026-06-27T00:00:00.000Z',
     };
   }
+
+  describe('readBlockedSnapshot', () => {
+    it('returns its tolerant result shape for valid, missing, and malformed snapshots', async () => {
+      const validRepo = join(root, 'valid-blocked-snapshot');
+      const malformedRepo = join(root, 'malformed-blocked-snapshot');
+      const snapshot = {
+        schemaVersion: 1 as const,
+        writtenAt: '2026-08-05T12:00:00.000Z',
+        blocked: [{ slug: 'blocked-feature', reason: 'stories-missing', remedy: 'Create stories.' }],
+      };
+      await mkdir(join(validRepo, '.daemon'), { recursive: true });
+      await writeFile(join(validRepo, '.daemon', 'blocked.json'), JSON.stringify(snapshot), 'utf8');
+      await mkdir(join(malformedRepo, '.daemon'), { recursive: true });
+      await writeFile(join(malformedRepo, '.daemon', 'blocked.json'), '{"schemaVersion":', 'utf8');
+
+      const valid: BlockedSnapshotRead = await readBlockedSnapshot(validRepo);
+      const missing: BlockedSnapshotRead = await readBlockedSnapshot(join(root, 'missing-blocked-snapshot'));
+      const malformed: BlockedSnapshotRead = await readBlockedSnapshot(malformedRepo);
+
+      expect([valid, missing, malformed]).toEqual([
+        { kind: 'ok', snapshot },
+        { kind: 'unknown', why: 'missing' },
+        { kind: 'unknown', why: 'unreadable' },
+      ]);
+    });
+  });
 
   describe('daemon-lock pidfile — engineDir (FR-14)', () => {
     it('a pidfile written via acquire() (the real daemon-lock path) carries an engineDir field', async () => {
