@@ -27,7 +27,7 @@ describe('buildGraderPrompt', () => {
     fresh: false,
   };
 
-  it('includes the three rubric items verbatim', () => {
+  it('includes the original rubric items verbatim', () => {
     const prompt = buildGraderPrompt(inputs);
 
     expect(prompt).toContain(
@@ -94,7 +94,39 @@ describe('buildGraderPrompt', () => {
   it('states the all-or-FAIL rule', () => {
     const prompt = buildGraderPrompt(inputs);
 
-    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
+    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
+  });
+
+  it('lists five rubric items and applies all-or-FAIL across all five', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints: ['src/conductor/src/index.ts'],
+    });
+
+    expect(prompt).toMatch(/Score the diff against exactly these five rubric items/i);
+    expect(prompt).toMatch(/5\. Wiring:/);
+    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
+  });
+
+  it('judges wiring as static reachability while reserving runtime behavior for manual_test', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints: ['src/conductor/src/index.ts'],
+    });
+
+    expect(prompt).toMatch(/Wiring:.*static.*diff/is);
+    expect(prompt).toMatch(/path.*reaches.*configured production entry point/is);
+    expect(prompt).toContain("not evaluating\nruntime behavior (that is manual_test's mandate)");
+  });
+
+  it('honors only an explicit Steps statement as intentional non-wiring', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints: ['src/conductor/src/index.ts'],
+    });
+
+    expect(prompt).toContain("A plan task's\nown Steps may declare intentional non-wiring only when they explicitly state\nthat it ships scaffolding for a later task or feature");
+    expect(prompt).toContain('Silence is never an implicit waiver.');
   });
 
   it('includes the exact JSON schema for .pipeline/build-review.json', () => {
@@ -102,8 +134,18 @@ describe('buildGraderPrompt', () => {
 
     expect(prompt).toContain('.pipeline/build-review.json');
     expect(prompt).toContain(
-      "{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean } }",
+      "{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean, wiring: boolean } }",
     );
+  });
+
+  it('includes wiring in the JSON verdict schema', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      entryPoints: ['src/conductor/src/index.ts'],
+    });
+
+    expect(prompt).toContain('wiring?: string[]');
+    expect(prompt).toContain('wiring: boolean');
   });
 
   it('requires every independent failed-rubric finding in a structured list', () => {
@@ -141,7 +183,7 @@ describe('buildGraderPrompt', () => {
       /(do not|must not|never).*(per-task|SHA|reachability|corroboration)/i,
     );
     expect(prompt).toMatch(/findings\.completeness/);
-    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
+    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
   });
 
   it('includes the diff and plan body', () => {

@@ -1709,6 +1709,7 @@ export class DefaultStepRunner implements StepRunner {
     try {
       inputs = {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath),
+        entryPoints: this.config?.wiring?.entry_points,
         acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
       };
     } catch (err) {
