@@ -113,7 +113,7 @@ run exits 1.
 | --- | --- | --- | --- | --- |
 | `--resume` | boolean | `false` | — | With a feature description, honored by the auto-resume gate and clamps the start index. Without one, cleans up merged worktrees, scans `.worktrees/`, and shows a selection menu (exit 1 when no features are found), then repoints `projectRoot`, `pipelineDir`, and the state file at the selected worktree. |
 | `--fresh` | boolean | `false` | — | Suppresses auto-resume detection so an existing worktree for the same slug is not silently reused. This is its only effect; it is never passed to the engine's conductor object. |
-| `--auto` | boolean | `false` | mutually exclusive with `--interactive` | Run mode `auto`: skips checkpoint prompts, never opens a REPL, sets `dangerouslySkipPermissions` on dispatch, takes the existing tier or defaults to `L` without prompting (one of four tier paths — see [where the tier comes from](steps.md#where-the-tier-comes-from)), auto-skips advisory step failures, and skips the assess-staleness prompt. |
+| `--auto` | boolean | `false` | deprecated; mutually exclusive with `--interactive` | Prints `Error: --auto is deprecated. Use \`conduct-ts daemon start\` instead.` and exits 1 before starting the inline pipeline. Use the daemon for unattended execution and retained logs. |
 | `--interactive` | boolean | `false` | mutually exclusive with `--auto` | Run mode `interactive`: opens a Claude REPL for every conversational step except `complexity`, `conflict_check`, `architecture_diagram`, `retro`, and `rebase`. `dangerouslySkipPermissions` stays off, so a human approves each action. |
 | `--status` | boolean | `false` | — | Prints `## Conductor State` and the state file as pretty JSON, then returns. No provider session. |
 | `--from <step>` | string | — | must be a step name | Sets the start index to that step. Also suppresses auto-resume. An unrecognized step name exits 1, printing the invalid value and every valid step name (built-ins plus any config-declared custom steps). |
@@ -129,8 +129,8 @@ run exits 1.
 | `-h`, `--help` | boolean | — | — | Prints help and exits 0. |
 
 Passing both `--auto` and `--interactive` prints `Error: --auto and --interactive are mutually
-exclusive` and exits 1. This is the only hard mutual exclusion in the pipeline surface, and neither
-flag's help string mentions it.
+exclusive` and exits 1. Passing `--auto` alone prints its daemon-directed deprecation notice and
+exits 1.
 
 ### Auto-resume
 

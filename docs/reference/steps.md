@@ -172,13 +172,12 @@ because of a skip.
 
 ## Where the tier comes from
 
-Four separate paths resolve a feature's tier, and each has its own fallback. They are not
+Three separate paths resolve a feature's tier, and each has its own fallback. They are not
 reconciled with one another — the path in play decides which fallback you get.
 
 | Path | Where the tier is read | When no tier is found |
 | --- | --- | --- |
 | Daemon dispatch | `.docs/complexity/<slug>.md` on the base-branch tree, via the `Tier: <S\|M\|L>` line; a dated slug falls back once to the date-stripped stem when that stem is unambiguous | `M` — the daemon's own fallback for an absent or garbled marker, logged once per slug with the paths tried |
-| `conduct-ts inline --auto` | The tier already persisted in the run state. No marker read, no prompt, no host dispatch | `L` |
 | `conduct-ts inline --interactive`, and the default run mode | The persisted tier, else the `complexity` step's assessment, confirmed by the operator | `L`, when the assessment fails and there is no prompt to fall back on |
 | `complexity.default_tier` in `.ai-conductor/config.yml` | Nowhere — the key validates but no engine code reads it | Not applicable; the key never contributes a tier |
 

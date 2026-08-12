@@ -15,6 +15,10 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
     console.error('Error: --auto and --interactive are mutually exclusive');
     process.exit(1);
   }
+  if (opts.auto) {
+    console.error('Error: --auto is deprecated. Use `conduct-ts daemon start` instead.');
+    process.exit(1);
+  }
   return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
 }
 

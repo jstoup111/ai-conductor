@@ -34,7 +34,7 @@ Full walkthrough, prerequisites, and first-run blockers: **[Quickstart](docs/qui
 
 ## Quick start
 
-Register a project, bootstrap it, then drive a feature:
+Register and bootstrap a project:
 
 ```bash
 cd your-project/            # must already be a git repository
@@ -42,20 +42,23 @@ conduct-ts register
 claude                      # then run /bootstrap in the session
 ```
 
-Run the pipeline interactively, watching every step in a live Claude REPL:
+For the preferred autonomous path, author a spec, merge its PR, then start the daemon. The daemon
+builds each merged spec in an isolated worktree, retains logs, and opens an implementation PR:
+
+```bash
+conduct-ts engineer --idea "add a CSV export"
+# Review and merge the spec PR, then:
+conduct-ts daemon start
+```
+
+For a supervised foreground run, use interactive inline mode:
 
 ```bash
 conduct-ts inline --interactive "add a CSV export"
 ```
 
-`inline` is required — the bare form `conduct-ts "<feature>"` is rejected.
-
-Or let the daemon drain merged specs on its own, each in an isolated worktree, opening a pull request per
-feature:
-
-```bash
-conduct-ts daemon start
-```
+`conduct-ts inline --auto` is deprecated; use the daemon for unattended work. The `inline` token is
+required for foreground runs — the bare form `conduct-ts "<feature>"` is rejected.
 
 The harness runs on Claude Code and Codex. Select the host with the `llm_provider` config key; an ordered
 array such as `[claude, codex]` acts as a fallback ladder. See

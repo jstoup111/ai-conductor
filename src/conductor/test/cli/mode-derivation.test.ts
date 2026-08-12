@@ -11,9 +11,29 @@ describe('RunMode derivation', () => {
     expect(mode).toBe('default');
   });
 
-  it('returns auto when --auto is set', () => {
-    const mode = deriveMode({ auto: true, interactive: false });
-    expect(mode).toBe('auto');
+  it('rejects --auto with a deprecation notice directing the operator to the daemon', () => {
+    const exitSentinel = new Error('process.exit called');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw exitSentinel;
+    });
+
+    let thrown: unknown;
+    try {
+      deriveMode({ auto: true, interactive: false });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect({
+      thrown,
+      exitCode: exitSpy.mock.calls[0]?.[0],
+      notice: errorSpy.mock.calls[0]?.[0],
+    }).toEqual({
+      thrown: exitSentinel,
+      exitCode: 1,
+      notice: expect.stringMatching(/--auto.*deprecated.*conduct-ts daemon start/i),
+    });
   });
 
   it('returns interactive when --interactive is set', () => {
