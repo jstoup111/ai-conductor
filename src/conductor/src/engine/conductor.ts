@@ -149,8 +149,6 @@ import {
   BUILD_REVIEW_VERDICT,
   buildReviewFailureDetails,
   validateBuildReviewVerdict,
-  WIRING_EVIDENCE,
-  validateWiringEvidence,
   type WiringEvidence,
   FINISH_CHOICE_MARKER,
   type RemediationGap,
@@ -5362,6 +5360,13 @@ export class Conductor {
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
         await emitTracked({ type: 'step_started', step: step.name, index: i });
+        if (step.deprecated) {
+          await emitTracked({
+            type: 'deprecated_step',
+            step: step.name,
+            adr: step.deprecated.adr,
+          });
+        }
 
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
@@ -7436,13 +7441,11 @@ export class Conductor {
               let evidenceRaw: unknown = null;
               try {
                 evidenceRaw = JSON.parse(
-                  await readFile(join(this.projectRoot, WIRING_EVIDENCE), 'utf-8'),
+                  await readFile(join(this.projectRoot, '.pipeline/wiring-evidence.json'), 'utf-8'),
                 );
               } catch {
                 /* missing/unreadable — falls through to generic HALT below */
               }
-              const validated =
-                evidenceRaw !== null ? validateWiringEvidence(evidenceRaw) : null;
               const evidence = evidenceRaw as WiringEvidence | null;
               // Prefer the fully-validated schema (real evidence written by
               // the wiring_check predicate/probe); fall back to a lenient
@@ -7452,7 +7455,7 @@ export class Conductor {
               // not to re-enforce full artifact validity (that's the
               // completion predicate's job).
               let gapMessages: string[] = [];
-              if (validated?.ok && evidence) {
+              if (evidence && Array.isArray(evidence.tasks)) {
                 gapMessages = evidence.tasks.flatMap((task) => task.gaps.map((g) => g.message));
               } else if (
                 evidenceRaw !== null &&
@@ -8517,6 +8520,11 @@ export class Conductor {
   }
 
   private async runWiringCheckStep(state: ConductState): Promise<StepRunResult> {
+    await this.events.emit({
+      type: 'deprecated_step',
+      step: 'wiring_check',
+      adr: 'adr-2026-08-11-wiring-judged-in-build-review',
+    });
     return this.stepRunner.run('wiring_check', state);
   }
 

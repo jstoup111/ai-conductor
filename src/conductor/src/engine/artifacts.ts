@@ -279,7 +279,7 @@ export const STEP_ARTIFACT_CONTRACTS = {
   ].map((pattern) => ({ pattern, scope: 'repository' as const })),
   build: [{ pattern: '.pipeline/task-status.json', scope: 'run' }],
   build_review: [{ pattern: '.pipeline/build-review.json', scope: 'run' }],
-  wiring_check: [{ pattern: '.pipeline/wiring-evidence.json', scope: 'run' }],
+  wiring_check: [],
   test_suite: [{ pattern: FULL_SUITE_EVIDENCE_PATH, scope: 'run' }],
   manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
   prd_audit: [{ pattern: '.pipeline/prd-audit.md', scope: 'run' }],
@@ -1341,14 +1341,6 @@ export function validateAcceptanceRedEvidence(
   return { ok: true };
 }
 
-/**
- * Path to the wiring-reachability gate's evidence artifact. Written by the
- * wiring-reachability-gate skill after analyzing whether a task's symbols
- * are actually wired into a reachable surface. Gitignored run evidence, not
- * a committed design artifact.
- */
-export const WIRING_EVIDENCE = '.pipeline/wiring-evidence.json';
-
 export type WiringContractForm = 'declared' | 'none_no_surface' | 'inert' | 'malformed';
 export type WiringGapKind =
   | 'no-reference'
@@ -1400,161 +1392,6 @@ export interface WiringEvidence {
   tasks: WiringTaskResult[];
   layer2: WiringLayer2;
   waivers: unknown[];
-}
-
-const WIRING_GAP_KINDS: WiringGapKind[] = [
-  'no-reference',
-  'orphan-export',
-  'unreferenced-site',
-  'undeclared-surface',
-  'contradiction',
-  'scope-undeterminable',
-  'waiver-unresolved',
-];
-
-/**
- * Validate a parsed wiring-reachability evidence object.
- */
-export function validateWiringEvidence(
-  ev: unknown,
-  currentHead?: string | null,
-): { ok: true } | { ok: false; reason: string } {
-  if (typeof ev !== 'object' || ev === null) {
-    return { ok: false, reason: `${WIRING_EVIDENCE} is not a JSON object` };
-  }
-  const e = ev as Record<string, unknown>;
-  const str = (k: string): string | null =>
-    typeof e[k] === 'string' && (e[k] as string).trim() !== '' ? (e[k] as string) : null;
-
-  if (typeof e.schema !== 'number') {
-    return { ok: false, reason: `${WIRING_EVIDENCE} must include "schema" as a number` };
-  }
-  if (str('base') === null) {
-    return { ok: false, reason: `${WIRING_EVIDENCE} must include "base" as a non-empty string` };
-  }
-  const head = str('head');
-  if (head === null) {
-    return { ok: false, reason: `${WIRING_EVIDENCE} must include "head" as a non-empty string` };
-  }
-  if (currentHead != null && currentHead !== head) {
-    return {
-      ok: false,
-      reason: `${WIRING_EVIDENCE} is stale — evidence recorded for ${head} but HEAD is ${currentHead}; re-run wiring-reachability analysis at the current HEAD`,
-    };
-  }
-  if (typeof e.layer2 !== 'object' || e.layer2 === null || Array.isArray(e.layer2)) {
-    return { ok: false, reason: `${WIRING_EVIDENCE} must include a "layer2" object` };
-  }
-  const layer2 = e.layer2 as Record<string, unknown>;
-  if (typeof layer2.applicable !== 'boolean') {
-    return {
-      ok: false,
-      reason: `${WIRING_EVIDENCE} "layer2" must include "applicable" as a boolean`,
-    };
-  }
-  if (layer2.reason !== undefined && typeof layer2.reason !== 'string') {
-    return {
-      ok: false,
-      reason: `${WIRING_EVIDENCE} "layer2" has a non-string "reason"`,
-    };
-  }
-  if (!Array.isArray(e.waivers)) {
-    return {
-      ok: false,
-      reason: `${WIRING_EVIDENCE} must include "waivers" as an array`,
-    };
-  }
-  if (!Array.isArray(e.tasks)) {
-    return { ok: false, reason: `${WIRING_EVIDENCE} must include "tasks" as an array` };
-  }
-
-  for (const task of e.tasks as unknown[]) {
-    if (typeof task !== 'object' || task === null) {
-      return { ok: false, reason: `${WIRING_EVIDENCE} has a "tasks" entry that is not an object` };
-    }
-    const t = task as Record<string, unknown>;
-    if (typeof t.id !== 'string') {
-      return { ok: false, reason: `${WIRING_EVIDENCE} has a task missing a string "id"` };
-    }
-    if (typeof t.contract !== 'string') {
-      return {
-        ok: false,
-        reason: `${WIRING_EVIDENCE} task "${t.id}" must include "contract" as a string`,
-      };
-    }
-    if (!Array.isArray(t.gaps)) {
-      return {
-        ok: false,
-        reason: `${WIRING_EVIDENCE} task "${t.id}" must include "gaps" as an array`,
-      };
-    }
-    if (t.proofs !== undefined) {
-      if (!Array.isArray(t.proofs)) {
-        return {
-          ok: false,
-          reason: `${WIRING_EVIDENCE} task "${t.id}" must include "proofs" as an array`,
-        };
-      }
-      for (const proof of t.proofs) {
-        if (typeof proof !== 'object' || proof === null || Array.isArray(proof)) {
-          return {
-            ok: false,
-            reason: `${WIRING_EVIDENCE} task "${t.id}" has a "proofs" entry that is not an object`,
-          };
-        }
-        const p = proof as Record<string, unknown>;
-        if (p.kind !== 'same-file-composition') {
-          return {
-            ok: false,
-            reason: `${WIRING_EVIDENCE} task "${t.id}" has a proof with an unknown "kind" "${String(p.kind)}"`,
-          };
-        }
-        for (const field of ['export', 'caller', 'file'] as const) {
-          if (typeof p[field] !== 'string' || p[field].trim() === '') {
-            return {
-              ok: false,
-              reason: `${WIRING_EVIDENCE} task "${t.id}" has a proof missing a non-empty string "${field}"`,
-            };
-          }
-        }
-        if (!Array.isArray(p.rootChain) || p.rootChain.length === 0) {
-          return {
-            ok: false,
-            reason: `${WIRING_EVIDENCE} task "${t.id}" must include a non-empty "rootChain" array`,
-          };
-        }
-        if (p.rootChain.some((entry) => typeof entry !== 'string' || entry.trim() === '')) {
-          return {
-            ok: false,
-            reason: `${WIRING_EVIDENCE} task "${t.id}" has a "rootChain" entry that is not a non-empty string`,
-          };
-        }
-      }
-    }
-    for (const gap of t.gaps as unknown[]) {
-      if (typeof gap !== 'object' || gap === null) {
-        return {
-          ok: false,
-          reason: `${WIRING_EVIDENCE} task "${t.id}" has a "gaps" entry that is not an object`,
-        };
-      }
-      const g = gap as Record<string, unknown>;
-      if (typeof g.kind !== 'string' || !WIRING_GAP_KINDS.includes(g.kind as WiringGapKind)) {
-        return {
-          ok: false,
-          reason: `${WIRING_EVIDENCE} task "${t.id}" has a gap with an unknown kind "${g.kind as string}"`,
-        };
-      }
-      if (typeof g.message !== 'string' || g.message.trim() === '') {
-        return {
-          ok: false,
-          reason: `${WIRING_EVIDENCE} task "${t.id}" has a gap missing a non-empty string "message"`,
-        };
-      }
-    }
-  }
-
-  return { ok: true };
 }
 
 /**
@@ -1823,30 +1660,6 @@ async function writeArchitectureReviewAsBuiltCodeStamp(
   ctx: CompletionContext,
 ): Promise<void> {
   await writeGateCodeStamp(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, ctx);
-}
-
-/**
- * Computes fresh wiring evidence via the injected probe and durably writes it
- * to `path` (creating `.pipeline/` if needed), mirroring the wiring_check
- * predicate's absent-evidence-file branch. Returns the computed evidence, or
- * a `{ reason }` failure object if the probe throws.
- */
-async function deriveAndPersistWiringEvidence(
-  dir: string,
-  path: string,
-  ctx: CompletionContext,
-): Promise<WiringEvidence | { reason: string }> {
-  let computed: WiringEvidence;
-  try {
-    computed = await ctx.wiringProbe!();
-  } catch (err) {
-    return {
-      reason: `wiring probe failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-  await mkdir(join(dir, '.pipeline'), { recursive: true });
-  await writeFile(path, JSON.stringify(computed, null, 2));
-  return computed;
 }
 
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
@@ -2604,116 +2417,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     };
   },
 
-  // Wiring-reachability gate: satisfied only by a fresh evidence artifact at
-  // WIRING_EVIDENCE recorded for the CURRENT HEAD, with zero gap symbols
-  // across every task. Missing file, malformed/invalid evidence, or a stale
-  // (prior-HEAD) evidence file all keep the gate unsatisfied (fail-closed).
-  // When any task's symbols array is non-empty, every gap's full message is
-  // surfaced verbatim in the reason so the kickback tells build exactly what
-  // is unreachable/undeclared.
-  wiring_check: async (dir, ctx): Promise<CompletionResult> => {
-    const path = join(dir, WIRING_EVIDENCE);
-    let raw: string | null;
-    try {
-      raw = await readFile(path, 'utf-8');
-    } catch {
-      raw = null;
-    }
-
-    let parsed: unknown;
-    if (raw === null) {
-      // No pre-existing evidence fixture — compute it live via the
-      // injected probe (push-evidence injection, same convention as
-      // ctx.getHeadSha/ctx.isHeadPushed). A getHeadSha that resolves to
-      // null is the real Conductor's own signal (completionCtx wires
-      // getHeadSha to currentCommitSha(projectRoot)) that projectRoot
-      // isn't a git-tracked directory at all, so there is no
-      // wiring-relevant diff to evaluate in the first place (same
-      // "nothing to verify" logic as the freshness check being skipped
-      // when currentHead is indeterminate) — this must be checked BEFORE
-      // invoking the probe, not only when the probe is absent, or a
-      // non-git projectRoot with wiringProbe wired unconditionally
-      // (the real Conductor, always) falls through into the probe and
-      // fails closed instead of short-circuiting. Absent injector →
-      // fail closed exactly as before Task 18. A caller that omits
-      // getHeadSha entirely (raw unit/acceptance calls against a real
-      // git fixture) is NOT covered by this — that path still fails
-      // closed, matching the "no evidence file exists at all"
-      // acceptance spec.
-      if (ctx.getHeadSha) {
-        const head = await ctx.getHeadSha().catch(() => null);
-        if (head === null) {
-          return { done: true };
-        }
-      }
-      if (!ctx.wiringProbe) {
-        return {
-          done: false,
-          reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
-        };
-      }
-      const derived = await deriveAndPersistWiringEvidence(dir, path, ctx);
-      if ('reason' in derived) {
-        return { done: false, reason: derived.reason };
-      }
-      parsed = derived;
-    } else {
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        return { done: false, reason: `invalid JSON in ${WIRING_EVIDENCE}` };
-      }
-    }
-    const currentHead = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
-
-    if (raw !== null) {
-      // Existing evidence file: first check shape/schema only (no head
-      // comparison) so malformed evidence is never "repaired" by recompute.
-      const shapeValidated = validateWiringEvidence(parsed);
-      if (!shapeValidated.ok) {
-        return { done: false, reason: shapeValidated.reason };
-      }
-      const recordedHead = (parsed as WiringEvidence).head;
-      if (currentHead != null && recordedHead !== currentHead && ctx.wiringProbe) {
-        // Stale evidence (HEAD moved) but we can re-derive at the current
-        // HEAD instead of rejecting outright — at most one re-derivation
-        // per completion check.
-        const derived = await deriveAndPersistWiringEvidence(dir, path, ctx);
-        if ('reason' in derived) {
-          return { done: false, reason: `wiring probe failed: ${derived.reason}` };
-        }
-        parsed = derived;
-        const revalidated = validateWiringEvidence(parsed, currentHead);
-        if (!revalidated.ok) {
-          return { done: false, reason: revalidated.reason };
-        }
-      } else {
-        const validated = validateWiringEvidence(parsed, currentHead);
-        if (!validated.ok) {
-          return { done: false, reason: validated.reason };
-        }
-      }
-    } else {
-      const validated = validateWiringEvidence(parsed, currentHead);
-      if (!validated.ok) {
-        return { done: false, reason: validated.reason };
-      }
-    }
-    const evidence = parsed as WiringEvidence;
-    const gapMessages: string[] = [];
-    for (const task of evidence.tasks) {
-      for (const g of task.gaps) {
-        gapMessages.push(g.message);
-      }
-    }
-    if (gapMessages.length > 0) {
-      return {
-        done: false,
-        reason: `wiring-reachability gaps found:\n${gapMessages.join('\n')}`,
-      };
-    }
-    return { done: true };
-  },
+  // Retained solely for topology compatibility. Wiring is evaluated by the
+  // build_review rubric; this step must never inspect plans, diffs, or evidence.
+  wiring_check: async (): Promise<CompletionResult> => ({ done: true }),
 
   test_suite: async (dir, ctx): Promise<CompletionResult> => {
     let inspection: FullSuiteInspectionResult;

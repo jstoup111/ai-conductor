@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import {
   CUSTOM_COMPLETION_PREDICATES,
-  WIRING_EVIDENCE,
   type WiringEvidence,
 } from '../../src/engine/artifacts.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
 
@@ -31,6 +32,35 @@ function staleEvidence(): WiringEvidence {
 }
 
 describe('wiring_check — deprecated no-op completion predicate', () => {
+  it('emits one deprecation notice per execution without a stall or kickback', async () => {
+    const events = new ConductorEventEmitter();
+    const deprecated: unknown[] = [];
+    const terminalEvents: string[] = [];
+    events.on('deprecated_step', (event) => deprecated.push(event));
+    events.on('loop_halt', () => terminalEvents.push('halt'));
+    events.on('kickback', () => terminalEvents.push('kickback'));
+    const runner: StepRunner = { run: async () => ({ success: true }) };
+    const conductor = new Conductor({
+      stateFilePath: join(tmpdir(), 'wiring-check-noop-state.json'),
+      projectRoot: tmpdir(),
+      stepRunner: runner,
+      events,
+    });
+
+    await (conductor as unknown as {
+      runWiringCheckStep: (state: object) => Promise<unknown>;
+    }).runWiringCheckStep({});
+
+    expect({ deprecated, terminalEvents }).toEqual({
+      deprecated: [{
+        type: 'deprecated_step',
+        step: 'wiring_check',
+        adr: 'adr-2026-08-11-wiring-judged-in-build-review',
+      }],
+      terminalEvents: [],
+    });
+  });
+
   it('reports done when the fixture contains no plan', async () => {
     await withFixture(async (dir) => {
       const result = await predicate(dir, {});
@@ -70,7 +100,7 @@ describe('wiring_check — deprecated no-op completion predicate', () => {
     await withFixture(async (dir) => {
       await mkdir(join(dir, '.pipeline'));
       await writeFile(
-        join(dir, WIRING_EVIDENCE),
+        join(dir, '.pipeline/wiring-evidence.json'),
         JSON.stringify(staleEvidence()),
         'utf-8',
       );

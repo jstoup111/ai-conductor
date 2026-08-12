@@ -161,6 +161,7 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,
+    deprecated: { adr: 'adr-2026-08-11-wiring-judged-in-build-review' },
   },
   {
     // Native aggregate verification is the other deterministic BUILD branch.
