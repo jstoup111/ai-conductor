@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { access, lstat, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -23,6 +23,8 @@ describe('provider-aware self-host homes', () => {
     const home = await provisionProviderHome({
       provider: { id: 'codex' },
       worktreeRoot: worktree,
+      repository: 'owner/repository',
+      featureSlug: 'provider-home',
       runId: 'run-11',
       attempt: 2,
     });
@@ -40,6 +42,10 @@ describe('provider-aware self-host homes', () => {
         home.homeDir,
         expect.stringMatching(new RegExp(`^${explicitBaseDir}/self-host-codex-`)),
       ]);
+      const lease = JSON.parse(await readFile(join(scratchRoot, 'owner.json'), 'utf8'));
+      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'provider-home', runId: 'run-11', attempt: 2, ownerPid: process.pid });
+      expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
     } finally {
       await Promise.all([home.teardown(), explicitHome.teardown()]);
       await rm(root, { recursive: true, force: true });
@@ -71,6 +77,8 @@ describe('provider-aware self-host homes', () => {
           },
         },
         worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-missing',
         baseDir,
         parentEnv: {
           PATH: '/usr/bin',
@@ -131,6 +139,8 @@ describe('provider-aware self-host homes', () => {
           },
         },
         worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-failure',
         baseDir,
       }),
     ).rejects.toThrow('[REDACTED]');
@@ -148,6 +158,8 @@ describe('provider-aware self-host homes', () => {
       await expect(provisionProviderHome({
         provider: { id: 'codex' },
         worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-missing',
         runId: 'run-14',
         attempt: 2,
       })).rejects.toThrow(
@@ -177,6 +189,8 @@ describe('provider-aware self-host homes', () => {
       await expect(provisionProviderHome({
         provider: { id: 'claude', prepareSelfHostAuth: async () => { throw new Error('post-acquire failure'); } },
         worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-failure',
         runId: 'run-14',
         attempt: 3,
       })).rejects.toThrow('Failed to provision isolated claude self-host home: post-acquire failure');
@@ -203,6 +217,8 @@ describe('provider-aware self-host homes', () => {
     const home = await provisionProviderHome({
       provider: { id: 'codex' },
       worktreeRoot: worktree,
+      repository: 'owner/repository',
+      featureSlug: 'provider-home-clean',
       runId: 'run-14',
       attempt: 4,
     });

@@ -9372,20 +9372,12 @@ describe('engine/conductor', () => {
   });
 
   it('threads the held run identity and candidate index into Codex and Claude self-host provisioning', async () => {
-    const codexHome = {
-      provider: 'codex' as const,
-      homeDir: join(dir, 'codex-home'),
-      childEnv: () => ({ CODEX_HOME: join(dir, 'codex-home') }),
-      childArgs: () => [],
-      teardown: vi.fn().mockResolvedValue(undefined),
-    };
-    const claudeSandbox = {
-      configDir: join(dir, 'claude-home'),
-      childEnv: () => ({ CLAUDE_CONFIG_DIR: join(dir, 'claude-home') }),
-      teardown: vi.fn().mockResolvedValue(undefined),
-    };
-    const provisionProviderHome = vi.fn().mockResolvedValue(codexHome);
-    const provisionSandbox = vi.fn().mockResolvedValue(claudeSandbox);
+    await mkdir(join(dir, 'skills'), { recursive: true });
+    const providerHomeModule = await vi.importActual<typeof import('../../src/engine/self-host/provider-home.js')>('../../src/engine/self-host/provider-home.js');
+    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
+    const provisionProviderHome = vi.fn(providerHomeModule.provisionProviderHome);
+    const provisionSandbox = vi.fn(sandboxModule.provisionSandboxBuildEnv);
+    const leases: unknown[] = [];
     const codex: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn().mockResolvedValue({
@@ -9422,16 +9414,23 @@ describe('engine/conductor', () => {
       providerExecutor: async (input) => {
         const prepare = input.prepareCandidateSelfHost;
         if (!prepare) throw new Error('expected self-host preparation');
-        await prepare(
+        const codexInvocation = await prepare(
           { step: 'build', providerKey: 'codex', model: 'gpt-5.6-terra', effort: 'medium' },
           runtimes.get('codex'),
           { runId: input.runId, attempt: 0 },
         );
-        await prepare(
+        const claudeInvocation = await prepare(
           { step: 'build', providerKey: 'claude', model: 'sonnet', effort: 'medium' },
           runtimes.get('claude'),
           { runId: input.runId, attempt: 1 },
         );
+        for (const [attempt, invocation] of [codexInvocation, claudeInvocation].entries()) {
+          const provider = attempt === 0 ? 'codex' : 'claude';
+          leases.push(JSON.parse(await readFile(join(
+            dir, '.daemon', 'scratch', 'held-conductor-run', `${attempt}-${provider}`, 'owner.json',
+          ), 'utf8')));
+          await invocation?.teardown?.();
+        }
         return {
           success: true,
           output: 'prepared',
@@ -9451,6 +9450,7 @@ describe('engine/conductor', () => {
       projectRoot: dir,
       daemon: true,
       selfHost: true,
+      featureSlug: 'self-host-identity',
       config: {
         llm_provider: ['codex', 'claude'],
         harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } },
@@ -9478,16 +9478,25 @@ describe('engine/conductor', () => {
       codex: expect.objectContaining({
         provider: expect.objectContaining({ id: 'codex' }),
         worktreeRoot: dir,
+        repository: dir,
+        featureSlug: 'self-host-identity',
         runId: 'held-conductor-run',
         attempt: 0,
       }),
       claude: expect.objectContaining({
         worktreeRoot: dir,
         harnessRoot: dir,
+        repository: dir,
+        featureSlug: 'self-host-identity',
         runId: 'held-conductor-run',
         attempt: 1,
       }),
     });
+    for (const [attempt, lease] of leases.entries()) {
+      expect(Object.keys(lease as object).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(lease).toMatchObject({ repository: dir, featureSlug: 'self-host-identity', runId: 'held-conductor-run', attempt, ownerPid: process.pid });
+      expect(new Date((lease as { startedAt: string }).startedAt).toISOString()).toBe((lease as { startedAt: string }).startedAt);
+    }
   });
 
   it('keeps shared provider CLI overrides authoritative for ordinary step dispatch', async () => {

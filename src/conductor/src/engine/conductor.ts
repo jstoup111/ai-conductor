@@ -721,6 +721,8 @@ export interface StepRunOptions {
 
 export interface StepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
+  /** Run identity held by provider-aware runners for self-host scratch leases. */
+  selfHostRunId?(): string;
   /** Resolve the effective retry-escalation policy for a detached branch. */
   escalateForStep?(step: StepName, state: ConductState): boolean;
   /**
@@ -2913,7 +2915,19 @@ export class Conductor {
       }
       const installed = await this.guardrails.resolveInstalledHarnessRoot();
       const harnessRoot = installed.status === 'ok' ? installed.root : this.projectRoot;
-      const sandbox = await this.guardrails.provisionSandbox({ worktreeRoot: this.projectRoot, harnessRoot });
+      const runId = this.stepRunner.selfHostRunId?.();
+      const featureSlug = this.featureSlug ?? state.feature_desc;
+      if (!runId || !featureSlug) {
+        throw new Error('Self-host scratch provisioning requires the held runId and featureSlug.');
+      }
+      const sandbox = await this.guardrails.provisionSandbox({
+        worktreeRoot: this.projectRoot,
+        harnessRoot,
+        repository: this.projectRoot,
+        featureSlug,
+        runId,
+        attempt: 1,
+      });
       const priorConfig = process.env.CLAUDE_CONFIG_DIR;
       const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
       const hadConfig = 'CLAUDE_CONFIG_DIR' in process.env;
@@ -2970,6 +2984,10 @@ export class Conductor {
               result.reason ?? 'Live boundary could not be verified.';
           }
         };
+        const featureSlug = this.featureSlug ?? state.feature_desc;
+        if (!featureSlug || !identity?.runId || identity.attempt === undefined) {
+          throw new Error('Candidate self-host provisioning requires repository, featureSlug, runId, and attempt.');
+        }
         if (codex) {
           const prepareAuth = runtime.provider.prepareSelfHostAuth;
           const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
@@ -2981,8 +2999,10 @@ export class Conductor {
           const home = await provisionHome({
             provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
             worktreeRoot: this.projectRoot,
-            runId: identity?.runId,
-            attempt: identity?.attempt,
+            repository: this.projectRoot,
+            featureSlug,
+            runId: identity.runId,
+            attempt: identity.attempt,
           });
           return { executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } };
         }
@@ -2990,8 +3010,10 @@ export class Conductor {
           const sandbox = await this.guardrails.provisionSandbox({
             worktreeRoot: this.projectRoot,
             harnessRoot: liveCheckout,
-            runId: identity?.runId,
-            attempt: identity?.attempt,
+            repository: this.projectRoot,
+            featureSlug,
+            runId: identity.runId,
+            attempt: identity.attempt,
           });
           return {
             executable: 'claude',

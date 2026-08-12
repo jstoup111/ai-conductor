@@ -480,6 +480,10 @@ export class DefaultStepRunner implements StepRunner {
     return this.resolvedConfigFor(step).model;
   }
 
+  selfHostRunId(): string {
+    return this.runId;
+  }
+
   escalateForStep(step: StepName, state: ConductState): boolean {
     return this.resolvedConfigFor(step, state.complexity_tier).escalate;
   }

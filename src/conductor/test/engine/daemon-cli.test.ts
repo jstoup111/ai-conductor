@@ -13,13 +13,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
+import { access, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
+import { acquireScratchHome } from '../../src/engine/self-host/provider-scratch.js';
+import { sweepFeatureWorktreeScratch } from '../../src/daemon-cli.js';
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
@@ -448,12 +450,20 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
   });
 
-  it('wires the provider scratch sweep to the daemon worktree base', () => {
-    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
-
-    expect(src).toMatch(
-      /await runDaemon\(\s*\{[\s\S]*?sweepProviderScratch:\s*async\s*\(\)\s*=>\s*\{\s*await sweepScratch\(\{\s*worktreeRoot:\s*worktreeBase,\s*events\s*\}\);\s*await collectLegacyScratch\(\{\s*events\s*\}\);\s*\},/,
-    );
+  it('reclaims a dead lease across concrete worktrees while retaining live and lease-less homes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-worktree-scratch-'));
+    const base = join(root, '.worktrees');
+    const dead = join(base, 'dead'); const live = join(base, 'live'); const unleased = join(base, 'unleased');
+    await Promise.all([mkdir(dead, { recursive: true }), mkdir(live, { recursive: true }), mkdir(unleased, { recursive: true })]);
+    const deadHome = await acquireScratchHome({ worktreeRoot: dead, repository: 'owner/repo', featureSlug: 'dead', runId: 'R', attempt: 1, provider: 'codex', ownerPid: 99999999 });
+    const liveHome = await acquireScratchHome({ worktreeRoot: live, repository: 'owner/repo', featureSlug: 'live', runId: 'R', attempt: 1, provider: 'claude', ownerPid: process.pid });
+    const noLease = join(unleased, '.daemon', 'scratch', 'R', '1-codex'); await mkdir(noLease, { recursive: true });
+    try {
+      await sweepFeatureWorktreeScratch({ worktreeBase: base, events: { emit: async () => {} } as never, log: () => {} });
+      await expect(access(deadHome)).rejects.toThrow();
+      await expect(access(liveHome)).resolves.toBeUndefined();
+      await expect(access(noLease)).resolves.toBeUndefined();
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
 

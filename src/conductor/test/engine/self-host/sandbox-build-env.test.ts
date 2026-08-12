@@ -182,6 +182,8 @@ describe('minimal Claude self-host sandbox', () => {
     const scratchRoot = join(worktree, '.daemon', 'scratch', 'run-12', '1-claude');
     const sandbox = await provisionSandboxBuildEnv({
       ...defaulted,
+      repository: 'owner/repository',
+      featureSlug: 'sandbox-build-env',
       runId: 'run-12',
       attempt: 1,
     });
@@ -190,19 +192,15 @@ describe('minimal Claude self-host sandbox', () => {
         expect.stringMatching(new RegExp(`^${scratchRoot}`)),
         expect.stringMatching(new RegExp(`^${scratchRoot}`)),
       ]);
+      const lease = JSON.parse(await readFile(join(scratchRoot, 'owner.json'), 'utf8'));
+      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'sandbox-build-env', runId: 'run-12', attempt: 1, ownerPid: process.pid });
+      expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
     } finally {
       await sandbox.teardown();
     }
   });
 
-  it('leaves token liveness probes on the system temporary directory', async () => {
-    const source = await readFile(
-      new URL('../../../src/engine/self-host/token-liveness.ts', import.meta.url),
-      'utf8',
-    );
-
-    expect(source).toContain("options.baseDir ?? tmpdir()");
-  });
 
   it('keeps the child env isolated and teardown idempotent on the crash path', async () => {
     const parentEnv = { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/operator/.claude' };

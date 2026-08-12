@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
-import { access, mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
+import { access, mkdir, rm, readFile, writeFile, readlink, readdir } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
@@ -182,6 +182,20 @@ export function createDiscoveryLogger(log: (msg: string) => void): DiscoveryLogg
       }
     },
   };
+}
+
+/** Sweep each concrete feature worktree; one bad checkout never blocks dispatch. */
+export async function sweepFeatureWorktreeScratch(options: { worktreeBase: string; events: ConductorEventEmitter; log: (message: string) => void }): Promise<void> {
+  let entries: string[] = [];
+  try { entries = await readdir(options.worktreeBase); } catch (error) {
+    options.log(`provider scratch worktree enumeration failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  for (const slug of entries) {
+    try { await sweepScratch({ worktreeRoot: join(options.worktreeBase, slug), events: options.events }); } catch (error) {
+      options.log(`provider scratch sweep failed for ${slug}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  await collectLegacyScratch({ events: options.events });
 }
 
 /**
@@ -1458,10 +1472,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
-      sweepProviderScratch: async () => {
-        await sweepScratch({ worktreeRoot: worktreeBase, events });
-        await collectLegacyScratch({ events });
-      },
+      sweepProviderScratch: () => sweepFeatureWorktreeScratch({ worktreeBase, events, log }),
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls
       // back to polling alone. Otherwise, the daemon uses event-driven re-kick

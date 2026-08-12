@@ -6,7 +6,7 @@ import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
-import { releaseScratchHome, resolveScratchHome } from './provider-scratch.js';
+import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 
 export type SelfHostProviderId = 'claude' | 'codex';
 
@@ -59,14 +59,10 @@ export interface ProviderHome {
   teardown(): Promise<void>;
 }
 
-export interface ProvisionProviderHomeOptions {
+interface ProvisionProviderHomeBaseOptions {
   /** The actual candidate selected for this attempt, not a preferred provider. */
   provider: ResolvedSelfHostProvider;
   worktreeRoot: string;
-  /** Attempt identity supplied by the conductor when available. */
-  runId?: string;
-  attempt?: number;
-  baseDir?: string;
   parentEnv?: NodeJS.ProcessEnv;
   fs?: ProviderHomeFs;
   /** Engine-owned controls (for example a write fence) applied only in this home. */
@@ -74,6 +70,19 @@ export interface ProvisionProviderHomeOptions {
   /** Worktree-owned assets exposed inside the isolated home. */
   worktreeAssets?: readonly string[];
 }
+
+type ScratchLeaseIdentity = {
+  readonly repository: string;
+  readonly featureSlug: string;
+  readonly runId: string;
+  readonly attempt: number;
+};
+
+/** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
+export type ProvisionProviderHomeOptions = ProvisionProviderHomeBaseOptions & (
+  | (ScratchLeaseIdentity & { readonly baseDir?: undefined })
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number }
+);
 
 export class ProviderHomeProvisionError extends Error {
   constructor(message: string) {
@@ -131,10 +140,13 @@ export async function provisionProviderHome(
   options: ProvisionProviderHomeOptions,
 ): Promise<ProviderHome> {
   const fs = options.fs ?? realProviderHomeFs;
-  const baseDir = options.baseDir ?? resolveScratchHome({
+  const usesScratch = options.baseDir === undefined;
+  const baseDir = options.baseDir ?? await acquireScratchHome({
     worktreeRoot: options.worktreeRoot,
-    runId: options.runId ?? 'provider-home',
-    attempt: options.attempt ?? 0,
+    repository: options.repository,
+    featureSlug: options.featureSlug,
+    runId: options.runId,
+    attempt: options.attempt,
     provider: options.provider.id,
   });
   const parentEnv = options.parentEnv ?? process.env;
@@ -190,27 +202,25 @@ export async function provisionProviderHome(
       { ...auth?.env, ...controls?.env },
       [...(auth?.args ?? []), ...(controls?.args ?? [])],
       fs,
-      options.baseDir === undefined
+      usesScratch
         ? () => releaseScratchHome({
           worktreeRoot: options.worktreeRoot,
-          runId: options.runId ?? 'provider-home',
-          attempt: options.attempt ?? 0,
+          runId: options.runId!,
+          attempt: options.attempt!,
           provider: options.provider.id,
         }).then(() => {})
         : undefined,
     );
   } catch (error) {
-    if (homeDir) {
-      if (options.baseDir === undefined) {
+    if (usesScratch) {
         await releaseScratchHome({
           worktreeRoot: options.worktreeRoot,
-          runId: options.runId ?? 'provider-home',
-          attempt: options.attempt ?? 0,
+          runId: options.runId!,
+          attempt: options.attempt!,
           provider: options.provider.id,
         });
-      } else {
+    } else if (homeDir) {
         await fs.rm(homeDir, { recursive: true, force: true }).catch(() => {});
-      }
     }
     if (error instanceof ProviderHomeProvisionError) throw error;
     const reason = redactSafetyText(error instanceof Error ? error.message : String(error));

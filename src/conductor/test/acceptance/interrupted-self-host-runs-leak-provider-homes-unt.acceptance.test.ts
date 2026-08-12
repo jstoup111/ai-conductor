@@ -27,7 +27,7 @@
  */
 
 import { execFile as execFileCb } from 'node:child_process';
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -37,6 +37,7 @@ import { makeFeatureRunnerDeps } from '../../src/engine/daemon-deps.js';
 import { runDaemon, type BacklogItem, type DaemonDeps } from '../../src/engine/daemon.js';
 import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 import { provisionSandboxBuildEnv } from '../../src/engine/self-host/sandbox-build-env.js';
+import { sweepFeatureWorktreeScratch } from '../../src/daemon-cli.js';
 
 const execFile = promisify(execFileCb);
 const roots: string[] = [];
@@ -95,6 +96,9 @@ describe('Stories 3/4 — build-path homes are worktree-local and self-cleaning'
     expect(path).toMatch(new RegExp(`^${expectedHome(worktree, 'codex')}/self-host-codex-`));
     expect(home.childEnv().CODEX_HOME).toBe(path);
     expect(relative(worktree, path).split(sep)[0]).toBe('.daemon');
+    const lease = JSON.parse(await readFile(join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json'), 'utf8'));
+    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+    expect(lease).toMatchObject({ repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2, ownerPid: process.pid });
     expect(await git('status', '--porcelain')).toBe('');
 
     await home.teardown();
@@ -119,6 +123,9 @@ describe('Stories 3/4 — build-path homes are worktree-local and self-cleaning'
     expect(path).toMatch(new RegExp(`^${expectedHome(worktree, 'claude')}/harness-selfbuild-`));
     expect(sandbox.childEnv().CLAUDE_CONFIG_DIR).toBe(path);
     expect(relative(worktree, path).split(sep)[0]).toBe('.daemon');
+    const lease = JSON.parse(await readFile(join(worktree, '.daemon', 'scratch', 'R', '2-claude', 'owner.json'), 'utf8'));
+    expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+    expect(lease).toMatchObject({ repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2, ownerPid: process.pid });
     expect(await git('status', '--porcelain')).toBe('');
 
     await sandbox.teardown();
@@ -167,6 +174,22 @@ describe('Story 5 — scratch reclamation is a best-effort dispatch-boundary hoo
     expect(runFeature).toHaveBeenCalledTimes(1);
     expect(result.processed).toContainEqual({ slug: item.slug, status: 'done' });
     expect(logs.join('\n')).toContain('scratch sweep exploded');
+  });
+});
+
+describe('Concrete worktree daemon sweep', () => {
+  it('reclaims an interrupted leased provider home without touching durable external state', async () => {
+    const { root } = await initRepo('provider-scratch-daemon-');
+    const worktree = join(root, '.worktrees', 'scratch-feature');
+    const durable = join(root, 'durable-runs', 'scratch-feature', 'conduct-state.json');
+    await mkdir(join(worktree, 'skills'), { recursive: true });
+    await mkdir(join(durable, '..'), { recursive: true }); await writeFile(durable, '{}\n');
+    const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, repository: 'owner/repo', featureSlug: 'scratch-feature', runId: 'R', attempt: 2 });
+    const leasePath = join(worktree, '.daemon', 'scratch', 'R', '2-codex', 'owner.json');
+    const lease = JSON.parse(await readFile(leasePath, 'utf8')); lease.ownerPid = 99999999; await writeFile(leasePath, `${JSON.stringify(lease)}\n`);
+    await sweepFeatureWorktreeScratch({ worktreeBase: join(root, '.worktrees'), events: { emit: async () => {} } as never, log: () => {} });
+    expect(await exists(home.homeDir)).toBe(false);
+    expect(await exists(durable)).toBe(true);
   });
 });
 
