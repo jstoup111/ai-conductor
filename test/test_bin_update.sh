@@ -1158,6 +1158,36 @@ assert "post-release newest tag: reports distance and baseline without prompting
 assert "post-release newest tag: stamps lastCheckedAt" "$([ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
 assert "post-release newest tag: leaves HEAD unchanged" "$([ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && echo 0 || echo 1)"
 
+# The checkout-derived baseline is a write-only migration cache. A
+# post-release display identity must never leak its +distance suffix into
+# currentVersion, and cache state must not influence the update decision.
+REPO=$(make_repo "t7-1-post-release-cache")
+for commit_number in 1 2 3; do
+  git -C "$REPO" commit -q --allow-empty -m "post-release ${commit_number}"
+done
+POST_RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$POST_RELEASE_SHA"
+
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+ABSENT_CACHE_OUT=$OUT
+assert "post-release cache: absent config records the bare baseline" \
+  "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$(cfg_get "$HOME_DIR" currentVersion)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' && echo 0 || echo 1)"
+
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v9.9.9
+run_update "$REPO" "$HOME_DIR"
+assert "post-release cache: contradictory record cannot change the decision" \
+  "$([ "$OUT" = "$ABSENT_CACHE_OUT" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" not-a-version
+run_update "$REPO" "$HOME_DIR"
+assert "post-release cache: malformed recorded version does not fail or change the decision" \
+  "$([ "$CODE" -eq 0 ] && [ "$OUT" = "$ABSENT_CACHE_OUT" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
 # A checkout one commit past v0.3.0 remains a tagged install even though it is
 # off-tag. With v0.4.0 reachable as the newest release, it must identify that
 # drift and still offer the release to an interactive operator.

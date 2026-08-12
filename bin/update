@@ -154,9 +154,11 @@ check_harness_update_tagged() {
     return 0
   fi
 
-  if [ "$_identity_kind" = "release" ]; then
-    conductor_cfg_set currentVersion "$baseline"
-  fi
+  # This is a write-only cache for bin/migrate's semver lower bound, never
+  # an input to update identity or offer decisions. Persist the checkout's
+  # bare baseline before any no-update, no-TTY, or declined-offer exit.
+  conductor_cfg_set currentVersion "$baseline" || \
+    warn "Could not record the installed release baseline."
 
   if [ "$_identity_kind" = "post-release" ]; then
     local commit_label="commits"
