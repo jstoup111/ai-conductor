@@ -140,10 +140,10 @@ function createFixtureAgentFake(
           verdict: 'PASS',
           reasons: [],
           rubric: {
-            tautology: true,
-            scope: true,
-            rootCause: true,
-            completeness: true, wiring: false },
+            tautology: false,
+            scope: false,
+            rootCause: false,
+            completeness: false, wiring: false },
         }),
         'utf-8',
       );

@@ -179,10 +179,10 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
         JSON.stringify({
           verdict: 'PASS',
           rubric: {
-            tautology: true,
-            scope: true,
-            rootCause: true,
-            completeness: true,
+            tautology: false,
+            scope: false,
+            rootCause: false,
+            completeness: false,
             wiring: false,
           },
         }),

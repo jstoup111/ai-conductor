@@ -29,6 +29,7 @@ import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
+import { writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { Conductor } from '../test-conductor.js';
 
 const execFile = promisify(execFileCb);
@@ -127,7 +128,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             JSON.stringify({
               verdict: 'FAIL',
               reasons: [`diff touches ${flaggedPath} which is out of scope`],
-              rubric: { wiring: false },
+              rubric: { tautology: true, wiring: false },
             }),
           );
           return {
@@ -235,7 +236,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               // feat.txt is the branch's OWN work — genuine out-of-scope,
               // not a stale-mirage, under any base.
               reasons: ['diff touches feat.txt which is out of scope'],
-              rubric: { wiring: false },
+              rubric: { tautology: true, wiring: false },
             }),
           );
           return {
@@ -282,12 +283,27 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     await seedToBuildReview(statePath, repo);
 
-    // Two genuine FAILs first (consuming both kickback slots — cap is 2), so
-    // a THIRD build_review re-entry would hit this block's own
-    // "unresolved after N kickbacks" cap-HALT UNLESS the stale-mirage
-    // disposition on that same re-entry is classified first and short-
-    // circuits into invalidate-and-regrade instead.
-    let genuineFails = 0;
+    // Seed an already-exhausted budget directly. This isolates the ordering
+    // contract from build-fixture progress mechanics: the first FAIL below
+    // must still run stale-mirage disposition before its own cap HALT.
+    const seeded = await readState(statePath);
+    const seededState = (seeded.ok ? seeded.value : {}) as ConductState;
+    seededState.run_started_at = Date.now();
+    await writeState(statePath, seededState);
+    await writeKickbackLedger(repo, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          treeHash: null,
+          lastReason: 'prior genuine failure',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    let genuineFails = 2;
     let sawStaleFail = false;
     let buildCallCount = 0;
     const calls: StepName[] = [];
@@ -295,9 +311,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
       run: async (step: StepName): Promise<StepRunResult> => {
         calls.push(step);
         if (step === 'build') {
-          // Each build call resolves a new task, so the D2 no-op re-entry
-          // guard (checkKickbackToBuildEscalation) never fires and doesn't
-          // interfere with pinning the disposition-first ordering.
+          // This branch must remain unreachable: stale-mirage disposition
+          // regrades build_review directly rather than dispatching rework.
           buildCallCount += 1;
           // Seed already recorded 1 completed task — always write strictly
           // more than that AND more than the prior call, so every
@@ -320,7 +335,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: ['diff touches feat.txt which is out of scope'],
-                rubric: { wiring: false },
+                rubric: { tautology: true, wiring: false },
               }),
             );
             return {
@@ -340,7 +355,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
-                rubric: { wiring: false },
+                rubric: { tautology: true, wiring: false },
               }),
             );
             return {
@@ -363,7 +378,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['diff touches feat.txt which is out of scope'],
-              rubric: { wiring: false },
+              rubric: { tautology: true, wiring: false },
             }),
           );
           return {
@@ -433,7 +448,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
-                rubric: { wiring: false },
+                rubric: { tautology: true, wiring: false },
               }),
             );
             return {
@@ -455,7 +470,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             .catch(() => true);
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
-            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { wiring: false } }),
+            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { scope: false, wiring: false } }),
           );
           return {
             success: true,
@@ -553,7 +568,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
-            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { wiring: false } }),
+            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { scope: false, wiring: false } }),
           );
           return {
             success: true,
