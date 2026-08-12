@@ -161,14 +161,19 @@ PY
 # as an identity source.
 # Usage: resolve_harness_identity <harness_dir>
 resolve_harness_identity() {
-  local harness_dir=$1 baseline distance
+  local harness_dir=$1 baseline distance tag tags
 
-  if ! baseline=$(set -o pipefail; git -C "$harness_dir" tag --merged HEAD -l 'v*.*.*' --sort=-v:refname 2>/dev/null \
-    | grep -E '^v[0-9]+(\.[0-9]+)+$' \
-    | head -1); then
+  if ! tags=$(git -C "$harness_dir" tag --merged HEAD -l 'v*.*.*' --sort=-v:refname 2>/dev/null); then
     printf 'undeterminable\tunknown\t\t\tnone\n'
     return 0
   fi
+
+  while IFS= read -r tag; do
+    if [[ "$tag" =~ ^v[0-9]+(\.[0-9]+)+$ ]]; then
+      baseline=$tag
+      break
+    fi
+  done <<< "$tags"
 
   if [ -z "$baseline" ]; then
     printf 'undeterminable\tunknown\t\t\tnone\n'
