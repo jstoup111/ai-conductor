@@ -72,6 +72,22 @@ function passingProvider(): { provider: LLMProvider; invokeCalls: InvokeOptions[
   const provider: LLMProvider = {
     invoke: async (opts: InvokeOptions): Promise<InvokeResult> => {
       invokeCalls.push(opts);
+      const projectRoot = opts.cwd as string;
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectRoot, '.pipeline', 'build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: {
+            tautology: false,
+            scope: false,
+            rootCause: false,
+            completeness: false,
+            wiring: false,
+          },
+        }),
+        'utf-8',
+      );
       return { success: true, output: 'PASS', exitCode: 0 };
     },
     invokeInteractive: async (): Promise<void> => {},

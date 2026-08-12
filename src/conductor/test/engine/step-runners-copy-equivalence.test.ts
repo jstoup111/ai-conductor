@@ -30,13 +30,27 @@ describe('build_review copy equivalence', () => {
     await rm(projectDir, { recursive: true, force: true });
   });
 
-  function runner(invoke = vi.fn().mockResolvedValue({
-    success: true,
-    output: '{"verdict":"PASS"}',
-    exitCode: 0,
-  })) {
+  function runner(invoke?: LLMProvider['invoke']) {
+    const defaultInvoke: LLMProvider['invoke'] = async () => {
+      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectDir, '.pipeline', 'build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          rubric: {
+            tautology: false,
+            scope: false,
+            rootCause: false,
+            completeness: false,
+            wiring: false,
+          },
+        }),
+      );
+      return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+    };
+    const providerInvoke = invoke ?? vi.fn(defaultInvoke);
     const provider: LLMProvider = {
-      invoke,
+      invoke: providerInvoke,
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const gitRunner = async (args: string[]) => {
@@ -45,7 +59,7 @@ describe('build_review copy equivalence', () => {
       if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
       return { exitCode: 1, stdout: '', stderr: '' };
     };
-    return { invoke, runner: new DefaultStepRunner(provider, 'session', projectDir, { planPath, gitRunner }) };
+    return { invoke: providerInvoke, runner: new DefaultStepRunner(provider, 'session', projectDir, { planPath, gitRunner }) };
   }
 
   it('fails build_review when a resolved declaration does not match its derived target', async () => {

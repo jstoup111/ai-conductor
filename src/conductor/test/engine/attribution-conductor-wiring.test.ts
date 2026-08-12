@@ -191,6 +191,21 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     const codexInvoke = vi.fn(
       async (options: InvokeOptions): Promise<InvokeResult> => {
         const attribution = options.systemPrompt?.includes('attribution_verify');
+        if (!attribution) {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'build-review.json'),
+            JSON.stringify({
+              verdict: 'PASS',
+              rubric: {
+                tautology: false,
+                scope: false,
+                rootCause: false,
+                completeness: false,
+                wiring: false,
+              },
+            }),
+          );
+        }
         const output = attribution
           ? JSON.stringify({
               schema: 1,

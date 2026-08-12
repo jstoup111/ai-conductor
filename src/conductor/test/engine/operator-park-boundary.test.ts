@@ -375,7 +375,7 @@ describe('operator park boundary contract', () => {
         },
       ],
       parkedBoundaries: [],
-      persisted: { buildReview: 'failed', wiringCheck: undefined },
+      persisted: { buildReview: 'failed', wiringCheck: 'done' },
     });
   });
 
@@ -1043,10 +1043,11 @@ describe('operator park boundary contract', () => {
       },
       runnerCalls: [],
     });
-    // build_review is the pending semantic gate. Parking must not manufacture
-    // a retired wiring_check wait/dispatch on its way to that boundary.
+    // build_review is the pending semantic gate. Parking must not dispatch the
+    // retired wiring_check compatibility step; its deterministic completion is
+    // persisted before the pending review boundary.
     if (pending.length === 1 && pending[0] === 'build_review') {
-      expect(persisted.ok && persisted.value.wiring_check).toBeUndefined();
+      expect(persisted.ok && persisted.value.wiring_check).toBe('done');
       expect(run.mock.calls.map(([step]) => step)).not.toContain('wiring_check');
     }
   });

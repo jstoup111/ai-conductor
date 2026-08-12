@@ -302,7 +302,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     }));
   });
 
-  it('dispatches a later-invalidated wiring_check prerequisite without entering review', async () => {
+  it('does not re-enter review for later-invalidated retired wiring_check evidence', async () => {
     await writeState(statePath, {
       ...frontDone(),
       complexity_tier: 'M',
@@ -354,10 +354,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     });
     const next = await advanceTail(reviewStep, state.value, stuckGate, ALL_STEPS, indexOf);
 
-    expect({ next, debt: [...stuckGate.entries()] }).toEqual({
-      next: indexOf('wiring_check'),
-      debt: [['wiring_check', 2]],
-    });
+    expect(next).toBe('halt');
   });
 
   it.each([

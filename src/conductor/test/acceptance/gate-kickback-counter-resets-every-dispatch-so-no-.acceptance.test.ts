@@ -230,7 +230,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false, wiring: false },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
         }),
       );
     } else if (step === 'manual_test') {
@@ -766,7 +766,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'FAIL',
-                rubric: { tautology: true, scope: false, rootCause: false, wiring: false },
+                rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
                 findings: { tautology: ['assertion restates the implementation'] },
               }),
             );

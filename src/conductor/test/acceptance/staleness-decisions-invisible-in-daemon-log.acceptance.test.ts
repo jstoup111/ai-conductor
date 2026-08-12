@@ -235,7 +235,14 @@ async function writeBuildReviewVerdict(
   legacyRubric = false,
 ): Promise<string> {
   const path = join(repo, '.pipeline/build-review.json');
-  const body: Record<string, unknown> = { verdict, rubric: legacyRubric ? {} : { wiring: false } };
+  const rubric = {
+    tautology: false,
+    scope: false,
+    rootCause: false,
+    completeness: false,
+    ...(legacyRubric ? {} : { wiring: false }),
+  };
+  const body: Record<string, unknown> = { verdict, rubric };
   if (codeStamp) body.codeStamp = codeStamp;
   await writeFile(path, JSON.stringify(body, null, 2));
   if (mtime) await utimes(path, mtime, mtime);
