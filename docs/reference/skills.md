@@ -267,7 +267,9 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   invocation or the engine reads it as stale and halts the SHIP tail.
 - **Gate role** — the as-built half is blocking and fail-closed: only `APPROVED` or `APPROVED WITH
   DRIFT NOTES` passes. The DECIDE half is advisory at the step level; its DRAFT-ADR hard gate is
-  enforced by the `conduct` state machine and by the land-time spec gate instead.
+  enforced by the `conduct` state machine and by the land-time spec gate instead. The as-built
+  half's production reachability sweep derives root-to-caller-to-export chains from current shipped
+  source, never from plan-declared callers.
 
 ### stories
 

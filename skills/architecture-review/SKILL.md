@@ -395,9 +395,9 @@ on BUILD proof as authority.
   primitive's own module do not count as callers, except for the narrow same-file composition
   case below.
   - **Narrow same-file composition exception.** Independently verify the complete **root-to-caller-to-export** chain in the current shipped source: a configured production
-    entry point reaches the defining module through non-test edges; the task's declared caller in
-    that module is the exact caller implementation; and that implementation references the exact
-    changed export. Cite the root/module chain and caller-to-export reference as `file:line`.
+    entry point reaches the defining module through non-test edges; an actual production caller in
+    that module references the exact changed export. Derive that caller from current source rather
+    than from a plan declaration. Cite the root/module chain and caller-to-export reference as `file:line`.
     A same-file exception passes only with an exact caller-to-export reference and a production-entry-point root chain.
     An own-module caller alone, module reachability alone, or a name/text match alone does not count.
     This exception never permits a dead helper, a test-only path, a shadowed binding, or an
