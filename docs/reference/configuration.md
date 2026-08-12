@@ -549,7 +549,7 @@ The project-owned aggregate verification command run by the pre-SHIP `test_suite
 | --- | --- | --- | --- | --- |
 | `test_suite.command` | string | Yes, unless `test_suite.scoped_command` is configured | Non-empty after trim (`config.ts:1217-1221`) | — |
 | `test_suite.scoped_command` | string | No | Non-empty after trim and must contain `{selectors}`. `conduct-ts scoped-run <selectors...>` replaces that placeholder with the selected tests; it never falls back to `command`. (`config.ts:1223-1236`) | none; scoped runs are unavailable |
-| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1239-1262`) | project root |
+| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1239-1262`). Applies to both the aggregate `command` and `scoped_command`; `conduct-ts scoped-run` rebases project-root-relative selectors onto it | project root |
 | `test_suite.timeout_seconds` | number | No | Finite and `> 0` (`config.ts:1264-1274`) | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts:7`) |
 | `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1276-1287`) | none |
 | `test_suite.environment` | string[] | No | Array of strings | none |

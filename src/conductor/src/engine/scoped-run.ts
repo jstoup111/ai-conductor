@@ -1,5 +1,7 @@
 export interface ScopedRunRunnerOptions {
   signal: AbortSignal;
+  /** Directory the scoped command runs in; absent means the caller's default. */
+  cwd?: string;
 }
 
 export type ScopedRunRunner = (
@@ -24,6 +26,7 @@ export interface ScopedRunCommandOptions {
   template?: string;
   selectors: string[];
   runner: ScopedRunRunner;
+  cwd?: string;
   timeoutMs?: number;
   scheduleTimeout?: ScopedRunTimeoutScheduler;
 }
@@ -37,6 +40,7 @@ export async function runScopedCommand({
   template,
   selectors,
   runner,
+  cwd,
   timeoutMs,
   scheduleTimeout = (callback, milliseconds) => {
     const timeout = setTimeout(callback, milliseconds);
@@ -63,7 +67,10 @@ export async function runScopedCommand({
 
   const command = template.replace('{selectors}', normalizedSelectors.map(formatSelector).join(' '));
   const controller = new AbortController();
-  const run = runner(command, { signal: controller.signal });
+  const run = runner(command, {
+    signal: controller.signal,
+    ...(cwd === undefined ? {} : { cwd }),
+  });
   let cancelTimeout: (() => void) | undefined;
   let timedOut = false;
 
