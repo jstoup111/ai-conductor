@@ -123,6 +123,7 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
         const selfHost = await prepare(
           { step, providerKey: 'claude', model: 'opus', effort: 'high' } as never,
           runtimes.get('claude') as never,
+          { runId: 'live-boundary-run', attempt: dispatches.length },
         );
         // Layer 1 — provider-execution.ts: teardown runs in a `finally`, so a
         // throw there discards the invocation's own result.

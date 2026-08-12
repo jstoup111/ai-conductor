@@ -45,6 +45,7 @@ const BUILD_ONLY_READY_STATE: ConductState = {
   retro: 'done',
   rebase: 'done',
   finish: 'done',
+  feature_desc: 'token-injection',
 } as ConductState;
 
 describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', () => {
@@ -88,6 +89,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     const observedTokens: (string | undefined)[] = [];
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           // Capture the token seen during execution
@@ -137,6 +139,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           // Token should be set during execution
@@ -184,6 +187,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     process.env.CLAUDE_CODE_OAUTH_TOKEN = priorValue;
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           // Token should be OVERWRITTEN with the injected one during execution
@@ -230,6 +234,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     const observedTokens: (string | undefined)[] = [];
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           observedTokens.push(process.env.CLAUDE_CODE_OAUTH_TOKEN);
@@ -282,6 +287,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
   it('does not inject a Claude daemon token when Codex is the preferred self-host build provider', async () => {
     const observedTokens: (string | undefined)[] = [];
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') observedTokens.push(process.env.CLAUDE_CODE_OAUTH_TOKEN);
         return { success: true };
@@ -323,6 +329,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     const buildError = new Error('Build failed unexpectedly');
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           // Token should be set before the error
@@ -371,6 +378,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     const capturedEnvs: NodeJS.ProcessEnv[] = [];
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           // During build, process.env has the token, so childEnv should also have it
@@ -428,6 +436,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           return { success: false, output: 'Build failed' };
@@ -474,6 +483,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     let buildCount = 0;
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           buildCount++;
@@ -534,6 +544,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     await writeFile(tokenPath, sensitiveToken, 'utf-8');
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           // Even though the token is in process.env, it should never appear in output
@@ -588,6 +599,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     const capturedEnvs: NodeJS.ProcessEnv[] = [];
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           // Manually construct childEnv as the sandbox would
@@ -644,6 +656,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     const capturedEnvDuring: Record<string, string | undefined> = {};
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step === 'build') {
           // Both should be set/modified during execution
