@@ -39,6 +39,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { clampToRunnablePrerequisite, Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { checkGate } from '../../src/engine/gates.js';
 import { gateSatisfied } from '../../src/engine/selector.js';
 import { writeFile, mkdir } from 'fs/promises';
@@ -270,6 +271,35 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   // ── Story 3: post-rebase kickback verdicts are honored on resume ──────────
   describe('Story 3: post-rebase kickback verdicts steer the resume entry', () => {
+    it.each([
+      {
+        name: 'an incomplete PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        done: false,
+      },
+      {
+        name: 'a complete current PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        done: true,
+      },
+    ])('clamps $name based on the build_review predicate', async ({ rubric, done }) => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'build-review.json'),
+        JSON.stringify({ verdict: 'PASS', rubric }),
+      );
+
+      const completion = await checkStepCompletion(dir, 'build_review', {
+        sessionStartedAt: Date.now() - 1_000,
+        attemptStartedAt: Date.now() - 1_000,
+      });
+
+      // Resume's clamp treats a non-current completion as pending; a complete
+      // current PASS remains done. wiring_check is deliberately not consulted.
+      expect(completion.done).toBe(done);
+      expect(ALL_STEPS.find((step) => step.name === 'wiring_check')?.loopGate).not.toBe(true);
+    });
+
     // wiring_check is omitted: it is a deprecated no-op that settles
     // in-process, so a stale wiring proof never steers a resume entry
     // (adr-2026-08-11-wiring-judged-in-build-review).

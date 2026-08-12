@@ -3114,6 +3114,54 @@ TIER: M`,
       await writeFile(planPath, '# Plan\n\nDo the thing.\n', 'utf-8');
     });
 
+    it('has no provider runner for the retired wiring_check step', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('wiring_check', emptyState);
+
+      expect(result.success).toBe(true);
+      expect(provider.invoke).not.toHaveBeenCalled();
+      expect(provider.invokeInteractive).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      {
+        name: 'complete five-flag PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        success: true,
+      },
+      ...(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const).map((missing) => ({
+        name: `PASS missing rubric.${missing}`,
+        rubric: Object.fromEntries(
+          ['tautology', 'scope', 'rootCause', 'completeness', 'wiring']
+            .filter((name) => name !== missing)
+            .map((name) => [name, false]),
+        ),
+        success: false,
+      })),
+    ])('returns $success for a $name verdict', async ({ rubric, success }) => {
+      const verdictPath = join(dir, '.pipeline', 'build-review.json');
+      const invoke = vi.fn().mockImplementation(async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric }), 'utf-8');
+        return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+      });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        { gitRunner: scriptedGit(), planPath },
+      );
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(success);
+    });
+
     afterEach(async () => {
       await rm(dir, { recursive: true, force: true });
     });

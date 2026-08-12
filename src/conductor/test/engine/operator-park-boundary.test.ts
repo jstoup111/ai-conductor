@@ -1040,6 +1040,7 @@ describe('operator park boundary contract', () => {
 
     const result = await conductor.run();
 
+    const persisted = await readState(statePath);
     expect({ result, runnerCalls: run.mock.calls }).toEqual({
       result: {
         kind: 'operator-parked',
@@ -1047,6 +1048,13 @@ describe('operator park boundary contract', () => {
       },
       runnerCalls: [],
     });
+    // build_review is the pending semantic gate. Parking must not manufacture
+    // a retired wiring_check wait/dispatch on its way to that boundary.
+    if (pending.length === 1 && pending[0] === 'build_review') {
+      expect(persisted.ok && persisted.value.wiring_check).toBe('done');
+      expect(persisted.ok && persisted.value.build_verification__wiring_check).toBeUndefined();
+      expect(run.mock.calls.map(([step]) => step)).not.toContain('wiring_check');
+    }
   });
 
   it('keeps interactive dispatch and checkpoint sequences identical with a repo-root park marker', async () => {
