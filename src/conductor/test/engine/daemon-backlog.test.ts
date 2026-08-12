@@ -422,6 +422,34 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
+  it('leaves missing-coherence blocks unannotated when the sentinel is false or absent', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/unannotated-coherence.md'),
+      planWithDeps('.docs/stories/unannotated-coherence.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/unannotated-coherence.md'), APPROVED_STORIES);
+    const hasRekickSentinel = vi.fn(async () => false);
+    const expected = [
+      {
+        slug: 'unannotated-coherence',
+        reason: 'missing-coherence',
+        remedy: 'Author a valid coherence table in .docs/coherence/unannotated-coherence.md on the default branch.',
+      },
+    ];
+
+    const withFalseProbe = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+      hasRekickSentinel,
+    });
+    const withoutProbe = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(withFalseProbe.blocked).toEqual(expected);
+    expect(hasRekickSentinel).toHaveBeenCalledOnce();
+    expect(withoutProbe.blocked).toEqual(expected);
+  });
+
   it('Task 8: blocked classification is visibility-only across the mixed discovery fixture', async () => {
     const writeEligible = async (slug: string, storiesRef = `.docs/stories/${slug}.md`) => {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(storiesRef));
