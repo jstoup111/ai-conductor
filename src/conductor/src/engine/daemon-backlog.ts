@@ -1034,7 +1034,8 @@ export async function discoverBacklog(
         slug,
         `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +
           `(.docs/coherence/${slug}.md) required for tier ${tier ?? 'unresolved'}. ` +
-          'Author it on the default branch; logged once.',
+          `Author it on the default branch${strandedRekick ? '; stranded re-kick sentinel present' : ''}; ` +
+          'logged once.',
       );
       continue;
     }

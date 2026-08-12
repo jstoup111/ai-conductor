@@ -418,7 +418,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     ]);
     expect(hasRekickSentinel).toHaveBeenCalledOnce();
     expect(logs).toContain(
-      'skip missing-coherence: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/missing-coherence.md) required for tier unresolved. Author it on the default branch; logged once.',
+      'skip missing-coherence: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/missing-coherence.md) required for tier unresolved. Author it on the default branch; stranded re-kick sentinel present; logged once.',
     );
   });
 
@@ -429,6 +429,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
     await writeFile(join(dir, '.docs/stories/unannotated-coherence.md'), APPROVED_STORIES);
     const hasRekickSentinel = vi.fn(async () => false);
+    const logs: string[] = [];
     const expected = [
       {
         slug: 'unannotated-coherence',
@@ -437,7 +438,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       },
     ];
 
-    const withFalseProbe = await discoverBacklog(dir, undefined, undefined, {
+    const withFalseProbe = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
       treeSource: fsTreeSource(dir),
       hasRekickSentinel,
     });
@@ -447,6 +448,9 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
 
     expect(withFalseProbe.blocked).toEqual(expected);
     expect(hasRekickSentinel).toHaveBeenCalledOnce();
+    expect(logs).toContain(
+      'skip unannotated-coherence: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/unannotated-coherence.md) required for tier unresolved. Author it on the default branch; logged once.',
+    );
     expect(withoutProbe.blocked).toEqual(expected);
   });
 
