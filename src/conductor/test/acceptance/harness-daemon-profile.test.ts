@@ -92,6 +92,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
   } {
     const seen: Array<{ step: StepName }> = [];
     const runner: StepRunner = {
+      selfHostRunId: () => 'harness-daemon-profile-run',
       run: vi.fn(async (step: StepName) => {
         seen.push({ step });
         if (step === 'finish') {
@@ -214,6 +215,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
 
     const seen: Array<{ step: StepName }> = [];
     const runner: StepRunner = {
+      selfHostRunId: () => 'harness-daemon-profile-run',
       run: vi.fn(async (step: StepName) => {
         seen.push({ step });
         if (step === 'finish') {
