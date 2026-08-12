@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { renderReport, ReportError, parseEvents, aggregateKickbacks } from '../../src/engine/report-renderer.js';
+import { renderReport, ReportError, parseEvents, aggregateHalts, aggregateKickbacks } from '../../src/engine/report-renderer.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
 
@@ -72,6 +72,34 @@ describe('report-renderer', () => {
     ];
 
     expect(kickbackResults).toEqual(baselineResults);
+  });
+
+  it('aggregates persisted loop_halt records from a local event ledger', async () => {
+    const worktreeDir = join(tempDir, 'halted-feature');
+    const ledgerPath = join(worktreeDir, '.pipeline', 'events.jsonl');
+    await mkdir(join(worktreeDir, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, makeLines([
+      { event: { type: 'loop_halt', reason: 'retry budget exhausted' }, ts: '2026-01-01T00:00:00.000Z' },
+    ]), 'utf-8');
+
+    const halts = aggregateHalts(parseEvents(await readFile(ledgerPath, 'utf-8')));
+
+    expect(halts).toEqual([{ reason: 'retry budget exhausted' }]);
+  });
+
+  it('keeps local-ledger halt parsing resilient for no-halt, missing-reason, and malformed records', async () => {
+    const worktreeDir = join(tempDir, 'resilient-halt-feature');
+    const ledgerPath = join(worktreeDir, '.pipeline', 'events.jsonl');
+    await mkdir(join(worktreeDir, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, [
+      JSON.stringify({ type: 'step_completed', step: 'build', ts: '2026-01-01T00:00:00.000Z' }),
+      JSON.stringify({ type: 'loop_halt', ts: '2026-01-01T00:00:01.000Z' }),
+      '{not valid json',
+    ].join('\n'), 'utf-8');
+
+    const halts = aggregateHalts(parseEvents(await readFile(ledgerPath, 'utf-8')));
+
+    expect(halts).toEqual([{ reason: 'unknown' }]);
   });
 
   // ─── Task 9: step durations table ─────────────────────────────────────────
