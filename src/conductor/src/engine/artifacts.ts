@@ -2308,6 +2308,21 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
 
+    // A parseable legacy verdict is an incompatible schema, irrespective of
+    // when it was written. Check that before mtime freshness so a backdated
+    // pre-wiring artifact is reported as "not judged", rather than being
+    // indistinguishable from an otherwise-valid prior-session verdict.
+    try {
+      const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'));
+      const validation = validateBuildReviewVerdict(parsed);
+      if (!validation.ok) {
+        return { done: false, reason: validation.reason, routeClass: 'absent' };
+      }
+    } catch {
+      // Missing and malformed files retain their existing freshness and JSON
+      // diagnostics below.
+    }
+
     if (!(await fileIsFreshSinceSession(path, cmpFloor))) {
       // fileIsFreshSinceSession returns false both for "missing" and "stale";
       // distinguish them so the reason message is accurate.

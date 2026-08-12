@@ -5454,6 +5454,10 @@ export class Conductor {
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
         let unchangedInputNote: string | undefined;
+        // An incompatible build-review verdict is a stable schema failure,
+        // not an exhausted-work retry. Keep its validator diagnostic for the
+        // terminal HALT instead of replacing it with the generic fallback.
+        let buildReviewSchemaFailureReason: string | undefined;
         // #569 Task 5: set when a build stall is diagnosed as no_task_progress —
         // consulted at the terminal fallback below to give the operator a
         // distinct, actionable HALT reason instead of the generic
@@ -6319,6 +6323,12 @@ export class Conductor {
 
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
+              if (
+                step.name === 'build_review' &&
+                completion.reason?.startsWith(`${BUILD_REVIEW_VERDICT} `)
+              ) {
+                buildReviewSchemaFailureReason = completion.reason;
+              }
               finishPresentationDefect =
                 step.name === 'finish' && completion.missing === 'presentation'
                   ? (completion.reason ?? 'PR presentation is not a /pr-authored body')
@@ -7817,6 +7827,8 @@ export class Conductor {
                         ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
                         : unchangedInputNote
                           ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                          : buildReviewSchemaFailureReason
+                            ? buildReviewSchemaFailureReason
                           : `step '${step.name}' failed in auto mode (retries exhausted)`;
             if (!existingHalt || existingHalt.trim().length === 0) {
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
