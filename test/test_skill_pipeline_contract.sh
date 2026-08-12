@@ -85,48 +85,34 @@ confirmed_breadth_contract_holds() {
     && grep -qiE '(do not|must not|never).+(materially broader|material expansion|expand materially).+(unless|without).+operator.+confirm.+before.+artifact' "$skill_file"
 }
 
-adr_creation_contract_holds() {
+adr_structural_policy_contract_holds() {
   local skill_file="$1"
   local skill_text
 
-  skill_text="$(tr '\n' ' ' < "$skill_file")"
+  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
 
-  grep -qF 'A new ADR is warranted only for a real structural decision.' <<<"$skill_text" \
-    && grep -qF 'Structural change is a necessary prerequisite: decision categories never independently require an ADR.' <<<"$skill_text" \
-    && grep -qF 'system boundary' <<<"$skill_text" \
-    && grep -qF 'component or service decomposition' <<<"$skill_text" \
-    && grep -qF 'integration pattern' <<<"$skill_text" \
-    && grep -qF 'state or data architecture' <<<"$skill_text" \
-    && grep -qF 'foundational technology' <<<"$skill_text" \
-    && grep -qF 'Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail are not sufficient ADR triggers.' <<<"$skill_text" \
-    && grep -qF 'Reuse an existing governing ADR rather than duplicate it.' <<<"$skill_text"
+  grep -qF 'Structural change is a necessary prerequisite: decision categories never independently require an ADR.' <<<"$skill_text" \
+    && grep -qF 'Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail are not sufficient ADR triggers.' <<<"$skill_text"
 }
 
-# The ADR policy is a decision table, not a bag of required phrases. Keep the
-# scenario facts separate from the production guidance so each outcome can be
-# checked without coupling the fixture to its prose.
-adr_disposition_contract_holds() {
+adr_small_structural_change_contract_holds() {
   local skill_file="$1"
-  local fixture_file="$2"
-  local structural_decision
-  local governing_adr
-  local expected_disposition
-  local actual_disposition
+  local skill_text
 
-  adr_creation_contract_holds "$skill_file" || return 1
+  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
 
-  structural_decision="$(awk -F= '$1 == "structural_decision" { print $2; exit }' "$fixture_file")"
-  governing_adr="$(awk -F= '$1 == "governing_adr" { print $2; exit }' "$fixture_file")"
-  expected_disposition="$(awk -F= '$1 == "expected_disposition" { print $2; exit }' "$fixture_file")"
+  grep -qF 'A small change may still warrant an ADR when it makes one of the structural decisions above;' <<<"$skill_text"
+}
 
-  case "$structural_decision:$governing_adr" in
-    false:*) actual_disposition='no-new-adr' ;;
-    true:approved) actual_disposition='reuse-governing-adr' ;;
-    true:none) actual_disposition='new-adr' ;;
-    *) return 1 ;;
-  esac
+adr_governing_reuse_contract_holds() {
+  local skill_file="$1"
+  local skill_text
 
-  [ "$actual_disposition" = "$expected_disposition" ]
+  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
+
+  grep -qF 'Before drafting, read `.docs/decisions/` for an APPROVED ADR that already governs the structural decision.' <<<"$skill_text" \
+    && grep -qF 'Reuse an existing governing ADR rather than duplicate it.' <<<"$skill_text" \
+    && grep -qF 'draft a new ADR only for an uncovered structural decision, or supersede the existing ADR when the structural decision itself changes.' <<<"$skill_text"
 }
 
 if [ ! -f "$SKILL_FILE" ]; then
@@ -173,77 +159,55 @@ done
 if [ ! -f "$ARCHITECTURE_REVIEW_SKILL_FILE" ]; then
   fail "skills/architecture-review/SKILL.md exists for ADR-creation guidance"
 else
-  missing_structural_prerequisite_fixture="$(mktemp "${TMPDIR:-/tmp}/adr-missing-structural-prerequisite.XXXXXX")"
-  policy_only_change_fixture="$(mktemp "${TMPDIR:-/tmp}/adr-policy-only-change.XXXXXX")"
-  small_structural_change_fixture="$(mktemp "${TMPDIR:-/tmp}/adr-small-structural-change.XXXXXX")"
-  existing_governing_adr_fixture="$(mktemp "${TMPDIR:-/tmp}/adr-existing-governing-adr.XXXXXX")"
-  trap 'rm -f "$mutated_conduct_skill" "$missing_structural_prerequisite_fixture" "$policy_only_change_fixture" "$small_structural_change_fixture" "$existing_governing_adr_fixture"' EXIT
+  adr_policy_mutation="$(mktemp "${TMPDIR:-/tmp}/adr-policy-contract.XXXXXX")"
 
-  # Negative control: category labels without the structural prerequisite must
-  # not qualify a change for an ADR.
-  cat >"$missing_structural_prerequisite_fixture" <<'EOF'
-system boundary
-component or service decomposition
-integration pattern
-state or data architecture
-foundational technology
-EOF
-
-  # Semantic negative control: a workflow-policy change is explicitly
-  # non-structural, even if it is important or broad.
-  cat >"$policy_only_change_fixture" <<'EOF'
-change_kind=workflow-policy
-structural_decision=false
-governing_adr=none
-expected_disposition=no-new-adr
-EOF
-
-  # A small change can still be ADR-eligible when it makes a real structural
-  # decision; size is not a substitute for, or bar to, that prerequisite.
-  cat >"$small_structural_change_fixture" <<'EOF'
-change_size=small
-structural_decision=true
-governing_adr=none
-expected_disposition=new-adr
-EOF
-
-  # A structural decision already covered by an APPROVED ADR is a reuse case,
-  # not permission to draft a duplicate decision record.
-  cat >"$existing_governing_adr_fixture" <<'EOF'
-structural_decision=true
-governing_adr=approved
-expected_disposition=reuse-governing-adr
-EOF
-
-  if adr_creation_contract_holds "$missing_structural_prerequisite_fixture"; then
-    fail "ADR predicate rejects category-only changes without a structural prerequisite"
+  if adr_structural_policy_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE"; then
+    pass "ADR policy requires a structural prerequisite and rejects non-structural rationales"
   else
-    pass "ADR predicate rejects category-only changes without a structural prerequisite"
+    fail "ADR policy must require a structural prerequisite and reject non-structural rationales"
   fi
 
-  if adr_disposition_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE" "$policy_only_change_fixture"; then
-    pass "ADR decision table rejects a policy-only non-structural change"
+  sed '/A new ADR is warranted only for a real structural decision\. Structural change is a necessary/{N;d;}' "$ARCHITECTURE_REVIEW_SKILL_FILE" >"$adr_policy_mutation"
+  if adr_structural_policy_contract_holds "$adr_policy_mutation"; then
+    fail "ADR structural-policy predicate rejects a contract missing the prerequisite"
   else
-    fail "ADR decision table rejects a policy-only non-structural change"
+    pass "ADR structural-policy predicate rejects a contract missing the prerequisite"
   fi
 
-  if adr_disposition_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE" "$small_structural_change_fixture"; then
-    pass "ADR predicate accepts a small change with a real structural decision"
+  sed '/and reviewable\. Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail/{N;d;}' "$ARCHITECTURE_REVIEW_SKILL_FILE" >"$adr_policy_mutation"
+  if adr_structural_policy_contract_holds "$adr_policy_mutation"; then
+    fail "ADR structural-policy predicate rejects a contract missing non-structural exclusions"
   else
-    fail "ADR predicate accepts a small change with a real structural decision"
+    pass "ADR structural-policy predicate rejects a contract missing non-structural exclusions"
   fi
 
-  if adr_disposition_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE" "$existing_governing_adr_fixture"; then
-    pass "ADR decision table reuses an existing governing ADR"
+  if adr_small_structural_change_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE"; then
+    pass "ADR policy keeps small structural changes eligible"
   else
-    fail "ADR decision table reuses an existing governing ADR"
+    fail "ADR policy must keep small structural changes eligible"
   fi
 
-  if adr_creation_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE"; then
-    pass "ADR creation requires structural change and reuses governing decisions"
+  sed '/are not sufficient ADR triggers\. A small change may still warrant an ADR when it makes one/{N;d;}' "$ARCHITECTURE_REVIEW_SKILL_FILE" >"$adr_policy_mutation"
+  if adr_small_structural_change_contract_holds "$adr_policy_mutation"; then
+    fail "ADR small-change predicate rejects a contract missing small structural eligibility"
   else
-    fail "ADR creation must require structural change before category triggers, reject non-structural rationales, and reuse governing ADRs"
+    pass "ADR small-change predicate rejects a contract missing small structural eligibility"
   fi
+
+  if adr_governing_reuse_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE"; then
+    pass "ADR policy reuses an approved governing ADR rather than duplicating it"
+  else
+    fail "ADR policy must reuse an approved governing ADR rather than duplicate it"
+  fi
+
+  grep -vF 'Reuse an existing governing ADR rather than duplicate it.' "$ARCHITECTURE_REVIEW_SKILL_FILE" >"$adr_policy_mutation"
+  if adr_governing_reuse_contract_holds "$adr_policy_mutation"; then
+    fail "ADR governing-reuse predicate rejects a contract missing duplication prevention"
+  else
+    pass "ADR governing-reuse predicate rejects a contract missing duplication prevention"
+  fi
+
+  rm -f "$adr_policy_mutation"
 fi
 
 if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \
