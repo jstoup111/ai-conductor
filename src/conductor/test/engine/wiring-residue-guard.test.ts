@@ -16,6 +16,12 @@ const forbiddenReferences = [
   'wiring-reachability gaps found',
   "sourceGate === 'wiring_check'",
 ];
+const retiredMetadataCompatibilityBlock = [
+  '// Retired **Wired-into:** metadata must remain excluded from legacy fallback',
+  '// paths in historical plans. This preserves only the old line grammar (case,',
+  '// optional bullet, qualifier, and colon placement), not its wiring behavior.',
+  String.raw`const RETIRED_WIRED_INTO_METADATA_LINE = /^\s*(?:[-*]\s+)?\*\*Wired-into(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;`,
+].join('\n');
 
 function occurrenceCount(source: string, reference: string): number {
   return source.split(reference).length - 1;
@@ -23,32 +29,8 @@ function occurrenceCount(source: string, reference: string): number {
 
 function withoutRetiredMetadataCompatibilityBlock(path: string, source: string): string {
   if (path !== 'engine/plan-task-parse.ts') return source;
-
-  const lines = source.split('\n');
-  const declarationIndexes = lines.flatMap((line, index) => (
-    /^\s*const RETIRED_WIRED_INTO_METADATA_LINE\s*=\s*\/.*\\\*\\\*Wired-into.*\/i;\s*$/.test(line)
-      ? [index]
-      : []
-  ));
-  if (declarationIndexes.length !== 1) return source;
-
-  const declarationIndex = declarationIndexes[0];
-  const compatibilityBlock = lines.slice(declarationIndex - 3, declarationIndex + 1);
-  const compatibilitySource = compatibilityBlock.join('\n');
-  if (
-    compatibilityBlock.length !== 4
-    || !/^\s*\/\/ Retired \*\*Wired-into:\*\* metadata must remain excluded from legacy fallback\s*$/.test(compatibilityBlock[0])
-    || !compatibilityBlock.slice(1, 3).every((line) => (
-      /^\s*\/\//.test(line) && occurrenceCount(line, 'Wired-into') === 0
-    ))
-    || occurrenceCount(compatibilitySource, 'Wired-into') !== 2
-    || forbiddenReferences.some((reference) => (
-      reference !== 'Wired-into' && occurrenceCount(compatibilitySource, reference) > 0
-    ))
-  ) return source;
-
-  lines.splice(declarationIndex - 3, 4);
-  return lines.join('\n');
+  if (occurrenceCount(source, retiredMetadataCompatibilityBlock) !== 1) return source;
+  return source.replace(retiredMetadataCompatibilityBlock, '');
 }
 
 async function productionTypeScriptFiles(directory: string): Promise<string[]> {
