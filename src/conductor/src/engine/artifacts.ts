@@ -826,6 +826,14 @@ export interface CompletionResult {
    * `done:true` and on predicates that don't classify.
    */
   routeClass?: 'named-route' | 'absent';
+  /**
+   * Why acceptance_specs RED evidence was refused. The conductor uses this
+   * machine-readable class to decide whether its bounded pre-heal can repair
+   * missing or malformed recording without re-running a real observed result.
+   */
+  acceptanceRedRefusalClass?: 'missing' | 'unparseable' | 'shape' | 'outcome';
+  /** Whether acceptance_specs completed through a recorded remediation exception. */
+  viaException?: boolean;
 }
 
 async function verdictFreshnessFor(
@@ -1248,6 +1256,12 @@ export function parseAsBuiltVerdict(content: string): string | null {
  */
 export const ACCEPTANCE_SPECS_RED_EVIDENCE = '.pipeline/acceptance-specs-red.json';
 
+export interface AcceptanceRedRemediationException {
+  kind: 'remediation';
+  reason: string;
+  attribution: string;
+}
+
 export interface AcceptanceRedEvidence {
   /** The exact test command run (for the audit trail / reason messages). */
   command: string;
@@ -1259,6 +1273,14 @@ export interface AcceptanceRedEvidence {
   failed: number;
   skipped: number;
   errors: number;
+  /** Identifies the tests whose failures established RED. */
+  failingTests: Array<{ name: string; reason: string }>;
+  /** Timestamp when the RED command ran. */
+  ranAt: string;
+  /** Why the observed failures prove the feature remains unimplemented. */
+  intentRationale: string;
+  /** Recorded authorization for a remediation that could not establish RED separately. */
+  exception?: AcceptanceRedRemediationException;
   /** Raw runner summary line, e.g. pytest's "5 failed in 12.3s". */
   summary?: string;
 }
@@ -1273,60 +1295,126 @@ export interface AcceptanceRedEvidence {
  */
 export function validateAcceptanceRedEvidence(
   ev: unknown,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true } | { ok: false; reason: string; class: 'shape' | 'outcome' } {
   if (typeof ev !== 'object' || ev === null) {
-    return { ok: false, reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is not a JSON object` };
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is not a JSON object`,
+    };
   }
   const e = ev as Record<string, unknown>;
   const num = (k: string): number | null =>
     typeof e[k] === 'number' && Number.isFinite(e[k]) ? (e[k] as number) : null;
   const failed = num('failed');
+  const passed = num('passed');
   const skipped = num('skipped');
   const errors = num('errors');
   const executed = num('executed');
-  if (failed === null || skipped === null || errors === null || executed === null) {
+  if (failed === null || passed === null || skipped === null || errors === null || executed === null) {
     return {
       ok: false,
+      class: 'shape',
       reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record numeric executed/passed/failed/skipped/errors from the real RED run`,
-    };
-  }
-  if (typeof e.command !== 'string' || e.command.trim() === '') {
-    return {
-      ok: false,
-      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record the test "command" that was run`,
-    };
-  }
-  if (!Array.isArray(e.targetSpecs) || e.targetSpecs.length === 0) {
-    return {
-      ok: false,
-      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list the "targetSpecs" the RED run exercised`,
     };
   }
   if (errors > 0) {
     return {
       ok: false,
+      class: 'outcome',
       reason: `acceptance specs errored at collection (${errors}) — they never ran; fix the specs so they execute (this is not RED)`,
     };
   }
   if (skipped > 0) {
     return {
       ok: false,
+      class: 'outcome',
       reason: `${skipped} acceptance spec(s) were SKIPPED — a skipped spec does not establish RED (missing testcontainer/dependency, or a unit-only test scope?). Bring up the required infra and run the feature's specs so they actually execute`,
     };
   }
   if (executed < 1) {
     return {
       ok: false,
+      class: 'outcome',
       reason: `acceptance-specs RED run executed 0 tests — the command did not select the feature's specs`,
     };
   }
-  if (failed < 1) {
+  const hasRemediationException = hasRecordedRemediationException(e.exception);
+  if ('exception' in e && !hasRemediationException) {
     return {
       ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a remediation "exception" with a non-empty reason and attribution`,
+    };
+  }
+  if (failed < 1 && !hasRemediationException) {
+    return {
+      ok: false,
+      class: 'outcome',
       reason: `acceptance-specs RED run shows 0 failed — RED not established; the generated specs must FAIL before implementation`,
     };
   }
+  if (typeof e.command !== 'string' || e.command.trim() === '') {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record the test "command" that was run`,
+    };
+  }
+  if (!Array.isArray(e.targetSpecs) || e.targetSpecs.length === 0) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list the "targetSpecs" the RED run exercised`,
+    };
+  }
+  if (
+    (!hasRemediationException &&
+      (!Array.isArray(e.failingTests) || e.failingTests.length === 0)) ||
+    (Array.isArray(e.failingTests) &&
+      e.failingTests.some(
+        (test) =>
+          typeof test !== 'object' ||
+          test === null ||
+          typeof test.name !== 'string' ||
+          test.name.trim() === '' ||
+          typeof test.reason !== 'string' ||
+          test.reason.trim() === '',
+      ))
+  ) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must list non-empty "failingTests" with a name and reason that established RED`,
+    };
+  }
+  if (typeof e.ranAt !== 'string' || Number.isNaN(Date.parse(e.ranAt))) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a parseable "ranAt" timestamp for the RED run`,
+    };
+  }
+  if (typeof e.intentRationale !== 'string' || e.intentRationale.trim() === '') {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record a non-empty "intentRationale" for why the failures establish RED`,
+    };
+  }
   return { ok: true };
+}
+
+function hasRecordedRemediationException(exception: unknown): boolean {
+  if (typeof exception !== 'object' || exception === null) return false;
+  const candidate = exception as Record<string, unknown>;
+  return (
+    candidate.kind === 'remediation' &&
+    typeof candidate.reason === 'string' &&
+    candidate.reason.trim() !== '' &&
+    typeof candidate.attribution === 'string' &&
+    candidate.attribution.trim() !== ''
+  );
 }
 
 /**
@@ -1847,6 +1935,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     } catch {
       return {
         done: false,
+        acceptanceRedRefusalClass: 'missing',
         reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} is missing — the writing-system-tests skill must run the new specs and record the RED result (a spec that is never executed does not establish RED)`,
       };
     }
@@ -1854,11 +1943,23 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     try {
       parsed = JSON.parse(raw);
     } catch {
-      return { done: false, reason: `invalid JSON in ${ACCEPTANCE_SPECS_RED_EVIDENCE}` };
+      return {
+        done: false,
+        acceptanceRedRefusalClass: 'unparseable',
+        reason: `invalid JSON in ${ACCEPTANCE_SPECS_RED_EVIDENCE}`,
+      };
     }
     const verdict = validateAcceptanceRedEvidence(parsed);
-    if (!verdict.ok) return { done: false, reason: verdict.reason };
-    return { done: true };
+    if (!verdict.ok) {
+      return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
+    }
+    return {
+      done: true,
+      viaException:
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        hasRecordedRemediationException((parsed as Record<string, unknown>).exception),
+    };
   },
 
   // Manual-test passes only when .pipeline/manual-test-results.md exists, has

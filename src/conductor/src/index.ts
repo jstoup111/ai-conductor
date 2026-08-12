@@ -30,6 +30,7 @@ import { realpathSync, writeSync } from 'node:fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor, createFinishPresentationRepair } from './engine/conductor.js';
+import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {
   createProductionFinishPublicationCoordinator,
   createProductionReleaseReadinessObserver,
@@ -1312,6 +1313,7 @@ async function main(): Promise<void> {
     modelPolicy: compatibilityRuntime.policy,
     providerExecution,
     projectRoot,
+    acceptanceRedExec: createProductionAcceptanceRedExec(),
     baseBranch: finishPublicationBaseBranch,
     // FINISH mechanics are engine-owned. Keep this explicit at the foreground
     // composition root so production cannot silently fall back to the

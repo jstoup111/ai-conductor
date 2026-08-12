@@ -560,6 +560,11 @@ describe('integration/gate-loop', () => {
           failed: 1,
           skipped: 0,
           errors: 0,
+          failingTests: [
+            { name: 'fails until implemented', reason: 'Expected true to be false' },
+          ],
+          ranAt: '2026-08-10T00:00:00.000Z',
+          intentRationale: 'The feature acceptance spec executed and failed before implementation.',
         }),
       );
     }
@@ -1312,6 +1317,11 @@ describe('integration/gate-loop', () => {
                 failed: 1,
                 skipped: 0,
                 errors: 0,
+                failingTests: [
+                  { name: 'fails until implemented', reason: 'Expected true to be false' },
+                ],
+                ranAt: '2026-08-10T00:00:00.000Z',
+                intentRationale: 'The feature acceptance spec executed and failed before implementation.',
               }),
             );
             return { success: true };

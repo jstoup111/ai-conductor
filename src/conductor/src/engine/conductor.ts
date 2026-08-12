@@ -152,7 +152,6 @@ import {
   FINISH_CHOICE_MARKER,
   type RemediationGap,
   type CompletionContext,
-  ACCEPTANCE_SPECS_RED_EVIDENCE,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
 } from './artifacts.js';
@@ -193,10 +192,6 @@ import {
   renderDecideEntryHalt,
 } from './decide-entry-policy.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import {
   classifyBuildSettle,
@@ -1948,9 +1943,8 @@ export class Conductor {
     this.guardrails = opts.selfHostGuardrails ?? defaultSelfHostGuardrails;
     this.acceptanceRedExec =
       opts.acceptanceRedExec ??
-      (async (command: string, cwd: string) => {
-        const { stdout } = await execFileAsync(command, { cwd, shell: true } as any);
-        return stdout;
+      (async () => {
+        throw new Error('acceptance RED executor must be injected at a production composition root');
       });
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
@@ -3899,6 +3893,11 @@ export class Conductor {
       breadcrumb.lastEventType = ev.type;
       return this.events.emit(ev);
     };
+    // Acceptance RED telemetry records gate lifecycle but must not alter the
+    // gate's authority: a failing sink leaves every later lifecycle event
+    // eligible to emit and the completion verdict unchanged.
+    const emitAcceptanceRed = (ev: Extract<Parameters<typeof this.events.emit>[0], { type: 'acceptance_red' }>) =>
+      emitTracked(ev).catch(() => undefined);
     let lastSettledUnit: SchedulingUnitRef | undefined;
     const stopAtOperatorParkBoundary =
       async (): Promise<OperatorParkedTermination | undefined> => {
@@ -5504,13 +5503,12 @@ export class Conductor {
             await this.completionCtx(state),
           );
           this.currentAttemptStartedAt = undefined;
-          const marker = ACCEPTANCE_SPECS_RED_EVIDENCE;
-          const namesMissingOrInvalidRedMarker =
+          const hasRepairableRedEvidenceRefusal =
             !preCheck.done &&
-            typeof preCheck.reason === 'string' &&
-            (preCheck.reason.includes(`${marker} is missing`) ||
-              preCheck.reason.includes(`invalid JSON in ${marker}`));
-          if (namesMissingOrInvalidRedMarker) {
+            (preCheck.acceptanceRedRefusalClass === 'missing' ||
+              preCheck.acceptanceRedRefusalClass === 'unparseable' ||
+              preCheck.acceptanceRedRefusalClass === 'shape');
+          if (hasRepairableRedEvidenceRefusal) {
             const specFiles = await findArtifactFilesForStep(
               this.projectRoot,
               'acceptance_specs',
@@ -5525,9 +5523,49 @@ export class Conductor {
                 exec,
               });
               if (healResult.healed) {
-                succeeded = true;
-                successOutput = undefined;
-                acceptanceRedPreHealed = true;
+                // Re-read through the completion predicate so the lifecycle
+                // reports the replacement marker's actual waiver status.
+                const healedCompletion = await checkStepCompletion(
+                  this.projectRoot,
+                  step.name,
+                  await this.completionCtx(state),
+                );
+                if (!healedCompletion.done) {
+                  acceptanceRedHealFailureReason = healedCompletion.reason;
+                } else {
+                  // A successful pre-heal bypasses the ordinary dispatch loop,
+                  // whose lifecycle emissions would otherwise make the recovery
+                  // invisible. Record the refused legacy marker, the bounded
+                  // re-run, and its satisfied replacement in the same order.
+                  await emitAcceptanceRed({
+                    type: 'acceptance_red',
+                    state: 'required',
+                    step: step.name,
+                    viaException: false,
+                  });
+                  await emitAcceptanceRed({
+                    type: 'acceptance_red',
+                    state: 'rejected',
+                    step: step.name,
+                    reason: preCheck.reason,
+                    viaException: false,
+                  });
+                  await emitAcceptanceRed({
+                    type: 'acceptance_red',
+                    state: 'pending',
+                    step: step.name,
+                    viaException: false,
+                  });
+                  await emitAcceptanceRed({
+                    type: 'acceptance_red',
+                    state: 'satisfied',
+                    step: step.name,
+                    viaException: healedCompletion.viaException === true,
+                  });
+                  succeeded = true;
+                  successOutput = undefined;
+                  acceptanceRedPreHealed = true;
+                }
               } else {
                 acceptanceRedHealFailureReason = healResult.reason;
               }
@@ -5754,6 +5792,14 @@ export class Conductor {
             // reads to an operator like worktree corruption and is then retried
             // and kicked back into further dispatches against the same absent
             // path. Classify it here, before any provider call.
+            if (step.name === 'acceptance_specs') {
+              await emitAcceptanceRed({
+                type: 'acceptance_red',
+                state: 'required',
+                step: step.name,
+                viaException: false,
+              });
+            }
             result =
               (await this.missingWorktreeResult(step.name)) ??
               (step.name === 'complexity'
@@ -6278,6 +6324,16 @@ export class Conductor {
             this.currentAttemptStartedAt = undefined;
           }
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity') {
+            if (step.name === 'acceptance_specs') {
+              // The dispatch has returned; publish that RED evidence is now
+              // awaiting its authoritative completion-gate verdict.
+              await emitAcceptanceRed({
+                type: 'acceptance_red',
+                state: 'pending',
+                step: step.name,
+                viaException: false,
+              });
+            }
             let completion = await checkStepCompletion(
               this.projectRoot,
               step.name,
@@ -6312,6 +6368,18 @@ export class Conductor {
             // completion (artifacts.ts, Task 10), so there is nothing left
             // to derive here — a build-gate miss just falls through to the
             // normal retry path below.
+
+            if (step.name === 'acceptance_specs') {
+              const viaException =
+                'viaException' in completion && completion.viaException === true;
+              await emitAcceptanceRed({
+                type: 'acceptance_red',
+                state: completion.done ? 'satisfied' : 'rejected',
+                step: step.name,
+                ...(!completion.done && { reason: completion.reason }),
+                viaException,
+              });
+            }
 
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;

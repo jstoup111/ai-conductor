@@ -104,6 +104,14 @@ const RED_EVIDENCE_JSON = JSON.stringify({
   failed: 1,
   skipped: 0,
   errors: 0,
+  failingTests: [
+    {
+      name: 'Feature acceptance behavior',
+      reason: 'Expected behavior is not implemented yet',
+    },
+  ],
+  ranAt: '2026-08-10T00:00:00.000Z',
+  intentRationale: 'The feature acceptance spec executed and failed before implementation.',
 });
 
 describe('engine/conductor', () => {

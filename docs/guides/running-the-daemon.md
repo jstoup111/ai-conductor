@@ -329,17 +329,35 @@ After spawn, activity is observation-only. While a step's provider subprocess is
 `.pipeline/step-heartbeat` in that feature's worktree on every observed stdout/stderr activity
 boundary (throttled to at most once every few seconds — activity telemetry, not a transcript or
 termination control).
-The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) annotates
-each in-progress feature with the heartbeat's age when one exists:
+The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) shows
+the current dispatch's elapsed time, the latest validated aggregate test outcome, and the
+heartbeat's age when one exists:
 
 ```text
 IN-PROGRESS (1)
-  • my-feature [M] @build (heartbeat 12s ago)
+  • my-feature [M] @build (working) (activity telemetry: 12s ago) (elapsed: 3m12s) (last test outcome: PASS) (children: unknown)
 ```
 
-A feature with no `(heartbeat … ago)` suffix hasn't produced its first activity pulse yet (a step
+A feature with no `(activity telemetry: … ago)` suffix hasn't produced its first activity pulse yet (a step
 that just started) — that's distinct from a stale heartbeat, and is never rendered as if the step
 were stuck.
+
+If no current-dispatch start event is available, elapsed time is omitted. If test-suite evidence is
+missing, malformed, or unreadable, the dashboard says `(last test outcome: unavailable)` rather
+than inferring a result.
+
+`(working)` means the current dispatch has fresh activity telemetry; `(waiting)` means the current
+dispatch returned but its completion gate is still unmet. A waiting acceptance-specs step also
+names its RED-evidence state and the completion predicate's unmet-condition reason:
+
+```text
+IN-PROGRESS (1)
+  • my-feature [M] @acceptance_specs (waiting; RED: rejected; completion condition: acceptance specs RED run shows 0 failed — RED not established) (children: unknown)
+```
+
+`completion condition: unavailable` means the completion predicate did not supply a reason. The
+`(children: unknown)` suffix is constant — the provider layer cannot observe work done by child
+processes it spawns, so the dashboard never fabricates a count.
 
 The heartbeat file is overwritten, never cleared, so a worktree keeps its last pulse after the step
 that wrote it ends. The dashboard ignores a heartbeat from another step or from before the current

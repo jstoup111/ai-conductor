@@ -7,7 +7,13 @@ import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
 import type { GatedItem } from './daemon-backlog.js';
-import { readStepHeartbeat, formatHeartbeatAge } from './step-heartbeat.js';
+import {
+  classifyHeartbeatAge,
+  formatHeartbeatAge,
+  heartbeatBelongsToDispatch,
+  readStepHeartbeat,
+} from './step-heartbeat.js';
+import { readFullSuiteEvidence } from './full-suite-evidence.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -63,9 +69,26 @@ export interface InProgressEntry {
    * activity pulse never renders as "stalled" (see `step-heartbeat.ts`).
    */
   heartbeatAgeMs?: number;
+  /** Elapsed time since the current dispatch's `step_started` event. */
+  elapsedStepTimeMs?: number;
+  /** Most recent validated aggregate test outcome, when run evidence exists. */
+  lastTestOutcome?: 'PASS' | 'FAIL';
+  /**
+   * `working` is backed by fresh telemetry from this dispatch; `waiting` is
+   * backed by a returned dispatch whose completion gate remains unsatisfied.
+   * Undefined deliberately means neither conclusion is supported yet.
+   */
+  activityState?: 'working' | 'waiting';
+  /** Latest RED-evidence lifecycle state from the current dispatch's ledger. */
+  acceptanceRedState?: 'required' | 'pending' | 'satisfied' | 'rejected';
+  /** Completion predicate's exact unmet-condition reason, when it supplied one. */
+  completionCondition?: string;
   /** Current provider preparation/running/recovery phase, if persisted. */
   lifecycle?: ProviderLifecycleDiagnostic;
 }
+
+/** A dashboard observation needs only a short current-activity window. */
+const DASHBOARD_HEARTBEAT_FRESH_MS = 60_000;
 
 export interface EligibleEntry {
   slug: string;
@@ -201,6 +224,8 @@ export interface ScanInheritedStateDeps {
   log?: (msg: string) => void;
   /** Optional PR-state lookup for refining processed-ledger retained reasons. */
   prStateProbe?: PrStateProbe;
+  /** Injectable clock for deterministic dashboard timing. */
+  now?: () => number;
 }
 
 /** The completed-run marker; mirrors the private constant in conductor.ts. */
@@ -349,6 +374,68 @@ async function readProviderLifecycleDiagnostic(
   return latest;
 }
 
+/**
+ * Extract the minimum dispatch lifecycle evidence needed to classify an
+ * in-progress row. The latest `step_started` starts a new logical dispatch;
+ * only an acceptance-RED refusal after that boundary proves the dispatch has
+ * returned while its completion gate remains unmet.
+ */
+async function readDispatchActivity(
+  wt: string,
+  step: string,
+): Promise<{
+  startedAtMs?: number;
+  completionUnmet: boolean;
+  acceptanceRed?: {
+    state: 'required' | 'pending' | 'satisfied' | 'rejected';
+    reason?: string;
+  };
+}> {
+  let content: string;
+  try {
+    content = await readFile(join(wt, '.pipeline/events.jsonl'), 'utf-8');
+  } catch {
+    return { completionUnmet: false };
+  }
+
+  let startedAtMs: number | undefined;
+  let completionUnmet = false;
+  let acceptanceRed: {
+    state: 'required' | 'pending' | 'satisfied' | 'rejected';
+    reason?: string;
+  } | undefined;
+  for (const line of content.split('\n')) {
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(event) || event.step !== step) continue;
+    const timestamp = typeof event.ts === 'string' ? Date.parse(event.ts) : Number.NaN;
+    if (event.type === 'step_started' && Number.isFinite(timestamp)) {
+      startedAtMs = timestamp;
+      completionUnmet = false;
+      acceptanceRed = undefined;
+      continue;
+    }
+    if (startedAtMs !== undefined && event.type === 'acceptance_red' && isAcceptanceRedState(event.state)) {
+      acceptanceRed = {
+        state: event.state,
+        ...(typeof event.reason === 'string' ? { reason: event.reason } : {}),
+      };
+      completionUnmet = event.state === 'pending' || event.state === 'rejected';
+    }
+  }
+  return { startedAtMs, completionUnmet, acceptanceRed };
+}
+
+function isAcceptanceRedState(
+  value: unknown,
+): value is 'required' | 'pending' | 'satisfied' | 'rejected' {
+  return value === 'required' || value === 'pending' || value === 'satisfied' || value === 'rejected';
+}
+
 function parseProviderLifecycleDiagnostic(
   line: string,
   step: string | undefined,
@@ -406,6 +493,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export async function scanInheritedState(
   deps: ScanInheritedStateDeps,
 ): Promise<InheritedState> {
+  const now = deps.now ?? Date.now;
   const processed = await readProcessedEntries(deps.processedDir);
   const processedSlugs = new Set(processed.map((p) => p.slug));
   const processedBySlug = new Map(processed.map((entry) => [entry.slug, entry]));
@@ -520,8 +608,29 @@ export async function scanInheritedState(
       // multi-hour "stall" for a step that just started.
       const heartbeat = await readStepHeartbeat(wt);
       if (heartbeat && heartbeat.step === entry.step) {
-        const ageMs = Date.now() - Date.parse(heartbeat.ts);
+        const ageMs = now() - Date.parse(heartbeat.ts);
         if (Number.isFinite(ageMs)) entry.heartbeatAgeMs = Math.max(0, ageMs);
+      }
+      const activity = await readDispatchActivity(wt, entry.step);
+      if (activity.startedAtMs !== undefined) {
+        entry.elapsedStepTimeMs = Math.max(0, now() - activity.startedAtMs);
+      }
+      const testEvidence = await readFullSuiteEvidence(wt);
+      if ('evidence' in testEvidence && testEvidence.evidence) {
+        entry.lastTestOutcome = testEvidence.evidence.outcome;
+      }
+      if (activity.acceptanceRed) {
+        entry.acceptanceRedState = activity.acceptanceRed.state;
+        entry.completionCondition = activity.acceptanceRed.reason;
+      }
+      if (activity.completionUnmet) {
+        entry.activityState = 'waiting';
+      } else if (
+        activity.startedAtMs !== undefined
+        && heartbeatBelongsToDispatch(heartbeat, entry.step, activity.startedAtMs)
+        && classifyHeartbeatAge(heartbeat, now(), DASHBOARD_HEARTBEAT_FRESH_MS).kind === 'fresh'
+      ) {
+        entry.activityState = 'working';
       }
       const lifecycle = await readProviderLifecycleDiagnostic(wt, entry.step);
       if (lifecycle?.phase !== 'halted') entry.lifecycle = lifecycle;
@@ -617,6 +726,30 @@ function prSuffix(prUrl?: string): string {
 function heartbeatSuffix(heartbeatAgeMs?: number): string {
   if (heartbeatAgeMs === undefined) return '';
   return ` (activity telemetry: ${formatHeartbeatAge(heartbeatAgeMs)} ago)`;
+}
+
+function elapsedStepTimeSuffix(elapsedStepTimeMs?: number): string {
+  return elapsedStepTimeMs === undefined ? '' : ` (elapsed: ${formatHeartbeatAge(elapsedStepTimeMs)})`;
+}
+
+function lastTestOutcomeSuffix(lastTestOutcome?: 'PASS' | 'FAIL'): string {
+  return ` (last test outcome: ${lastTestOutcome ?? 'unavailable'})`;
+}
+
+function activityStateSuffix(entry: InProgressEntry): string {
+  const state = entry.activityState;
+  const redState = entry.acceptanceRedState ? `RED: ${entry.acceptanceRedState}` : undefined;
+  if (state === 'waiting') {
+    return ` (waiting${redState ? `; ${redState}` : ''}; completion condition: ${entry.completionCondition ?? 'unavailable'})`;
+  }
+  if (state) return ` (${[state, redState].filter(Boolean).join('; ')})`;
+  return redState ? ` (${redState})` : '';
+}
+
+function childWorkSuffix(): string {
+  // The provider layer cannot observe child work; do not fabricate a zero count (#1441).
+  // See jstoup111/ai-conductor#1441.
+  return ' (children: unknown)';
 }
 
 function lifecycleSuffix(lifecycle?: ProviderLifecycleDiagnostic): string {
@@ -750,7 +883,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix()}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(

@@ -97,7 +97,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  function runConductor() {
+  function runConductor(maxRetries = 1) {
     const { runner, log } = trackingRunner();
     const reasons: string[] = [];
     let haltReason: string | undefined;
@@ -115,7 +115,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
       mode: 'auto',
       daemon: true,
       verifyArtifacts: true,
-      maxRetries: 1,
+      maxRetries,
       fromStep: 'acceptance_specs',
     });
     return { conductor, log, reasons, getHaltReason: () => haltReason };
@@ -125,7 +125,25 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     // No run contract / marker on disk — the completion gate misses with the
     // "marker is missing" reason and committed spec files are present, which
     // is exactly the condition the self-heal call site must fire on.
-    selfHealAcceptanceRedMock.mockResolvedValue({ healed: true });
+    selfHealAcceptanceRedMock.mockImplementation(async ({ worktree }: { worktree: string }) => {
+      await writeFile(
+        join(worktree, '.pipeline', 'acceptance-specs-red.json'),
+        JSON.stringify({
+          command: 'npm test',
+          targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+          executed: 1,
+          passed: 0,
+          failed: 1,
+          skipped: 0,
+          errors: 0,
+          failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+          ranAt: new Date().toISOString(),
+          intentRationale: 'The feature acceptance behavior remains unimplemented.',
+        }),
+        'utf-8',
+      );
+      return { healed: true };
+    });
 
     const { conductor, log, reasons, getHaltReason } = runConductor();
     await conductor.run();
@@ -141,6 +159,158 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.acceptance_specs).toBe('done');
+  });
+
+  it('reports a successful pre-heal as satisfied via exception when its preserved marker waives RED', async () => {
+    const exception = {
+      kind: 'remediation',
+      reason: 'The remediation coupled the production and acceptance changes.',
+      attribution: 'remediate',
+    };
+    selfHealAcceptanceRedMock.mockImplementation(async ({ worktree }: { worktree: string }) => {
+      await writeFile(
+        join(worktree, '.pipeline', 'acceptance-specs-red.json'),
+        JSON.stringify({
+          command: 'npm test',
+          targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+          executed: 1,
+          passed: 1,
+          failed: 0,
+          skipped: 0,
+          errors: 0,
+          ranAt: new Date().toISOString(),
+          intentRationale: 'The recorded remediation exception documents why RED is waived.',
+          exception,
+        }),
+        'utf-8',
+      );
+      return { healed: true };
+    });
+    const observed: Array<Record<string, unknown>> = [];
+    events.on('acceptance_red', (event) => {
+      observed.push(event as unknown as Record<string, unknown>);
+    });
+
+    const { conductor } = runConductor();
+    await conductor.run();
+
+    expect(observed).toContainEqual(expect.objectContaining({
+      type: 'acceptance_red',
+      state: 'satisfied',
+      step: 'acceptance_specs',
+      viaException: true,
+    }));
+  });
+
+  it('invokes selfHealAcceptanceRed for a shape-class marker refusal, not only missing or invalid JSON', async () => {
+    // This marker is valid JSON and has a real observed RED outcome, but is
+    // incomplete evidence because it lacks the required intentRationale.
+    // The completion predicate classifies that as a repairable shape defect.
+    await writeFile(
+      join(dir, '.pipeline', 'acceptance-specs-red.json'),
+      JSON.stringify({
+        command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+        targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errors: 0,
+        failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+        ranAt: new Date().toISOString(),
+      }),
+      'utf-8',
+    );
+    selfHealAcceptanceRedMock.mockImplementation(async ({ worktree }: { worktree: string }) => {
+      await writeFile(
+        join(worktree, '.pipeline', 'acceptance-specs-red.json'),
+        JSON.stringify({
+          command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+          targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+          executed: 1,
+          passed: 0,
+          failed: 1,
+          skipped: 0,
+          errors: 0,
+          failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+          ranAt: new Date().toISOString(),
+          intentRationale: 'The self-heal repaired the missing provenance field.',
+        }),
+        'utf-8',
+      );
+      return { healed: true };
+    });
+
+    const { conductor, log, reasons } = runConductor();
+    await conductor.run();
+
+    expect(selfHealAcceptanceRedMock).toHaveBeenCalledTimes(1);
+    expect(log).not.toContain('run:acceptance_specs');
+    expect(reasons).toEqual([]);
+  });
+
+  it.each([
+    ['failed == 0', { failed: 0 }],
+    ['skipped > 0', { skipped: 1 }],
+    ['errors > 0', { errors: 1 }],
+  ])('does not rerun a marker refused for the real observed outcome: %s', async (_name, outcome) => {
+    await writeFile(
+      join(dir, '.pipeline', 'acceptance-specs-red.json'),
+      JSON.stringify({
+        command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+        targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errors: 0,
+        failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+        ranAt: new Date().toISOString(),
+        intentRationale: 'The observed failure proves the behavior remains unimplemented.',
+        ...outcome,
+      }),
+      'utf-8',
+    );
+
+    const { conductor, log } = runConductor();
+    await conductor.run();
+
+    expect(selfHealAcceptanceRedMock).not.toHaveBeenCalled();
+    expect(log).toContain('run:acceptance_specs');
+  });
+
+  it('does not rerun a shape-class refusal when no committed acceptance specs exist', async () => {
+    await rm(join(dir, 'test', 'acceptance', 'feature.acceptance.test.ts'));
+    await writeFile(
+      join(dir, '.pipeline', 'acceptance-specs-red.json'),
+      JSON.stringify({
+        command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
+        targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
+        executed: 1,
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        errors: 0,
+        failingTests: [{ name: 'feature behavior', reason: 'not implemented' }],
+        ranAt: new Date().toISOString(),
+      }),
+      'utf-8',
+    );
+
+    const { conductor } = runConductor();
+    await conductor.run();
+
+    expect(selfHealAcceptanceRedMock).not.toHaveBeenCalled();
+  });
+
+  it('attempts the bounded pre-heal only once per step run', async () => {
+    selfHealAcceptanceRedMock.mockResolvedValue({ healed: false, reason: 'run contract missing: x' });
+
+    const { conductor, log } = runConductor(2);
+    await conductor.run();
+
+    expect(selfHealAcceptanceRedMock).toHaveBeenCalledTimes(1);
+    expect(log.filter((entry) => entry === 'run:acceptance_specs')).toHaveLength(2);
   });
 
   it('falls through to the existing retry/HALT behavior unchanged when the heal fails', async () => {
@@ -159,5 +329,64 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     const result = await readState(statePath);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.value.acceptance_specs).not.toBe('done');
+  });
+});
+
+describe('Conductor.run acceptance_specs RED dispatch lifecycle (Task 10)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    selfHealAcceptanceRedMock.mockReset();
+    dir = await mkdtemp(join(tmpdir(), 'acceptance-red-dispatch-lifecycle-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await seedAllDoneExcept(statePath, 'acceptance_specs');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await mkdir(join(dir, 'test', 'acceptance'), { recursive: true });
+    await writeFile(join(dir, 'test', 'acceptance', 'feature.acceptance.test.ts'), '// spec\n', 'utf-8');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('emits required before dispatch, pending at the completion seam, and rejected when a successful dispatch leaves the gate unsatisfied', async () => {
+    // A missing marker reaches Task 9's pre-heal seam first. Refusing that
+    // heal preserves the ordinary dispatch path, whose lifecycle is this
+    // test's only concern.
+    selfHealAcceptanceRedMock.mockResolvedValue({ healed: false, reason: 'run contract missing: x' });
+    const order: string[] = [];
+    events.on('acceptance_red', (event) => {
+      if (event.type === 'acceptance_red') order.push(`event:${event.state}`);
+    });
+    const runner: StepRunner = {
+      run: async (step): Promise<StepRunResult> => {
+        order.push(`dispatch:${step}`);
+        return { success: true };
+      },
+      resetSession: async () => {},
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'acceptance_specs',
+    });
+
+    await conductor.run();
+
+    expect(order).toEqual([
+      'event:required',
+      'dispatch:acceptance_specs',
+      'event:pending',
+      'event:rejected',
+    ]);
   });
 });

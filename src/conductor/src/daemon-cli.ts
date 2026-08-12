@@ -50,6 +50,7 @@ import {
   createFinishPresentationRepair,
   type OperatorParkedTermination,
 } from './engine/conductor.js';
+import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {
   createProductionFinishPublicationCoordinator,
   createProductionReleaseReadinessObserver,
@@ -1006,6 +1007,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       modelPolicy: selectedRuntime.policy,
       providerExecution,
       projectRoot: wt.path,
+      acceptanceRedExec: createProductionAcceptanceRedExec(),
       // Daemon FINISH shares the same engine-owned coordinator as foreground
       // conduct; its git/GitHub boundaries remain injectable at this root.
       finishPublication: createProductionFinishPublicationCoordinator({

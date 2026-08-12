@@ -39,7 +39,7 @@ describe('repository-local release-disposition contract', () => {
       claudeTarget: canonicalDir,
       byteIdentical: true,
       config: {
-        // Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
+        // Provider remains pinned to the configured Claude judgement lane.
         llm_provider: 'claude',
         model: 'sonnet',
         after: 'maintain-documentation',

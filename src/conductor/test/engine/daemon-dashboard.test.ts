@@ -13,6 +13,7 @@ import type { ComplexityTier } from '../../src/types/index.js';
 import type { PriorityResolution } from '../../src/engine/backlog-priority.js';
 import type { GatedItem } from '../../src/engine/daemon-backlog.js';
 import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
+import { writeFullSuiteEvidence, type FullSuiteEvidence } from '../../src/engine/full-suite-evidence.js';
 
 function item(slug: string, tier?: ComplexityTier): BacklogItem {
   return tier ? { slug, tier } : { slug };
@@ -65,6 +66,52 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       })}\n`,
       'utf-8',
     );
+  }
+  async function makeTestSuiteEvidence(slug: string, outcome: 'PASS' | 'FAIL'): Promise<void> {
+    const timestamp = '2026-08-11T12:00:00.000Z';
+    const evidence: FullSuiteEvidence = outcome === 'PASS'
+      ? {
+          version: 3,
+          outcome,
+          reason: 'exit_zero',
+          fingerprint: 'sha256:fixture',
+          categoryFingerprints: {
+            additional_inputs: 'additional',
+            dependencies: 'dependencies',
+            environment: 'environment',
+            migrations: 'migrations',
+            project_config: 'project-config',
+            source: 'source',
+            test_infrastructure: 'infrastructure',
+            tests: 'tests',
+          },
+          provenanceHeadSha: 'fixture-head',
+          command: 'true',
+          workingDirectory: '.',
+          startedAt: timestamp,
+          endedAt: timestamp,
+          durationMs: 0,
+          exitCode: 0,
+          stdout: '',
+          stderr: '',
+        }
+      : {
+          version: 3,
+          outcome,
+          reason: 'nonzero_exit',
+          fingerprint: null,
+          provenanceHeadSha: null,
+          command: 'false',
+          workingDirectory: '.',
+          startedAt: timestamp,
+          endedAt: timestamp,
+          durationMs: 0,
+          exitCode: 1,
+          signal: null,
+          stdout: '',
+          stderr: '',
+        };
+    await writeFullSuiteEvidence(join(worktreeBase, slug), evidence);
   }
   // Legacy ledger format (plain `shipped`).
   async function makeProcessed(slug: string): Promise<void> {
@@ -155,6 +202,209 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 
     const entry = state.inProgress.find((p) => p.slug === 'ip1');
     expect(entry?.heartbeatAgeMs).toBeUndefined();
+  });
+
+  it('classifies fresh current-dispatch activity as working, a refused completion as waiting, and a prior-dispatch heartbeat as neither', async () => {
+    const now = Date.now();
+    await makeStateful('working', { acceptance_specs: 'in_progress' });
+    await makeStateful('waiting', { acceptance_specs: 'in_progress' });
+    await makeStateful('leftover', { acceptance_specs: 'in_progress' });
+
+    await writeFile(
+      join(worktreeBase, 'working', '.pipeline', 'events.jsonl'),
+      `${JSON.stringify({
+        type: 'step_started', step: 'acceptance_specs', index: 11,
+        ts: new Date(now - 10_000).toISOString(),
+      })}\n`,
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeBase, 'working', '.pipeline', 'step-heartbeat'),
+      JSON.stringify({ step: 'acceptance_specs', ts: new Date(now - 1_000).toISOString() }),
+      'utf-8',
+    );
+
+    await writeFile(
+      join(worktreeBase, 'waiting', '.pipeline', 'events.jsonl'),
+      [
+        JSON.stringify({
+          type: 'step_started', step: 'acceptance_specs', index: 11,
+          ts: new Date(now - 10_000).toISOString(),
+        }),
+        JSON.stringify({
+          type: 'acceptance_red', step: 'acceptance_specs', state: 'rejected',
+          ts: new Date(now - 1_000).toISOString(),
+        }),
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+
+    await writeFile(
+      join(worktreeBase, 'leftover', '.pipeline', 'events.jsonl'),
+      `${JSON.stringify({
+        type: 'step_started', step: 'acceptance_specs', index: 11,
+        ts: new Date(now - 10_000).toISOString(),
+      })}\n`,
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeBase, 'leftover', '.pipeline', 'step-heartbeat'),
+      JSON.stringify({ step: 'acceptance_specs', ts: new Date(now - 20_000).toISOString() }),
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.inProgress.find((entry) => entry.slug === 'working')?.activityState).toBe('working');
+    expect(state.inProgress.find((entry) => entry.slug === 'waiting')?.activityState).toBe('waiting');
+    expect(state.inProgress.find((entry) => entry.slug === 'leftover')?.activityState).toBeUndefined();
+  });
+
+  it('renders current-dispatch elapsed time and latest test outcome for working and waiting rows', async () => {
+    const now = Date.parse('2026-08-11T12:01:05.000Z');
+    const startedAt = new Date(now - 65_000).toISOString();
+    await makeStateful('working-evidence', { acceptance_specs: 'in_progress' });
+    await makeStateful('waiting-evidence', { acceptance_specs: 'in_progress' });
+    await writeFile(
+      join(worktreeBase, 'working-evidence', '.pipeline', 'events.jsonl'),
+      JSON.stringify({ type: 'step_started', step: 'acceptance_specs', index: 11, ts: startedAt }) + '\n',
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeBase, 'working-evidence', '.pipeline', 'step-heartbeat'),
+      JSON.stringify({ step: 'acceptance_specs', ts: new Date(now - 1_000).toISOString() }),
+      'utf-8',
+    );
+    await writeFile(
+      join(worktreeBase, 'waiting-evidence', '.pipeline', 'events.jsonl'),
+      [
+        { type: 'step_started', step: 'acceptance_specs', index: 11, ts: startedAt },
+        { type: 'acceptance_red', step: 'acceptance_specs', state: 'rejected', ts: new Date(now - 1_000).toISOString() },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf-8',
+    );
+    await makeTestSuiteEvidence('working-evidence', 'PASS');
+    await makeTestSuiteEvidence('waiting-evidence', 'FAIL');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      now: () => now,
+    });
+
+    const out = renderDashboard(state);
+    expect(out).toContain('working-evidence @acceptance_specs (working)');
+    expect(out).toContain('waiting-evidence @acceptance_specs (waiting; RED: rejected; completion condition: unavailable)');
+    expect(out).toContain('(elapsed: 1m5s) (last test outcome: PASS)');
+    expect(out).toContain('(elapsed: 1m5s) (last test outcome: FAIL)');
+  });
+
+  it('renders unavailable test outcome when run evidence cannot be read', async () => {
+    const now = Date.parse('2026-08-11T12:01:05.000Z');
+    await makeStateful('missing-test-evidence', { acceptance_specs: 'in_progress' });
+    await writeFile(
+      join(worktreeBase, 'missing-test-evidence', '.pipeline', 'events.jsonl'),
+      JSON.stringify({ type: 'step_started', step: 'acceptance_specs', index: 11, ts: new Date(now - 5_000).toISOString() }) + '\n',
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      now: () => now,
+    });
+
+    expect(renderDashboard(state)).toContain(
+      'missing-test-evidence @acceptance_specs (elapsed: 5s) (last test outcome: unavailable)',
+    );
+  });
+
+  it('retains the latest acceptance RED state and completion condition for a waiting dispatch', async () => {
+    const now = Date.now();
+    await makeStateful('with-condition', { acceptance_specs: 'in_progress' });
+    await makeStateful('without-condition', { acceptance_specs: 'in_progress' });
+    for (const [slug, reason] of [
+      ['with-condition', 'acceptance specs RED run shows 0 failed — RED not established'],
+      ['without-condition', undefined],
+    ] as const) {
+      await writeFile(
+        join(worktreeBase, slug, '.pipeline', 'events.jsonl'),
+        [
+          { type: 'step_started', step: 'acceptance_specs', index: 11, ts: new Date(now - 10_000).toISOString() },
+          { type: 'acceptance_red', step: 'acceptance_specs', state: 'rejected', ...(reason ? { reason } : {}), ts: new Date(now - 1_000).toISOString() },
+        ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+        'utf-8',
+      );
+    }
+
+    const state = await scanInheritedState({ worktreeBase, processedDir, discover: async () => [] });
+
+    expect(state.inProgress.find((entry) => entry.slug === 'with-condition')).toMatchObject({
+      activityState: 'waiting',
+      acceptanceRedState: 'rejected',
+      completionCondition: 'acceptance specs RED run shows 0 failed — RED not established',
+    });
+    expect(renderDashboard(state)).toContain(
+      'with-condition @acceptance_specs (waiting; RED: rejected; completion condition: acceptance specs RED run shows 0 failed — RED not established)',
+    );
+    expect(renderDashboard(state)).toContain(
+      'without-condition @acceptance_specs (waiting; RED: rejected; completion condition: unavailable)',
+    );
+  });
+
+  it('closes a current dispatch waiting state when later acceptance RED evidence is satisfied', async () => {
+    const now = Date.now();
+    await makeStateful('red-satisfied', { acceptance_specs: 'in_progress' });
+    await writeFile(
+      join(worktreeBase, 'red-satisfied', '.pipeline', 'events.jsonl'),
+      [
+        { type: 'step_started', step: 'acceptance_specs', index: 11, ts: new Date(now - 10_000).toISOString() },
+        { type: 'acceptance_red', step: 'acceptance_specs', state: 'rejected', ts: new Date(now - 2_000).toISOString() },
+        { type: 'acceptance_red', step: 'acceptance_specs', state: 'satisfied', ts: new Date(now - 1_000).toISOString() },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({ worktreeBase, processedDir, discover: async () => [] });
+
+    const entry = state.inProgress.find((candidate) => candidate.slug === 'red-satisfied');
+    expect({
+      acceptanceRedState: entry?.acceptanceRedState,
+      isWaiting: entry?.activityState === 'waiting',
+    }).toEqual({
+      acceptanceRedState: 'satisfied',
+      isWaiting: false,
+    });
+  });
+
+  it('renders child work as unknown and degrades when the event ledger is unavailable', async () => {
+    await makeStateful('missing-ledger', { acceptance_specs: 'in_progress' });
+    await makeStateful('unreadable-ledger', { acceptance_specs: 'in_progress' });
+    // A directory at the ledger path makes readFile fail portably, including
+    // when tests run as a user that can bypass ordinary file permissions.
+    await mkdir(join(worktreeBase, 'unreadable-ledger', '.pipeline', 'events.jsonl'));
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+    expect(state).toMatchObject({
+      inProgress: expect.arrayContaining([
+        { slug: 'missing-ledger', step: 'acceptance_specs' },
+        { slug: 'unreadable-ledger', step: 'acceptance_specs' },
+      ]),
+    });
+
+    const out = renderDashboard(state);
+    expect(out).toContain('children: unknown');
+    expect(out).not.toContain('children: 0');
   });
 
   it('reads the current lifecycle phase and attempt evidence for an in-progress feature', async () => {
