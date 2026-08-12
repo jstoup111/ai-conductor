@@ -65,6 +65,12 @@ describe('CLI', () => {
     expect(help).not.toContain('--output');
   });
 
+  it('does not register or advertise the removed validate-wired-into subcommand', () => {
+    const program = createProgram();
+    expect(program.commands.map((command) => command.name())).not.toContain('validate-wired-into');
+    expect(renderFullHelp()).not.toContain('validate-wired-into');
+  });
+
   // --from is the real, documented way to start at a specific step and must
   // be unaffected by the --step/--output removal.
   it('--from still works and still satisfies the state-flag check', () => {
