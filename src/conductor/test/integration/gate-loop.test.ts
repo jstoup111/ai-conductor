@@ -1578,7 +1578,8 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: isFail ? 'FAIL' : 'PASS',
                 reasons: isFail ? ['diff touches merged-pr.txt which is out of scope'] : [],
-                rubric: { tautology: isFail, scope: false, rootCause: false, completeness: false, wiring: false },
+                findings: isFail ? { scope: ['diff touches merged-pr.txt which is out of scope'] } : undefined,
+                rubric: { tautology: false, scope: isFail, rootCause: false, completeness: false, wiring: false },
               }),
             );
             // Simulate `runBuildReview` having assembled fresh-base evidence
@@ -2477,7 +2478,11 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
         if (step === 'retro') {
           await writeFile(join(repoDir, '.pipeline/retro.md'), '# Retro\n');
         } else if (step === 'finish') {
-          await writeFile(join(repoDir, '.pipeline/finish-choice'), 'keep\n');
+          await writeFile(join(repoDir, '.pipeline/finish-choice'), 'pr\n');
+          const state = JSON.parse(await readFile(realStatePath, 'utf-8'));
+          state.pr_url = 'https://example.com/pr/1';
+          await writeFile(realStatePath, JSON.stringify(state));
+          await writeFile(join(repoDir, '.pipeline/conduct-state.json'), JSON.stringify(state));
         }
         return { success: true };
       },
@@ -2495,6 +2500,9 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
       maxRetries: 1,
       baseBranch: 'main',
       config: { steps: { manual_test: { disable: true } } },
+      git: async (args: string[]) => args.includes('--symbolic-full-name')
+        ? { stdout: 'refs/remotes/origin/feature/current-feature\n' }
+        : { stdout: '' },
       shipmentEvidence: validShipmentEvidence,
     };
 
@@ -2504,24 +2512,7 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
     expect(buildRuns).toBeGreaterThan(0);
     expect(staleReportWasPresentBeforeAudit).toBe(false);
 
-    // The coverage-only failure routed through /remediate into BUILD. Resume
-    // the real SHIP tail after recording BUILD's deterministic native evidence;
-    // this dispatch adds FR-3's ALIGNED row and is the convergence proof.
-    const afterBuild = await readRealState(realStatePath);
-    if (!afterBuild.ok) throw new Error(afterBuild.error.message);
-    await writeRealState(realStatePath, {
-      ...afterBuild.value,
-      wiring_check: 'done',
-      test_suite: 'done',
-      build_review: 'skipped',
-      prd_audit: 'stale',
-    });
-    await new RealConductor({ ...conductorOptions, fromStep: 'prd_audit' }).run();
-
-    // The real auto tail may re-dispatch the audit while it converges the
-    // intervening BUILD verification group; the final state below is the
-    // authoritative convergence proof.
-    expect(auditRuns).toBeGreaterThanOrEqual(2);
+    expect(auditRuns).toBe(2);
     const finalState = await readRealState(realStatePath);
     expect(finalState.ok && finalState.value.prd_audit).toBe('done');
   });

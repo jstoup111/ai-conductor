@@ -128,7 +128,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             JSON.stringify({
               verdict: 'FAIL',
               reasons: [`diff touches ${flaggedPath} which is out of scope`],
-              rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+              findings: { scope: [`diff touches ${flaggedPath} which is out of scope`] },
+              rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
             }),
           );
           return {
@@ -236,7 +237,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               // feat.txt is the branch's OWN work — genuine out-of-scope,
               // not a stale-mirage, under any base.
               reasons: ['diff touches feat.txt which is out of scope'],
-              rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+              findings: { scope: ['diff touches feat.txt which is out of scope'] },
+              rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
             }),
           );
           return {
@@ -335,7 +337,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: ['diff touches feat.txt which is out of scope'],
-                rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+                findings: { scope: ['diff touches feat.txt which is out of scope'] },
+                rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
               }),
             );
             return {
@@ -355,7 +358,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
-                rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+                findings: { scope: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`] },
+                rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
               }),
             );
             return {
@@ -378,7 +382,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['diff touches feat.txt which is out of scope'],
-              rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+              findings: { scope: ['diff touches feat.txt which is out of scope'] },
+              rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
             }),
           );
           return {
@@ -448,7 +453,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               JSON.stringify({
                 verdict: 'FAIL',
                 reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
-                rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+                findings: { scope: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`] },
+                rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
               }),
             );
             return {
