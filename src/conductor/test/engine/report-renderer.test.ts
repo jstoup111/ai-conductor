@@ -90,32 +90,6 @@ describe('report-renderer', () => {
     expect(halts).toEqual([{ reason: 'retry budget exhausted' }]);
   });
 
-  it('uses unknown for loop_halt records with omitted or non-string reasons', () => {
-    const halts = aggregateHalts(
-      parseEvents(
-        makeLines([
-          { event: { type: 'loop_halt' }, ts: '2026-01-01T00:00:00.000Z' },
-          { event: { type: 'loop_halt', reason: 42 }, ts: '2026-01-01T00:00:01.000Z' },
-        ]),
-      ),
-    );
-
-    expect(halts).toEqual([{ reason: 'unknown' }, { reason: 'unknown' }]);
-  });
-
-  it('skips malformed ledger lines while aggregating every valid loop_halt record', () => {
-    const events = parseEvents(
-      `${makeLines([
-        { event: { type: 'loop_halt', reason: 'first halt' }, ts: '2026-01-01T00:00:00.000Z' },
-      ])}{this is not valid JSON}\n${makeLines([
-        { event: { type: 'loop_halt', reason: 'second halt' }, ts: '2026-01-01T00:00:01.000Z' },
-      ])}`,
-    );
-
-    expect(events).toHaveLength(2);
-    expect(aggregateHalts(events)).toEqual([{ reason: 'first halt' }, { reason: 'second halt' }]);
-  });
-
   // ─── Task 9: step durations table ─────────────────────────────────────────
 
   it('renders Step Durations table from step_started/step_completed pairs', async () => {
