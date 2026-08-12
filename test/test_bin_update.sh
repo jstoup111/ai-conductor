@@ -181,7 +181,11 @@ assert_resolved_identity() {
   local expected_distance=$5 expected_source=$6
   local kind identity baseline distance source
 
-  IFS=$'\t' read -r kind identity baseline distance source <<< "$RESOLVER_OUT"
+  kind=$(printf '%s\n' "$RESOLVER_OUT" | cut -f1)
+  identity=$(printf '%s\n' "$RESOLVER_OUT" | cut -f2)
+  baseline=$(printf '%s\n' "$RESOLVER_OUT" | cut -f3)
+  distance=$(printf '%s\n' "$RESOLVER_OUT" | cut -f4)
+  source=$(printf '%s\n' "$RESOLVER_OUT" | cut -f5)
   assert "$desc: exits 0" "$([ "$RESOLVER_CODE" -eq 0 ] && echo 0 || echo 1)"
   assert "$desc: kind is $expected_kind" "$([ "$kind" = "$expected_kind" ] && echo 0 || echo 1)"
   assert "$desc: identity is $expected_identity" "$([ "$identity" = "$expected_identity" ] && echo 0 || echo 1)"
