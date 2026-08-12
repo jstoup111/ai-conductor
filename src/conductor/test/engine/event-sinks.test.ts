@@ -482,6 +482,30 @@ describe('event sink subscriptions', () => {
     ))).toEqual(new Set(PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES));
     expect(persisted).toEqual(expect.arrayContaining(BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES));
     expect(persisted).not.toEqual(Object.keys(EVENT_SINKS));
+  it('pins the persisted volume to the three halt additions and excludes non-halt lifecycle events', () => {
+    const neverPersisted = [
+      'loop_converged',
+      'build_review_base',
+      'pipeline_closeout',
+      'retry_decision',
+      'group_member_step',
+      'test_suite_verification',
+      ...NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES,
+    ] satisfies Array<ConductorEvent['type']>;
+
+    expect({
+      persisted: persistedEventTypes(),
+      haltAdditions: persistedEventTypes().filter((type) => [
+        'loop_halt',
+        'halt_marker_write_failed',
+        'rebase_conflict_halt',
+      ].includes(type)),
+      excluded: neverPersisted.filter((type) => persistedEventTypes().includes(type)),
+    }).toEqual({
+      persisted: PINNED_PERSISTED_EVENT_TYPES,
+      haltAdditions: ['loop_halt', 'halt_marker_write_failed', 'rebase_conflict_halt'],
+      excluded: [],
+    });
   });
 
   it('derives the audited set without changing prior routing', () => {

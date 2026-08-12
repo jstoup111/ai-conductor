@@ -25,8 +25,9 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
-import type { ExecuteProviderCandidatesInput } from '../../src/engine/provider-execution.js';
+import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
+import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -81,6 +82,63 @@ function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefine
 }
 
 describe('DefaultStepRunner', () => {
+  async function exhaustLifecycle(projectDir: string) {
+    let now = 0;
+    const episodeStore: ProviderLifecycleEpisodeStore = {
+      readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
+      writeProviderLifecycleEpisode: vi.fn(),
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+      configuredProviders: ['codex'],
+      providerLifecycleTimer: {
+        now: () => now,
+        schedule: (callback) => {
+          queueMicrotask(() => { now += 1; callback(); });
+          return {};
+        },
+        cancel: () => undefined,
+      },
+      providerLifecycleEpisodeStore: episodeStore,
+    });
+    const dispatch = (runner as unknown as {
+      dispatchProviderWithLifecycleSupervision: (
+        step: StepName,
+        options: ExecuteProviderCandidatesInput['options'],
+        run: () => Promise<never>,
+      ) => Promise<ProviderExecutionResult>;
+    }).dispatchProviderWithLifecycleSupervision.bind(runner);
+    return dispatch('build', { prompt: 'prepare provider', cwd: projectDir }, () => new Promise<never>(() => undefined));
+  }
+
+  it('preserves a failed lifecycle halt-marker write for the provider caller', async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), 'lifecycle-halt-failure-'));
+    const projectFile = join(temporaryDirectory, 'not-a-directory');
+    await writeFile(projectFile, 'not a directory');
+    try {
+      const result = await exhaustLifecycle(projectFile);
+      expect(result).toMatchObject({ success: false, haltMarkerWrite: { status: 'failed' } });
+      const marker = result.haltMarkerWrite!;
+      if (marker.status !== 'failed') throw new Error('expected failed marker write');
+      expect(result.output).toBe(
+        `Provider preparation timed out twice. Halt marker write failed at ${marker.path}: ${marker.reason}.`,
+      );
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the successful lifecycle halt-marker message unchanged', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'lifecycle-halt-success-'));
+    try {
+      expect(await exhaustLifecycle(projectDir)).toMatchObject({
+        output: 'Provider preparation timed out twice. See .pipeline/HALT.',
+        haltMarkerWrite: { status: 'written' },
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       name: 'autonomous scalar conversion',

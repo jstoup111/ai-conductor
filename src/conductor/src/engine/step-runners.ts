@@ -162,6 +162,24 @@ function isProviderLifecycleHalted(
   return 'kind' in result && result.kind === 'halted';
 }
 
+/** Preserve an exhausted lifecycle's durable-marker outcome for provider callers. */
+function mapProviderLifecycleHalt(
+  result: ProviderLifecycleHaltedResult,
+  preferredProvider: string,
+): ProviderExecutionResult {
+  const markerMessage = result.haltMarkerWrite.status === 'written'
+    ? ' See .pipeline/HALT.'
+    : ` Halt marker write failed at ${result.haltMarkerWrite.path}: ${result.haltMarkerWrite.reason}.`;
+  return {
+    success: false,
+    output: `Provider preparation timed out twice.${markerMessage}`,
+    exitCode: 1,
+    preferredProvider,
+    attempts: [],
+    haltMarkerWrite: result.haltMarkerWrite,
+  };
+}
+
 /**
  * A non-zero scoped command is counterfactual RED evidence only when its
  * output shows that a selected test actually ran and failed an assertion.
@@ -1035,13 +1053,7 @@ export class DefaultStepRunner implements StepRunner {
       }),
     );
     if (isProviderLifecycleHalted(result)) {
-      return {
-        success: false,
-        output: 'Provider preparation timed out twice. See .pipeline/HALT.',
-        exitCode: 1,
-        preferredProvider: this.configuredProviders[0] ?? 'unknown',
-        attempts: [],
-      };
+      return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
     }
     return result;
   }
