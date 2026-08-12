@@ -453,6 +453,7 @@ export async function writeHalt(
   projectRoot: string,
   conflicts: string[],
   extraReason?: string,
+  events?: ConductorEventEmitter,
 ): Promise<void> {
   const fileList = conflicts.length > 0 ? conflicts.join(', ') : '(unknown)';
   const note =
@@ -464,11 +465,15 @@ export async function writeHalt(
     `  2. git rebase --continue\n` +
     `  3. rm .pipeline/HALT\n` +
     `  4. Re-queue the feature for the daemon.\n`;
-  await writeHaltMarker(projectRoot, note, 'needs-human');
+  await writeHaltMarker(projectRoot, note, 'needs-human', events);
 }
 
 /** Park a seal refusal that happened before git started a rebase. */
-export async function writeSealHalt(projectRoot: string, reason: string): Promise<void> {
+export async function writeSealHalt(
+  projectRoot: string,
+  reason: string,
+  events?: ConductorEventEmitter,
+): Promise<void> {
   const note =
     `protected-artifact seal error\n` +
     `${reason}\n\n` +
@@ -477,7 +482,7 @@ export async function writeSealHalt(projectRoot: string, reason: string): Promis
     `  2. Perform an audited reseal with the engine rotation function.\n` +
     `  3. Clear .pipeline/HALT and .pipeline/HALT.class, then re-queue the feature.\n\n` +
     `This refusal happens before and does not start a git rebase; do not run git rebase --continue.\n`;
-  await writeHaltMarker(projectRoot, note, 'needs-human');
+  await writeHaltMarker(projectRoot, note, 'needs-human', events);
 }
 
 // ── Outcome model ────────────────────────────────────────────────────────────

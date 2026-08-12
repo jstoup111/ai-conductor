@@ -9,6 +9,7 @@
 import { access as accessFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
 import { readDaemonBuildToken } from './daemon-build-token.js';
 import { buildAuthRemediationMessage } from './build-auth-message.js';
 import type { StepRunResult } from '../conductor.js';
@@ -26,6 +27,7 @@ export async function preflightBuildAuthCheck(
   buildAuthMode: string,
   buildAuthTokenPath: string,
   projectRoot: string,
+  events?: ConductorEventEmitter,
 ): Promise<StepRunResult | undefined> {
   // API-key mode: skip token requirement (env var injection at runtime)
   if (buildAuthMode !== 'daemon-token') {
@@ -54,7 +56,10 @@ export async function preflightBuildAuthCheck(
   const haltPath = join(projectRoot, HALT_MARKER);
   const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
   if (!haltExists) {
-    await writeHaltMarker(projectRoot, haltReason + '\n', 'needs-human');
+    const markerWrite = await writeHaltMarker(projectRoot, haltReason + '\n', 'needs-human', events);
+    if (markerWrite.status === 'failed') {
+      haltReason += `\n\nHALT marker write failed: ${markerWrite.reason}`;
+    }
   }
 
   return {

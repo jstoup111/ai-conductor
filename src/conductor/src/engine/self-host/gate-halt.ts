@@ -10,6 +10,8 @@
 // ends at a HALT for the operator to re-install, `/verify`, and merge.
 
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
+import type { HaltMarkerWriteResult } from '../halt-marker.js';
+import type { ConductorEventEmitter } from '../../ui/events.js';
 import { redactSafetyText } from '../safety-diagnostics.js';
 
 /** Re-exported from the canonical marker module for existing importers. */
@@ -24,7 +26,11 @@ export type GateVerdict = { ok: true } | { ok: false; reason: string };
  * best-effort marker write to `writeHaltMarker` — the HALT is a signal, never
  * itself a hard failure.
  */
-export async function writeSelfHostHalt(projectRoot: string, reason: string): Promise<void> {
+export async function writeSelfHostHalt(
+  projectRoot: string,
+  reason: string,
+  events?: ConductorEventEmitter,
+): Promise<HaltMarkerWriteResult> {
   const body =
     `${redactSafetyText(reason)}\n\n` +
     `Harness self-build gate HALT — the daemon never merges (ADR-005/ADR-010).\n` +
@@ -32,7 +38,7 @@ export async function writeSelfHostHalt(projectRoot: string, reason: string): Pr
     `  1. Address the gate reason above.\n` +
     `  2. Re-install the harness (bin/install --update) and run /verify.\n` +
     `  3. rm .pipeline/HALT, then merge the PR yourself.\n`;
-  await writeHaltMarker(projectRoot, body, 'needs-human');
+  return writeHaltMarker(projectRoot, body, 'needs-human', events);
 }
 
 /** First non-empty, trimmed line of a text blob, or null when there is none. */

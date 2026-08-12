@@ -73,6 +73,22 @@ describe('writeHaltMarker', () => {
     }]);
   });
 
+  it('returns the write failure even when emitting it fails', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(writeFile).mockImplementation(async (path: any, ...rest: any[]) => {
+      if (path === join(root, HALT_MARKER)) throw new Error('disk full');
+      return (actual.writeFile as any)(path, ...rest);
+    });
+    const emitter = { emit: vi.fn().mockRejectedValue(new Error('event sink unavailable')) } as any;
+
+    await expect(writeHaltMarker(root, 'reason', 'needs-human', emitter)).resolves.toEqual({
+      status: 'failed',
+      path: join(root, HALT_MARKER),
+      reason: 'disk full',
+    });
+  });
+
   it('removes a stale halt class before replacing the halt body', async () => {
     root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
     await mkdir(join(root, '.pipeline'), { recursive: true });
