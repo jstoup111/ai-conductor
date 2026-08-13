@@ -41,6 +41,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Protected artifact seal rotation no longer refuses when a base-ahead path was never touched by the feature, avoiding false "seal rebaseline refused" halts. ([implementation PR #1498](https://github.com/jstoup111/ai-conductor/pull/1498)).
 - `conduct-ts scoped-run` now runs in `test_suite.working_directory` and rebases project-root-relative selectors onto it, so scoped test runs work in monorepo layouts. ([implementation PR #1520](https://github.com/jstoup111/ai-conductor/pull/1520)).
 - A rebase no longer halts for human review when a feature commit is dropped because the base already landed an equivalent change. ([implementation PR #1544](https://github.com/jstoup111/ai-conductor/pull/1544)).
+- build_review now terminates in an operator-visible halt after a bounded number of cumulative kickbacks instead of churning indefinitely, and no longer grades removal maintenance as a tautology. ([implementation PR #1526](https://github.com/jstoup111/ai-conductor/pull/1526)).
 
 ## Migration
 
