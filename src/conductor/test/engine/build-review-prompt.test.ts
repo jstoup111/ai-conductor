@@ -301,7 +301,7 @@ diff --git a/src/classify.ts b/src/classify.ts
 
     expect([
       prompts.every((prompt) => prompt.includes('1. Tautology: every new/changed test would fail without the diff.')),
-      prompts.every((prompt) => /old path retains its pre-diff meaning[\s\S]*measured normally/i.test(relocationEntry(prompt))),
+      prompts.every((prompt) => /production hunks in the same diff change[\s\S]*path-classification or path-handling[\s\S]*old path loses its pre-diff meaning\.\s+A relocation whose old path retains its pre-diff meaning because no production\s+hunk changes its classification or handling does not qualify and is measured normally;/i.test(relocationEntry(prompt))),
       prompts.every((prompt) => /new behavioral assertion[\s\S]*measured normally/i.test(relocationEntry(prompt))),
       prompts.every((prompt) => /per changed test, never[\s\S]*whole diff/i.test(relocationEntry(prompt))),
       new Set(prompts.map(relocationEntry)).size === 1,
