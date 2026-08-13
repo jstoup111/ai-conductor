@@ -97,4 +97,35 @@ deleted file mode 100644
       deletedFiles: [], removedDeclarations: ['removed'], removedMembers: [],
     });
   });
+
+  it('does not classify same-name export or member changes as removals', () => {
+    expect(deriveBuildReviewRemovals(`diff --git a/src/contracts.ts b/src/contracts.ts
+@@ -1,9 +1,9 @@
+-export const version = 1;
++export const version = '1';
+-export type Payload = string;
++export type Payload = { value: string };
+ export interface Contract {
+-  retained: string;
++  retained: number;
+ }`)).toEqual({
+      deletedFiles: [], removedDeclarations: [], removedMembers: [],
+    });
+  });
+
+  it('ignores export and member-shaped text inside removed comments and strings', () => {
+    expect(deriveBuildReviewRemovals(`diff --git a/src/contracts.ts b/src/contracts.ts
+@@ -1,10 +1,3 @@
+ /*
+-export const mentionedOnly = true;
+-  phantomMember: string;
+ */
+-/*
+-export type anotherMention = string;
+-*/
+-"export const quotedOnly = true";
+-'memberLike: string';`)).toEqual({
+      deletedFiles: [], removedDeclarations: [], removedMembers: [],
+    });
+  });
 });

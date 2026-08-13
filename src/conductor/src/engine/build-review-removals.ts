@@ -31,6 +31,35 @@ function removedMember(line: string): string | undefined {
   return line.match(/^\s*(?:readonly\s+)?([A-Za-z_$][\w$]*)(?:\?)?\s*(?::|\(|=|,)/)?.[1];
 }
 
+function declarationIdentity(line: string): string | undefined {
+  return /^\s*export\s+(?:declare\s+)?type\s+[A-Za-z_$][\w$]*\s*=\s*$/.test(line)
+    ? undefined
+    : line.match(exportedDeclaration)?.[1];
+}
+
+/**
+ * Only old-side context and removals participate in comment state. Any line
+ * touching a block delimiter is intentionally omitted: reconstructing mixed
+ * code/comment syntax from a diff would be less reliable than no evidence.
+ */
+function canReadOldCandidate(line: string, state: { inBlockComment: boolean }): boolean {
+  const trimmed = line.trimStart();
+  if (state.inBlockComment) {
+    const end = trimmed.indexOf('*/');
+    if (end === -1) return false;
+    state.inBlockComment = false;
+    return false;
+  }
+
+  const blockStart = trimmed.indexOf('/*');
+  const blockEnd = trimmed.indexOf('*/');
+  if (blockStart !== -1 || blockEnd !== -1) {
+    if (blockStart !== -1 && (blockEnd === -1 || blockEnd < blockStart)) state.inBlockComment = true;
+    return false;
+  }
+  return !/^\/\/|^\*|^['"`]/.test(trimmed);
+}
+
 /**
  * Derive removal evidence from unified-diff text. Parsing is deliberately
  * conservative: an unrecognised declaration is omitted rather than guessed.
@@ -40,6 +69,9 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
   let currentPath: string | undefined;
   let renamed = false;
   let scope: string | undefined;
+  let oldSyntax = { inBlockComment: false };
+  const addedDeclarations = new Set<string>();
+  const addedMembers = new Set<string>();
 
   for (const rawLine of diff.split('\n')) {
     const fileMatch = rawLine.match(/^diff --git a\/(.+) b\/(.+)$/);
@@ -47,6 +79,7 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
       currentPath = fileMatch[2];
       renamed = false;
       scope = undefined;
+      oldSyntax = { inBlockComment: false };
       continue;
     }
     if (/^(?:similarity index|rename from |rename to )/.test(rawLine)) {
@@ -63,15 +96,24 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
     }
     if (rawLine.startsWith(' ')) {
       const context = rawLine.slice(1);
+      const candidate = canReadOldCandidate(context, oldSyntax);
+      if (!candidate) continue;
       scope = context.match(exportedType)?.[1] ?? (context.trim() === '}' || context.trim() === '};' ? undefined : scope);
+      continue;
+    }
+    if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
+      const added = rawLine.slice(1);
+      const declaration = declarationIdentity(added);
+      if (declaration) addedDeclarations.add(declaration);
+      const member = scope && removedMember(added);
+      if (scope && member) addedMembers.add(`${scope}\u0000${member}`);
       continue;
     }
     if (!rawLine.startsWith('-') || rawLine.startsWith('---')) continue;
 
     const removed = rawLine.slice(1);
-    const declaration = /^\s*export\s+(?:declare\s+)?type\s+[A-Za-z_$][\w$]*\s*=\s*$/.test(removed)
-      ? undefined
-      : removed.match(exportedDeclaration)?.[1];
+    if (!canReadOldCandidate(removed, oldSyntax)) continue;
+    const declaration = declarationIdentity(removed);
     if (declaration) {
       result.removedDeclarations.push(declaration);
       continue;
@@ -80,5 +122,9 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
     if (scope && member) result.removedMembers.push({ declaration: scope, member });
   }
 
-  return result;
+  return {
+    deletedFiles: result.deletedFiles,
+    removedDeclarations: result.removedDeclarations.filter((declaration) => !addedDeclarations.has(declaration)),
+    removedMembers: result.removedMembers.filter(({ declaration, member }) => !addedMembers.has(`${declaration}\u0000${member}`)),
+  };
 }

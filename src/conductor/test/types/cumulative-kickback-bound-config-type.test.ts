@@ -1,6 +1,8 @@
-import type { HarnessConfig } from '../../src/types/config.js';
-import { expectTypeOf, it } from 'vitest';
+import { expect, it } from 'vitest';
+import { compileTypeFixture } from './compile-type-fixture.js';
 
-it('typechecks the imported cumulative kickback bound configuration', () => {
-  expectTypeOf<HarnessConfig>().toHaveProperty('cumulative_kickback_bound');
+it('compiles only the optional boolean cumulative kickback bound block', () => {
+  const result = compileTypeFixture('test/types/fixtures/cumulative-kickback-bound-config.fixture.ts');
+
+  expect(result.status, result.stderr).toBe(0);
 });
