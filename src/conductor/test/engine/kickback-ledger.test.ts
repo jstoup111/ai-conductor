@@ -94,6 +94,34 @@ describe('kickback-ledger', () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual(ledger);
   });
 
+  it('defaults a legacy build review entry without cumulative to zero', async () => {
+    const legacyLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'production export is orphaned',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyLedger));
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({
+      ...legacyLedger,
+      gates: {
+        build_review: {
+          ...legacyLedger.gates.build_review,
+          cumulative: 0,
+        },
+      },
+    });
+  });
+
   it('never leaves a torn ledger for readers during concurrent writes', async () => {
     const ledgers: KickbackLedger[] = Array.from({ length: 10 }, (_, index) => ({
       version: 1,

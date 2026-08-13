@@ -17,6 +17,15 @@ export interface KickbackLedger {
   gates: Record<string, KickbackGateEntry>;
 }
 
+type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative'> & {
+  cumulative?: number;
+};
+
+interface PersistedKickbackLedger {
+  version: 1;
+  gates: Record<string, PersistedKickbackGateEntry>;
+}
+
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
 
 /** A gate may be kicked back to BUILD this many times for one progress state. */
@@ -37,13 +46,13 @@ function emptyLedger(): KickbackLedger {
   return { version: 1, gates: {} };
 }
 
-function isKickbackGateEntry(value: unknown): value is KickbackGateEntry {
+function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntry {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
   const entry = value as Record<string, unknown>;
   return (
     typeof entry.count === 'number' &&
-    typeof entry.cumulative === 'number' &&
+    (entry.cumulative === undefined || typeof entry.cumulative === 'number') &&
     (typeof entry.treeHash === 'string' || entry.treeHash === null) &&
     typeof entry.lastReason === 'string' &&
     typeof entry.priorVerdict === 'boolean' &&
@@ -51,7 +60,7 @@ function isKickbackGateEntry(value: unknown): value is KickbackGateEntry {
   );
 }
 
-function isKickbackLedger(value: unknown): value is KickbackLedger {
+function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
   const ledger = value as Record<string, unknown>;
@@ -60,6 +69,18 @@ function isKickbackLedger(value: unknown): value is KickbackLedger {
   }
 
   return Object.values(ledger.gates).every(isKickbackGateEntry);
+}
+
+function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedger {
+  return {
+    ...ledger,
+    gates: Object.fromEntries(
+      Object.entries(ledger.gates).map(([gate, entry]) => [
+        gate,
+        { ...entry, cumulative: entry.cumulative ?? 0 },
+      ]),
+    ),
+  };
 }
 
 /**
@@ -71,7 +92,7 @@ export async function readKickbackLedger(projectRoot: string): Promise<KickbackL
 
   try {
     const parsed: unknown = JSON.parse(await readFile(ledgerPath, 'utf-8'));
-    if (isKickbackLedger(parsed)) return parsed;
+    if (isKickbackLedger(parsed)) return normalizeKickbackLedger(parsed);
 
     if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
       console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}; using empty ledger`);
