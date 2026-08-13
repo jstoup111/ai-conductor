@@ -81,6 +81,8 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'finish_publication_disposition',
   'kickback',
   'deprecated_step',
+  'rebase_changed',
+  'rebase_gate_invalidated',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
