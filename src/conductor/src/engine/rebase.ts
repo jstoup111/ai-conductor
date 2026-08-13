@@ -483,7 +483,11 @@ export async function writeSealHalt(projectRoot: string, reason: string): Promis
 // ── Outcome model ────────────────────────────────────────────────────────────
 
 export type RebaseOutcome =
-  | { kind: 'noop' }
+  | {
+      kind: 'noop';
+      /** Complete rebase delta when the base advanced without touching code/test paths. */
+      allChangedPaths?: string[];
+    }
   | {
       kind: 'mergeable_skip';
       /** The ref the skip decision was taken against, e.g. `origin/main`. */
@@ -776,7 +780,9 @@ async function classifyClean(
     dUncomputable = true;
   }
   const codePaths = filterCodeOrTestPaths(changed);
-  if (!dUncomputable && codePaths.length === 0) return { kind: 'noop' };
+  if (!dUncomputable && codePaths.length === 0) {
+    return { kind: 'noop', allChangedPaths: changed };
+  }
   // F: the feature's own claimed surface — files the feature's commits
   // touched, before the rebase (mergeBase..preTree). Threaded onto the
   // outcome for the delta-aware gate-invalidation classifier (Task 6+);
@@ -1438,7 +1444,15 @@ export async function emitRebaseEvent(
   try {
     switch (outcome.kind) {
       case 'noop':
-        await events.emit({ type: 'rebase_noop' });
+        await events.emit(
+          outcome.allChangedPaths === undefined
+            ? { type: 'rebase_noop' }
+            : {
+                type: 'rebase_changed',
+                changedPaths: [],
+                allChangedPaths: outcome.allChangedPaths,
+              },
+        );
         break;
       case 'mergeable_skip':
         await events.emit({
@@ -1452,6 +1466,9 @@ export async function emitRebaseEvent(
         await events.emit({
           type: 'rebase_changed',
           changedPaths: outcome.changedCodePaths,
+          ...(outcome.allChangedPaths === undefined
+            ? {}
+            : { allChangedPaths: outcome.allChangedPaths }),
         });
         break;
       case 'conflict_halt':
