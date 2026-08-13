@@ -253,6 +253,15 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(/adds a new behavioral assertion[\s\S]*measured normally/i);
   });
 
+  it('renders the two Tautology exceptions as an explicitly closed list', () => {
+    const prompt = buildGraderPrompt(inputs);
+    const exceptions = prompt.match(/The Tautology exceptions are an explicitly closed list:[\s\S]*?measured normally\./)?.[0] ?? '';
+    expect(exceptions).toMatch(/1\. Rebase repair:[\s\S]*Engine-recorded rebase repair context block/i);
+    expect(exceptions).toMatch(/2\. Removal maintenance:[\s\S]*Engine-derived removal evidence block/i);
+    expect(exceptions).toMatch(/qualifying under neither exception is measured normally/i);
+    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(2);
+  });
+
 
   it('never references task-status, maker summary, or maker internal state', () => {
     const prompt = buildGraderPrompt(inputs);

@@ -92,6 +92,13 @@ still exists after this diff. Evaluate this predicate per changed test, never
 per diff: deleting something does not exempt every test it touches. A test that
 also adds a new behavioral assertion is still measured normally on that assertion.
 
+The Tautology exceptions are an explicitly closed list:
+1. Rebase repair: use the Engine-recorded rebase repair context block and only
+   the stale-base-state test rule stated above.
+2. Removal maintenance: use the Engine-derived removal evidence block and only
+   the three-condition per-test predicate stated above.
+A changed test qualifying under neither exception is measured normally.
+
 Completeness must be judged holistically: read the plan and the diff as a
 whole and form a judgement of whether the diff, taken together, delivers
 everything the plan describes. Do NOT reason about completeness on a
