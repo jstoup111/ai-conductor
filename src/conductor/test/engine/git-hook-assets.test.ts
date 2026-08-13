@@ -107,7 +107,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
         /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE"/,
       );
       expect(COMMIT_MSG_HOOK).toMatch(
-        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "3" \]\]; then\n\s+echo "commit-msg: scope-check recorded ambiguity \(exit 3\); allowing commit" >&2/,
+        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "3" \]\]; then\n\s+echo "commit-msg: scope-check recorded ambiguity \(exit 3\); allowing commit" >&2\n\s+elif \[\[ "\$rc" != "0" \]\]; then\n\s+echo "commit-msg: scope-check abstained \(exit \$rc\); allowing commit" >&2/,
       );
     });
   });
