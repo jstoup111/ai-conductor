@@ -469,6 +469,66 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
     const ok = await featureCommitsPreserved(makeGitRunner(repo), 'main', []);
     expect(ok).toBe(true);
   });
+
+  // Regression (observed on `interrupted-self-host-runs-leak-provider-homes-unt`,
+  // 2026-08-13): the branch carried its own fix for a dead test contract; main
+  // landed an equivalent fix first. Replaying the feature commit conflicted, the
+  // resolver correctly took the upstream shape, the commit became empty, and git
+  // dropped it. Subject-set membership alone reads that as lost work and writes a
+  // needs-human HALT over a rebase that lost nothing.
+  it('returns true when a vanished commit was superseded by an upstream rewrite of the same region', async () => {
+    // Both sides delete the same dead contract; main also rewords a neighbour,
+    // so the two patches differ textually while sharing an intent.
+    await writeFile(join(repo, 'a.ts'), 'keep one\nDEAD one\nDEAD two\nkeep two\n');
+    await g(['commit', '-q', '-am', 'seed the dead contract']);
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'keep one\nkeep two\n');
+    await g(['commit', '-q', '-am', 'feat: remove the dead contract']);
+    const droppedSubject = 'feat: remove the dead contract';
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'a.ts'), 'keep one\nkeep two, reworded\n');
+    await g(['commit', '-q', '-am', 'main: remove the dead contract']);
+
+    // The replay empties the feature commit, so the post-rebase branch is main.
+    await g(['checkout', '-q', 'feat']);
+    await g(['reset', '-q', '--hard', 'main']);
+
+    const ok = await featureCommitsPreserved(makeGitRunner(repo), 'main', [droppedSubject]);
+    expect(ok).toBe(true);
+  });
+
+  it('still returns false when a vanished commit applies cleanly and its work is genuinely absent', async () => {
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'b.ts'), 'feature-only work\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: add b']);
+    const droppedSubject = 'feat: add b';
+
+    // The commit is --skip'd: nothing upstream touches b.ts, so its work is
+    // cleanly re-appliable and therefore genuinely lost.
+    await g(['reset', '-q', '--hard', 'main']);
+
+    const ok = await featureCommitsPreserved(makeGitRunner(repo), 'main', [droppedSubject]);
+    expect(ok).toBe(false);
+  });
+
+  it('fails closed on a vanished empty commit, which offers no evidence of supersession', async () => {
+    await g(['checkout', '-q', '-b', 'feat']);
+    await g(['commit', '-q', '--allow-empty', '-m', 'feat: empty marker commit']);
+    const droppedSubject = 'feat: empty marker commit';
+
+    await g(['reset', '-q', '--hard', 'main']);
+
+    const ok = await featureCommitsPreserved(makeGitRunner(repo), 'main', [droppedSubject]);
+    expect(ok).toBe(false);
+  });
+
+  it('fails closed when the vanished commit cannot be resolved against the pre-rebase tip', async () => {
+    const ok = await featureCommitsPreserved(makeGitRunner(repo), 'main', ['feat: never existed']);
+    expect(ok).toBe(false);
+  });
 });
 
 describe('engine/rebase — .docs keep-both resolver (happy path)', () => {

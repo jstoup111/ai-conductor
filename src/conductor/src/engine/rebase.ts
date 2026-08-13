@@ -816,10 +816,136 @@ export interface CiFailureContext { worktreePath: string; prUrl: string; hint: s
 export type CiFailureResolver = (ctx: CiFailureContext) => Promise<CiFailureAttempt>;
 
 /**
+ * Was a vanished feature commit's INTENT already realized by the base, rather
+ * than lost?
+ *
+ * A rebase legitimately drops a commit whose work the new base already carries:
+ * the replay empties it, either because the change is verbatim upstream or
+ * because it conflicted with an upstream edit to the same region that a
+ * resolver then settled in the base's favour. Both erase the subject this
+ * guard looks for while losing nothing.
+ *
+ * End-state alone cannot separate that from a `--skip`: after either, HEAD
+ * simply holds the base's shape of the region. What separates them is whether
+ * the dropped commit's own intent survives — so this compares the commit's
+ * diff against HEAD's content of the paths it touched:
+ *
+ *   - every line the commit ADDED is present in HEAD, and
+ *   - no line it REMOVED is back in HEAD
+ *
+ * The upstream-equivalent fix (both sides delete the same dead code) passes:
+ * its removals are gone and it added nothing. A `--skip`'d commit fails: the
+ * content it introduced is simply absent.
+ *
+ * Fails closed — a rename, a binary hunk, or any git failure reports "not
+ * superseded" and the HALT stands.
+ */
+interface DroppedFileEdit {
+  oldPath: string | null;
+  newPath: string | null;
+  added: string[];
+  removed: string[];
+}
+
+/** Count each line of `content`, trimmed. Blank lines are not counted. */
+function lineCounts(content: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const raw of content.split('\n')) {
+    const line = raw.trim();
+    if (line) counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Split a `git show -U0` body into one record per file it touched. */
+function parseDroppedCommitDiff(diff: string): DroppedFileEdit[] | null {
+  const edits: DroppedFileEdit[] = [];
+  let current: DroppedFileEdit | null = null;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      current = { oldPath: null, newPath: null, added: [], removed: [] };
+      edits.push(current);
+      continue;
+    }
+    if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) return null;
+    if (current === null || line.startsWith('@@')) continue;
+    if (line.startsWith('--- ')) {
+      const source = line.slice(4).trim();
+      current.oldPath = source === '/dev/null' ? null : source.replace(/^a\//, '');
+    } else if (line.startsWith('+++ ')) {
+      const target = line.slice(4).trim();
+      current.newPath = target === '/dev/null' ? null : target.replace(/^b\//, '');
+    } else if (line.startsWith('+')) {
+      const body = line.slice(1).trim();
+      if (body) current.added.push(body);
+    } else if (line.startsWith('-')) {
+      const body = line.slice(1).trim();
+      if (body) current.removed.push(body);
+    }
+  }
+  return edits;
+}
+
+async function supersededByBase(git: GitRunner, sha: string): Promise<boolean> {
+  // -U0: hunk bodies carry only the commit's own +/- lines, no context.
+  const show = await git(['show', '--format=', '--unified=0', '--no-renames', sha]);
+  if (show.exitCode !== 0) return false;
+  const edits = parseDroppedCommitDiff(show.stdout);
+  if (edits === null) return false;
+  // A commit with no diff offers no evidence that its intent survives. Absence
+  // of evidence is not supersession: fail closed and let the HALT stand.
+  if (edits.length === 0) return false;
+
+  for (const edit of edits) {
+    if (edit.newPath === null) {
+      // The commit deleted the file: its intent survives only if HEAD has no
+      // such file either.
+      if (edit.oldPath === null) return false;
+      const stillThere = await git(['cat-file', '-e', `HEAD:${edit.oldPath}`]);
+      if (stillThere.exitCode === 0) return false;
+      continue;
+    }
+
+    const head = await git(['show', `HEAD:${edit.newPath}`]);
+    if (head.exitCode !== 0) {
+      // HEAD dropped the file. Anything the commit added is gone with it; a
+      // pure deletion's intent is satisfied.
+      if (edit.added.length > 0) return false;
+      continue;
+    }
+    const headCounts = lineCounts(head.stdout);
+
+    // Additions must be present at least as often as the commit introduced them.
+    for (const [line, count] of lineCounts(edit.added.join('\n'))) {
+      if ((headCounts.get(line) ?? 0) < count) return false;
+    }
+
+    // Removals are judged against the commit's OWN parent, not by bare presence:
+    // a structural line like `});` legitimately survives elsewhere in the file.
+    // What must hold is that HEAD carries no more copies than the removal left.
+    if (edit.removed.length === 0) continue;
+    const parentPath = edit.oldPath ?? edit.newPath;
+    const parent = await git(['show', `${sha}^:${parentPath}`]);
+    if (parent.exitCode !== 0) return false;
+    const parentCounts = lineCounts(parent.stdout);
+    for (const [line, count] of lineCounts(edit.removed.join('\n'))) {
+      if ((headCounts.get(line) ?? 0) > (parentCounts.get(line) ?? 0) - count) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Check whether every commit subject from before the rebase is still present in
  * the current `baseRef..HEAD` range. Subject-set membership (not patch-id) lets
  * a conflict resolution legitimately change a commit's diff while keeping its
  * subject; a --skip'd commit loses its subject entirely and is caught here.
+ *
+ * A missing subject is not lost work on its own: when the base already carries
+ * the commit's change, the replay empties it and git drops it. Each missing
+ * subject is therefore resolved back to its pre-rebase commit (via `ORIG_HEAD`,
+ * the tip git recorded before replaying) and put through {@link supersededByBase}
+ * before the guard reports loss. A subject that cannot be resolved fails closed.
  *
  * Empty `subjectsBefore` → true (nothing to lose).
  */
@@ -834,7 +960,26 @@ export async function featureCommitsPreserved(
   const currentSubjects = new Set(
     r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0),
   );
-  return subjectsBefore.every((s) => currentSubjects.has(s));
+  const missing = subjectsBefore.filter((s) => !currentSubjects.has(s));
+  if (missing.length === 0) return true;
+
+  // NUL-delimited so a subject containing whitespace still splits correctly.
+  const pre = await git(['log', '--format=%H%x00%s', `${baseRef}..ORIG_HEAD`]);
+  if (pre.exitCode !== 0) return false;
+  const shaBySubject = new Map<string, string>();
+  for (const line of pre.stdout.split('\n')) {
+    const [sha, subject] = line.split('\0');
+    if (!sha?.trim() || subject === undefined) continue;
+    // First writer wins: the newest commit carrying a repeated subject.
+    if (!shaBySubject.has(subject.trim())) shaBySubject.set(subject.trim(), sha.trim());
+  }
+
+  for (const subject of missing) {
+    const sha = shaBySubject.get(subject);
+    if (!sha) return false;
+    if (!(await supersededByBase(git, sha))) return false;
+  }
+  return true;
 }
 
 /**
