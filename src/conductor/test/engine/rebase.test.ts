@@ -617,6 +617,22 @@ describe('engine/rebase — path classifier (FR-5)', () => {
     ).toBe(true);
   });
 
+  it('keeps documentation exclusions outside code/test classification', () => {
+    expect(
+      [
+        '.docs/plans/x.md',
+        '.docs/audits/y.json',
+        '.docs/coherence/.gitkeep',
+        'docs/guides/z.md',
+        'docs/_config.yml',
+        'README',
+        'README.md',
+        'a/b/README.md',
+        'CHANGELOG.md',
+      ].every((path) => !isCodeOrTestPath(path)),
+    ).toBe(true);
+  });
+
   it('filterCodeOrTestPaths keeps only invalidating paths', () => {
     expect(
       filterCodeOrTestPaths(['CHANGELOG.md', 'src/a.ts', 'README.md', 'test/b.ts']),
