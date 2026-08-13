@@ -262,3 +262,10 @@ describe('recordTestSuiteRemediation', () => {
     ]);
   });
 });
+
+describe('engine/test-suite-remediation — retired kickback-provenance predicate (Task 16)', () => {
+  it('no longer exports wasInvalidatedByRebase', async () => {
+    const mod: Record<string, unknown> = await import('../../src/engine/test-suite-remediation.js');
+    expect('wasInvalidatedByRebase' in mod).toBe(false);
+  });
+});
