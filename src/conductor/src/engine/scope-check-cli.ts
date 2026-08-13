@@ -16,8 +16,8 @@ export interface ScopeCheckCommand {
 }
 
 /**
- * The resolved shipped default. Flip this single value only after live
- * containment-floor evidence supports changing scope-check recording behavior.
+ * The resolved shipped default for report-only containment recording. The
+ * recorder never refuses commits; see adr-2026-08-09-non-blocking-plan-scope-containment D3.
  */
 const DEFAULT_SCOPE_CHECK_ENFORCEMENT = false;
 
@@ -47,7 +47,8 @@ export interface ScopeCheckDependencies {
   projectRoot: string;
   commitMessagePath: string;
   /**
-   * Resolved containment recording mode. It never makes the commit hook block.
+   * Resolved containment recording mode, never a commit-blocking enforcement
+   * switch; see adr-2026-08-09-non-blocking-plan-scope-containment D3.
    */
   enforce?: boolean;
   readFile?: (path: string) => Promise<string>;

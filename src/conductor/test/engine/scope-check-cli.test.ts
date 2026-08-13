@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import * as scopeCheckCli from '../../src/engine/scope-check-cli.js';
+import { COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 
 const { appendUnresolvedContainmentCheck, detectScopeCheckCommand, runScopeCheck } = scopeCheckCli;
 const loadScopeCheckEnforcement = (
@@ -50,6 +51,22 @@ describe('scope-check CLI', () => {
     );
 
     await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(true);
+  });
+
+  it('contains no withdrawn enforcement-flip guidance in the scope-check source or generated hook', async () => {
+    const source = await readFile(new URL('../../src/engine/scope-check-cli.ts', import.meta.url), 'utf8');
+    const withdrawnGuidance = [
+      'Flip this single value',
+      'enforcing scope refusals',
+      'one-line enforcement flip',
+      'a later resolved enforcement flip',
+      'this branch then refuses the commit',
+    ];
+
+    for (const phrase of withdrawnGuidance) {
+      expect(source).not.toContain(phrase);
+      expect(COMMIT_MSG_HOOK).not.toContain(phrase);
+    }
   });
 
   it('detects the commit-message path for the dispatcher', () => {
