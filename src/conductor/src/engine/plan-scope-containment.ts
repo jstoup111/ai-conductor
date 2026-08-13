@@ -20,6 +20,15 @@ export type ScopeContainmentResult =
   | { allowed: true }
   | { allowed: false; taskId: string; offendingPaths: string[] };
 
+function pathDirectory(path: string): string {
+  return path.slice(0, Math.max(0, path.lastIndexOf('/')));
+}
+
+function isSameDirectory(path: string, declaredPath: string): boolean {
+  const declaredDirectory = pathDirectory(declaredPath);
+  return declaredDirectory !== '' && fileMatchesPlanPath(pathDirectory(path), declaredDirectory);
+}
+
 /**
  * Determines whether every staged path is declared by the active plan task.
  *
@@ -62,6 +71,7 @@ export function evaluateScopeContainment({
       !declaredFiles.some((declaredPath) =>
         fileMatchesPlanPath(path, declaredPath.replace(/(\.[^./]+)$/, '.test$1')),
       ) &&
+      !declaredFiles.some((declaredPath) => isSameDirectory(path, declaredPath)) &&
       !scopeTrailers.some((trailer) => fileMatchesPlanPath(path, trailer.path)),
   );
 

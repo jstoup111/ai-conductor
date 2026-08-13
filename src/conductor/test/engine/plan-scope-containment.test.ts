@@ -28,14 +28,14 @@ describe('evaluateScopeContainment', () => {
       evaluateScopeContainment({
         stagedPaths: [
           'src/conductor/src/engine/config.ts',
-          'src/conductor/src/engine/artifacts.ts',
+          'src/conductor/src/daemon/backlog.ts',
         ],
         task,
       }),
     ).toEqual({
       allowed: false,
       taskId: '3',
-      offendingPaths: ['src/conductor/src/engine/artifacts.ts'],
+      offendingPaths: ['src/conductor/src/daemon/backlog.ts'],
     });
   });
 
@@ -57,10 +57,32 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
+  it('allows a source-file sibling of a declared file', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['src/conductor/src/engine/resolved-config.ts'],
+        task: { id: '3', status: 'in_progress', files: ['src/conductor/src/engine/config.ts'] },
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it('does not treat root-level files as same-directory siblings', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['undeclared.ts'],
+        task: { id: '3', status: 'in_progress', files: ['declared.ts'] },
+      }),
+    ).toEqual({
+      allowed: false,
+      taskId: '3',
+      offendingPaths: ['undeclared.ts'],
+    });
+  });
+
   it('does not over-accept a filename that merely ends in the declared path', () => {
     expect(
       evaluateScopeContainment({
-        stagedPaths: ['src/conductor/src/engine/audit-trail.ts'],
+        stagedPaths: ['src/conductor/src/daemon/audit-trail.ts'],
         task: {
           id: '4',
           status: 'in_progress',
@@ -70,7 +92,7 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({
       allowed: false,
       taskId: '4',
-      offendingPaths: ['src/conductor/src/engine/audit-trail.ts'],
+      offendingPaths: ['src/conductor/src/daemon/audit-trail.ts'],
     });
   });
 
@@ -111,7 +133,7 @@ describe('evaluateScopeContainment', () => {
       evaluateScopeContainment({
         stagedPaths: [
           'src/conductor/src/index.ts',
-          'src/conductor/src/engine/artifacts.ts',
+          'src/conductor/src/daemon/artifacts.ts',
         ],
         task: {
           id: '6',
@@ -128,7 +150,7 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({
       allowed: false,
       taskId: '6',
-      offendingPaths: ['src/conductor/src/engine/artifacts.ts'],
+      offendingPaths: ['src/conductor/src/daemon/artifacts.ts'],
     });
   });
 
