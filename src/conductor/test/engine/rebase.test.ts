@@ -1612,6 +1612,30 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     }
   }, 20000);
 
+  it('Task 2: retains the complete unfiltered delta on a changed outcome while keeping changedCodePaths filtered', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'feature.ts'), 'feature\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: feature']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'source advance\n');
+    await mkdir(join(repo, '.docs'), { recursive: true });
+    await writeFile(join(repo, '.docs', 'base-note.md'), 'excluded advance\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: mixed advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      changedCodePaths: ['unrelated.ts'],
+      allChangedPaths: ['.docs/base-note.md', 'unrelated.ts'],
+    });
+  }, 20000);
+
   it('Task 5: carries the feature claimed surface F (changedPathsBetween(mergeBase, preTree)) on the `changed` outcome', async () => {
     const { performRebase, makeGitRunner, changedPathsBetween } = await import(
       '../../src/engine/rebase.js'

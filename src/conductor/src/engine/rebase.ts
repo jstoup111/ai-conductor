@@ -493,7 +493,13 @@ export type RebaseOutcome =
       /** Whether that ref came from origin or from a local branch. */
       baseKind: 'remote' | 'local';
     }
-  | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
+  | {
+      kind: 'changed';
+      changedCodePaths: string[];
+      /** Complete pre-filter rebase delta; absent when the delta is uncomputable. */
+      allChangedPaths?: string[];
+      featureSurface?: string[];
+    }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
 
 /** A protected-artifact refusal raised before git starts a rebase. */
@@ -790,7 +796,12 @@ async function classifyClean(
       featureSurface = undefined;
     }
   }
-  return { kind: 'changed', changedCodePaths: codePaths, featureSurface };
+  return {
+    kind: 'changed',
+    changedCodePaths: codePaths,
+    ...(dUncomputable ? {} : { allChangedPaths: changed }),
+    featureSurface,
+  };
 }
 
 
