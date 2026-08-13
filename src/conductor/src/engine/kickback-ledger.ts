@@ -31,6 +31,9 @@ export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
 /** A gate may be kicked back to BUILD this many times for one progress state. */
 export const MAX_KICKBACKS_PER_GATE = 2;
 
+/** Cumulative build-review failures allowed before human intervention is required. */
+export const MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW = 5;
+
 export interface BumpKickbackGateInput {
   treeHash: string | null;
   resolvedCount: number;
@@ -39,6 +42,8 @@ export interface BumpKickbackGateInput {
 
 export interface BumpKickbackGateResult {
   entry: KickbackGateEntry;
+  /** True only after the cumulative build-review convergence cap is exceeded. */
+  cumulativeExhausted: boolean;
   exhausted: boolean;
 }
 
@@ -161,15 +166,18 @@ export function bumpKickbackGate(
     previous.treeHash !== input.treeHash || input.resolvedCount > previous.resolvedBefore;
   const nextCount = madeProgress ? 1 : Math.min(previous.count + 1, MAX_KICKBACKS_PER_GATE);
 
+  const nextEntry: KickbackGateEntry = {
+    ...previous,
+    count: nextCount,
+    cumulative: previous.cumulative + 1,
+    treeHash: input.treeHash,
+    lastReason: input.reason,
+    resolvedBefore: input.resolvedCount,
+  };
+
   return {
-    entry: {
-      ...previous,
-      count: nextCount,
-      cumulative: previous.cumulative + 1,
-      treeHash: input.treeHash,
-      lastReason: input.reason,
-      resolvedBefore: input.resolvedCount,
-    },
+    entry: nextEntry,
+    cumulativeExhausted: nextEntry.cumulative > MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
     exhausted: !madeProgress && previous.count >= MAX_KICKBACKS_PER_GATE,
   };
 }

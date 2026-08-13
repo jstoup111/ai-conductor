@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   bumpKickbackGate,
   bumpKickbackGateInLedger,
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
   resetKickbackGateCumulativeInLedger,
   writeKickbackLedger,
@@ -254,6 +255,7 @@ describe('kickback-ledger', () => {
           cumulative: 1,
           lastReason: 'different failure wording',
         },
+        cumulativeExhausted: false,
         exhausted: false,
       });
     });
@@ -351,6 +353,31 @@ describe('kickback-ledger', () => {
         entry: { count: 2 },
         exhausted: true,
       });
+    });
+
+    it('reports cumulative exhaustion only beyond the shared build review cap', () => {
+      const atCap = bumpKickbackGate(
+        { ...existingEntry, cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW - 1 },
+        {
+          treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+          resolvedCount: existingEntry.resolvedBefore,
+          reason: 'another semantic failure',
+        },
+      );
+      const beyondCap = bumpKickbackGate(
+        { ...existingEntry, cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW },
+        {
+          treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+          resolvedCount: existingEntry.resolvedBefore,
+          reason: 'one semantic failure too many',
+        },
+      );
+
+      expect({
+        cap: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+        atCap: atCap.cumulativeExhausted,
+        beyondCap: beyondCap.cumulativeExhausted,
+      }).toEqual({ cap: 5, atCap: false, beyondCap: true });
     });
   });
 });
