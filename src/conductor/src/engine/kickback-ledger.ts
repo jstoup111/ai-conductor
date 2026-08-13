@@ -190,3 +190,21 @@ export async function bumpKickbackGateInLedger(
 
   return result;
 }
+
+/** Reset one gate's cumulative failure count while preserving its current budget state. */
+export async function resetKickbackGateCumulativeInLedger(
+  projectRoot: string,
+  gate: string,
+): Promise<void> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const entry = ledger.gates[gate];
+  if (!entry) return;
+
+  await writeKickbackLedger(projectRoot, {
+    ...ledger,
+    gates: {
+      ...ledger.gates,
+      [gate]: { ...entry, cumulative: 0 },
+    },
+  });
+}
