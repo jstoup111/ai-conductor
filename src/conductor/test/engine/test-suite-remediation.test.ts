@@ -23,6 +23,16 @@ describe('diagnosticOverlapsBaseAdvance', () => {
       diagnosticOverlapsBaseAdvance({ paths: ['agents/planner.m'], ts: '2026-08-13T10:00:00.000Z' }, diagnostic),
     ]).toEqual([true, false, false]);
   });
+
+  it('matches prefixed renderings of the same path without matching a different repo path', () => {
+    const advance = { paths: ['agents/planner.md'], ts: '2026-08-13T10:00:00.000Z' };
+
+    expect([
+      diagnosticOverlapsBaseAdvance(advance, './agents/planner.md failed to parse'),
+      diagnosticOverlapsBaseAdvance(advance, 'FAIL /tmp/worktree/agents/planner.md > frontmatter'),
+      diagnosticOverlapsBaseAdvance(advance, 'src/agents/planner.md failed to parse'),
+    ]).toEqual([true, true, false]);
+  });
 });
 
 describe('failureMatchesBaseAdvance', () => {

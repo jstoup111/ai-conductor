@@ -26,7 +26,13 @@ export interface BaseAdvance {
 export function diagnosticOverlapsBaseAdvance(advance: BaseAdvance, diagnostic: string): boolean {
   return advance.paths.some((path) => {
     const escapedPath = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(^|[^\\w./-])${escapedPath}(?=$|[^\\w./-])`).test(diagnostic);
+    // A diagnostic may render the repo-relative path bare, as `./path`, or as
+    // an absolute worktree path (`/…/path`). A bare relative prefix
+    // (`src/agents/planner.md` for advance path `agents/planner.md`) names a
+    // DIFFERENT repo path and must not match, so the absolute form requires a
+    // leading `/` at a token boundary.
+    const prefix = String.raw`(?:(?:^|[^\w./-])(?:\./)?|(?:^|[^\w.-])/(?:[\w.@+-]+/)*)`;
+    return new RegExp(`${prefix}${escapedPath}(?=$|[^\\w./-])`).test(diagnostic);
   });
 }
 
