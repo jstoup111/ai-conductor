@@ -356,6 +356,18 @@ run_update_without_conduct() {
   set -e
 }
 
+# run_conduct_update <repo> <home> — exercise bin/conduct's retained update
+# path through its public --update entry point.
+run_conduct_update() {
+  local repo=$1 home=$2
+  cp "$HARNESS_DIR/bin/conduct" "$repo/bin/conduct"
+  chmod +x "$repo/bin/conduct"
+  set +e
+  OUT=$(cd "$repo" && HOME="$home" PATH="$repo/bin:$TEST_PATH" "$repo/bin/conduct" --update < /dev/null 2>&1)
+  CODE=$?
+  set -e
+}
+
 # run_update_tty <repo> <home> <answer> [args...] — pty-backed stdin via
 # `script`, feeding <answer> so `[ -t 0 ]` checks see a real terminal
 # (Stories 3/4's interactive prompts can't be exercised over a pipe).
@@ -1157,6 +1169,14 @@ assert "post-release newest tag: reports distance and baseline without prompting
   "$([ "$CODE" -eq 0 ] && [ -n "$OUT" ] && case "$OUT" in *"2 commits past v0.4.0"*) true;; *) false;; esac && case "$OUT" in *"Update to"*) false;; *) true;; esac && echo 0 || echo 1)"
 assert "post-release newest tag: stamps lastCheckedAt" "$([ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
 assert "post-release newest tag: leaves HEAD unchanged" "$([ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && echo 0 || echo 1)"
+
+# bin/conduct retains its own update implementation. Its public --update path
+# must report a checkout that has advanced past the newest release instead of
+# silently treating it as current.
+HOME_DIR=$(make_isolated_home)
+run_conduct_update "$REPO" "$HOME_DIR"
+assert "bin/conduct post-release newest tag: reports distance and baseline" \
+  "$( [ "$CODE" -eq 0 ] && case "$OUT" in *"2 commits past v0.4.0"*) true;; *) false;; esac && echo 0 || echo 1)"
 
 # The checkout-derived baseline is a write-only migration cache. A
 # post-release display identity must never leak its +distance suffix into
