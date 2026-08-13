@@ -82,79 +82,32 @@ describe('recordTestSuiteRemediation', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('persists one stable repair record for the same upstream-induced failure across repeated rebases', async () => {
-    const failure = {
-      reason: 'command_failed' as const,
-      message: 'full-suite-verification-gate expected npm run test:changed but config is npm test',
-    };
-
-    const first = await recordTestSuiteRemediation(dir, failure, {
-      satisfied: false,
-      checkedAt: 101,
-      kickback: { from: 'rebase', evidence: 'first rebase' },
-    });
-    const second = await recordTestSuiteRemediation(dir, failure, {
-      satisfied: false,
-      checkedAt: 202,
-      kickback: { from: 'rebase', evidence: 'second rebase' },
-    });
-    const records = await readTestSuiteRemediations(dir);
-
-    expect(first?.id).toEqual(second?.id);
-    expect(first?.id).toMatch(/^repair-[a-f0-9]{12}$/);
-    expect(records).toEqual([first]);
-    expect(records[0].diagnostic).toBe(failure.message);
-  });
-
-  it('accumulates distinct failures instead of replacing prior rebase remediation provenance', async () => {
-    const first = await recordTestSuiteRemediation(dir, {
-      reason: 'command_failed',
-      message: 'repair stale expectation A',
-    }, { satisfied: false, checkedAt: 101, kickback: { from: 'rebase', evidence: 'one' } });
-    const second = await recordTestSuiteRemediation(dir, {
-      reason: 'timeout',
-      message: 'repair stale expectation B',
-    }, { satisfied: false, checkedAt: 202, kickback: { from: 'rebase', evidence: 'two' } });
-    const records = await readTestSuiteRemediations(dir);
-
-    expect(first?.id).not.toBe(second?.id);
-    expect(records).toEqual([first, second]);
-  });
-
-  it('consumes one rebase invalidation once and serializes concurrent writers', async () => {
-    const verdict = {
-      satisfied: false,
-      checkedAt: 303,
-      kickback: { from: 'rebase' as const, evidence: 'same rebase' },
-    };
-    const [first, second] = await Promise.all([
-      recordTestSuiteRemediation(dir, { reason: 'command_failed', message: 'first' }, verdict),
-      recordTestSuiteRemediation(dir, { reason: 'command_failed', message: 'second' }, verdict),
-    ]);
-    const records = await readTestSuiteRemediations(dir);
-
-    expect([first, second].filter(Boolean)).toHaveLength(1);
-    expect(records).toHaveLength(1);
-  });
-
-  it('reclaims a lock left by a dead daemon process', async () => {
+  it('records an observing gate against the causally matching advance', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
-      join(dir, `${BUILD_REVIEW_REPAIR_LEDGER}.lock`),
-      JSON.stringify({ pid: 2_147_483_647, createdAt: 1 }) + '\n',
+      join(dir, '.pipeline', 'events.jsonl'),
+      `${JSON.stringify({
+        type: 'rebase_changed',
+        allChangedPaths: ['agents/planner.md'],
+        ts: '2026-08-13T10:01:00.000Z',
+      })}\n`,
     );
 
     const record = await recordTestSuiteRemediation(
       dir,
-      { reason: 'command_failed', message: 'repair after restart' },
+      'wiring_check',
       {
-        satisfied: false,
-        checkedAt: 404,
-        kickback: { from: 'rebase', evidence: 'restarted daemon' },
+        reason: 'missing_coverage',
+        message: 'agents/planner.md has an invalid reference',
+        observedAt: Date.parse('2026-08-13T10:02:00.000Z'),
       },
     );
 
-    expect(record?.id).toMatch(/^repair-/);
+    expect(record).toMatchObject({
+      gate: 'wiring_check',
+      diagnostic: 'agents/planner.md has an invalid reference',
+      rebaseInvalidatedAt: Date.parse('2026-08-13T10:01:00.000Z'),
+    });
   });
 
   it('reads every recorded base advance in event-log order', async () => {

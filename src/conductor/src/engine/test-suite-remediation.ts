@@ -1,17 +1,18 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { GateVerdict } from './gate-verdicts.js';
 
 export const BUILD_REVIEW_REPAIR_LEDGER = '.pipeline/build-review-rebase-repairs.json';
 
 export interface TestSuiteRemediationFailure {
   reason: string;
   message: string;
+  observedAt: number;
 }
 
 export interface TestSuiteRemediationRecord {
   id: string;
+  gate?: string;
   reason: string;
   diagnostic: string;
   rebaseInvalidatedAt: number;
@@ -31,15 +32,18 @@ export function diagnosticOverlapsBaseAdvance(advance: BaseAdvance, diagnostic: 
 
 export function failureMatchesBaseAdvance(
   advance: BaseAdvance,
-  failure: { diagnostic: string; observedAt: string },
+  failure: { diagnostic: string; observedAt: string | number },
 ): boolean {
-  return failure.observedAt > advance.ts
+  const observedAt = typeof failure.observedAt === 'number'
+    ? failure.observedAt > Date.parse(advance.ts)
+    : failure.observedAt > advance.ts;
+  return observedAt
     && diagnosticOverlapsBaseAdvance(advance, failure.diagnostic);
 }
 
 export function resolveBaseAdvanceForFailure(
   advances: readonly BaseAdvance[],
-  failure: { diagnostic: string; observedAt: string },
+  failure: { diagnostic: string; observedAt: string | number },
 ): BaseAdvance | undefined {
   return advances.find((advance) => failureMatchesBaseAdvance(advance, failure));
 }
@@ -102,6 +106,7 @@ export async function readTestSuiteRemediations(
         !!repair &&
         typeof repair === 'object' &&
         typeof (repair as TestSuiteRemediationRecord).id === 'string' &&
+        typeof (repair as TestSuiteRemediationRecord).gate === 'string' &&
         typeof (repair as TestSuiteRemediationRecord).reason === 'string' &&
         typeof (repair as TestSuiteRemediationRecord).diagnostic === 'string' &&
         typeof (repair as TestSuiteRemediationRecord).rebaseInvalidatedAt === 'number',
@@ -172,11 +177,16 @@ async function acquireLedgerLock(projectRoot: string): Promise<() => Promise<voi
  */
 export async function recordTestSuiteRemediation(
   projectRoot: string,
-  failure: TestSuiteRemediationFailure,
-  rebaseVerdict: GateVerdict | null | undefined,
+  gate: unknown,
+  failure: unknown,
 ): Promise<TestSuiteRemediationRecord | undefined> {
-  if (rebaseVerdict?.kickback?.from !== 'rebase') return undefined;
-  const invalidatedAt = rebaseVerdict!.checkedAt;
+  if (typeof gate !== 'string' || !isObservedFailure(failure)) return undefined;
+  const advance = resolveBaseAdvanceForFailure(await readBaseAdvanceHistory(projectRoot), {
+    diagnostic: failure.message,
+    observedAt: failure.observedAt,
+  });
+  if (!advance) return undefined;
+  const invalidatedAt = Date.parse(advance.ts);
   const release = await acquireLedgerLock(projectRoot);
   try {
     const ledger = await readLedger(projectRoot);
@@ -184,6 +194,7 @@ export async function recordTestSuiteRemediation(
 
     const record: TestSuiteRemediationRecord = {
       id: `repair-${remediationIdentity(failure)}`,
+      gate,
       reason: failure.reason,
       diagnostic: failure.message.replace(/\s+/g, ' ').trim(),
       rebaseInvalidatedAt: invalidatedAt,
@@ -200,4 +211,14 @@ export async function recordTestSuiteRemediation(
   } finally {
     await release();
   }
+}
+
+export const recordGateRepair = recordTestSuiteRemediation;
+
+function isObservedFailure(value: unknown): value is TestSuiteRemediationFailure {
+  return !!value
+    && typeof value === 'object'
+    && typeof (value as TestSuiteRemediationFailure).reason === 'string'
+    && typeof (value as TestSuiteRemediationFailure).message === 'string'
+    && typeof (value as TestSuiteRemediationFailure).observedAt === 'number';
 }
