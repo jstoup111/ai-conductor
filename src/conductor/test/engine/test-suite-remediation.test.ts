@@ -53,6 +53,23 @@ describe('resolveBaseAdvanceForFailure', () => {
       observedAt: '2026-08-13T10:04:00.000Z',
     })).toBe(plannerAdvance);
   });
+
+  it('returns no attribution for diagnostics without a changed path or absent advances', () => {
+    const advances = [{ paths: ['agents/planner.md'], ts: '2026-08-13T10:01:00.000Z' }];
+    const observedAt = '2026-08-13T10:02:00.000Z';
+
+    expect([
+      resolveBaseAdvanceForFailure(advances, {
+        diagnostic: 'agents/evaluator.md has an invalid reference',
+        observedAt,
+      }),
+      resolveBaseAdvanceForFailure(advances, { diagnostic: 'build review failed', observedAt }),
+      resolveBaseAdvanceForFailure([], {
+        diagnostic: 'agents/planner.md has an invalid reference',
+        observedAt,
+      }),
+    ]).toEqual([undefined, undefined, undefined]);
+  });
 });
 
 describe('recordTestSuiteRemediation', () => {
