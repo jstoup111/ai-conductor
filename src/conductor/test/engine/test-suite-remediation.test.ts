@@ -103,11 +103,25 @@ describe('recordTestSuiteRemediation', () => {
       },
     );
 
-    expect(record).toMatchObject({
-      gate: 'wiring_check',
-      diagnostic: 'agents/planner.md has an invalid reference',
-      rebaseInvalidatedAt: Date.parse('2026-08-13T10:01:00.000Z'),
+    await recordTestSuiteRemediation(dir, 'test_suite', {
+      reason: 'missing_test',
+      message: 'agents/planner.md has no matching test',
+      observedAt: Date.parse('2026-08-13T10:03:00.000Z'),
     });
+    await recordTestSuiteRemediation(dir, 'wiring_check', {
+      reason: 'missing_coverage',
+      message: 'agents/planner.md has an invalid reference',
+      observedAt: Date.parse('2026-08-13T10:04:00.000Z'),
+    });
+
+    expect([record, await readTestSuiteRemediations(dir)]).toEqual([
+      expect.objectContaining({ gate: 'wiring_check' }),
+      expect.arrayContaining([
+        expect.objectContaining({ diagnostic: 'agents/planner.md has an invalid reference' }),
+        expect.objectContaining({ diagnostic: 'agents/planner.md has no matching test' }),
+      ]),
+    ]);
+    expect(await readTestSuiteRemediations(dir)).toHaveLength(2);
   });
 
   it('reads every recorded base advance in event-log order', async () => {

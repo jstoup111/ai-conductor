@@ -82,13 +82,12 @@ export async function readBaseAdvanceHistory(projectRoot: string): Promise<BaseA
 }
 
 interface RepairLedger {
-  consumedInvalidations: number[];
   repairs: TestSuiteRemediationRecord[];
 }
 
-function remediationIdentity(failure: TestSuiteRemediationFailure): string {
+function remediationIdentity(advance: BaseAdvance, failure: TestSuiteRemediationFailure): string {
   return createHash('sha256')
-    .update(`${failure.reason}\0${failure.message}`)
+    .update(`${advance.ts}\0${failure.reason}\0${failure.message}`)
     .digest('hex')
     .slice(0, 12);
 }
@@ -122,13 +121,10 @@ async function readLedger(projectRoot: string): Promise<RepairLedger> {
       await readFile(join(projectRoot, BUILD_REVIEW_REPAIR_LEDGER), 'utf8'),
     ) as Partial<RepairLedger>;
     return {
-      consumedInvalidations: Array.isArray(parsed.consumedInvalidations)
-        ? parsed.consumedInvalidations.filter((value): value is number => typeof value === 'number')
-        : [],
       repairs: await readTestSuiteRemediations(projectRoot),
     };
   } catch {
-    return { consumedInvalidations: [], repairs: [] };
+    return { repairs: [] };
   }
 }
 
@@ -190,16 +186,14 @@ export async function recordTestSuiteRemediation(
   const release = await acquireLedgerLock(projectRoot);
   try {
     const ledger = await readLedger(projectRoot);
-    if (ledger.consumedInvalidations.includes(invalidatedAt)) return undefined;
 
     const record: TestSuiteRemediationRecord = {
-      id: `repair-${remediationIdentity(failure)}`,
+      id: `repair-${remediationIdentity(advance, failure)}`,
       gate,
       reason: failure.reason,
       diagnostic: failure.message.replace(/\s+/g, ' ').trim(),
       rebaseInvalidatedAt: invalidatedAt,
     };
-    ledger.consumedInvalidations.push(invalidatedAt);
     if (!ledger.repairs.some((candidate) => candidate.id === record.id)) {
       ledger.repairs.push(record);
     }
