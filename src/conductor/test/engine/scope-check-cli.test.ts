@@ -136,9 +136,26 @@ describe('scope-check CLI', () => {
     expect(diagnostic).toContain('Task 3');
     expect(diagnostic).toContain('src/conductor/src/unrelated/artifacts.ts');
     expect(diagnostic).toContain('src/conductor/src/other/changelog-pr-finalizer-cli.ts');
-    expect(diagnostic).toContain('Scope: src/conductor/src/unrelated/artifacts.ts — <rationale>');
-    expect(diagnostic).toContain('Scope: src/conductor/src/other/changelog-pr-finalizer-cli.ts — <rationale>');
+    expect(diagnostic).toContain('Scope: src/conductor/src/unrelated/artifacts.ts — feat(engine): scope check');
+    expect(diagnostic).toContain('Scope: src/conductor/src/other/changelog-pr-finalizer-cli.ts — feat(engine): scope check');
     expect(diagnostic.toLowerCase()).not.toContain('refus');
+  });
+
+  it('keeps an out-of-floor commit silent when containment recording is disabled', async () => {
+    const output: string[] = [];
+
+    await expect(
+      runScopeCheck({
+        projectRoot: '/repo',
+        commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+        readFile: async (path) =>
+          path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+        stagedPaths: async () => ['src/conductor/src/unrelated/artifacts.ts'],
+        print: (message) => output.push(message),
+      }),
+    ).resolves.toBe(0);
+
+    expect(output).toEqual([]);
   });
 
   it('bounds its advisory diagnostic for 200 undeclared paths', async () => {

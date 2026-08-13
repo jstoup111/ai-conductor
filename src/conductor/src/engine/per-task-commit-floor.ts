@@ -11,10 +11,9 @@ import {
 } from './autoheal.js';
 import { evaluateScopeContainment } from './plan-scope-containment.js';
 import { parseScopeTrailers, type ScopeTrailer } from './scope-trailer.js';
+import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
 import { normalizeTasks } from './task-progress.js';
 import type { ConductorEvent } from '../types/events.js';
-
-const MAX_DERIVED_RATIONALE_LENGTH = 1_000;
 
 /**
  * Per-task work-happened floor (task 1 of the per-task-commit-floor plan):
@@ -206,29 +205,6 @@ export async function runContainmentFloor(args: {
   }
 }
 
-function resolveScopeWideningRationale(
-  path: string,
-  scopeTrailers: readonly ScopeTrailer[],
-  commitMessage: string,
-): Pick<AcceptedScopeWidening, 'rationale' | 'derived'> {
-  const trailer = scopeTrailers.find((scope) => scope.path === path);
-  if (trailer !== undefined) return { rationale: trailer.rationale, derived: false };
-
-  const rationale = commitMessage
-    .split('\n')
-    .filter((line) => !/^Task:\s/.test(line))
-    .join('\n')
-    .trim() || 'Commit message unavailable';
-
-  return {
-    rationale:
-      rationale.length > MAX_DERIVED_RATIONALE_LENGTH
-        ? `${rationale.slice(0, MAX_DERIVED_RATIONALE_LENGTH - 1)}…`
-        : rationale,
-    derived: true,
-  };
-}
-
 function skippedContainmentFloor(message: string): ContainmentFloorReport {
   return {
     satisfied: true,
@@ -409,8 +385,14 @@ export function renderPerTaskFloorReport(report: PerTaskFloorReport): string[] {
 }
 
 export function renderContainmentFloorReport(report: ContainmentFloorReport): string[] {
-  return report.violations.map(
-    (violation) =>
-      `Advisory: containment violation for Task ${violation.taskId} in commit ${violation.sha}; offending paths: ${violation.paths.join(', ')}.`,
-  );
+  return [
+    ...report.violations.map(
+      (violation) =>
+        `Advisory: containment violation for Task ${violation.taskId} in commit ${violation.sha}; offending paths: ${violation.paths.join(', ')}.`,
+    ),
+    ...report.unresolvedChecks.map((check) =>
+      `Advisory: containment check unresolved${check.taskId === undefined ? '' : ` for Task ${check.taskId}`}; ${check.failure}.`,
+    ),
+    ...report.skipNotes.map((note) => `Advisory: ${note}.`),
+  ];
 }

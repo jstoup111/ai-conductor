@@ -47,8 +47,10 @@ import { writeState } from '../../src/engine/state.js';
  *                           absent" invariant); the fixture below MUST NOT
  *                           produce a record.
  */
+type AuditedEventType = Exclude<ConductorEvent['type'], 'containment_check_unresolved'>;
+
 const EVENT_TYPE_CLASSIFICATION: Record<
-  ConductorEvent['type'],
+  AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
   build_review_rubric_started: 'not-audited-by-design',
@@ -61,7 +63,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_disposition_refused: 'not-audited-by-design',
   build_review_outer_verdict: 'not-audited-by-design',
   step_started: 'not-audited-by-design',
-  containment_check_unresolved: 'not-audited-by-design',
   deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
@@ -148,8 +149,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   acceptance_red: 'not-audited-by-design',
 };
 
-/** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
-const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+/** One minimally-valid fixture per event owned by the audit writer, keyed by type. */
+const EVENT_FIXTURES: { [K in AuditedEventType]: Extract<ConductorEvent, { type: K }> } = {
   build_review_rubric_started: { type: 'build_review_rubric_started', rubric: 'scope', lapId: 'lap-1' },
   build_review_rubric_prompt: { type: 'build_review_rubric_prompt', rubric: 'scope', lapId: 'lap-1', promptBytes: 4096 },
   build_review_rubric_result: { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
@@ -160,12 +161,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_review_disposition_refused: { type: 'build_review_disposition_refused', feature: 'feature', reason: 'non-tty' },
   build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
   step_started: { type: 'step_started', step: 'build', index: 0 },
-  containment_check_unresolved: {
-    type: 'containment_check_unresolved',
-    failure: 'task-status-malformed',
-    taskId: '10',
-    ts: 1_723_231_600_000,
-  },
   deprecated_step: {
     type: 'deprecated_step',
     step: 'wiring_check',
@@ -566,7 +561,7 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     ).toBe(true);
   });
 
-  it('drift guard: every ConductorEvent type is classified, and the writer honors that classification', async () => {
+  it('drift guard: every audit-owned event type is classified, and the writer honors that classification', async () => {
     // Enumeration-driven (writing-system-tests §3): EVENT_TYPE_CLASSIFICATION
     // above is a `Record` keyed by the full `ConductorEvent['type']` union —
     // TypeScript itself refuses to compile this file if a new event type is
@@ -583,7 +578,7 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     writer.subscribe(events);
 
     for (const [type, classification] of Object.entries(EVENT_TYPE_CLASSIFICATION) as Array<
-      [ConductorEvent['type'], 'friction-mapped' | 'not-audited-by-design']
+      [AuditedEventType, 'friction-mapped' | 'not-audited-by-design']
     >) {
       const before = (await readRecords(dir)).length;
       await events.emit(EVENT_FIXTURES[type]);

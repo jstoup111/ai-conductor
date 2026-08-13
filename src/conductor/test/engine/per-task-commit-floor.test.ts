@@ -6,6 +6,7 @@ import { execa } from 'execa';
 import {
   runContainmentFloor,
   runPerTaskCommitFloor,
+  renderContainmentFloorReport,
   renderPerTaskFloorReport,
 } from '../../src/engine/per-task-commit-floor.js';
 
@@ -359,6 +360,10 @@ describe('per-task-commit-floor', () => {
       { type: 'containment_check_unresolved', failure: 'task-status-malformed', taskId: '2', ts: 1_000 },
       { type: 'containment_check_unresolved', failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
     ]);
+    expect(renderContainmentFloorReport(report)).toEqual(expect.arrayContaining([
+      'Advisory: containment check unresolved for Task 2; task-status-malformed.',
+      'Advisory: containment check unresolved for Task 3; evaluation-failed.',
+    ]));
   });
 
   it('tolerates an absent hook ledger and marks its observations unrecorded', async () => {
@@ -368,6 +373,9 @@ describe('per-task-commit-floor', () => {
 
     expect(report.unresolvedChecks).toEqual([]);
     expect(report.skipNotes).toContain('containment-floor: hook-events ledger is unrecorded');
+    expect(renderContainmentFloorReport(report)).toContain(
+      'Advisory: containment-floor: hook-events ledger is unrecorded.',
+    );
   });
 
   it('skips malformed hook-ledger lines without losing readable engine-ledger events', async () => {

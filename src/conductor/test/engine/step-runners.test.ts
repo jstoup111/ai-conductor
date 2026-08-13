@@ -3441,6 +3441,7 @@ TIER: M`,
           pipelineDir: join(dir, '.pipeline'),
           config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
           ...currentBuildReviewProof(),
+          config: { build_review: { scopeContainmentEnforced: true } },
         },
       );
 
@@ -3482,6 +3483,7 @@ TIER: M`,
           log: (message) => console.warn(message),
           ...tautologyOptIn(),
           ...currentBuildReviewProof(),
+          config: { build_review: { scopeContainmentEnforced: true } },
         },
       );
 
@@ -3515,6 +3517,7 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           ...currentBuildReviewProof(),
+          config: { build_review: { scopeContainmentEnforced: true } },
         },
       );
 
@@ -3525,11 +3528,37 @@ TIER: M`,
 
       expect(result.success).toBe(false);
       expect(output).not.toContain('out of scope');
+      expect(output).toContain('containment-floor: hook-events ledger is unrecorded');
       expect(scopePrompt).toContain('artifacts.ts');
       expect(scopePrompt).toContain('changelog-pr-finalizer-cli.ts');
       expect(scopePrompt).toContain('out of scope');
       expect(scopePrompt).toContain('"taskId":"3"');
       expect(scopePrompt).toContain(sha);
+    });
+
+    it('runs the containment floor but omits accepted widenings from build_review by default', async () => {
+      await prepareContainmentRepo(['outside.ts'], 'out of scope\n\nTask: 3');
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        {
+          gitRunner: makeGitRunner(dir),
+          planPath,
+          pipelineDir: join(dir, '.pipeline'),
+          ...currentBuildReviewProof(),
+        },
+      );
+
+      await runner.run('build_review', emptyState);
+
+      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      const floor = JSON.parse(await readFile(join(dir, '.pipeline', 'containment-floor.json'), 'utf8'));
+      expect(floor.acceptedWidenings).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'outside.ts', derived: true }),
+      ]));
+      expect(prompts).not.toContain('"path":"outside.ts","rationale"');
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {

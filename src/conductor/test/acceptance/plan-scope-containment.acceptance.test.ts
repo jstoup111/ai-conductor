@@ -152,7 +152,7 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     expect(unrelatedCommit.code).toBe(0);
     expect(unrelatedCommit.stderr).toContain('Task 3');
     expect(unrelatedCommit.stderr).toContain(unrelatedPath);
-    expect(unrelatedCommit.stderr).toContain(`Scope: ${unrelatedPath} — <rationale>`);
+    expect(unrelatedCommit.stderr).toContain(`Scope: ${unrelatedPath} — fix: keep daemon behavior aligned`);
     expect(unrelatedCommit.stderr).not.toMatch(/refus(?:e|ing|al)/i);
     expect((await git('show', '--format=%s', '--no-patch', 'HEAD')).stdout)
       .toBe('fix: keep daemon behavior aligned');
@@ -173,6 +173,12 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     expect(result.stderr).toBe('');
     await expect(readFile(join(repoDir, '.pipeline', 'hook-events.jsonl'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
+
+    const report = await runContainmentFloor({ projectRoot: repoDir, planPath });
+    expect(report.acceptedWidenings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: unrelatedPath, derived: true }),
+    ]));
+    expect(graderPrompt([])).not.toContain(unrelatedPath);
   });
 
   it('carries authored and derived rationales from a real commit into build_review', async () => {

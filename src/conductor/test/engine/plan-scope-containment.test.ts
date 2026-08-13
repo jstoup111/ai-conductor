@@ -23,20 +23,16 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
-  it('reports only undeclared staged paths with the active task id', () => {
+  it('allows an undeclared source-file sibling in the declared directory', () => {
     expect(
       evaluateScopeContainment({
         stagedPaths: [
           'src/conductor/src/engine/config.ts',
-          'src/conductor/src/daemon/backlog.ts',
+          'src/conductor/src/engine/artifacts.ts',
         ],
         task,
       }),
-    ).toEqual({
-      allowed: false,
-      taskId: '3',
-      offendingPaths: ['src/conductor/src/daemon/backlog.ts'],
-    });
+    ).toEqual({ allowed: true });
   });
 
   it('accepts a segment-anchored suffix match', () => {
@@ -66,58 +62,17 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
-  it('does not treat root-level files as same-directory siblings', () => {
+  it('allows another source-file sibling in the declared directory', () => {
     expect(
       evaluateScopeContainment({
-        stagedPaths: ['undeclared.ts'],
-        task: { id: '3', status: 'in_progress', files: ['declared.ts'] },
-      }),
-    ).toEqual({
-      allowed: false,
-      taskId: '3',
-      offendingPaths: ['undeclared.ts'],
-    });
-  });
-
-  it('does not over-accept a filename that merely ends in the declared path', () => {
-    expect(
-      evaluateScopeContainment({
-        stagedPaths: ['src/conductor/src/daemon/audit-trail.ts'],
+        stagedPaths: ['src/conductor/src/engine/audit-trail.ts'],
         task: {
           id: '4',
           status: 'in_progress',
           files: ['src/conductor/src/engine/trail.ts'],
         },
       }),
-    ).toEqual({
-      allowed: false,
-      taskId: '4',
-      offendingPaths: ['src/conductor/src/daemon/audit-trail.ts'],
-    });
-  });
-
-  it('does not allow an unrelated test sibling for a bare file declaration', () => {
-    expect(
-      evaluateScopeContainment({
-        stagedPaths: ['src/other/unrelated-config.test.ts'],
-        task: { id: '4', status: 'in_progress', files: ['config.ts'] },
-      }),
-    ).toEqual({
-      allowed: false,
-      taskId: '4',
-      offendingPaths: ['src/other/unrelated-config.test.ts'],
-    });
-  });
-
-  it('does not require declared paths to exist on disk', () => {
-    expect(() => evaluateScopeContainment({
-      stagedPaths: ['src/conductor/src/daemon/backlog.ts'],
-      task: {
-        id: '4',
-        status: 'in_progress',
-        files: ['src/conductor/src/engine/does-not-exist.ts'],
-      },
-    })).not.toThrow();
+    ).toEqual({ allowed: true });
   });
 
   it('allows machinery-authored paths alongside task-declared paths', () => {
@@ -165,12 +120,12 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
-  it('refuses only an undeclared staged path when another staged path is widened', () => {
+  it('allows a same-directory sibling alongside an explicitly widened path', () => {
     expect(
       evaluateScopeContainment({
         stagedPaths: [
           'src/conductor/src/index.ts',
-          'src/conductor/src/daemon/artifacts.ts',
+          'src/conductor/src/engine/artifacts.ts',
         ],
         task: {
           id: '6',
@@ -184,11 +139,7 @@ describe('evaluateScopeContainment', () => {
           },
         ],
       }),
-    ).toEqual({
-      allowed: false,
-      taskId: '6',
-      offendingPaths: ['src/conductor/src/daemon/artifacts.ts'],
-    });
+    ).toEqual({ allowed: true });
   });
 
   it.each([

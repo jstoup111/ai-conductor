@@ -346,6 +346,7 @@ describe('integration/git-hooks-attribution', () => {
 
       expect(res.code).toBe(0);
       expect(res.stderr).toContain('scope-check: Task 7 has staged paths outside its declared scope (advisory):');
+      expect(res.stderr).toContain('Scope: outside-floor.ts — feat: advisory containment');
       expect((await git('rev-parse', '--verify', 'HEAD')).code).toBe(0);
     });
 

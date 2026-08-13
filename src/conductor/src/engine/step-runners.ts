@@ -2184,7 +2184,9 @@ export class DefaultStepRunner implements StepRunner {
       inputs = {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
           ...this.buildReviewInputOptions,
-          acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
+          acceptedWidenings: buildReviewConfig.scopeContainmentEnforced
+            ? containmentReport?.acceptedWidenings ?? []
+            : [],
         }),
       };
     } catch (err) {

@@ -9,6 +9,7 @@ import {
 } from './plan-scope-containment.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { parseScopeTrailers } from './scope-trailer.js';
+import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
 import type { ConductorEvent } from '../types/events.js';
 
 export interface ScopeCheckCommand {
@@ -125,7 +126,7 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
     if (deps.enforce !== true) return 0;
 
     const print = deps.print ?? ((message: string) => writeSync(process.stderr.fd, `${message}\n`));
-    print(renderScopeAdvisory(result.taskId, result.offendingPaths));
+    print(renderScopeAdvisory(result.taskId, result.offendingPaths, commitMessage, stagedPaths));
     return 0;
   } catch {
     await appendUnresolvedContainmentCheck(deps.projectRoot, {
@@ -184,14 +185,20 @@ function parseScopeContainmentTasks(raw: string): ScopeContainmentTask[] {
 
 const MAX_RENDERED_OFFENDING_PATHS = 20;
 
-function renderScopeAdvisory(taskId: string, offendingPaths: readonly string[]): string {
+function renderScopeAdvisory(
+  taskId: string,
+  offendingPaths: readonly string[],
+  commitMessage: string,
+  stagedPaths: readonly string[],
+): string {
   const renderedPaths = offendingPaths.slice(0, MAX_RENDERED_OFFENDING_PATHS);
   const remainingPathCount = offendingPaths.length - renderedPaths.length;
+  const scopeTrailers = parseScopeTrailers(commitMessage, stagedPaths);
   return [
     `scope-check: Task ${taskId} has staged paths outside its declared scope (advisory):`,
     ...renderedPaths.map((path) => `  ${path}`),
     ...(remainingPathCount === 0 ? [] : [`  … ${remainingPathCount} more undeclared paths`]),
     'Record each widening by adding:',
-    ...renderedPaths.map((path) => `  Scope: ${path} — <rationale>`),
+    ...renderedPaths.map((path) => `  Scope: ${path} — ${resolveScopeWideningRationale(path, scopeTrailers, commitMessage).rationale}`),
   ].join('\n');
 }
