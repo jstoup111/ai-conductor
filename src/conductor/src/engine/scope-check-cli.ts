@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
 import { writeSync } from 'node:fs';
 import { execa } from 'execa';
 import { extractBodyTaskIds } from './autoheal.js';
@@ -9,6 +9,7 @@ import {
 } from './plan-scope-containment.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { parseScopeTrailers } from './scope-trailer.js';
+import type { ConductorEvent } from '../types/events.js';
 
 export interface ScopeCheckCommand {
   commitMessagePath: string;
@@ -66,6 +67,11 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
   try {
     commitMessage = await read(deps.commitMessagePath);
   } catch {
+    await appendUnresolvedContainmentCheck(deps.projectRoot, {
+      type: 'containment_check_unresolved',
+      failure: 'commit-message-unreadable',
+      ts: Date.now(),
+    });
     return 3;
   }
   const taskId = extractBodyTaskIds(commitMessage)[0];
@@ -75,13 +81,26 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
   try {
     taskStatus = await read(`${deps.projectRoot}/.pipeline/task-status.json`);
   } catch (error) {
-    return isMissingFileError(error) ? 0 : 3;
+    if (isMissingFileError(error)) return 0;
+    await appendUnresolvedContainmentCheck(deps.projectRoot, {
+      type: 'containment_check_unresolved',
+      failure: 'task-status-unreadable',
+      taskId,
+      ts: Date.now(),
+    });
+    return 3;
   }
 
   let tasks: ScopeContainmentTask[];
   try {
     tasks = parseScopeContainmentTasks(taskStatus);
   } catch {
+    await appendUnresolvedContainmentCheck(deps.projectRoot, {
+      type: 'containment_check_unresolved',
+      failure: 'task-status-malformed',
+      taskId,
+      ts: Date.now(),
+    });
     return 3;
   }
   const activeTask = tasks.find((task) => task.id === taskId);
@@ -107,7 +126,25 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
     print(renderScopeAdvisory(result.taskId, result.offendingPaths));
     return 0;
   } catch {
+    await appendUnresolvedContainmentCheck(deps.projectRoot, {
+      type: 'containment_check_unresolved',
+      failure: 'evaluation-failed',
+      taskId,
+      ts: Date.now(),
+    });
     return 3;
+  }
+}
+
+/** Record hook-owned uncertainty without allowing filesystem failures to block a commit. */
+export async function appendUnresolvedContainmentCheck(
+  projectRoot: string,
+  event: Extract<ConductorEvent, { type: 'containment_check_unresolved' }>,
+): Promise<void> {
+  try {
+    await appendFile(`${projectRoot}/.pipeline/hook-events.jsonl`, `${JSON.stringify(event)}\n`);
+  } catch {
+    // The hook's containment verdict remains advisory even when its sibling ledger is unavailable.
   }
 }
 

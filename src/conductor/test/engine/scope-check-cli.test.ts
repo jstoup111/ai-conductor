@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import * as scopeCheckCli from '../../src/engine/scope-check-cli.js';
 
-const { detectScopeCheckCommand, runScopeCheck } = scopeCheckCli;
+const { appendUnresolvedContainmentCheck, detectScopeCheckCommand, runScopeCheck } = scopeCheckCli;
 const loadScopeCheckEnforcement = (
   scopeCheckCli as typeof scopeCheckCli & {
     loadScopeCheckEnforcement(
@@ -173,5 +173,66 @@ describe('scope-check CLI', () => {
         },
       }),
     ).resolves.toBe(3);
+  });
+
+  it('appends exactly one unresolved-check event without changing the engine ledger', async () => {
+    const engineLedgerPath = join(projectRoot, '.pipeline', 'events.jsonl');
+    const engineLedger = '{"type":"step_started"}\n';
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(engineLedgerPath, engineLedger, 'utf8');
+    await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), '{', 'utf8');
+    await writeFile(messagePath, MESSAGE, 'utf8');
+
+    await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
+
+    expect(await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8')).toMatch(
+      /^\{"type":"containment_check_unresolved","failure":"task-status-malformed","taskId":"3","ts":\d+\}\n$/,
+    );
+    await expect(readFile(engineLedgerPath, 'utf8')).resolves.toBe(engineLedger);
+  });
+
+  it('round-trips escaped commit task values as one parseable hook-ledger line', async () => {
+    const taskId = 'task "quote"\\slash\nnewline';
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await appendUnresolvedContainmentCheck(projectRoot, {
+      type: 'containment_check_unresolved',
+      failure: 'task-status-malformed',
+      taskId,
+      ts: 1,
+    });
+
+    const lines = (await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8')).split('\n');
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ taskId, failure: 'task-status-malformed' });
+  });
+
+  it('swallows an unwritable hook ledger path', async () => {
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
+    await writeFile(join(projectRoot, '.pipeline'), 'not a directory', 'utf8');
+    await writeFile(messagePath, MESSAGE, 'utf8');
+
+    await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
+  });
+
+  it('keeps two rapid unresolved checks as individually parseable records', async () => {
+    const firstMessagePath = join(projectRoot, 'COMMIT_EDITMSG-1');
+    const secondMessagePath = join(projectRoot, 'COMMIT_EDITMSG-2');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), '{', 'utf8');
+    await writeFile(firstMessagePath, MESSAGE, 'utf8');
+    await writeFile(secondMessagePath, MESSAGE.replace('Task: 3', 'Task: 4'), 'utf8');
+
+    await expect(Promise.all([
+      runScopeCheck({ projectRoot, commitMessagePath: firstMessagePath }),
+      runScopeCheck({ projectRoot, commitMessagePath: secondMessagePath }),
+    ])).resolves.toEqual([3, 3]);
+
+    const records = (await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.taskId).sort()).toEqual(['3', '4']);
   });
 });
