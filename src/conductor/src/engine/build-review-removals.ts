@@ -68,7 +68,9 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
     if (!rawLine.startsWith('-') || rawLine.startsWith('---')) continue;
 
     const removed = rawLine.slice(1);
-    const declaration = removed.match(exportedDeclaration)?.[1];
+    const declaration = /^\s*export\s+(?:declare\s+)?type\s+[A-Za-z_$][\w$]*\s*=\s*$/.test(removed)
+      ? undefined
+      : removed.match(exportedDeclaration)?.[1];
     if (declaration) {
       result.removedDeclarations.push(declaration);
       continue;

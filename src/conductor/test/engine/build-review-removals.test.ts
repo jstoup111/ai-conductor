@@ -51,4 +51,27 @@ diff --git a/src/api.ts b/src/api.ts
       removedMembers: [{ declaration: 'Nested', member: 'removedNestedMember' }],
     });
   });
+
+  it('fails safely for renames, textual mentions, and declarations it cannot parse', () => {
+    expect(() => deriveBuildReviewRemovals(`diff --git a/src/old.ts b/src/new.ts
+similarity index 80%
+rename from src/old.ts
+rename to src/new.ts
+deleted file mode 100644
+@@ -1,3 +1 @@
+-// export const notAnApi = true
+-const text = "export interface AlsoNotAnApi";
+-export type MultiLine =`)).not.toThrow();
+    expect(deriveBuildReviewRemovals(`diff --git a/src/old.ts b/src/new.ts
+similarity index 80%
+rename from src/old.ts
+rename to src/new.ts
+deleted file mode 100644
+@@ -1,3 +1 @@
+-// export const notAnApi = true
+-const text = "export interface AlsoNotAnApi";
+-export type MultiLine =`)).toEqual({
+      deletedFiles: [], removedDeclarations: [], removedMembers: [],
+    });
+  });
 });
