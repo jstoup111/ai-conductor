@@ -1106,11 +1106,13 @@ export async function resolveRebaseConflicts(
       };
     }
 
-    // Both guards pass — reclassify by whether code/test paths changed.
-    const changed = filterCodeOrTestPaths(await changedPathsBetween(git, onto, 'HEAD'));
-    return changed.length > 0
-      ? { kind: 'changed', changedCodePaths: changed }
-      : { kind: 'noop' };
+    // Both guards pass — reclassify by whether code/test paths changed while
+    // retaining the complete delta for base-advance attribution.
+    const allChangedPaths = await changedPathsBetween(git, onto, 'HEAD');
+    const changedCodePaths = filterCodeOrTestPaths(allChangedPaths);
+    return changedCodePaths.length > 0
+      ? { kind: 'changed', changedCodePaths, allChangedPaths }
+      : { kind: 'noop', allChangedPaths };
   }
 
   // All cap attempts consumed without the rebase completing.
