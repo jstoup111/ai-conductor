@@ -5,11 +5,24 @@ import { tmpdir } from 'node:os';
 
 import {
   BUILD_REVIEW_REPAIR_LEDGER,
+  diagnosticOverlapsBaseAdvance,
   readBaseAdvanceHistory,
   readTestSuiteRemediations,
   recordTestSuiteRemediation,
   wasInvalidatedByRebase,
 } from '../../src/engine/test-suite-remediation.js';
+
+describe('diagnosticOverlapsBaseAdvance', () => {
+  it('matches a diagnostic naming a path in an advance but not another advance', () => {
+    const diagnostic = 'build review failed: agents/planner.md has an invalid reference';
+
+    expect([
+      diagnosticOverlapsBaseAdvance({ paths: ['agents/planner.md'], ts: '2026-08-13T10:00:00.000Z' }, diagnostic),
+      diagnosticOverlapsBaseAdvance({ paths: ['agents/evaluator.md'], ts: '2026-08-13T10:00:00.000Z' }, diagnostic),
+      diagnosticOverlapsBaseAdvance({ paths: ['agents/planner.m'], ts: '2026-08-13T10:00:00.000Z' }, diagnostic),
+    ]).toEqual([true, false, false]);
+  });
+});
 
 describe('recordTestSuiteRemediation', () => {
   let dir: string;

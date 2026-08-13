@@ -22,6 +22,13 @@ export interface BaseAdvance {
   ts: string;
 }
 
+export function diagnosticOverlapsBaseAdvance(advance: BaseAdvance, diagnostic: string): boolean {
+  return advance.paths.some((path) => {
+    const escapedPath = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^\\w./-])${escapedPath}(?=$|[^\\w./-])`).test(diagnostic);
+  });
+}
+
 /**
  * Read the complete path deltas from every recorded base advance. The JSONL
  * sequence is append-only, so preserving its scan order preserves chronology.
