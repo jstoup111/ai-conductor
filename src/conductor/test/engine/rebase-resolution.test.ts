@@ -295,8 +295,7 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
     }
   });
 
-  it('fails closed when the resolved complete base-advance diff cannot be computed', async () => {
-    const preAdvanceBase = (await g(['merge-base', 'feat', 'main'])).stdout.trim();
+  it('resolves without a new halt when the optional complete base-advance base cannot be computed', async () => {
     const onto = (await g(['rev-parse', 'main'])).stdout.trim();
     const realGit = makeGitRunner(repo);
     const pre = await performRebase(realGit, repo, 'main');
@@ -304,12 +303,11 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
 
     const git = async (args: string[], opts?: Parameters<typeof realGit>[1]) => {
       if (
-        args[0] === 'diff' &&
-        args[1] === '--name-only' &&
-        args[2] === preAdvanceBase &&
-        args[3] === onto
+        args[0] === 'merge-base' &&
+        args[1] === 'ORIG_HEAD' &&
+        args[2] === onto
       ) {
-        return { exitCode: 1, stdout: '', stderr: 'simulated base-advance diff failure' };
+        return { exitCode: 1, stdout: '', stderr: 'simulated base-advance merge-base failure' };
       }
       return realGit(args, opts);
     };
@@ -320,14 +318,13 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
       return { resolved: true };
     }, 3);
 
-    expect(outcome).toMatchObject({ kind: 'changed', changedCodePaths: [] });
-    if (outcome.kind === 'changed') {
+    expect(outcome).toMatchObject({ kind: 'noop' });
+    if (outcome.kind === 'changed' || outcome.kind === 'noop') {
       expect(outcome.allChangedPaths).toBeUndefined();
-      expect(outcome.featureSurface).toBeUndefined();
     }
   });
 
-  it('classifies a resolved conflict from the complete base advance, not the replayed feature patch', async () => {
+  it('keeps replayed paths for invalidation while carrying the complete base advance separately', async () => {
     const deltaRepo = await mkdtemp(join(tmpdir(), 'rebase-resolution-complete-delta-'));
     const deltaGit = (args: string[]) => execFile('git', args, { cwd: deltaRepo });
     const deltaGc = (args: string[]) =>
@@ -364,9 +361,12 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
 
       expect(outcome).toMatchObject({
         kind: 'changed',
-        changedCodePaths: ['base-only.ts', 'conflict.ts'],
+        changedCodePaths: ['conflict.ts', 'feature-only.ts'],
         allChangedPaths: ['base-only.ts', 'conflict.ts'],
       });
+      if (outcome.kind === 'changed') {
+        expect(outcome.changedCodePaths).not.toContain('base-only.ts');
+      }
       if (outcome.kind === 'changed' || outcome.kind === 'noop') {
         expect(outcome.allChangedPaths).not.toContain('feature-only.ts');
       }

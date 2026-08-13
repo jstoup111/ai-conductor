@@ -1047,17 +1047,13 @@ export async function resolveRebaseConflicts(
 
   // The rebase state retains ORIG_HEAD while paused: it is the feature tip
   // before replay began. Its merge-base with `onto` is the base before the
-  // advance, which lets the resolved outcome describe the complete base
-  // advance rather than the replayed feature patch.
+  // advance. That range is supplementary attribution only: gate
+  // invalidation retains its established `onto..HEAD` replayed-path contract.
   const preAdvanceBaseResult = await git(['merge-base', 'ORIG_HEAD', onto]);
-  const preAdvanceBase = preAdvanceBaseResult.stdout.trim();
-  if (preAdvanceBaseResult.exitCode !== 0 || !preAdvanceBase) {
-    return {
-      kind: 'conflict_halt',
-      conflicts: conflictOutcome.kind === 'conflict_halt' ? conflictOutcome.conflicts : [],
-      reason: 'could not derive the pre-advance base for resolved rebase classification',
-    };
-  }
+  const preAdvanceBase =
+    preAdvanceBaseResult.exitCode === 0 && preAdvanceBaseResult.stdout.trim()
+      ? preAdvanceBaseResult.stdout.trim()
+      : undefined;
 
   // Feature commit subjects that must survive: all commits in <onto>..ORIG_HEAD.
   // ORIG_HEAD is the pre-rebase feature tip (set by git before it starts replaying).
@@ -1120,28 +1116,46 @@ export async function resolveRebaseConflicts(
       };
     }
 
-    // Both guards pass — classify the complete base advance, not `onto..HEAD`:
-    // that latter range is the replayed feature patch and omits base-only
-    // changes while incorrectly including feature-only ones. Unlike the
-    // general helper, a failed diff here cannot be treated as an empty delta:
-    // doing so would falsely return noop after a completed resolution.
-    let allChangedPaths: string[];
+    // Both guards pass. `onto..HEAD` is the established invalidation set for
+    // a resolved rebase. Preserve it even when complete base-advance
+    // attribution is unavailable.
+    let changedCodePaths: string[];
     try {
-      const delta = await git(['diff', '--name-only', preAdvanceBase, onto]);
-      if (delta.exitCode !== 0) {
+      const replayed = await git(['diff', '--name-only', onto, 'HEAD']);
+      if (replayed.exitCode !== 0) {
         return { kind: 'changed', changedCodePaths: [] };
       }
-      allChangedPaths = delta.stdout
-        .split('\n')
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0);
+      changedCodePaths = filterCodeOrTestPaths(
+        replayed.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+      );
     } catch {
       return { kind: 'changed', changedCodePaths: [] };
     }
-    const changedCodePaths = filterCodeOrTestPaths(allChangedPaths);
+
+    // The complete pre-advance-base..onto delta is optional metadata. It
+    // describes all base changes for readers that need attribution, but must
+    // never alter the established changedCodePaths invalidation contract or
+    // turn a successfully resolved rebase into a conflict halt.
+    let allChangedPaths: string[] | undefined;
+    if (preAdvanceBase !== undefined) {
+      try {
+        const delta = await git(['diff', '--name-only', preAdvanceBase, onto]);
+        if (delta.exitCode === 0) {
+          allChangedPaths = delta.stdout
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+        }
+      } catch {
+        // Complete-delta attribution is optional after resolution succeeds.
+      }
+    }
     return changedCodePaths.length > 0
-      ? { kind: 'changed', changedCodePaths, allChangedPaths }
-      : { kind: 'noop', allChangedPaths };
+      ? { kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
+      : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
   }
 
   // All cap attempts consumed without the rebase completing.
