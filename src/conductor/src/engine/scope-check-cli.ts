@@ -172,14 +172,18 @@ function parseScopeContainmentTasks(raw: string): ScopeContainmentTask[] {
 
   const root = parsed as Record<string, unknown>;
   if (!Array.isArray(root.tasks)) throw new Error('task-status.json has no tasks array');
-  return root.tasks.flatMap((value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return root.tasks.map((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('task-status.json has a non-object task row');
+    }
     const row = value as Record<string, unknown>;
-    if (row.id === undefined || row.id === null || typeof row.status !== 'string') return [];
-    const files = Array.isArray(row.files) && row.files.every((file) => typeof file === 'string')
-      ? row.files
-      : undefined;
-    return [{ id: String(row.id), status: row.status, ...(files === undefined ? {} : { files }) }];
+    if (row.id === undefined || row.id === null) throw new Error('task-status.json task is missing id');
+    if (typeof row.status !== 'string') throw new Error('task-status.json task has invalid status');
+    if (row.files !== undefined && (!Array.isArray(row.files) || !row.files.every((file) => typeof file === 'string'))) {
+      throw new Error('task-status.json task has invalid files');
+    }
+    const files = row.files as string[] | undefined;
+    return { id: String(row.id), status: row.status, ...(files === undefined ? {} : { files }) };
   });
 }
 

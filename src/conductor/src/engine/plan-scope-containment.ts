@@ -26,7 +26,11 @@ function pathDirectory(path: string): string {
 
 function isSameDirectory(path: string, declaredPath: string): boolean {
   const declaredDirectory = pathDirectory(declaredPath);
-  return declaredDirectory !== '' && fileMatchesPlanPath(pathDirectory(path), declaredDirectory);
+  const pathDirectoryValue = pathDirectory(path);
+  return (
+    (declaredDirectory === '' && pathDirectoryValue === '') ||
+    (declaredDirectory !== '' && fileMatchesPlanPath(pathDirectoryValue, declaredDirectory))
+  );
 }
 
 function isMachineryAuthoredPath(path: string, machineryPath: string): boolean {

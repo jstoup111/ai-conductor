@@ -11,6 +11,7 @@ const loadScopeCheckEnforcement = (
   scopeCheckCli as typeof scopeCheckCli & {
     loadScopeCheckEnforcement(
       projectRoot: string,
+      load?: (projectRoot: string) => Promise<any>,
     ): Promise<boolean>;
   }
 ).loadScopeCheckEnforcement;
@@ -38,10 +39,21 @@ describe('scope-check CLI', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('loads report-only as the default from resolved project configuration', async () => {
-    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), '{}\n');
-
+  it.each([
+    ['absent key', '{}\n'],
+    ['non-boolean value', 'build_review:\n  scopeContainmentEnforced: enabled\n'],
+    ['malformed YAML', 'build_review: [\n'],
+  ])('falls back to report-only for %s configuration', async (_name, config) => {
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), config);
     await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(false);
+  });
+
+  it('falls back to report-only when the configuration loader is unreadable', async () => {
+    await expect(
+      loadScopeCheckEnforcement(projectRoot, async () => {
+        throw new Error('config unreadable');
+      }),
+    ).resolves.toBe(false);
   });
 
   it('loads explicit enforcement from resolved project configuration', async () => {
@@ -120,7 +132,7 @@ describe('scope-check CLI', () => {
     expect(diagnostic.toLowerCase()).not.toContain('refus');
   });
 
-  it('keeps an out-of-floor commit silent when containment recording is disabled', async () => {
+  it('keeps a root-level neighbor silent when containment recording is disabled', async () => {
     const output: string[] = [];
 
     await expect(
@@ -129,7 +141,7 @@ describe('scope-check CLI', () => {
         commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
         readFile: async (path) =>
           path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
-        stagedPaths: async () => ['src/conductor/src/unrelated/artifacts.ts'],
+        stagedPaths: async () => ['neighbor.ts'],
         print: (message) => output.push(message),
       }),
     ).resolves.toBe(0);
@@ -193,6 +205,36 @@ describe('scope-check CLI', () => {
     }
 
     expect(output).toEqual([]);
+  });
+
+  it.each([
+    ['non-object row', JSON.stringify({ tasks: [null] })],
+    ['missing id', JSON.stringify({ tasks: [{ status: 'in_progress', files: ['config.ts'] }] })],
+    ['null id', JSON.stringify({ tasks: [{ id: null, status: 'in_progress', files: ['config.ts'] }] })],
+    ['non-string status', JSON.stringify({ tasks: [{ id: '3', status: true, files: ['config.ts'] }] })],
+    ['non-string files member', JSON.stringify({ tasks: [{ id: '3', status: 'in_progress', files: ['config.ts', 1] }] })],
+  ])('records task-status-malformed for a structurally malformed %s', async (_name, status) => {
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(messagePath, MESSAGE, 'utf8');
+    await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), status, 'utf8');
+
+    await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
+    await expect(readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8')).resolves.toContain(
+      '"failure":"task-status-malformed"',
+    );
+  });
+
+  it('remains not applicable for a valid task-status file without an active row', async () => {
+    await expect(
+      runScopeCheck({
+        projectRoot: '/repo',
+        commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+        readFile: async (path) => path.endsWith('task-status.json')
+          ? JSON.stringify({ tasks: [{ id: '3', status: 'completed', files: ['config.ts'] }] })
+          : MESSAGE,
+      }),
+    ).resolves.toBe(0);
   });
 
   it('exits 3 when staged-path evaluation throws after resolving the active task', async () => {

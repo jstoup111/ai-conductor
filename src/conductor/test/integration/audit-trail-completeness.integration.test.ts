@@ -476,11 +476,15 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     await writeState(statePath, { complexity_tier: 'S' } as ConductState);
 
     const mod = await loadWriter();
+    const sinks = await import('../../src/engine/event-sinks.js');
     const AuditTrailWriter = mod.AuditTrailWriter as new (root: string) => {
       subscribe(emitter: ConductorEventEmitter): void;
     };
     const writer = new AuditTrailWriter(dir);
     writer.subscribe(events);
+
+    expect(sinks.persistedEventTypes()).toContain('containment_check_unresolved');
+    expect(sinks.auditedEventTypes()).not.toContain('containment_check_unresolved');
 
     const stepsRun: StepName[] = [];
     const deprecatedSteps: Array<Extract<ConductorEvent, { type: 'deprecated_step' }>> = [];

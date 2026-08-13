@@ -105,10 +105,13 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
-  it('rejects a path under an undeclared directory with that exact path', () => {
+  it('allows a same-directory neighbor while reporting only an undeclared directory', () => {
     expect(
       evaluateScopeContainment({
-        stagedPaths: ['src/conductor/src/daemon/backlog.ts'],
+        stagedPaths: [
+          'src/conductor/src/engine/artifacts.ts',
+          'src/conductor/src/daemon/backlog.ts',
+        ],
         task,
       }),
     ).toEqual({
@@ -118,10 +121,10 @@ describe('evaluateScopeContainment', () => {
     });
   });
 
-  it('does not treat a declared file as a prefix for another directory', () => {
+  it('allows root-level neighbors but reports nested paths for a root declaration', () => {
     expect(
       evaluateScopeContainment({
-        stagedPaths: ['src/other/unrelated-config.test.ts'],
+        stagedPaths: ['neighbor.ts', 'src/other/unrelated-config.test.ts'],
         task: { id: '3', status: 'in_progress', files: ['config.ts'] },
       }),
     ).toEqual({
@@ -131,17 +134,17 @@ describe('evaluateScopeContainment', () => {
     });
   });
 
-  it('evaluates a declared path absent from disk without throwing', () => {
-    expect(() => evaluateScopeContainment({
-      stagedPaths: ['src/conductor/src/engine/not-on-disk.ts'],
+  it('allows a same-directory neighbor of a declared path absent from disk', () => {
+    expect(() => expect(evaluateScopeContainment({
+      stagedPaths: ['src/conductor/src/engine/neighbor.ts'],
       task: { id: '3', status: 'in_progress', files: ['src/conductor/src/engine/not-on-disk.ts'] },
-    })).not.toThrow();
+    })).toEqual({ allowed: true })).not.toThrow();
   });
 
-  it('does not allow a longer filename sharing a machinery allowlist prefix', () => {
+  it('allows the exact machinery path but not a longer filename sharing its prefix', () => {
     expect(
       evaluateScopeContainment({
-        stagedPaths: ['CHANGELOG.md.backup'],
+        stagedPaths: ['CHANGELOG.md', 'CHANGELOG.md.backup'],
         task,
       }),
     ).toEqual({ allowed: false, taskId: '3', offendingPaths: ['CHANGELOG.md.backup'] });

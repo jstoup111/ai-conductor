@@ -3400,20 +3400,25 @@ TIER: M`,
     async function prepareContainmentRepo(
       changedPaths: string[],
       commitMessage: string,
+      declaredPath = 'config.ts',
     ): Promise<string> {
       await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
       await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
-      writeFileSync(planPath, '### Task 3: Config only\n**Files:** config.ts\n');
-      writeFileSync(join(dir, 'config.ts'), 'base\n');
-      await execa('git', ['add', 'config.ts'], { cwd: dir });
+      writeFileSync(planPath, `### Task 3: Config only\n**Files:** ${declaredPath}\n`);
+      const declaredDirectory = declaredPath.slice(0, declaredPath.lastIndexOf('/'));
+      if (declaredDirectory !== '') await mkdir(join(dir, declaredDirectory), { recursive: true });
+      writeFileSync(join(dir, declaredPath), 'base\n');
+      await execa('git', ['add', declaredPath], { cwd: dir });
       await execa('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
       await execa('git', ['remote', 'add', 'origin', dir], { cwd: dir });
       await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: dir });
       await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: dir });
       await execa('git', ['checkout', '-q', '-b', 'feature/containment'], { cwd: dir });
       for (const path of changedPaths) {
+        const directory = path.slice(0, path.lastIndexOf('/'));
+        if (directory !== '') await mkdir(join(dir, directory), { recursive: true });
         writeFileSync(join(dir, path), `${path}\n`);
       }
       await execa('git', ['add', '--', ...changedPaths], { cwd: dir });
@@ -3425,6 +3430,7 @@ TIER: M`,
       const sha = await prepareContainmentRepo(
         ['shared.ts'],
         'widen shared parser\n\nTask: 3\nScope: shared.ts — shared parser changes atomically',
+        'engine/config.ts',
       );
       const invoke = vi.fn().mockResolvedValue({
         success: true,
@@ -3464,7 +3470,7 @@ TIER: M`,
 
     it('passes derived scope-widening evidence into the isolated grader prompt with provenance', async () => {
       const sha = await prepareContainmentRepo(
-        ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
         'out of scope\n\nTask: 3',
       );
       const invoke = vi.fn().mockResolvedValue({
@@ -3491,8 +3497,8 @@ TIER: M`,
 
       const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
         .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
-      expect(scopePrompt).toContain('artifacts.ts');
-      expect(scopePrompt).toContain('changelog-pr-finalizer-cli.ts');
+      expect(scopePrompt).toContain('other/artifacts.ts');
+      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
       expect(scopePrompt).toContain('out of scope');
       expect(scopePrompt).toContain('"taskId":"3"');
       expect(scopePrompt).toContain(sha);
@@ -3500,7 +3506,7 @@ TIER: M`,
 
     it('keeps grader failure output separate from derived scope-widening evidence', async () => {
       const sha = await prepareContainmentRepo(
-        ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
         'out of scope\n\nTask: 3',
       );
       const invoke = vi.fn().mockResolvedValue({
@@ -3529,15 +3535,15 @@ TIER: M`,
       expect(result.success).toBe(false);
       expect(output).not.toContain('out of scope');
       expect(output).toContain('containment-floor: hook-events ledger is unrecorded');
-      expect(scopePrompt).toContain('artifacts.ts');
-      expect(scopePrompt).toContain('changelog-pr-finalizer-cli.ts');
+      expect(scopePrompt).toContain('other/artifacts.ts');
+      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
       expect(scopePrompt).toContain('out of scope');
       expect(scopePrompt).toContain('"taskId":"3"');
       expect(scopePrompt).toContain(sha);
     });
 
     it('does not persist, render, or forward accepted widenings when containment is disabled', async () => {
-      await prepareContainmentRepo(['outside.ts'], 'out of scope\n\nTask: 3');
+      await prepareContainmentRepo(['neighbor.ts'], 'root-level neighbor\n\nTask: 3');
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
@@ -3557,7 +3563,7 @@ TIER: M`,
       const floor = JSON.parse(await readFile(join(dir, '.pipeline', 'containment-floor.json'), 'utf8'));
       expect(floor.acceptedWidenings).toEqual([]);
       expect(floor.skipNotes).toEqual([]);
-      expect(prompts).not.toContain('"path":"outside.ts","rationale"');
+      expect(prompts).not.toContain('root-level neighbor');
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
