@@ -309,6 +309,15 @@ export interface KickbackEscalationConfig {
 }
 
 /**
+ * Cumulative build-review convergence-bound kill-switch. An absent block
+ * resolves to `{ enabled: true }`, mirroring `KickbackEscalationConfig`.
+ */
+export interface CumulativeKickbackBoundConfig {
+  /** Master on/off switch for the cumulative convergence bound. Omitted → true. */
+  enabled?: boolean;
+}
+
+/**
  * Gate-code-validity-on-redispatch kill-switch (gate-code-validity-on-redispatch,
  * #817, Task 8): master on/off switch for the `gateVerdictStillValid` preserve
  * check that lets `build_review`/`prd_audit`/`architecture_review_as_built`/
@@ -464,6 +473,11 @@ export interface HarnessConfig {
    * `{ enabled: true }`. See `KickbackEscalationConfig`.
    */
   kickback_escalation?: KickbackEscalationConfig;
+  /**
+   * Cumulative build-review convergence-bound kill-switch. Absent block
+   * resolves to `{ enabled: true }`. See `CumulativeKickbackBoundConfig`.
+   */
+  cumulative_kickback_bound?: CumulativeKickbackBoundConfig;
   /**
    * Gate-code-validity-on-redispatch kill-switch (#817, Task 8). Absent block
    * resolves to `{ enabled: true }`. See `GateCodeValidityConfig`.
