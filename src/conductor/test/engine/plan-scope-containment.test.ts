@@ -96,6 +96,30 @@ describe('evaluateScopeContainment', () => {
     });
   });
 
+  it('does not allow an unrelated test sibling for a bare file declaration', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['src/other/unrelated-config.test.ts'],
+        task: { id: '4', status: 'in_progress', files: ['config.ts'] },
+      }),
+    ).toEqual({
+      allowed: false,
+      taskId: '4',
+      offendingPaths: ['src/other/unrelated-config.test.ts'],
+    });
+  });
+
+  it('does not require declared paths to exist on disk', () => {
+    expect(() => evaluateScopeContainment({
+      stagedPaths: ['src/conductor/src/daemon/backlog.ts'],
+      task: {
+        id: '4',
+        status: 'in_progress',
+        files: ['src/conductor/src/engine/does-not-exist.ts'],
+      },
+    })).not.toThrow();
+  });
+
   it('allows machinery-authored paths alongside task-declared paths', () => {
     expect(
       evaluateScopeContainment({
