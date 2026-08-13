@@ -13,6 +13,7 @@ const explore = contract('skills/explore/SKILL.md');
 const architectureReview = contract('skills/architecture-review/SKILL.md');
 const stories = contract('skills/stories/SKILL.md');
 const plan = contract('skills/plan/SKILL.md');
+const planner = contract('agents/planner.md');
 
 describe('Story 1: operator-controlled fix comprehensiveness', () => {
   it('asks how comprehensive the fix should be before confirming an approach and blocks without an answer', () => {

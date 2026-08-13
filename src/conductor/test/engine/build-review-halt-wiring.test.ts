@@ -29,7 +29,7 @@ import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
-import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { KICKBACK_LEDGER_PATH, readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { Conductor } from '../test-conductor.js';
 
@@ -293,7 +293,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     const seededState = (seeded.ok ? seeded.value : {}) as ConductState;
     seededState.run_started_at = Date.now();
     await writeState(statePath, seededState);
-    await writeKickbackLedger(repo, {
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(join(repo, KICKBACK_LEDGER_PATH), JSON.stringify({
       version: 1,
       gates: {
         build_review: {
@@ -304,7 +305,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
           resolvedBefore: 0,
         },
       },
-    });
+    }));
     expect((await readKickbackLedger(repo)).gates.build_review?.cumulative).toBe(0);
 
     let genuineFails = 2;

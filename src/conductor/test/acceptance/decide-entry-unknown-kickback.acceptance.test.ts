@@ -8,6 +8,7 @@ import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import {
   MAX_KICKBACKS_PER_GATE,
+  KICKBACK_LEDGER_PATH,
   readKickbackLedger,
   writeKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
@@ -126,7 +127,8 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
   it('keeps the ping-pong cap reason ahead of an unknown-target refusal', async () => {
     await seedPlanTask();
     const unknownTarget = 'custom_decide_target' as StepName;
-    await writeKickbackLedger(fixture.root, {
+    await mkdir(join(fixture.root, '.pipeline'), { recursive: true });
+    await writeFile(join(fixture.root, KICKBACK_LEDGER_PATH), JSON.stringify({
       version: 1,
       gates: {
         [unknownTarget]: {
@@ -137,7 +139,7 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
           resolvedBefore: 1_000,
         },
       },
-    });
+    }));
     expect((await readKickbackLedger(fixture.root)).gates[unknownTarget]?.cumulative).toBe(0);
     await writeFixtureState(fixture, resolvedState({ build: 'pending', run_started_at: 1 }));
     const runner: StepRunner = {

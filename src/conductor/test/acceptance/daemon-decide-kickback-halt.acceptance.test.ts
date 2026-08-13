@@ -26,6 +26,7 @@ import {
   readKickbackLedger,
   writeKickbackLedger,
   MAX_KICKBACKS_PER_GATE,
+  KICKBACK_LEDGER_PATH,
 } from '../../src/engine/kickback-ledger.js';
 import {
   rekickSweep,
@@ -635,7 +636,8 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
      * not wipe it.
      */
     async function seedExhaustedPlanLedger(): Promise<void> {
-      await writeKickbackLedger(dir, {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, KICKBACK_LEDGER_PATH), JSON.stringify({
         version: 1,
         gates: {
           plan: {
@@ -646,7 +648,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
             resolvedBefore: 1_000,
           },
         },
-      });
+      }));
 
       expect((await readKickbackLedger(dir)).gates.plan?.cumulative).toBe(0);
     }

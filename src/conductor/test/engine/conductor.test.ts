@@ -278,6 +278,63 @@ describe('engine/conductor', () => {
     expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toContain('cumulative kickback cap');
   });
 
+  it('preserves the ordinary per-tree kickback halt reason byte-for-byte for test_suite', async () => {
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'test_suite') break;
+      state[step.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'ordinary-test-suite-kickback-cap';
+    state.run_started_at = Date.now();
+    await writeState(statePath, state as ConductState);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        test_suite: {
+          count: 2,
+          cumulative: 2,
+          treeHash: null,
+          lastReason: 'previous suite failure',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    const suiteFailure = {
+      status: 'FAILED' as const,
+      reason: 'nonzero_exit' as const,
+      message: 'fixture suite failure',
+    };
+    const haltReasons: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReasons.push(event.reason);
+    });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      mode: 'auto',
+      fromStep: 'test_suite',
+      maxRetries: 1,
+      fullSuiteVerifier: {
+        inspect: async () => suiteFailure,
+        ensure: async () => suiteFailure,
+      },
+    });
+
+    await conductor.run();
+
+    const expected =
+      'test_suite failure unresolved after 2 build kickback(s) (cap 2): ' +
+      'full-suite verification failed (nonzero_exit): fixture suite failure\n' +
+      'Evidence: .pipeline/test-suite-evidence.json';
+    expect(haltReasons).toEqual([expected]);
+    expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toBe(`${expected}\n`);
+  });
+
   it('keeps the interactive CLI constructor free of daemon operator-park options', async () => {
     const source = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
     const constructor = source.match(

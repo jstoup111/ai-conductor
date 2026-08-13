@@ -288,6 +288,7 @@ describe('buildGraderPrompt', () => {
     expect(removalBlock).toContain('RemovedApi');
     expect(removalBlock).toContain('Contract.removedMember');
     expect(removalBlock).not.toMatch(/transcript|maker summary|task-status/i);
+    expect(removalBlock).not.toMatch(/claude|codex|conduct-ts|\.pipeline\/|\/[a-z]+\/|npm |pnpm |yarn |bun |shell|bash/i);
   });
 
 
