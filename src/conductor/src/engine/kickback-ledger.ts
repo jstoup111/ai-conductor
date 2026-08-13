@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 /** Durable state for a gate's cross-dispatch kickback budget. */
 export interface KickbackGateEntry {
   count: number;
+  cumulative: number;
   treeHash: string | null;
   lastReason: string;
   priorVerdict: boolean;
@@ -42,6 +43,7 @@ function isKickbackGateEntry(value: unknown): value is KickbackGateEntry {
   const entry = value as Record<string, unknown>;
   return (
     typeof entry.count === 'number' &&
+    typeof entry.cumulative === 'number' &&
     (typeof entry.treeHash === 'string' || entry.treeHash === null) &&
     typeof entry.lastReason === 'string' &&
     typeof entry.priorVerdict === 'boolean' &&
@@ -125,6 +127,7 @@ export function bumpKickbackGate(
 ): BumpKickbackGateResult {
   const previous: KickbackGateEntry = entry ?? {
     count: 0,
+    cumulative: 0,
     treeHash: null,
     lastReason: '',
     // `true` is the consumed/no-pending-baseline state. The conductor writes

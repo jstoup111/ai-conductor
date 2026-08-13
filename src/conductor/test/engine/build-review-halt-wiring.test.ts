@@ -297,6 +297,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
       gates: {
         build_review: {
           count: 2,
+          cumulative: 0,
           treeHash: null,
           lastReason: 'prior genuine failure',
           priorVerdict: true,

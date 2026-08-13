@@ -131,6 +131,7 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
       gates: {
         [unknownTarget]: {
           count: MAX_KICKBACKS_PER_GATE,
+          cumulative: 0,
           treeHash: null,
           lastReason: 'prior ping-pong round',
           priorVerdict: true,

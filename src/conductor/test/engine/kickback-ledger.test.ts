@@ -59,6 +59,7 @@ describe('kickback-ledger', () => {
       gates: {
         wiring_check: {
           count: 2,
+          cumulative: 0,
           treeHash: '0123456789abcdef0123456789abcdef01234567',
           lastReason: 'production export is orphaned',
           priorVerdict: false,
@@ -72,12 +73,34 @@ describe('kickback-ledger', () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual(ledger);
   });
 
+  it('accepts an on-disk gate entry with an initial cumulative count', async () => {
+    const ledger: KickbackLedger = {
+      version: 1,
+      gates: {
+        wiring_check: {
+          count: 2,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'production export is orphaned',
+          priorVerdict: false,
+          resolvedBefore: 7,
+          cumulative: 0,
+        },
+      },
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger));
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual(ledger);
+  });
+
   it('never leaves a torn ledger for readers during concurrent writes', async () => {
     const ledgers: KickbackLedger[] = Array.from({ length: 10 }, (_, index) => ({
       version: 1,
       gates: {
         wiring_check: {
           count: index + 1,
+          cumulative: 0,
           treeHash: `${index}`.padStart(40, '0'),
           lastReason: `attempt ${index + 1}`,
           priorVerdict: false,
@@ -95,6 +118,7 @@ describe('kickback-ledger', () => {
   describe('bumpKickbackGate', () => {
     const existingEntry = {
       count: 1,
+      cumulative: 0,
       treeHash: '0123456789abcdef0123456789abcdef01234567',
       lastReason: 'first failure',
       priorVerdict: false,

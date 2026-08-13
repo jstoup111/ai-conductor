@@ -3748,6 +3748,7 @@ export class Conductor {
           ...ledger.gates,
           [sourceGate]: {
             count: existing?.count ?? 0,
+            cumulative: 0,
             treeHash: treeBefore,
             lastReason: existing?.lastReason ?? '',
             priorVerdict: false, // active D2 baseline: kickback began on a failing gate

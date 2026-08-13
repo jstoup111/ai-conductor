@@ -639,6 +639,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         gates: {
           plan: {
             count: MAX_KICKBACKS_PER_GATE,
+            cumulative: 0,
             treeHash: null,
             lastReason: 'prior ping-pong round',
             priorVerdict: true,
