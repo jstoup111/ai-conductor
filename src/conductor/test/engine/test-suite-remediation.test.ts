@@ -124,6 +124,36 @@ describe('recordTestSuiteRemediation', () => {
     expect(await readTestSuiteRemediations(dir)).toHaveLength(2);
   });
 
+  it('preserves concurrent distinct repairs and surfaces an unacquirable lock', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'events.jsonl'), `${JSON.stringify({
+      type: 'rebase_changed',
+      allChangedPaths: ['agents/planner.md', 'agents/evaluator.md'],
+      ts: '2026-08-13T10:01:00.000Z',
+    })}\n`);
+    const observedAt = Date.parse('2026-08-13T10:02:00.000Z');
+
+    await Promise.all([
+      recordTestSuiteRemediation(dir, 'test_suite', {
+        reason: 'missing_test', message: 'agents/planner.md has no matching test', observedAt,
+      }),
+      recordTestSuiteRemediation(dir, 'wiring_check', {
+        reason: 'missing_coverage', message: 'agents/evaluator.md has no coverage', observedAt,
+      }),
+    ]);
+
+    expect(await readTestSuiteRemediations(dir)).toHaveLength(2);
+
+    await writeFile(
+      join(dir, `${BUILD_REVIEW_REPAIR_LEDGER}.lock`),
+      `${JSON.stringify({ pid: process.pid, createdAt: Date.now() })}\n`,
+    );
+
+    await expect(recordTestSuiteRemediation(dir, 'test_suite', {
+      reason: 'missing_test', message: 'agents/planner.md has another missing test', observedAt,
+    })).rejects.toThrow('timed out acquiring build-review rebase-repair ledger lock');
+  });
+
   it('reads every recorded base advance in event-log order', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline', 'events.jsonl'), [
