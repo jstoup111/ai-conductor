@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import {
   BUILD_REVIEW_REPAIR_LEDGER,
   diagnosticOverlapsBaseAdvance,
+  failureMatchesBaseAdvance,
   readBaseAdvanceHistory,
   readTestSuiteRemediations,
   recordTestSuiteRemediation,
@@ -21,6 +22,23 @@ describe('diagnosticOverlapsBaseAdvance', () => {
       diagnosticOverlapsBaseAdvance({ paths: ['agents/evaluator.md'], ts: '2026-08-13T10:00:00.000Z' }, diagnostic),
       diagnosticOverlapsBaseAdvance({ paths: ['agents/planner.m'], ts: '2026-08-13T10:00:00.000Z' }, diagnostic),
     ]).toEqual([true, false, false]);
+  });
+});
+
+describe('failureMatchesBaseAdvance', () => {
+  it('does not attribute an overlapping failure that preceded the advance', () => {
+    const advance = { paths: ['agents/planner.md'], ts: '2026-08-13T10:01:00.000Z' };
+
+    expect([
+      failureMatchesBaseAdvance(advance, {
+        diagnostic: 'agents/planner.md has an invalid reference',
+        observedAt: '2026-08-13T10:02:00.000Z',
+      }),
+      failureMatchesBaseAdvance(advance, {
+        diagnostic: 'agents/planner.md has an invalid reference',
+        observedAt: '2026-08-13T10:00:00.000Z',
+      }),
+    ]).toEqual([true, false]);
   });
 });
 
