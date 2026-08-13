@@ -253,13 +253,37 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(/adds a new behavioral assertion[\s\S]*measured normally/i);
   });
 
-  it('renders the two Tautology exceptions as an explicitly closed list', () => {
-    const prompt = buildGraderPrompt(inputs);
+  it('renders the three closed Tautology exceptions, including qualifying fixture relocation', () => {
+    const relocationDiff = `diff --git a/test/fixture.test.ts b/test/fixture.test.ts
+--- a/test/fixture.test.ts
++++ b/test/fixture.test.ts
+@@
+-await writeFile(oldPath, content);
++await mkdir(dirname(newPath), { recursive: true });
++await writeFile(newPath, content);
+diff --git a/src/classify.ts b/src/classify.ts
+@@
+-return path === 'c.md' ? 'root-markdown' : 'other';
++return path === 'docs/c.md' ? 'root-markdown' : 'other';
+`;
+    const prompt = buildGraderPrompt({ ...inputs, diff: relocationDiff });
     const exceptions = prompt.match(/The Tautology exceptions are an explicitly closed list:[\s\S]*?measured normally\./)?.[0] ?? '';
     expect(exceptions).toMatch(/1\. Rebase repair:[\s\S]*Engine-recorded rebase repair context block/i);
     expect(exceptions).toMatch(/2\. Removal maintenance:[\s\S]*Engine-derived removal evidence block/i);
-    expect(exceptions).toMatch(/qualifying under neither exception is measured normally/i);
-    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(2);
+    expect(exceptions).toMatch(/3\. Fixture relocation:/i);
+    expect(exceptions).toMatch(/fixture path move/i);
+    expect(exceptions).toMatch(/writeFile\(oldPath, content\)[\s\S]*directory creation[\s\S]*writeFile\(newPath, content\)[\s\S]*same content/i);
+    expect(exceptions).toMatch(/no Git rename\s+header/i);
+    expect(exceptions).toMatch(/tracked-file rename[\s\S]*delete-plus-create evidence/i);
+    expect(exceptions).toMatch(/production hunks?[\s\S]*same diff[\s\S]*(?:path-classification|path-handling)/i);
+    expect(exceptions).toMatch(/old path[\s\S]*pre-diff\s+meaning/i);
+    expect(exceptions).toMatch(/no new behavioral assertion beyond the\s+move/i);
+    expect(exceptions).toMatch(/must not receive a Tautology finding solely because.*passes pre-diff/is);
+    expect(prompt).toContain(relocationDiff);
+    expect(relocationDiff).not.toMatch(/^(rename from|rename to|similarity index) /m);
+    expect(exceptions).toMatch(/absence of Git rename headers does\s+not disqualify/i);
+    expect(exceptions).toMatch(/qualifying under none of these exceptions is measured normally/i);
+    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(3);
   });
 
   it('leaves every non-Tautology rubric item and the all-or-FAIL rule intact with populated removal evidence', () => {

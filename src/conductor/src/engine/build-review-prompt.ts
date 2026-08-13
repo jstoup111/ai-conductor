@@ -97,7 +97,19 @@ The Tautology exceptions are an explicitly closed list:
    the stale-base-state test rule stated above.
 2. Removal maintenance: use the Engine-derived removal evidence block and only
    the three-condition per-test predicate stated above.
-A changed test qualifying under neither exception is measured normally.
+3. Fixture relocation: exempt a changed test only when all three conditions
+   hold. First, the changed test's diff shows a fixture path move: this includes
+   removed \`writeFile(oldPath, content)\` replaced with directory creation plus
+   \`writeFile(newPath, content)\` retaining the same content; no Git rename header
+   is required. It also includes tracked-file rename headers or equivalent
+   delete-plus-create evidence. The concrete \`c.md\` → \`docs/c.md\` form is a
+   qualifying rendered-diff shape when the absence of Git rename headers does
+   not disqualify it. Second, production hunks in the same diff change
+   path-classification or path-handling so the old path loses its pre-diff meaning.
+   Third, the changed test adds no new behavioral assertion beyond the
+   move. A qualifying test must not receive a Tautology finding solely because
+   its relocated form also passes pre-diff.
+A changed test qualifying under none of these exceptions is measured normally.
 
 Completeness must be judged holistically: read the plan and the diff as a
 whole and form a judgement of whether the diff, taken together, delivers
