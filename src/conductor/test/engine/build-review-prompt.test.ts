@@ -253,13 +253,68 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(/adds a new behavioral assertion[\s\S]*measured normally/i);
   });
 
-  it('renders the two Tautology exceptions as an explicitly closed list', () => {
-    const prompt = buildGraderPrompt(inputs);
+  it('renders the three closed Tautology exceptions, including qualifying fixture relocation', () => {
+    const relocationDiff = `diff --git a/test/fixture.test.ts b/test/fixture.test.ts
+--- a/test/fixture.test.ts
++++ b/test/fixture.test.ts
+@@
+-await writeFile(oldPath, content);
++await mkdir(dirname(newPath), { recursive: true });
++await writeFile(newPath, content);
+diff --git a/src/classify.ts b/src/classify.ts
+@@
+-return path === 'c.md' ? 'root-markdown' : 'other';
++return path === 'docs/c.md' ? 'root-markdown' : 'other';
+`;
+    const prompt = buildGraderPrompt({ ...inputs, diff: relocationDiff });
     const exceptions = prompt.match(/The Tautology exceptions are an explicitly closed list:[\s\S]*?measured normally\./)?.[0] ?? '';
     expect(exceptions).toMatch(/1\. Rebase repair:[\s\S]*Engine-recorded rebase repair context block/i);
     expect(exceptions).toMatch(/2\. Removal maintenance:[\s\S]*Engine-derived removal evidence block/i);
-    expect(exceptions).toMatch(/qualifying under neither exception is measured normally/i);
-    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(2);
+    expect(exceptions).toMatch(/3\. Fixture relocation:/i);
+    expect(exceptions).toMatch(/fixture path move/i);
+    expect(exceptions).toMatch(/writeFile\(oldPath, content\)[\s\S]*directory creation[\s\S]*writeFile\(newPath, content\)[\s\S]*same content/i);
+    expect(exceptions).toMatch(/no Git rename\s+header/i);
+    expect(exceptions).toMatch(/tracked-file rename[\s\S]*delete-plus-create evidence/i);
+    expect(exceptions).toMatch(/production hunks?[\s\S]*same diff[\s\S]*(?:path-classification|path-handling)/i);
+    expect(exceptions).toMatch(/old path[\s\S]*pre-diff\s+meaning/i);
+    expect(exceptions).toMatch(/no new behavioral assertion beyond the\s+move/i);
+    expect(exceptions).toMatch(/must not receive a Tautology finding solely because.*passes pre-diff/is);
+    expect(prompt).toContain(relocationDiff);
+    expect(relocationDiff).not.toMatch(/^(rename from|rename to|similarity index) /m);
+    expect(exceptions).toMatch(/absence of Git rename headers does\s+not disqualify/i);
+    expect(exceptions).toMatch(/qualifying under none of these exceptions is measured normally/i);
+    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(3);
+  });
+
+  it('keeps unforced fixture moves and added assertions under ordinary Tautology', () => {
+    const relocationEntry = (prompt: string) =>
+      prompt.match(/3\. Fixture relocation:[\s\S]*?A changed test qualifying under none of these exceptions is measured normally\./)?.[0] ?? '';
+    const prompts = [
+      buildGraderPrompt(inputs),
+      buildGraderPrompt({
+        ...inputs,
+        repairContext: [],
+        acceptedWidenings: [],
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+      }),
+    ];
+
+    expect([
+      prompts.every((prompt) => prompt.includes('1. Tautology: every new/changed test would fail without the diff.')),
+      prompts.every((prompt) => /production hunks in the same diff change[\s\S]*path-classification or path-handling[\s\S]*old path loses its pre-diff meaning\.\s+A relocation whose old path retains its pre-diff meaning because no production\s+hunk changes its classification or handling does not qualify and is measured normally;/i.test(relocationEntry(prompt))),
+      prompts.every((prompt) => /new behavioral assertion[\s\S]*measured normally/i.test(relocationEntry(prompt))),
+      prompts.every((prompt) => /per changed test, never[\s\S]*whole diff/i.test(relocationEntry(prompt))),
+      new Set(prompts.map(relocationEntry)).size === 1,
+    ]).toEqual([true, true, true, true, true]);
+  });
+
+  it('requires a relocation audit in reasons without changing the verdict schema', () => {
+    const prompt = buildGraderPrompt(inputs);
+    const auditContract = 'For every changed test evaluated under the fixture relocation exception, append exactly one `[relocation-audit]` entry to `reasons` on PASS or FAIL: `[relocation-audit] (EXEMPTED|MEASURED): old path → new path; production hunk(s) (do|do not) force the move`. These audit-only entries are evidence, not failing-rubric summaries, and are permitted in addition to one-line summaries for failed rubric items. A PASS with one or more evaluated relocations requires the corresponding audit entries; a PASS with no evaluated relocations may leave `reasons` empty. `findings` remains failure-only and must be omitted or empty on PASS.';
+    const schema = "{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean, wiring: boolean } }";
+    const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    expect(prompt).toMatch(new RegExp(`${escapeRegex(auditContract)}[\\s\\S]*${escapeRegex(schema)}`));
   });
 
   it('leaves every non-Tautology rubric item and the all-or-FAIL rule intact with populated removal evidence', () => {

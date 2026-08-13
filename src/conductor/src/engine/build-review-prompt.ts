@@ -97,7 +97,25 @@ The Tautology exceptions are an explicitly closed list:
    the stale-base-state test rule stated above.
 2. Removal maintenance: use the Engine-derived removal evidence block and only
    the three-condition per-test predicate stated above.
-A changed test qualifying under neither exception is measured normally.
+3. Fixture relocation: exempt a changed test only when all three conditions
+   hold. First, the changed test's diff shows a fixture path move: this includes
+   removed \`writeFile(oldPath, content)\` replaced with directory creation plus
+   \`writeFile(newPath, content)\` retaining the same content; no Git rename header
+   is required. It also includes tracked-file rename headers or equivalent
+   delete-plus-create evidence. The concrete \`c.md\` → \`docs/c.md\` form is a
+   qualifying rendered-diff shape when the absence of Git rename headers does
+   not disqualify it. Second, production hunks in the same diff change
+   path-classification or path-handling so the old path loses its pre-diff meaning.
+   A relocation whose old path retains its pre-diff meaning because no production
+   hunk changes its classification or handling does not qualify and is measured normally;
+   Third, the changed test adds no new behavioral assertion beyond the
+   move; a relocated test that also adds a new behavioral assertion remains
+   measured normally on that assertion. Evaluate this predicate per changed test, never
+   for the whole diff. A qualifying test must not receive a Tautology finding solely because
+   its relocated form also passes pre-diff.
+A changed test qualifying under none of these exceptions is measured normally.
+
+For every changed test evaluated under the fixture relocation exception, append exactly one \`[relocation-audit]\` entry to \`reasons\` on PASS or FAIL: \`[relocation-audit] (EXEMPTED|MEASURED): old path → new path; production hunk(s) (do|do not) force the move\`. These audit-only entries are evidence, not failing-rubric summaries, and are permitted in addition to one-line summaries for failed rubric items. A PASS with one or more evaluated relocations requires the corresponding audit entries; a PASS with no evaluated relocations may leave \`reasons\` empty. \`findings\` remains failure-only and must be omitted or empty on PASS.
 
 Completeness must be judged holistically: read the plan and the diff as a
 whole and form a judgement of whether the diff, taken together, delivers
@@ -120,8 +138,8 @@ exactly this JSON schema:
 { verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean, wiring: boolean } }
 
 Each \`rubric\` boolean marks whether that item failed. \`reasons\` remains a
-backward-compatible one-line summary for each failing rubric item; it may be
-empty when the verdict is PASS. When \`rubric.completeness\` fails, populate
+backward-compatible one-line summary for each failing rubric item, plus any
+required relocation-audit evidence stated above. When \`rubric.completeness\` fails, populate
 \`findings.completeness\`; when \`rubric.wiring\` fails, populate
 \`findings.wiring\`; use the matching \`findings.<rubric>\` key for the
 other rubric items. Each findings list contains **every independent finding**
