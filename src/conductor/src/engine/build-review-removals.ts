@@ -21,7 +21,7 @@ const exportedDeclaration = /^\s*export\s+(?:declare\s+)?(?:const|let|var|functi
 const exportedType = /^\s*export\s+(?:declare\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)\b/;
 
 function hunkDeclaration(header: string): string | undefined {
-  return header.match(exportedType)?.[1];
+  return header.slice(header.lastIndexOf('@@') + 2).match(exportedType)?.[1];
 }
 
 function removedMember(line: string): string | undefined {
@@ -61,8 +61,8 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
       scope = hunkDeclaration(rawLine);
       continue;
     }
-    if (rawLine.startsWith(' ') && !scope) {
-      scope = rawLine.slice(1).match(exportedType)?.[1];
+    if (rawLine.startsWith(' ')) {
+      scope = rawLine.slice(1).match(exportedType)?.[1] ?? scope;
       continue;
     }
     if (!rawLine.startsWith('-') || rawLine.startsWith('---')) continue;

@@ -17,4 +17,38 @@ diff --git a/src/api.ts b/src/api.ts
       deletedFiles: [], removedDeclarations: [], removedMembers: [],
     });
   });
+
+  it('attributes removed interface, type, and enum members from hunk context', () => {
+    expect(deriveBuildReviewRemovals(`diff --git a/src/contracts.ts b/src/contracts.ts
+@@ -20,8 +20,7 @@ export interface ReviewContract {
+   retained: string;
+-  removedFarFromDeclaration?: string;
+ }
+@@ -40,8 +40,7 @@ export type NestedContract = {
+   retained: string;
+-  removedTypeMember: number;
+ };
+@@ -60,8 +60,7 @@ export enum Verdict {
+   Pass,
+-  Retry,
+ }`)).toMatchObject({
+      removedMembers: [
+        { declaration: 'ReviewContract', member: 'removedFarFromDeclaration' },
+        { declaration: 'NestedContract', member: 'removedTypeMember' },
+        { declaration: 'Verdict', member: 'Retry' },
+      ],
+    });
+  });
+
+  it('uses an indented exported declaration in a nested namespace hunk', () => {
+    expect(deriveBuildReviewRemovals(`diff --git a/src/contracts.ts b/src/contracts.ts
+@@ -8,7 +8,6 @@ export namespace Api {
+   export interface Nested {
+     retained: string;
+-    removedNestedMember: boolean;
+   }
+ }`)).toMatchObject({
+      removedMembers: [{ declaration: 'Nested', member: 'removedNestedMember' }],
+    });
+  });
 });
