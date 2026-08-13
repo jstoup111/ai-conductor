@@ -8,6 +8,7 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import {
   KICKBACK_LEDGER_PATH,
   readKickbackLedger,
+  writeKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
 import { HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
@@ -218,5 +219,71 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       '[wiring] missing wiring from command to handler',
     );
     expect(ledger.gates.wiring_check).toBeUndefined();
+  });
+
+  it('preserves cumulative kickbacks while capturing the build_review baseline', async () => {
+    await writeState(statePath, {
+      run_started_at: 1,
+      complexity_tier: 'S',
+      track: 'technical',
+      worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
+      conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
+      architecture_review: 'skipped', acceptance_specs: 'skipped',
+      wiring_check: 'skipped', test_suite: 'done',
+    });
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0,
+          cumulative: 2,
+          treeHash: null,
+          lastReason: 'previous failure',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    let buildRuns = 0;
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build_review') {
+          await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
+            verdict: 'FAIL',
+            rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+            findings: { tautology: ['semantic failure remains'] },
+          }));
+        }
+        if (step === 'build') {
+          buildRuns += 1;
+          if (buildRuns === 1) {
+            await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+              tasks: [{ id: 't1', status: 'completed' }],
+            }));
+          } else {
+            throw new Error('stop after second kickback capture');
+          }
+        }
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
+      projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
+      fromStep: 'build_review', maxRetries: 1,
+      config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
+    } as never).run().catch(() => {});
+
+    expect((await readKickbackLedger(dir)).gates.build_review).toMatchObject({
+      cumulative: 4,
+      priorVerdict: false,
+      resolvedBefore: 1,
+    });
   });
 });
