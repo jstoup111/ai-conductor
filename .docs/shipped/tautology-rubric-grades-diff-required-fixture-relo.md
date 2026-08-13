@@ -12,10 +12,10 @@ output: 21498
 cache_read: 7557888
 cache_creation: 0
 cost_usd: 0
-dispatches: 7
+dispatches: 8
 retries: 0
 halts: 0
-unmetered: count: 4, duration_ms: 0
+unmetered: count: 5, duration_ms: 0
 cost_unmetered: count: 3
 providers:
   codex: input: 7921588, output: 21498, cache_read: 7557888, cache_creation: 0, cost_usd: 0, dispatches: 3, cost_unmetered: 3
