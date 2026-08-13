@@ -61,6 +61,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_disposition_refused: 'not-audited-by-design',
   build_review_outer_verdict: 'not-audited-by-design',
   step_started: 'not-audited-by-design',
+  containment_check_unresolved: 'not-audited-by-design',
   deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
@@ -159,6 +160,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_review_disposition_refused: { type: 'build_review_disposition_refused', feature: 'feature', reason: 'non-tty' },
   build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
   step_started: { type: 'step_started', step: 'build', index: 0 },
+  containment_check_unresolved: {
+    type: 'containment_check_unresolved',
+    failure: 'task-status-malformed',
+    taskId: '10',
+    ts: 1_723_231_600_000,
+  },
   deprecated_step: {
     type: 'deprecated_step',
     step: 'wiring_check',

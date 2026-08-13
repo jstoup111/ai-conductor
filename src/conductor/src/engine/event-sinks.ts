@@ -20,6 +20,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_review_disposition_refused: { render: false, persist: false, audit: false },
   build_review_outer_verdict: { render: false, persist: true, audit: false },
   step_started: { render: true, persist: true, audit: false },
+  containment_check_unresolved: { render: false, persist: true, audit: false },
   deprecated_step: { render: true, persist: true, audit: false },
   step_completed: { render: true, persist: true, audit: true },
   step_failed: { render: true, persist: true, audit: false },
