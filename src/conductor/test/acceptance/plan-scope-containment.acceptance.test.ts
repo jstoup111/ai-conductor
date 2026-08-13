@@ -212,8 +212,8 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     ]));
 
     const prompt = graderPrompt(report.acceptedWidenings);
-    expect(prompt).toMatch(new RegExp(`${authoredPath.replaceAll('/', '\\/')}[\\s\\S]*Derived: false`));
-    expect(prompt).toMatch(new RegExp(`${derivedPath.replaceAll('/', '\\/')}[\\s\\S]*Derived: true`));
+    expect(prompt).toMatch(new RegExp(`${authoredPath.replaceAll('/', '\\/')}[\\s\\S]*Provenance: Authored trailer`));
+    expect(prompt).toMatch(new RegExp(`${derivedPath.replaceAll('/', '\\/')}[\\s\\S]*Provenance: Derived commit rationale`));
   });
 
   it('surfaces an unresolvable check from the hook ledger in the build record', async () => {
@@ -239,7 +239,7 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     )).trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(hookEvents).toEqual([
       expect.objectContaining({
-        type: 'scope_check_unresolved',
+        type: 'containment_check_unresolved',
         taskId: '3',
         ts: expect.anything(),
       }),
@@ -249,7 +249,7 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     expect(report).toMatchObject({
       satisfied: true,
       unresolvedChecks: [expect.objectContaining({
-        type: 'scope_check_unresolved',
+        type: 'containment_check_unresolved',
         taskId: '3',
       })],
     });

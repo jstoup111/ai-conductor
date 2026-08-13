@@ -356,8 +356,8 @@ describe('per-task-commit-floor', () => {
     const report = await runContainmentFloor({ projectRoot: dir, planPath });
 
     expect(report.unresolvedChecks).toEqual([
-      { failure: 'task-status-malformed', taskId: '2', ts: 1_000 },
-      { failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
+      { type: 'containment_check_unresolved', failure: 'task-status-malformed', taskId: '2', ts: 1_000 },
+      { type: 'containment_check_unresolved', failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
     ]);
   });
 
@@ -387,7 +387,7 @@ describe('per-task-commit-floor', () => {
     const report = await runContainmentFloor({ projectRoot: dir, planPath });
 
     expect(report.unresolvedChecks).toEqual([
-      { failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
+      { type: 'containment_check_unresolved', failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
     ]);
   });
 

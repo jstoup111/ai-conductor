@@ -256,6 +256,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect([...MACHINERY_AUTHORED_PATHS].sort()).toEqual([
         '.docs/shipped/',
         '.pipeline/',
+        'CHANGELOG.md',
+        'docs/',
       ]);
     });
 

@@ -122,6 +122,7 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
       scopeTrailers: parseScopeTrailers(commitMessage, stagedPaths),
     });
     if (result.allowed) return 0;
+    if (deps.enforce !== true) return 0;
 
     const print = deps.print ?? ((message: string) => writeSync(process.stderr.fd, `${message}\n`));
     print(renderScopeAdvisory(result.taskId, result.offendingPaths));

@@ -71,6 +71,7 @@ const RESEAL_EVENT_TYPES = [
 
 const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
+  'containment_check_unresolved',
   ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
   'verdict_freshness',
   'operator_park_boundary',

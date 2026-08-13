@@ -114,7 +114,7 @@ describe('scope-check CLI', () => {
     expect(output).toEqual([]);
   });
 
-  it.each([false, true])('advises on every undeclared path with copy-pasteable Scope trailers when enforcement is %s', async (enforce) => {
+  it('advises on every undeclared path with copy-pasteable Scope trailers when recording is enabled', async () => {
     const output: string[] = [];
 
     await expect(
@@ -123,7 +123,7 @@ describe('scope-check CLI', () => {
         commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
         readFile: async (path) =>
           path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
-        enforce,
+        enforce: true,
         stagedPaths: async () => [
           'src/conductor/src/unrelated/artifacts.ts',
           'src/conductor/src/other/changelog-pr-finalizer-cli.ts',

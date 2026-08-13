@@ -56,11 +56,10 @@ export interface ContainmentFloorReport {
   skipNotes: string[];
 }
 
-export interface ContainmentCheckUnresolvedRecord {
-  failure: Extract<ConductorEvent, { type: 'containment_check_unresolved' }>['failure'];
-  taskId?: string;
-  ts: number;
-}
+export type ContainmentCheckUnresolvedRecord = Extract<
+  ConductorEvent,
+  { type: 'containment_check_unresolved' }
+>;
 
 export async function runPerTaskCommitFloor(args: {
   projectRoot: string;
@@ -310,6 +309,7 @@ function parseUnresolvedContainmentCheck(value: unknown): ContainmentCheckUnreso
     return undefined;
   }
   return {
+    type: 'containment_check_unresolved',
     failure: event.failure as ContainmentCheckUnresolvedRecord['failure'],
     ...(event.taskId === undefined ? {} : { taskId: event.taskId }),
     ts: event.ts,
