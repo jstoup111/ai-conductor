@@ -309,6 +309,8 @@ export function validateConfig(
     'wiring',
     // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
     'kickback_escalation',
+    // Cumulative build-review convergence-bound kill-switch.
+    'cumulative_kickback_bound',
     // Default-off verbose skip logging in gate-writeback (daemon-suppress-other-owner-log-noise).
     'daemon_verbose',
     // Removes parked feature worktrees after reconciliation by default.
@@ -1049,6 +1051,32 @@ export function validateConfig(
     }
   } else if (obj.kickback_escalation === null || materializeDefaults) {
     obj.kickback_escalation = { enabled: true };
+  }
+
+  // cumulative_kickback_bound — cumulative build-review convergence bound.
+  // Contract (total — never throws, never undefined):
+  //   K1  absent / null → { enabled: true } (no warning)
+  //   K2  { enabled: true|false } → as given (no warning)
+  //   K3  malformed (non-object, unknown key, or non-boolean enabled) →
+  //       { enabled: true } without warning (fail-safe)
+  if (obj.cumulative_kickback_bound !== undefined && obj.cumulative_kickback_bound !== null) {
+    if (isPlainObject(obj.cumulative_kickback_bound)) {
+      const cb = obj.cumulative_kickback_bound as Record<string, unknown>;
+      const unknownKey = Object.keys(cb).find((key) => key !== 'enabled');
+      if (unknownKey !== undefined) {
+        obj.cumulative_kickback_bound = { enabled: true };
+      } else if (cb.enabled === undefined) {
+        obj.cumulative_kickback_bound = { enabled: true };
+      } else if (typeof cb.enabled === 'boolean') {
+        obj.cumulative_kickback_bound = { enabled: cb.enabled };
+      } else {
+        obj.cumulative_kickback_bound = { enabled: true };
+      }
+    } else {
+      obj.cumulative_kickback_bound = { enabled: true };
+    }
+  } else if (obj.cumulative_kickback_bound === null || materializeDefaults) {
+    obj.cumulative_kickback_bound = { enabled: true };
   }
 
   // retry_routing — retry classify rerun-vs-route kill-switch.
