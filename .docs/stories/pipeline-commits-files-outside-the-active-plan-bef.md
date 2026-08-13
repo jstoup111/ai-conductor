@@ -54,6 +54,15 @@ declaration, so the fallback's incidental paths can never become blocking scope 
 
 ## Story TI-2: A commit outside the active task's declared paths is refused
 
+> **Amended 2026-08-09 by #1390:** the refusal is withdrawn. A commit outside the active task's
+> declared paths now **lands**, with an advisory on stderr and a recorded scope widening carrying a
+> rationale for `build_review`. Every "the commit is refused" assertion in this story, and the
+> `exit 2` it depends on, is superseded; the `/`-boundary matching assertions remain in force. The
+> refusal was never enabled in production — enforcement shipped `false` — and is withdrawn because
+> the floor it would have enforced rejects adjacent test files and same-directory neighbors. See
+> `adr-2026-08-09-non-blocking-plan-scope-containment` D3 and
+> `.docs/stories/out-of-plan-production-edits-reach-build-review-in.md` Story 3.
+
 **As** the harness
 **I want** a BUILD commit touching undeclared files rejected at commit time
 **So that** out-of-plan work never enters feature history.
@@ -141,6 +150,15 @@ its test
 
 ### Exit-code contract
 
+> **Amended 2026-08-09 by #1390:** the exit-code contract is revised. `0` still means allowed, but
+> `2` is retired and **reserved** — no code path returns it, because violations no longer refuse.
+> A check that cannot reach a verdict now returns **`3`** and records a `ConductorEvent`, so a
+> genuine failure is distinguishable from a legitimate "not applicable" instead of both collapsing
+> into `1`. Two rows below are correspondingly superseded: a malformed `.pipeline/task-status.json`
+> and an engine entry point that throws now exit `3`, not `0`. The *behavior* both rows protect is
+> unchanged — the commit still proceeds in every case, because `3` is non-blocking and an older
+> hook treats it as an abstain. See `adr-2026-08-09-hook-owned-containment-event-ledger` E1.
+
 **Given** the check is invoked as a subprocess
 **When** it completes
 **Then** it exits `0` for allowed, `2` for a violation, and any other code means abstain.
@@ -174,6 +192,13 @@ errexit cannot convert an abstention into a refusal.
 ---
 
 ## Story TI-4: A `Scope:` trailer widens the allowed set for the commit it rides on
+
+> **Amended 2026-08-09 by #1390:** the trailer's parsing rules — one commit only, malformed is
+> treated as absent, a trailer for an unstaged path is ignored, stderr names only the offending
+> path — all remain in force. What changes is the consequence: where this story says a commit
+> "is refused", the commit now **lands** with an advisory and a recorded widening. A path with no
+> trailer is no longer merely reported; its rationale is derived from the commit message and
+> flagged `derived`. See `adr-2026-08-09-non-blocking-plan-scope-containment` D2/D3.
 
 **As** a build agent with a legitimate collateral edit
 **I want** to justify the widening in the commit message itself
@@ -264,9 +289,13 @@ bookkeeping)
 
 ## Story TI-6: The #1074 regression is reproduced and rejected
 
-**As** a maintainer
-**I want** the original incident encoded as a test
-**So that** the exact failure cannot silently return.
+> **Amended 2026-08-09 by #1390:** the regression test's discriminating power is retained but its
+> assertion changes from refusal to detection — the `8b9f753e5` reproduction must now be **detected
+> and recorded as an out-of-floor widening**, while the in-scope control commit produces no record.
+> Note the widened floor changes what this fixture must use: a task scoped to `config.ts` now also
+> allows same-directory neighbours, so the reproduction's out-of-floor path must lie outside the
+> declared directory to remain a valid discriminator. See
+> `adr-2026-08-09-non-blocking-plan-scope-containment` D1/D3.
 
 ### Happy path
 
@@ -293,6 +322,18 @@ reproduced as the remedy.
 ---
 
 ## Story TI-7: The hook ships report-only before it blocks
+
+> **Amended 2026-08-09 by #1390:** the staged progression this story describes — report-only first,
+> blocking later — is **cancelled**, not merely deferred. There is no enforcing mode to enable:
+> `scopeContainmentEnforced` is retained but redefined to gate *recording and advisory output*, not
+> refusal, and no code path returns `exit 2`. This amendment is the load-bearing one: left
+> unamended, this story licenses a future build to "finally flip enforcement on", which would
+> re-break `.docs/stories/out-of-plan-production-edits-reach-build-review-in.md` Story 3 and put the
+> two specs into a non-terminating oscillation. Reopening enforcement requires a new ADR superseding
+> `adr-2026-08-09-non-blocking-plan-scope-containment`, not an implementation decision.
+>
+> The measurement intent survives and is strengthened: `.pipeline/containment-floor.json` still
+> records what fell outside the floor, and every such path now carries a rationale.
 
 **As** a daemon operator
 **I want** the refusal path observable before it is enforced
