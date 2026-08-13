@@ -106,8 +106,12 @@ The Tautology exceptions are an explicitly closed list:
    qualifying rendered-diff shape when the absence of Git rename headers does
    not disqualify it. Second, production hunks in the same diff change
    path-classification or path-handling so the old path loses its pre-diff meaning.
+   A relocation whose old path retains its pre-diff meaning because no production
+   hunk changes its classification or handling does not qualify and is measured normally;
    Third, the changed test adds no new behavioral assertion beyond the
-   move. A qualifying test must not receive a Tautology finding solely because
+   move; a relocated test that also adds a new behavioral assertion remains
+   measured normally on that assertion. Evaluate this predicate per changed test, never
+   for the whole diff. A qualifying test must not receive a Tautology finding solely because
    its relocated form also passes pre-diff.
 A changed test qualifying under none of these exceptions is measured normally.
 

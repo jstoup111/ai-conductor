@@ -286,6 +286,28 @@ diff --git a/src/classify.ts b/src/classify.ts
     expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(3);
   });
 
+  it('keeps unforced fixture moves and added assertions under ordinary Tautology', () => {
+    const relocationEntry = (prompt: string) =>
+      prompt.match(/3\. Fixture relocation:[\s\S]*?A changed test qualifying under none of these exceptions is measured normally\./)?.[0] ?? '';
+    const prompts = [
+      buildGraderPrompt(inputs),
+      buildGraderPrompt({
+        ...inputs,
+        repairContext: [],
+        acceptedWidenings: [],
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+      }),
+    ];
+
+    expect([
+      prompts.every((prompt) => prompt.includes('1. Tautology: every new/changed test would fail without the diff.')),
+      prompts.every((prompt) => /old path retains its pre-diff meaning[\s\S]*measured normally/i.test(relocationEntry(prompt))),
+      prompts.every((prompt) => /new behavioral assertion[\s\S]*measured normally/i.test(relocationEntry(prompt))),
+      prompts.every((prompt) => /per changed test, never[\s\S]*whole diff/i.test(relocationEntry(prompt))),
+      new Set(prompts.map(relocationEntry)).size === 1,
+    ]).toEqual([true, true, true, true, true]);
+  });
+
   it('leaves every non-Tautology rubric item and the all-or-FAIL rule intact with populated removal evidence', () => {
     const prompt = buildGraderPrompt({
       ...inputs,
