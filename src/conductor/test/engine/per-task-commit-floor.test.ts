@@ -201,13 +201,14 @@ describe('per-task-commit-floor', () => {
   });
 
   it('accepts a commit-local Scope widening and exposes it for build review', async () => {
-    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
-    await writeFile(join(dir, 'widened.ts'), 'x');
-    await execa('git', ['add', 'widened.ts'], { cwd: dir });
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/widened.ts'), 'x');
+    await execa('git', ['add', 'other/widened.ts'], { cwd: dir });
     await execa('git', [
       'commit',
       '-m',
-      'widened\n\nTask: 3\nScope: widened.ts — needed by the task',
+      'widened\n\nTask: 3\nScope: other/widened.ts — needed by the task',
     ], { cwd: dir });
     const sha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
 
@@ -218,7 +219,7 @@ describe('per-task-commit-floor', () => {
       violations: [],
       acceptedWidenings: [
         {
-          path: 'widened.ts',
+          path: 'other/widened.ts',
           rationale: 'needed by the task',
           taskId: '3',
           sha,
@@ -330,6 +331,38 @@ describe('per-task-commit-floor', () => {
       violations: [],
       acceptedWidenings: [],
     });
+  });
+
+  it.each([
+    ['a test sibling', 'src/engine/config.test.ts'],
+    ['a same-directory neighbor', 'src/engine/neighbor.ts'],
+    ['a documentation path', 'docs/containment.md'],
+    ['the generated changelog', 'CHANGELOG.md'],
+  ])('does not record a redundant Scope trailer for %s in the effective floor', async (_name, path) => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/engine/config.ts\n');
+    const directory = path.slice(0, path.lastIndexOf('/'));
+    if (directory) await mkdir(join(dir, directory), { recursive: true });
+    await writeFile(join(dir, path), 'x');
+    await execa('git', ['add', path], { cwd: dir });
+    await execa('git', ['commit', '-m', `already admitted\n\nTask: 3\nScope: ${path} — redundant declaration`], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.acceptedWidenings).toEqual([]);
+  });
+
+  it('retains a Scope trailer for a genuinely out-of-floor path', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/engine/config.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/outside.ts'), 'x');
+    await execa('git', ['add', 'other/outside.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'needed widening\n\nTask: 3\nScope: other/outside.ts — needed by the task'], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.acceptedWidenings).toMatchObject([
+      { path: 'other/outside.ts', rationale: 'needed by the task', derived: false },
+    ]);
   });
 
   it('merges unresolved containment checks from both ledgers by timestamp', async () => {

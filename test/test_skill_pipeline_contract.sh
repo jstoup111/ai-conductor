@@ -139,7 +139,7 @@ fi
 if scope_choice_contract_holds "$HARNESS_DIR/HARNESS.md" "$EXPLORE_SKILL_FILE"; then
   pass "DECIDE requires an operator-selected fix breadth before approach confirmation"
 else
-  fail "DECIDE must ask and record the operator's fix breadth before approach confirmation, forbid silent scope defaults, and make plan expansion operator-controlled"
+  fail "DECIDE must ask and record the operator's fix breadth before approach confirmation and forbid silent scope defaults"
 fi
 
 for downstream_skill in \

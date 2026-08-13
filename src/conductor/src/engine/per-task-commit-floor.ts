@@ -5,12 +5,11 @@ import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
   parsePlanTaskVerifyOnly,
   canonicalTaskId,
-  fileMatchesPlanPath,
   filesForCommit,
   listCommitsWithTrailers,
 } from './autoheal.js';
 import { evaluateScopeContainment } from './plan-scope-containment.js';
-import { parseScopeTrailers, type ScopeTrailer } from './scope-trailer.js';
+import { parseScopeTrailers } from './scope-trailer.js';
 import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
 import { normalizeTasks } from './task-progress.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -169,7 +168,11 @@ export async function runContainmentFloor(args: {
           if (!files.some((path) => path === scope.path || path.startsWith(`${scope.path}/`))) {
             continue;
           }
-          if (task.files.some((declaredPath) => fileMatchesPlanPath(scope.path, declaredPath))) {
+          const alreadyInEffectiveFloor = evaluateScopeContainment({
+            stagedPaths: [scope.path],
+            task: { id: task.id, status: 'in_progress', files: task.files },
+          }).allowed;
+          if (alreadyInEffectiveFloor) {
             continue;
           }
           if (args.scopeContainmentEnforced !== false) acceptedWidenings.push({

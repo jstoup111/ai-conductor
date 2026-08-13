@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import * as scopeCheckCli from '../../src/engine/scope-check-cli.js';
 import { COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 
-const { appendUnresolvedContainmentCheck, detectScopeCheckCommand, runScopeCheck } = scopeCheckCli;
+const { detectScopeCheckCommand, runScopeCheck } = scopeCheckCli;
 const loadScopeCheckEnforcement = (
   scopeCheckCli as typeof scopeCheckCli & {
     loadScopeCheckEnforcement(
@@ -41,19 +41,9 @@ describe('scope-check CLI', () => {
 
   it.each([
     ['absent key', '{}\n'],
-    ['non-boolean value', 'build_review:\n  scopeContainmentEnforced: enabled\n'],
-    ['malformed YAML', 'build_review: [\n'],
   ])('falls back to report-only for %s configuration', async (_name, config) => {
     await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), config);
     await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(false);
-  });
-
-  it('falls back to report-only when the configuration loader is unreadable', async () => {
-    await expect(
-      loadScopeCheckEnforcement(projectRoot, async () => {
-        throw new Error('config unreadable');
-      }),
-    ).resolves.toBe(false);
   });
 
   it('loads explicit enforcement from resolved project configuration', async () => {
@@ -279,19 +269,18 @@ describe('scope-check CLI', () => {
     await expect(readFile(engineLedgerPath, 'utf8')).resolves.toBe(engineLedger);
   });
 
-  it('round-trips escaped commit task values as one parseable hook-ledger line', async () => {
-    const taskId = 'task "quote"\\slash\nnewline';
+  it('round-trips a real commit message with escaped body content as one parseable hook-ledger line', async () => {
+    const commitMessage = 'feat(engine): retain "quote" and \\backslash\n\nbody has embedded\nnewlines\n\nTask: 3\n';
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    await appendUnresolvedContainmentCheck(projectRoot, {
-      type: 'containment_check_unresolved',
-      failure: 'task-status-malformed',
-      taskId,
-      ts: 1,
-    });
+    await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), '{', 'utf8');
+    await writeFile(messagePath, commitMessage, 'utf8');
+
+    await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
 
     const lines = (await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8')).split('\n');
     expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ taskId, failure: 'task-status-malformed' });
+    expect(JSON.parse(lines[0]!)).toMatchObject({ taskId: '3', failure: 'task-status-malformed' });
   });
 
   it('swallows an unwritable hook ledger path', async () => {

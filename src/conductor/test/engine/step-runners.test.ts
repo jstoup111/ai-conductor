@@ -28,6 +28,7 @@ import { executeProviderCandidates } from '../../src/engine/provider-execution.j
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
+import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -3542,8 +3543,8 @@ TIER: M`,
       expect(scopePrompt).toContain(sha);
     });
 
-    it('does not persist, render, or forward accepted widenings when containment is disabled', async () => {
-      await prepareContainmentRepo(['neighbor.ts'], 'root-level neighbor\n\nTask: 3');
+    it('keeps the widened floor active while containment evidence is disabled', async () => {
+      await prepareContainmentRepo(['src/engine/config.test.ts'], 'test sibling\n\nTask: 3', 'src/engine/config.ts');
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
@@ -3554,6 +3555,7 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           ...currentBuildReviewProof(),
+          config: { build_review: { scopeContainmentEnforced: false } },
         },
       );
 
@@ -3563,7 +3565,11 @@ TIER: M`,
       const floor = JSON.parse(await readFile(join(dir, '.pipeline', 'containment-floor.json'), 'utf8'));
       expect(floor.acceptedWidenings).toEqual([]);
       expect(floor.skipNotes).toEqual([]);
-      expect(prompts).not.toContain('root-level neighbor');
+      expect(prompts).not.toContain('test sibling');
+      expect(evaluateScopeContainment({
+        stagedPaths: ['src/engine/config.test.ts'],
+        task: { id: '3', status: 'in_progress', files: ['src/engine/config.ts'] },
+      })).toEqual({ allowed: true });
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
