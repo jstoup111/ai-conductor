@@ -539,6 +539,12 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
         ).toBe(before);
       }
     }
+
+    // The grading-provenance event is classified not-audited-by-design above,
+    // which is only coherent because the spine persists it instead — assert
+    // that runtime classification here so the pairing cannot drift apart.
+    const { persistedEventTypes } = await import('../../src/engine/event-sinks.js');
+    expect(persistedEventTypes()).toContain('build_review_repair_context');
   });
 
   it('a UI-only event with no writer mapping produces no record and no error (allowlist, not a catch-all)', async () => {
