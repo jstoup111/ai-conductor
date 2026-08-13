@@ -58,27 +58,7 @@ describe('kickback-ledger', () => {
   });
 
   it('round-trips populated gate entries', async () => {
-    const ledger: KickbackLedger = {
-      version: 1,
-      gates: {
-        wiring_check: {
-          count: 2,
-          cumulative: 0,
-          treeHash: '0123456789abcdef0123456789abcdef01234567',
-          lastReason: 'production export is orphaned',
-          priorVerdict: false,
-          resolvedBefore: 7,
-        },
-      },
-    };
-
-    await writeKickbackLedger(dir, ledger);
-
-    await expect(readKickbackLedger(dir)).resolves.toEqual(ledger);
-  });
-
-  it('accepts an on-disk gate entry with an initial cumulative count', async () => {
-    const ledger: KickbackLedger = {
+    const ledger = {
       version: 1,
       gates: {
         wiring_check: {
@@ -87,7 +67,6 @@ describe('kickback-ledger', () => {
           lastReason: 'production export is orphaned',
           priorVerdict: false,
           resolvedBefore: 7,
-          cumulative: 0,
         },
       },
     };
@@ -95,7 +74,10 @@ describe('kickback-ledger', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger));
 
-    await expect(readKickbackLedger(dir)).resolves.toEqual(ledger);
+    await expect(readKickbackLedger(dir)).resolves.toEqual({
+      ...ledger,
+      gates: { wiring_check: { ...ledger.gates.wiring_check, cumulative: 0 } },
+    });
   });
 
   it('defaults a legacy build review entry without cumulative to zero', async () => {

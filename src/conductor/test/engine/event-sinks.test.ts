@@ -80,6 +80,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'finish_publication_blocked',
   'finish_publication_disposition',
   'kickback',
+  'loop_halt',
   'deprecated_step',
 ] satisfies Array<ConductorEvent['type']>;
 

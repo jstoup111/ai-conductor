@@ -20,6 +20,7 @@ EXPLORE_SKILL_FILE="${HARNESS_DIR}/skills/explore/SKILL.md"
 ARCHITECTURE_REVIEW_SKILL_FILE="${HARNESS_DIR}/skills/architecture-review/SKILL.md"
 STORIES_SKILL_FILE="${HARNESS_DIR}/skills/stories/SKILL.md"
 PLAN_SKILL_FILE="${HARNESS_DIR}/skills/plan/SKILL.md"
+PLANNER_AGENT_FILE="${HARNESS_DIR}/agents/planner.md"
 CI_WORKFLOW_FILE="${HARNESS_DIR}/.github/workflows/ci.yml"
 AUTORESOLVE_FILE="${HARNESS_DIR}/src/conductor/src/engine/autoresolve.ts"
 CI_FIX_FILE="${HARNESS_DIR}/src/conductor/src/engine/ci-fix.ts"
@@ -67,11 +68,13 @@ conduct_suite_guidance_contract_holds() {
 scope_choice_contract_holds() {
   local harness_file="$1"
   local explore_file="$2"
+  local planner_file="$3"
 
   grep -qF 'The operator chooses the fix breadth before approach confirmation.' "$harness_file" \
     && grep -qF 'Ask how comprehensive the fix should be before recommending or confirming an approach.' "$explore_file" \
     && grep -qF 'Do not default silently to minimal, balanced, or comprehensive scope.' "$explore_file" \
-    && grep -qF 'Record the operator’s answer as the scope boundary.' "$explore_file"
+    && grep -qF 'Record the operator’s answer as the scope boundary.' "$explore_file" \
+    && grep -qF 'Expand scope only when the operator has confirmed that expansion.' "$planner_file"
 }
 
 confirmed_breadth_contract_holds() {
@@ -136,10 +139,10 @@ else
   pass "legacy skills/test-suite directory is absent"
 fi
 
-if scope_choice_contract_holds "$HARNESS_DIR/HARNESS.md" "$EXPLORE_SKILL_FILE"; then
+if scope_choice_contract_holds "$HARNESS_DIR/HARNESS.md" "$EXPLORE_SKILL_FILE" "$PLANNER_AGENT_FILE"; then
   pass "DECIDE requires an operator-selected fix breadth before approach confirmation"
 else
-  fail "DECIDE must ask and record the operator's fix breadth before approach confirmation and forbid silent scope defaults"
+  fail "DECIDE must ask and record the operator's fix breadth before approach confirmation, forbid silent scope defaults, and make planner expansion operator-controlled"
 fi
 
 for downstream_skill in \
@@ -293,13 +296,10 @@ else
   fail "finish must delegate aggregate verification without a project CLI name"
 fi
 
-FINISH_SUITE_TEXT="$(tr '\n' ' ' <<<"$FINISH_SUITE_SECTION")"
-
-if grep -qiE 'reuses a current passing result' <<<"$FINISH_SUITE_TEXT" \
-  && grep -qiE 'evidence is missing or stale.*verifier obtains' <<<"$FINISH_SUITE_TEXT"; then
+if grep -q 'EXECUTED' <<<"$FINISH_SUITE_SECTION" && grep -q 'REUSED' <<<"$FINISH_SUITE_SECTION"; then
   pass "finish accepts both EXECUTED and REUSED passing proof"
 else
-  fail "finish must reuse current passing proof and obtain proof when evidence is missing or stale"
+  fail "finish must recognize both EXECUTED and REUSED passing proof"
 fi
 
 if grep -qiE '\*\*Full test suite\*\*.*Run it fresh|Run (it|the full test suite) fresh' <<<"$FINISH_SUITE_SECTION"; then

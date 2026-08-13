@@ -262,8 +262,14 @@ describe('buildGraderPrompt', () => {
     expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(2);
   });
 
-  it('leaves every non-Tautology rubric item and the all-or-FAIL rule intact', () => {
-    const prompt = buildGraderPrompt(inputs);
+  it('leaves every non-Tautology rubric item and the all-or-FAIL rule intact with populated removal evidence', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      removalContext: {
+        deletedFiles: ['src/removed.ts'], removedDeclarations: ['RemovedApi'],
+        removedMembers: [{ declaration: 'Contract', member: 'removedMember' }],
+      },
+    });
     const rubric = prompt.match(/Score the diff against exactly these (\w+) rubric items:\n([\s\S]*?)\n\nFor Wiring/)?.[2] ?? '';
     const items = [...rubric.matchAll(/^\d+\. ([^:]+): ([\s\S]*?)(?=\n\d+\.|$)/gm)];
     const nonTautology = items.filter(([, name]) => name !== 'Tautology').map(([, name, text]) => `${name}: ${text}`);
@@ -277,8 +283,10 @@ describe('buildGraderPrompt', () => {
     expect(rubricCount).toBeTruthy();
     expect(prompt).toContain(`PASS only if all ${rubricCount} rubric items pass.`);
 
-    const removalBlock = prompt.match(/## Engine-derived removal evidence\n([\s\S]*?)$/)?.[1] ?? '';
-    expect(removalBlock).not.toMatch(/\b(?:Claude|Codex|Agent tool|\/\w+|\$\w+)\b/i);
+    const removalBlock = prompt.match(/## Engine-derived removal evidence\n([\s\S]*?)$/)?.[1];
+    expect(removalBlock).toContain('src/removed.ts');
+    expect(removalBlock).toContain('RemovedApi');
+    expect(removalBlock).toContain('Contract.removedMember');
     expect(removalBlock).not.toMatch(/transcript|maker summary|task-status/i);
   });
 

@@ -30,6 +30,7 @@ import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { Conductor } from '../test-conductor.js';
 
 const execFile = promisify(execFileCb);
@@ -297,12 +298,11 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
       gates: {
         build_review: {
           count: 2,
-          cumulative: 0,
           treeHash: null,
           lastReason: 'prior genuine failure',
           priorVerdict: true,
           resolvedBefore: 0,
-        },
+        } as import('../../src/engine/kickback-ledger.js').KickbackGateEntry,
       },
     });
 
@@ -612,6 +612,72 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     expect(finalVerdict.verdict).toBe('PASS');
     const haltContent = await readFile(join(repo, HALT_MARKER), 'utf-8').catch(() => null);
     expect(haltContent).toBeNull();
+  }, 30000);
+
+  it.each(['missing', 'unreadable'] as const)('build_review PASS does not turn a %s ledger reset into a gate failure', async (ledgerState) => {
+    const fixture = await setupStaleTrackingRefFixture(dir);
+    const repo = fixture.repo;
+    await seedToBuildReview(statePath, repo, { markRemainingStepsDone: true });
+    const ledgerPath = join(repo, '.pipeline/kickback-ledger.json');
+    if (ledgerState === 'unreadable') await mkdir(ledgerPath, { recursive: true });
+
+    const calls: StepName[] = [];
+    const runner: StepRunner = { run: async (step) => {
+      calls.push(step);
+      if (step === 'build_review') {
+        await writeFile(join(repo, '.pipeline/build-review.json'), JSON.stringify({
+          verdict: 'PASS', reasons: [], rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        }));
+      }
+      return { success: true };
+    } };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: withPassingBuildVerification(repo, runner), events,
+      projectRoot: repo, mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
+      fromStep: 'build_review',
+    } as never).run();
+
+    expect(calls).toContain('build_review');
+    expect(await readFile(join(repo, HALT_MARKER), 'utf8').catch(() => null)).toBeNull();
+    if (ledgerState === 'missing') {
+      await expect(readFile(ledgerPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  }, 30000);
+
+  it('persists the cumulative-cap loop_halt reason through the event spine', async () => {
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build_review') break;
+      state[step.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'cumulative-cap-event-ledger';
+    state.run_started_at = Date.now();
+    await writeState(statePath, state as ConductState);
+    await writeKickbackLedger(dir, { version: 1, gates: { build_review: {
+      count: 1, cumulative: 5, treeHash: 'previous-tree', lastReason: 'tautology: stale assertion', priorVerdict: true, resolvedBefore: 0,
+    } } });
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+    persister.start();
+    const runner: StepRunner = { run: async (step) => {
+      if (step === 'build_review') await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
+        verdict: 'FAIL', reasons: ['tautology: stale assertion'], findings: { tautology: ['stale assertion'] },
+        rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+      }));
+      return { success: true };
+    } };
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'build_review',
+      config: { build_review: { enabled: true } },
+    }).run();
+    persister.stop();
+
+    const eventsLog = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(eventsLog.find((event) => event.type === 'loop_halt')?.reason).toBe(
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): tautology: stale assertion\n[tautology] stale assertion',
+    );
   }, 30000);
 
   it.each([

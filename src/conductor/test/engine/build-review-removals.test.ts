@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { deriveBuildReviewRemovals } from '../../src/engine/build-review-removals.js';
 
 describe('deriveBuildReviewRemovals', () => {
@@ -52,6 +53,17 @@ diff --git a/src/api.ts b/src/api.ts
     });
   });
 
+  it('does not carry an exported type scope past its closing brace', () => {
+    expect(deriveBuildReviewRemovals(`diff --git a/src/contracts.ts b/src/contracts.ts
+@@ -1,5 +1,4 @@
+ export interface Contract {
+   retained: string;
+ }
+-laterMember: string;`)).toEqual({
+      deletedFiles: [], removedDeclarations: [], removedMembers: [],
+    });
+  });
+
   it('fails safely for renames, textual mentions, and declarations it cannot parse', () => {
     expect(() => deriveBuildReviewRemovals(`diff --git a/src/old.ts b/src/new.ts
 similarity index 80%
@@ -72,6 +84,17 @@ deleted file mode 100644
 -const text = "export interface AlsoNotAnApi";
 -export type MultiLine =`)).toEqual({
       deletedFiles: [], removedDeclarations: [], removedMembers: [],
+    });
+  });
+
+  it('derives removal evidence without importing a git subprocess boundary', () => {
+    expect(readFileSync(new URL('../../src/engine/build-review-removals.ts', import.meta.url), 'utf8')).not.toMatch(
+      /node:child_process|execFile|spawn(?:Sync)?\(/,
+    );
+    expect(deriveBuildReviewRemovals(`diff --git a/src/old.ts b/src/old.ts
+@@ -1 +0,0 @@
+-export const removed = true;`)).toEqual({
+      deletedFiles: [], removedDeclarations: ['removed'], removedMembers: [],
     });
   });
 });

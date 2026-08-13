@@ -193,9 +193,9 @@ The Pattern-source accepts the same plain, inline-code, and Markdown link refere
 pairs:
 
 ```markdown
-**Pattern-source:** src/engine/source-pattern.ts
-**Pattern-source:** `src/engine/source-pattern.ts` (source pattern)
-**Pattern-source:** [source pattern](../../src/engine/source-pattern.ts) — reviewed
+**Pattern-source:** src/conductor/src/engine/source-pattern.ts
+**Pattern-source:** `src/conductor/src/engine/source-pattern.ts` (source pattern)
+**Pattern-source:** [source pattern](../../src/conductor/src/engine/source-pattern.ts) — reviewed
 
 **Rename-map:** source-pattern -> plan-pattern-source
 **Rename-map:** source-pattern -> plan-pattern-source, SourcePattern -> PlanPatternSource

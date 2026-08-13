@@ -131,12 +131,11 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
       gates: {
         [unknownTarget]: {
           count: MAX_KICKBACKS_PER_GATE,
-          cumulative: 0,
           treeHash: null,
           lastReason: 'prior ping-pong round',
           priorVerdict: true,
           resolvedBefore: 1_000,
-        },
+        } as import('../../src/engine/kickback-ledger.js').KickbackGateEntry,
       },
     });
     await writeFixtureState(fixture, resolvedState({ build: 'pending', run_started_at: 1 }));

@@ -62,7 +62,8 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
       continue;
     }
     if (rawLine.startsWith(' ')) {
-      scope = rawLine.slice(1).match(exportedType)?.[1] ?? scope;
+      const context = rawLine.slice(1);
+      scope = context.match(exportedType)?.[1] ?? (context.trim() === '}' || context.trim() === '};' ? undefined : scope);
       continue;
     }
     if (!rawLine.startsWith('-') || rawLine.startsWith('---')) continue;

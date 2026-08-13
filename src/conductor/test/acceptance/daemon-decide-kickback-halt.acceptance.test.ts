@@ -639,12 +639,11 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         gates: {
           plan: {
             count: MAX_KICKBACKS_PER_GATE,
-            cumulative: 0,
             treeHash: null,
             lastReason: 'prior ping-pong round',
             priorVerdict: true,
             resolvedBefore: 1_000,
-          },
+          } as import('../../src/engine/kickback-ledger.js').KickbackGateEntry,
         },
       });
     }

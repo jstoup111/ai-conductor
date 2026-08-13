@@ -144,6 +144,17 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       });
     });
 
+    it('returns an explicitly empty removal context for an additive diff', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/new.ts b/src/new.ts\n+export const added = true;\n' } },
+      ]);
+      await expect(assembleBuildReviewInputs(git, planPath)).resolves.toMatchObject({
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+      });
+    });
+
     it('stale base: fetches, recomputes merge-base against the refreshed ref, fresh=false', async () => {
       const { git } = fakeGit([
         { match: ['remote'], result: { exitCode: 0, stdout: 'origin\n' } },
