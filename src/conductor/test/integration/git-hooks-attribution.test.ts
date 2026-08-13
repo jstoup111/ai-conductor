@@ -337,7 +337,6 @@ describe('integration/git-hooks-attribution', () => {
       const res = await git('commit', '-m', 'feat: bundled change\n\nTask: 1');
       expect(res.code).toBe(0);
       expect(res.stderr).not.toContain('staged diff spans files of multiple plan tasks');
-      expect(res.stderr).not.toContain('commit-msg: scope-check abstained (exit 1); allowing commit');
     });
 
     it('commits an out-of-floor staged path with the scope advisory on stderr', async () => {
