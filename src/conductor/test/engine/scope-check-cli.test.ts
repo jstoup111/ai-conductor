@@ -81,6 +81,17 @@ describe('scope-check CLI', () => {
     }
   });
 
+  it('keeps reserved exit code 2 outside runScopeCheck', async () => {
+    const source = await readFile(new URL('../../src/engine/scope-check-cli.ts', import.meta.url), 'utf8');
+    const runScopeCheckStart = source.indexOf('export async function runScopeCheck');
+    const nextDeclaration = source.indexOf('/** Record hook-owned uncertainty', runScopeCheckStart);
+    const runScopeCheckSource = source.slice(runScopeCheckStart, nextDeclaration);
+
+    expect(runScopeCheckStart).toBeGreaterThanOrEqual(0);
+    expect(nextDeclaration).toBeGreaterThan(runScopeCheckStart);
+    expect(runScopeCheckSource).not.toMatch(/\breturn\s+2\b/);
+  });
+
   it('detects the commit-message path for the dispatcher', () => {
     expect(
       detectScopeCheckCommand(['node', 'conduct-ts', 'scope-check', '/tmp/COMMIT_EDITMSG']),
