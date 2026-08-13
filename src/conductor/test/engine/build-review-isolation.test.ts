@@ -133,7 +133,7 @@ describe('build_review input isolation', () => {
     type AssembleParams = Parameters<typeof assembleBuildReviewInputs>;
     type PromptParams = Parameters<typeof buildGraderPrompt>;
 
-    const assembleArity: AssembleParams extends [unknown, unknown, unknown?] ? true : false = true;
+    const assembleArity: AssembleParams extends [unknown, unknown] ? true : false = true;
     const promptArity: PromptParams extends [unknown] ? true : false = true;
 
     expect(assembleArity).toBe(true);
