@@ -11,7 +11,7 @@ import {
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import {
-  recordTestSuiteRemediation,
+  recordGateRepair,
 } from './test-suite-remediation.js';
 import { dirname, relative, join, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -2400,11 +2400,11 @@ export class Conductor {
     }
   }
 
-  private async recordTestSuiteRebaseRepair(
+  private async recordDeterministicGateRepair(
+    gate: string,
     failure: { reason: string; message: string },
-  ): Promise<Awaited<ReturnType<typeof recordTestSuiteRemediation>>> {
-    const buildReviewVerdict = await readVerdict(this.projectRoot, 'build_review');
-    return recordTestSuiteRemediation(this.projectRoot, failure, buildReviewVerdict);
+  ): Promise<Awaited<ReturnType<typeof recordGateRepair>>> {
+    return recordGateRepair(this.projectRoot, gate, { ...failure, observedAt: Date.now() });
   }
 
   /**
@@ -4702,12 +4702,17 @@ export class Conductor {
                       'deterministic BUILD verification gate unsatisfied'),
                 });
               }
-              const testSuiteFailure = deterministicFailures.find(
-                (failure) => failure.member.name === 'test_suite',
-              );
-              const remediationRecord = testSuiteFailure && fullSuiteFailure?.status === 'FAILED'
-                ? await this.recordTestSuiteRebaseRepair(fullSuiteFailure)
-                : undefined;
+              const remediationRecords = await Promise.all(deterministicFailures.map((failure) =>
+                this.recordDeterministicGateRepair(failure.member.name, {
+                  reason: failure.member.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED'
+                    ? fullSuiteFailure.reason
+                    : 'deterministic_gate_unsatisfied',
+                  message: failure.member.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED'
+                    ? fullSuiteFailure.message
+                    : failure.evidence,
+                }),
+              ));
+              const remediationRecord = remediationRecords.find(Boolean);
               const kickbacks = [] as Awaited<ReturnType<typeof consumeKickbackBudget>>[];
               for (const failure of deterministicFailures) {
                 kickbacks.push(
@@ -7207,7 +7212,10 @@ export class Conductor {
               const evidence =
                 `full-suite verification failed (${fullSuiteFailure.reason}): ` +
                 `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
-              const remediationRecord = await this.recordTestSuiteRebaseRepair(fullSuiteFailure);
+              const remediationRecord = await this.recordDeterministicGateRepair(
+                'test_suite',
+                fullSuiteFailure,
+              );
               const kickback = await consumeKickbackBudget('test_suite', evidence);
               const count = kickback.entry.count;
               if (!kickback.exhausted) {
