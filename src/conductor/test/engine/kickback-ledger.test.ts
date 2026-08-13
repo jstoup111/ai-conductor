@@ -136,21 +136,51 @@ describe('kickback-ledger', () => {
   });
 
   it('never leaves a torn ledger for readers during concurrent writes', async () => {
+    const legacyWinner = {
+      version: 1,
+      gates: {
+        wiring_check: {
+          count: 1,
+          treeHash: '0000000000000000000000000000000000000000',
+          lastReason: 'legacy winner',
+          priorVerdict: false,
+          resolvedBefore: 0,
+        },
+      },
+    };
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyWinner));
+
     const ledgers: KickbackLedger[] = Array.from({ length: 10 }, (_, index) => ({
       version: 1,
       gates: {
         wiring_check: {
-          count: index + 1,
-          cumulative: 0,
-          treeHash: `${index}`.padStart(40, '0'),
+          count: index + 2,
+          cumulative: index + 1,
+          treeHash: `${index + 1}`.padStart(40, '0'),
           lastReason: `attempt ${index + 1}`,
           priorVerdict: false,
-          resolvedBefore: index,
+          resolvedBefore: index + 1,
         },
       },
     }));
 
-    await Promise.all(ledgers.map((ledger) => writeKickbackLedger(dir, ledger)));
+    const successfulReads = await Promise.all([
+      readKickbackLedger(dir),
+      ...ledgers.map(async (ledger) => {
+        const write = writeKickbackLedger(dir, ledger);
+        const observed = await readKickbackLedger(dir);
+        await write;
+        return observed;
+      }),
+    ]);
+
+    expect(successfulReads[0].gates.wiring_check?.cumulative).toBe(0);
+    for (const ledger of successfulReads) {
+      for (const entry of Object.values(ledger.gates)) {
+        expect(entry.cumulative).toEqual(expect.any(Number));
+      }
+    }
 
     const raw = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8');
     expect(() => JSON.parse(raw)).not.toThrow();

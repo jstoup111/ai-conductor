@@ -135,9 +135,10 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
           lastReason: 'prior ping-pong round',
           priorVerdict: true,
           resolvedBefore: 1_000,
-        } as import('../../src/engine/kickback-ledger.js').KickbackGateEntry,
+        },
       },
     });
+    expect((await readKickbackLedger(fixture.root)).gates[unknownTarget]?.cumulative).toBe(0);
     await writeFixtureState(fixture, resolvedState({ build: 'pending', run_started_at: 1 }));
     const runner: StepRunner = {
       run: async (step) => {

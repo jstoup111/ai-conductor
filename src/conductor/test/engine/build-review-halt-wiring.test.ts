@@ -29,7 +29,7 @@ import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
-import { writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { Conductor } from '../test-conductor.js';
 
@@ -302,9 +302,10 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
           lastReason: 'prior genuine failure',
           priorVerdict: true,
           resolvedBefore: 0,
-        } as import('../../src/engine/kickback-ledger.js').KickbackGateEntry,
+        },
       },
     });
+    expect((await readKickbackLedger(repo)).gates.build_review?.cumulative).toBe(0);
 
     let genuineFails = 2;
     let sawStaleFail = false;

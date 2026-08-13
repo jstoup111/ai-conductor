@@ -23,6 +23,7 @@ import {
   readHaltClass,
 } from '../../src/engine/halt-marker.js';
 import {
+  readKickbackLedger,
   writeKickbackLedger,
   MAX_KICKBACKS_PER_GATE,
 } from '../../src/engine/kickback-ledger.js';
@@ -643,9 +644,11 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
             lastReason: 'prior ping-pong round',
             priorVerdict: true,
             resolvedBefore: 1_000,
-          } as import('../../src/engine/kickback-ledger.js').KickbackGateEntry,
+          },
         },
       });
+
+      expect((await readKickbackLedger(dir)).gates.plan?.cumulative).toBe(0);
     }
 
     it('an exhausted DECIDE kickback HALTs with the ping-pong reason, not the phase reason (happy path 1)', async () => {
