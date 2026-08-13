@@ -188,35 +188,63 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
 
   it('keeps conflict-check additive for non-story artifacts while replacing story assertions in place', async () => {
     const text = await readContract('skills/conflict-check/SKILL.md');
+    const additiveNonStoryContract = /accepted\s+DECIDE\s+artifact[\s\S]{0,180}\.docs\/stories\/[\s\S]{0,100}narrow\s+exception[\s\S]{0,220}all\s+other\s+accepted\s+DECIDE\s+artifacts[\s\S]{0,220}Amended\s+YYYY-MM-DD\s+by\s+#NNN[\s\S]{0,260}non-story\s+artifacts[\s\S]{0,160}original\s+assertion\s+remains[\s\S]{0,120}do\s+not\s+rewrite\s+or\s+delete/i;
 
-    expect(text).toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
-    expect(text).toMatch(/(?:non-story|other)[\s\S]{0,160}(?:original[\s\S]{0,120}(?:remain|preserv)|additive)/i);
+    expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/stor(?:y|ies)[\s\S]{0,160}(?:replace|replacement)[\s\S]{0,100}in place[\s\S]{0,100}(?:no|without)[\s\S]{0,60}(?:amendment )?record/i);
+    expect(
+      'Story artifacts and all other accepted DECIDE artifacts are the exception.',
+    ).not.toMatch(additiveNonStoryContract);
   });
 
   it('keeps architecture-review additive for non-story artifacts while replacing story assertions in place', async () => {
     const text = await readContract('skills/architecture-review/SKILL.md');
+    const additiveNonStoryContract = /accepted DECIDE assertion[\s\S]{0,180}amend that non-story artifact[\s\S]{0,220}Amended\s+YYYY-MM-DD\s+by\s+#NNN[\s\S]{0,280}every non-story artifact[\s\S]{0,160}original assertion remains preserved[\s\S]{0,140}\.docs\/stories\/[\s\S]{0,100}exception/i;
 
-    expect(text).toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
-    expect(text).toMatch(/(?:non-story|other)[\s\S]{0,160}(?:original[\s\S]{0,120}(?:remain|preserv)|additive)/i);
+    expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/stor(?:y|ies)[\s\S]{0,160}(?:replace|replacement)[\s\S]{0,100}in place[\s\S]{0,100}(?:no|without)[\s\S]{0,60}(?:amendment )?record/i);
+    expect(
+      'Every accepted DECIDE artifact is exempt from the additive amendment.',
+    ).not.toMatch(additiveNonStoryContract);
   });
 
   it('requires stories to replace superseded assertions in place without an amendment record', async () => {
     const text = await readContract('skills/stories/SKILL.md');
+    const storyCorrectionInstructions = text.match(
+      /When a DECIDE correction[\s\S]*?(?=\n\*\*Stamp the canonical approval marker\.)/i,
+    )?.[0];
+    const preservesSupersededAssertion =
+      /(?:original|superseded) assertion[\s\S]{0,80}(?:remain|preserv)|(?:remain|preserv)[\s\S]{0,80}(?:original|superseded) assertion|(?:original|superseded) assertion[\s\S]{0,80}never[\s\S]{0,80}(?:rewrite|delete)|never[\s\S]{0,80}(?:rewrite|delete)[\s\S]{0,80}(?:original|superseded) assertion/i;
 
     expect(text).toMatch(/replace[\s\S]{0,200}(?:in place|superseded)/i);
     expect(text).toMatch(/no[\s\S]{0,80}amendment record/i);
     expect(text).toMatch(/(?:pre-existing|legacy|existing)[\s\S]{0,180}amendment blocks?[\s\S]{0,240}(?:resolve|fold)[\s\S]{0,180}current behavioral text[\s\S]{0,180}(?:same DECIDE pass|same pass)/i);
     expect(text).toMatch(/(?:cannot|unable to)[\s\S]{0,180}determine[\s\S]{0,180}current behavior[\s\S]{0,240}correctness[\s\S]{0,100}assumption gate[\s\S]{0,160}(?:rather than|never)[\s\S]{0,100}delet/i);
     expect(text).not.toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
+    expect(storyCorrectionInstructions).toBeDefined();
+    expect(storyCorrectionInstructions).not.toMatch(preservesSupersededAssertion);
+
+    // Selector robustness: each minimal additive mutation must be rejected, while
+    // restricting the scan to the story-correction instruction avoids unrelated prose.
+    for (const mutation of [
+      'The original assertion remains preserved.',
+      'The original assertion is preserved.',
+      'The original assertion is never rewritten or deleted.',
+    ]) {
+      expect(`${storyCorrectionInstructions}\n${mutation}`).toMatch(preservesSupersededAssertion);
+    }
   });
 
   it('keeps the additive amendment form while excepting story artifacts from amendment records', async () => {
     const text = await readContract('HARNESS.md');
 
-    expect(text).toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
+    const additiveNonStoryContract = /accepted\s+DECIDE\s+artifact[\s\S]{0,180}\.docs\/stories\/[\s\S]{0,100}exception[\s\S]{0,220}all\s+other\s+accepted\s+DECIDE\s+artifacts[\s\S]{0,220}original\s+assertion[\s\S]{0,100}never\s+rewrite[\s\S]{0,80}delete[\s\S]{0,180}Amended\s+YYYY-MM-DD\s+by\s+#NNN/i;
+
+    expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/\.docs\/stories\/[\s\S]{0,200}replace[\s\S]{0,120}in place[\s\S]{0,120}no amendment record/i);
+    expect(
+      'All accepted DECIDE artifacts are the exception: replace superseded assertions in place.',
+    ).not.toMatch(additiveNonStoryContract);
   });
 });
 
