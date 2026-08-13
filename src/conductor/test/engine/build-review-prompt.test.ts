@@ -262,6 +262,26 @@ describe('buildGraderPrompt', () => {
     expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(2);
   });
 
+  it('leaves every non-Tautology rubric item and the all-or-FAIL rule intact', () => {
+    const prompt = buildGraderPrompt(inputs);
+    const rubric = prompt.match(/Score the diff against exactly these (\w+) rubric items:\n([\s\S]*?)\n\nFor Wiring/)?.[2] ?? '';
+    const items = [...rubric.matchAll(/^\d+\. ([^:]+): ([\s\S]*?)(?=\n\d+\.|$)/gm)];
+    const nonTautology = items.filter(([, name]) => name !== 'Tautology').map(([, name, text]) => `${name}: ${text}`);
+    expect(nonTautology).toEqual(expect.arrayContaining([
+      expect.stringContaining('Scope: diff scoped to the plan, no unrelated files.'),
+      expect.stringContaining('Root cause: the change addresses the stated defect, not a symptom.'),
+      expect.stringContaining("Completeness: every planned task's work is present in the diff."),
+      expect.stringContaining('Wiring: a static property of the diff'),
+    ]));
+    const rubricCount = prompt.match(/exactly these (\w+) rubric items/)?.[1];
+    expect(rubricCount).toBeTruthy();
+    expect(prompt).toContain(`PASS only if all ${rubricCount} rubric items pass.`);
+
+    const removalBlock = prompt.match(/## Engine-derived removal evidence\n([\s\S]*?)$/)?.[1] ?? '';
+    expect(removalBlock).not.toMatch(/\b(?:Claude|Codex|Agent tool|\/\w+|\$\w+)\b/i);
+    expect(removalBlock).not.toMatch(/transcript|maker summary|task-status/i);
+  });
+
 
   it('never references task-status, maker summary, or maker internal state', () => {
     const prompt = buildGraderPrompt(inputs);
