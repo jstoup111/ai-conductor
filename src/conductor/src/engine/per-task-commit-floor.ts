@@ -10,7 +10,7 @@ import {
   listCommitsWithTrailers,
 } from './autoheal.js';
 import { evaluateScopeContainment } from './plan-scope-containment.js';
-import { parseScopeTrailers } from './scope-trailer.js';
+import { parseScopeTrailers, type ScopeTrailer } from './scope-trailer.js';
 import { normalizeTasks } from './task-progress.js';
 
 /**
@@ -40,6 +40,7 @@ export interface ContainmentFloorViolation {
 export interface AcceptedScopeWidening {
   path: string;
   rationale: string;
+  derived: boolean;
   taskId: string;
   sha: string;
 }
@@ -166,7 +167,14 @@ export async function runContainmentFloor(args: {
           if (task.files.some((declaredPath) => fileMatchesPlanPath(scope.path, declaredPath))) {
             continue;
           }
-          acceptedWidenings.push({ ...scope, taskId: task.id, sha: commit.sha });
+          const rationale = resolveScopeWideningRationale(scope.path, scopeTrailers);
+          if (rationale === undefined) continue;
+          acceptedWidenings.push({
+            path: scope.path,
+            ...rationale,
+            taskId: task.id,
+            sha: commit.sha,
+          });
         }
       }
     }
@@ -181,6 +189,16 @@ export async function runContainmentFloor(args: {
     const message = err instanceof Error ? err.message : String(err);
     return skippedContainmentFloor(message);
   }
+}
+
+function resolveScopeWideningRationale(
+  path: string,
+  scopeTrailers: readonly ScopeTrailer[],
+): Pick<AcceptedScopeWidening, 'rationale' | 'derived'> | undefined {
+  const trailer = scopeTrailers.find((scope) => scope.path === path);
+  if (trailer === undefined) return undefined;
+
+  return { rationale: trailer.rationale, derived: false };
 }
 
 function skippedContainmentFloor(message: string): ContainmentFloorReport {

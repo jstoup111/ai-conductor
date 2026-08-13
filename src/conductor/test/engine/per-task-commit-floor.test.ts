@@ -206,7 +206,13 @@ describe('per-task-commit-floor', () => {
       satisfied: true,
       violations: [],
       acceptedWidenings: [
-        { path: 'widened.ts', rationale: 'needed by the task', taskId: '3', sha },
+        {
+          path: 'widened.ts',
+          rationale: 'needed by the task',
+          taskId: '3',
+          sha,
+          derived: false,
+        },
       ],
     });
   });
