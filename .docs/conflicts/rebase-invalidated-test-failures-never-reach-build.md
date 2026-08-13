@@ -222,7 +222,54 @@ order genuinely does not matter.
 | Story 7 ↔ `adr-2026-08-12-removal-anchored-tautology-exemption` | Yes | Its D5 table lists `repairContext`'s evidence source as "engine-recorded aggregate failures". This spec broadens that source to any gate. Descriptive refinement of a table, not a decision reversal — its D1–D4 are untouched. Noted, no amendment required. |
 | Stories 1, 6 ↔ `adr-2026-07-07-audit-trail-event-sink` | Yes | That ADR deliberately keeps `.pipeline/audit-trail/events.jsonl` separate from `.pipeline/events.jsonl`. This spec writes only to the latter and adds no third sink. Consistent with its stated separation. |
 | Story 8 ↔ `adr-2026-08-12-fail-closed-intake-ledger-durability` | Yes | That ADR requires a corrupt *intake* ledger to fail closed rather than read as empty. Story 8 requires a legacy *repair* ledger to read as empty. Different stores, and the asymmetry is principled: an unparseable intake ledger risks losing queued work, whereas an absent repair record only forgoes an exception and grades as today. No contradiction. |
+| Story 1 ↔ Story 4 | Yes | Added 2026-08-13 on operator challenge. They share the event log. Satisfying Story 1 fully (every advance recorded, including documentation-only) leaves Story 4 intact — extra recorded advances enlarge the join's candidate set but every match still requires path overlap, so they cannot manufacture an attribution. Satisfying Story 4 fully leaves Story 1 intact — it governs recording, not matching. Noted: the C2 resolution does widen the candidate set, and 129 test files reference `.docs/` paths, so a failure naming a `.docs/` path can now legitimately join a documentation-only advance. Correct behavior, but it makes task-12's overlap precision load-bearing in a way it was not before C2. |
+| Story 5 ↔ Story 7 | Yes | Added 2026-08-13 on operator challenge. They share the grader's evidence block. Satisfying Story 5 fully (several records accrue per advance) leaves Story 7 implementable, but a larger block gives the grader more entries a hunk might loosely match — the per-diff-versus-per-test failure shape `adr-2026-08-12-removal-anchored-tautology-exemption` D3 warns about. One "no" at most, so pressure rather than oscillation, and Story 7's "a deletion not covered by a repair record is still gradeable" criterion is the guard. Satisfying Story 7 fully leaves Story 5 unaffected. |
 | All stories ↔ existing `.docs/stories/*.md` | Yes | No other stories file addresses base-advance attribution, the repair ledger, or path classification. `.docs/stories/repeated-build-review-semantic-failures-can-churn-.md` is the nearest neighbour and is covered as Conflict 3. |
+
+---
+
+## Conflict 4: The plan's own task set could oscillate between the lock and the classifier
+
+**Stories involved:** Story 2 (gate invalidation unchanged) vs Story 3 (classifier inverted)
+**Files:** `.docs/plans/rebase-invalidated-test-failures-never-reach-build.md`
+**Type:** oscillating
+**Severity:** blocking (resolved before any BUILD entry)
+**Story ID:** Story 2 vs Story 3
+
+**Description:**
+Found 2026-08-13 on operator challenge, by running the both-directions heuristic over the *plan's
+task set* rather than only over the stories. The stories themselves do not conflict — Story 2's
+"gate invalidation byte-identical" is scoped to the delta-field split, and Story 3's reclassification
+is a different cause. The plan lost that distinction.
+
+Task 3 as originally written locked "for a delta mixing source, test and **excluded** paths,
+`classifyGateInvalidation` returns exactly the gate set it returns before this change." Under the
+pre-Task-9 classifier the excluded set includes `agents/*.md`. Task 9 moves exactly those paths to
+source, so a Task 3 fixture built on one would see the gate set change.
+
+Task 3 depended on Task 2 and Task 9 on nothing, so they sat on independent chains and could land in
+either order or concurrently. Both directions: implementing Task 3 first with a markdown fixture is
+broken by Task 9; implementing Task 9 first makes Task 3 unwritable as worded. The natural repair —
+relaxing Task 3's assertion — silently discards the guarantee Story 2 exists to provide, and nothing
+downstream would notice, because the lock would still be green.
+
+**Resolution Options:**
+1. Order Task 3 after Task 9 and pin its fixture to paths stable across both classifiers.
+2. Merge Tasks 3 and 9 so one task owns both the change and its lock.
+3. Drop Task 3's lock and rely on the wider suite.
+
+**Recommendation:** Option 1. It removes the interaction without enlarging either task, and keeps
+the lock isolated to its one intended variable.
+
+**RESOLVED:** Option 1 applied. Task 3 now depends on Task 2 and Task 9, its step 1 names the
+forbidden fixture paths explicitly, and the dependency graph carries the anti-oscillation edge with
+its rationale. Tasks 5 and 10 were already immune — both use `.docs/`/`docs/`, excluded under either
+classifier.
+
+**Method note.** This was missed on the first pass because the oscillation sweep ran over stories
+and over cross-layer outcome/story/ADR pairs, but not over task-versus-task pairs within the plan.
+Two tasks that each invalidate the other's fixture is the same failure shape at a layer the sweep
+did not cover.
 
 ---
 

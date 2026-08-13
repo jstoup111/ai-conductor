@@ -119,6 +119,11 @@ per feature.
 **Steps:**
 1. Write failing test: for a delta mixing source, test and excluded paths,
    `classifyGateInvalidation` returns exactly the gate set it returns before this change.
+   **The fixture's excluded path MUST be one whose classification Task 9 does not alter** — use
+   `.docs/…` or `docs/…`, never `agents/*.md`, `skills/**/SKILL.md`, `tech-context/**`,
+   `templates/**`, or root harness markdown. Those are excluded today and become source at Task 9,
+   so a fixture built on one would break this lock for a legitimate reason and invite weakening the
+   very assertion story-2 depends on. The lock's only variable must be the delta-field split.
 2. Verify test fails (RED) — or passes immediately, in which case keep it as the regression lock.
 3. Implement: assert no call site reads the new field for invalidation decisions.
 4. Verify test passes (GREEN)
@@ -127,7 +132,7 @@ per feature.
 **Files likely touched:**
 - `src/conductor/test/engine/gate-invalidation.test.ts` — regression lock
 
-**Dependencies:** Task 2
+**Dependencies:** Task 2, Task 9
 
 ---
 
@@ -568,7 +573,7 @@ per feature.
 ## Task Dependency Graph
 
 ```
-Task 1 ─→ Task 2 ─┬─→ Task 3
+Task 1 ─→ Task 2 ─┬─→ Task 3 ←─ Task 9 (fixture stability, see Task 3 step 1)
                   ├─→ Task 4
                   └─→ Task 5
 
@@ -584,6 +589,14 @@ Task 9 ─┬─→ Task 10
 
 Tasks 1, 6 and 9 are independent roots. The classifier chain (9–11) and the record chain (1–5) can
 proceed in parallel with the join chain (6–8, 12–22).
+
+**Task 3's dependency on Task 9 is an anti-oscillation edge, not a data dependency.** Task 3 locks
+that gate invalidation is unchanged; Task 9 legitimately changes it for markdown paths. Left
+unordered and unpinned, a Task 3 fixture using a markdown path would be broken by Task 9, and the
+natural repair — relaxing the lock — would silently discard story-2's guarantee. Ordering Task 3
+after Task 9 and pinning its fixture to paths stable across both classifiers removes the
+interaction entirely. Tasks 5 and 10 are already immune: both use `.docs/`/`docs/`, which stay
+excluded under either classifier.
 
 ## Integration Points
 
