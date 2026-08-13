@@ -29,6 +29,8 @@ Open with a short **Technical Approach** (a paragraph or few bullets: the design
 key modules/files, and sequencing) before the task list, so `build` has the shape of the work
 before the steps.
 
+Read the `Scope boundary:` from `.docs/track/<slug>.md` as binding; preserve the confirmed narrow/comprehensive breadth outcome; do not permit a materially broader expansion beyond it unless the operator confirms before it enters the artifact.
+
 ### Documentation boundary
 
 Never create plan tasks, subtasks, requirements, verification items, or notes for writing or

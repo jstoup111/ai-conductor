@@ -14,6 +14,8 @@ Catches technical infeasibility, hidden complexity, architectural drift, and dom
 early — when they're cheap to fix. This is where the *how* is resolved (so the PRD stays
 product-only) and captured as APPROVED ADRs.
 
+Read the `Scope boundary:` from `.docs/track/<slug>.md` as binding; preserve the confirmed narrow/comprehensive breadth outcome; do not permit a materially broader expansion beyond it unless the operator confirms before it enters the artifact.
+
 **Run after `/prd` (product track) or `/explore` (technical track), and BEFORE `/stories`** (adr-2026-06-29-architecture-before-stories-convergent-kickback).
 The review's input is the PRD's functional requirements (product) or the explore output + technical
 intent (technical) — stories and the plan do not exist yet at this point.
@@ -126,7 +128,7 @@ Check stories and plan against documented architecture:
 
 **Pattern consistency:**
 - Does the implementation approach match existing patterns (service objects, concerns, etc.)?
-- If it introduces a NEW pattern, is there an ADR justifying the departure?
+- If it establishes a new structural pattern, is there an ADR justifying the departure?
 
 **State management:**
 - Can invalid states be represented in the proposed data model?
@@ -178,42 +180,27 @@ Before implementation begins, check the plan for domain modeling issues:
 
 Risk types: **Technical**, **Integration**, **Data**, **Performance**, **Security**, **Knowledge**
 
-### 7. ADR Creation — Triggers and Decision Categories
+### 7. ADR Creation — Structural Prerequisite and Decision Categories
 
-An ADR is required when a change touches any of these decision categories. This checklist
-defines what constitutes an "architectural decision" — if a change fits a category below and
-no existing ADR covers it, one must be created before implementation proceeds.
+A new ADR is warranted only for a real structural decision. Structural change is a necessary
+prerequisite: decision categories never independently require an ADR. First determine whether the
+proposal establishes or revises one of these durable architectural shapes:
 
-**Technology Stack:**
-- Language/runtime selection or version change
-- Framework adoption or replacement
-- Database or event store selection
-- Messaging, queuing, or caching layer changes
+- a system boundary, including a bounded context or deployment boundary;
+- component or service decomposition, including merging services or assigning cross-module ownership;
+- an integration pattern, including an external API seam, anti-corruption layer, or asynchronous callback boundary;
+- state or data architecture, including a persistence model, event-store boundary, or durable state-transition design; or
+- foundational technology, including a runtime, framework, database, messaging, queuing, or caching platform.
 
-**Domain Architecture:**
-- Bounded context boundary definition or change
-- New aggregate identification
-- Service decomposition or merging
-- New domain type that crosses module boundaries
+Use the categories only after that structural prerequisite is met, to make the decision explicit
+and reviewable. Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail
+are not sufficient ADR triggers. A small change may still warrant an ADR when it makes one
+of the structural decisions above; a broad or important change does not when it does not.
 
-**Integration Patterns:**
-- New external API integration (sync or async)
-- Anti-corruption layer design
-- Data import/export mechanisms
-- New webhook or callback pattern
-
-**Cross-Cutting Concerns:**
-- Authentication/authorization strategy changes
-- Observability approach (logging, metrics, tracing)
-- Error handling and resilience patterns
-- New middleware or interceptor patterns
-
-**Infrastructure:**
-- Deployment topology changes
-- New background job framework or queue
-- Database connection pooling or caching strategy
-- CI/CD pipeline structural changes
-- Worktree isolation boundary changes (new shared services, new per-worktree resources)
+Before drafting, read `.docs/decisions/` for an APPROVED ADR that already governs the structural
+decision. Reuse an existing governing ADR rather than duplicate it. Cite and apply it when it
+covers the proposal; draft a new ADR only for an uncovered structural decision, or supersede the
+existing ADR when the structural decision itself changes.
 
 **ADR format:** Use `templates/adr.md.template`. Name each ADR
 `.docs/decisions/adr-YYYY-MM-DD-<kebab-slug>.md` — date plus a short descriptive slug — and title it
@@ -231,13 +218,13 @@ reject number-named ADRs is tracked in intake #705.)
 ADRs are append-only — supersede, don't delete. Every claim about external dependency behavior
 must cite specific evidence (documentation, tested behavior, or source code).
 
-**Lightweight mode (Medium tier):** Create ADRs only for categories marked above — do not skip
-ADR creation just because the feature is medium-sized. The threshold is the decision category,
-not the feature complexity.
+**Lightweight mode (Medium tier):** Apply the same structural prerequisite and reuse check. Do not
+skip an ADR merely because the feature is medium-sized, but do not create one merely because a
+category label, feature size, or importance is present.
 
-**GATE: If a change touches a decision category above and no ADR exists, architecture-review
-MUST create one. An architecture review that approves without documenting decisions is
-incomplete.**
+**GATE: If a proposed change makes an uncovered structural decision above, architecture-review
+MUST create an ADR before implementation proceeds. An architecture review that creates or omits an
+ADR without first applying the structural prerequisite and governing-ADR reuse check is incomplete.**
 
 ### 7b. ADR Approval Lifecycle
 
@@ -322,20 +309,20 @@ with it.
 
 **APPROVED WITH CONDITIONS** — Proceed; conditions tracked in the plan. Evaluator checks at code review. Unmet conditions at `/finish` are blocking.
 
-**BLOCKED** — Pipeline HALTS. Present to the user: what is violated, resolution options with trade-offs, and which ADRs are in conflict. The user must explicitly approve a resolution. Do not auto-resolve. Capture the resolution as a new ADR and re-run the review.
+**BLOCKED** — Pipeline HALTS. Present to the user: what is violated, resolution options with trade-offs, and which ADRs are in conflict. The user must explicitly approve a resolution. Do not auto-resolve. Capture the resolution as a new ADR only when resolving it makes or changes a structural decision; resolve non-structural blockers without an ADR. Re-run the review.
 
 ### 10. Recurring Review (Pipeline Batch Boundaries)
 
 At pipeline batch boundaries, perform a lightweight architecture check:
 
 - Has the implementation drifted from the approved plan?
-- Have new patterns been introduced without an ADR?
+- Have new structural patterns been introduced without an ADR?
 - Are domain boundaries being respected in the actual code?
 - Are architecture diagrams still accurate after this batch's changes?
 - Escalation: non-blocking findings that appear in 2+ consecutive reviews become blocking
 
 If drift is detected at a batch boundary:
-1. Write a new ADR documenting what changed and why (or that it was unintentional)
+1. For drift that makes or changes a structural decision, write a new ADR documenting what changed and why (or that it was unintentional); otherwise record the drift without creating an ADR
 2. If the drift violates a prior ADR: BLOCK — human must decide whether to update the ADR
    or revert the code
 
@@ -385,8 +372,9 @@ on BUILD proof as authority.
 - Load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`) and the approved
   architecture diagrams (`.docs/architecture/`). DRAFT/SUPERSEDED ADRs are not authoritative and
   are not gated against (per §7b).
-- Compare the as-shipped code to those approved decisions: were new patterns introduced without an
-  ADR? Are domain boundaries respected in the actual code? Do diagrams still match reality?
+- Compare the as-shipped code to those approved decisions: were new structural patterns that embody
+  a structural decision introduced without an ADR? Are domain boundaries respected in the actual
+  code? Do diagrams still match reality?
 - **Production reachability sweep (green-but-unwired guard).** For each primitive this
   feature's diff introduces or materially changes — exported functions/modules, hook scripts,
   config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
@@ -423,8 +411,8 @@ on BUILD proof as authority.
 **Verdict:**
 - **APPROVED** — shipped code matches the approved architecture. Proceed to retro/finish.
 - **APPROVED WITH DRIFT NOTES** — minor, non-violating drift (e.g. a diagram is now slightly stale,
-  a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR if
-  warranted, but it does not block.
+  a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR only
+  when it makes or changes a structural decision; otherwise no ADR is needed, and it does not block.
 - **BLOCKED** — shipped code **violates an APPROVED ADR**. The loop HALTS. A human must resolve it:
   either fix the code to comply, or supersede the ADR with a new, human-APPROVED ADR
   (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
@@ -488,7 +476,7 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
 - [ ] **Medium/Large tier:** `## Wiring Surface` section present, naming where each new
       production surface will be called from — BLOCKS approval if missing (not required
       for Small; design-time only, does not affect §12 as-built reachability sweep)
-- [ ] ADR created for every architectural decision made
+- [ ] ADR created only for each uncovered structural decision; existing governing ADRs cited and reused
 - [ ] Review written to .docs/decisions/
 - [ ] Verdict issued (APPROVED / CONDITIONS / BLOCKED)
 - [ ] Architecture diagrams reviewed for accuracy against current implementation

@@ -229,11 +229,14 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Inputs** — `.memory/`; existing `.docs/stories/`; prior bootstrap exploration. At most two
   directory-partitioned exploration agents.
 - **Outputs** — exactly one committed artifact, `.docs/track/<slug>.md`, carrying
-  `Track: product|technical`; ephemeral notes under `.pipeline/`; the selected approach and rejected
-  alternatives promoted to `.memory/decisions/`. No completion glob, by design.
-- **Gate role** — advisory, with three internal hard blocks: any unconfirmed assumption that would
-  change the approach or track HALTs an autonomous run; the track must be operator-confirmed; and the
-  skill must never call `ExitPlanMode`, which would mark the step failed.
+  `Track: product|technical` and `Scope boundary: <operator-confirmed breadth and exclusions>`;
+  ephemeral notes under `.pipeline/`; the selected approach and rejected alternatives promoted to
+  `.memory/decisions/`. No completion glob, by design.
+- **Gate role** — advisory, with four internal hard blocks: any unconfirmed assumption that would
+  change the approach or track HALTs an autonomous run; the track must be operator-confirmed; the
+  skill must ask the operator how comprehensive the fix should be and stop before approach
+  confirmation if unanswered — it never defaults silently to minimal, balanced, or comprehensive
+  scope; and the skill must never call `ExitPlanMode`, which would mark the step failed.
 
 ### prd
 

@@ -16,6 +16,11 @@ PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
 ENGINEER_SKILL_FILE="${HARNESS_DIR}/skills/engineer/SKILL.md"
 CONDUCT_SKILL_FILE="${HARNESS_DIR}/skills/conduct/SKILL.md"
 BOOTSTRAP_SKILL_FILE="${HARNESS_DIR}/skills/bootstrap/SKILL.md"
+EXPLORE_SKILL_FILE="${HARNESS_DIR}/skills/explore/SKILL.md"
+ARCHITECTURE_REVIEW_SKILL_FILE="${HARNESS_DIR}/skills/architecture-review/SKILL.md"
+STORIES_SKILL_FILE="${HARNESS_DIR}/skills/stories/SKILL.md"
+PLAN_SKILL_FILE="${HARNESS_DIR}/skills/plan/SKILL.md"
+PLANNER_AGENT_FILE="${HARNESS_DIR}/agents/planner.md"
 CI_WORKFLOW_FILE="${HARNESS_DIR}/.github/workflows/ci.yml"
 AUTORESOLVE_FILE="${HARNESS_DIR}/src/conductor/src/engine/autoresolve.ts"
 CI_FIX_FILE="${HARNESS_DIR}/src/conductor/src/engine/ci-fix.ts"
@@ -60,6 +65,56 @@ conduct_suite_guidance_contract_holds() {
     && ! grep -qiE '(^|[^[:alnum:]_-])[/\$]test-suite\b|test-suite[[:space:]]+(skill|model)|(skill|model)[[:space:]]+test-suite' "$skill_file"
 }
 
+scope_choice_contract_holds() {
+  local harness_file="$1"
+  local explore_file="$2"
+  local planner_file="$3"
+
+  grep -qF 'The operator chooses the fix breadth before approach confirmation.' "$harness_file" \
+    && grep -qF 'Ask how comprehensive the fix should be before recommending or confirming an approach.' "$explore_file" \
+    && grep -qF 'Do not default silently to minimal, balanced, or comprehensive scope.' "$explore_file" \
+    && grep -qF 'Record the operator’s answer as the scope boundary.' "$explore_file" \
+    && grep -qF 'Expand scope only when the operator has confirmed that expansion.' "$planner_file"
+}
+
+confirmed_breadth_contract_holds() {
+  local skill_file="$1"
+
+  grep -qiE 'Scope boundary:.*\.docs/track/<slug>\.md.*binding' "$skill_file" \
+    && grep -qiE 'preserve.+confirmed.+(narrow|comprehensive).+(breadth|outcome|scope)' "$skill_file" \
+    && grep -qiE '(do not|must not|never).+(materially broader|material expansion|expand materially).+(unless|without).+operator.+confirm.+before.+artifact' "$skill_file"
+}
+
+adr_structural_policy_contract_holds() {
+  local skill_file="$1"
+  local skill_text
+
+  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
+
+  grep -qF 'Structural change is a necessary prerequisite: decision categories never independently require an ADR.' <<<"$skill_text" \
+    && grep -qF 'Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail are not sufficient ADR triggers.' <<<"$skill_text"
+}
+
+adr_small_structural_change_contract_holds() {
+  local skill_file="$1"
+  local skill_text
+
+  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
+
+  grep -qF 'A small change may still warrant an ADR when it makes one of the structural decisions above;' <<<"$skill_text"
+}
+
+adr_governing_reuse_contract_holds() {
+  local skill_file="$1"
+  local skill_text
+
+  skill_text="$(tr '\n' ' ' < "$skill_file" | tr -s ' ')"
+
+  grep -qF 'Before drafting, read `.docs/decisions/` for an APPROVED ADR that already governs the structural decision.' <<<"$skill_text" \
+    && grep -qF 'Reuse an existing governing ADR rather than duplicate it.' <<<"$skill_text" \
+    && grep -qF 'draft a new ADR only for an uncovered structural decision, or supersede the existing ADR when the structural decision itself changes.' <<<"$skill_text"
+}
+
 if [ ! -f "$SKILL_FILE" ]; then
   fail "skills/pipeline/SKILL.md exists"
   exit 1
@@ -82,6 +137,77 @@ if [ -e "$LEGACY_TEST_SUITE_SKILL" ]; then
   fail "legacy skills/test-suite directory must be absent"
 else
   pass "legacy skills/test-suite directory is absent"
+fi
+
+if scope_choice_contract_holds "$HARNESS_DIR/HARNESS.md" "$EXPLORE_SKILL_FILE" "$PLANNER_AGENT_FILE"; then
+  pass "DECIDE requires an operator-selected fix breadth before approach confirmation"
+else
+  fail "DECIDE must ask and record the operator's fix breadth before approach confirmation, forbid silent scope defaults, and make planner expansion operator-controlled"
+fi
+
+for downstream_skill in \
+  "$ARCHITECTURE_REVIEW_SKILL_FILE" \
+  "$STORIES_SKILL_FILE" \
+  "$PLAN_SKILL_FILE"; do
+  if confirmed_breadth_contract_holds "$downstream_skill"; then
+    pass "$(basename "$(dirname "$downstream_skill")") preserves confirmed breadth through DECIDE"
+  else
+    fail "$(basename "$(dirname "$downstream_skill")") must consume confirmed breadth, preserve narrow and comprehensive outcomes, and block material expansion without operator confirmation"
+  fi
+done
+
+if [ ! -f "$ARCHITECTURE_REVIEW_SKILL_FILE" ]; then
+  fail "skills/architecture-review/SKILL.md exists for ADR-creation guidance"
+else
+  adr_policy_mutation="$(mktemp "${TMPDIR:-/tmp}/adr-policy-contract.XXXXXX")"
+
+  if adr_structural_policy_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE"; then
+    pass "ADR policy requires a structural prerequisite and rejects non-structural rationales"
+  else
+    fail "ADR policy must require a structural prerequisite and reject non-structural rationales"
+  fi
+
+  sed '/A new ADR is warranted only for a real structural decision\. Structural change is a necessary/{N;d;}' "$ARCHITECTURE_REVIEW_SKILL_FILE" >"$adr_policy_mutation"
+  if adr_structural_policy_contract_holds "$adr_policy_mutation"; then
+    fail "ADR structural-policy predicate rejects a contract missing the prerequisite"
+  else
+    pass "ADR structural-policy predicate rejects a contract missing the prerequisite"
+  fi
+
+  sed '/and reviewable\. Importance, breadth, workflow policy, prompt wording, and ordinary implementation detail/{N;d;}' "$ARCHITECTURE_REVIEW_SKILL_FILE" >"$adr_policy_mutation"
+  if adr_structural_policy_contract_holds "$adr_policy_mutation"; then
+    fail "ADR structural-policy predicate rejects a contract missing non-structural exclusions"
+  else
+    pass "ADR structural-policy predicate rejects a contract missing non-structural exclusions"
+  fi
+
+  if adr_small_structural_change_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE"; then
+    pass "ADR policy keeps small structural changes eligible"
+  else
+    fail "ADR policy must keep small structural changes eligible"
+  fi
+
+  sed '/are not sufficient ADR triggers\. A small change may still warrant an ADR when it makes one/{N;d;}' "$ARCHITECTURE_REVIEW_SKILL_FILE" >"$adr_policy_mutation"
+  if adr_small_structural_change_contract_holds "$adr_policy_mutation"; then
+    fail "ADR small-change predicate rejects a contract missing small structural eligibility"
+  else
+    pass "ADR small-change predicate rejects a contract missing small structural eligibility"
+  fi
+
+  if adr_governing_reuse_contract_holds "$ARCHITECTURE_REVIEW_SKILL_FILE"; then
+    pass "ADR policy reuses an approved governing ADR rather than duplicating it"
+  else
+    fail "ADR policy must reuse an approved governing ADR rather than duplicate it"
+  fi
+
+  grep -vF 'Reuse an existing governing ADR rather than duplicate it.' "$ARCHITECTURE_REVIEW_SKILL_FILE" >"$adr_policy_mutation"
+  if adr_governing_reuse_contract_holds "$adr_policy_mutation"; then
+    fail "ADR governing-reuse predicate rejects a contract missing duplication prevention"
+  else
+    pass "ADR governing-reuse predicate rejects a contract missing duplication prevention"
+  fi
+
+  rm -f "$adr_policy_mutation"
 fi
 
 if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \

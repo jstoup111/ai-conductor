@@ -84,6 +84,9 @@ both the acceptance spec and its implementation. The waiver must be recorded wit
 and attributable approval; the completion is reported as waived, never as proven RED. Without that
 recorded declaration, the acceptance specs must establish ordinary failing-spec RED evidence.
 
+**DECIDE scope:** The operator chooses the fix breadth before approach confirmation. Do not silently
+narrow or broaden the requested outcome.
+
 ### DECIDE Artifact Amendment Ownership
 
 When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE amends that artifact
