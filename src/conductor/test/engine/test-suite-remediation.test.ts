@@ -11,7 +11,6 @@ import {
   readTestSuiteRemediations,
   recordTestSuiteRemediation,
   resolveBaseAdvanceForFailure,
-  wasInvalidatedByRebase,
 } from '../../src/engine/test-suite-remediation.js';
 
 describe('diagnosticOverlapsBaseAdvance', () => {
@@ -120,12 +119,6 @@ describe('recordTestSuiteRemediation', () => {
 
     expect(first?.id).not.toBe(second?.id);
     expect(records).toEqual([first, second]);
-  });
-
-  it('authorizes recording only from a mechanically rebase-invalidated gate', () => {
-    expect(wasInvalidatedByRebase({ kickback: { from: 'rebase' } })).toBe(true);
-    expect(wasInvalidatedByRebase({ kickback: { from: 'build_review' } })).toBe(false);
-    expect(wasInvalidatedByRebase(null)).toBe(false);
   });
 
   it('consumes one rebase invalidation once and serializes concurrent writers', async () => {

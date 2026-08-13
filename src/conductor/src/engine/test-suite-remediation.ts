@@ -77,12 +77,6 @@ export async function readBaseAdvanceHistory(projectRoot: string): Promise<BaseA
   return advances;
 }
 
-export function wasInvalidatedByRebase(
-  verdict: { kickback?: { from?: string } } | null | undefined,
-): boolean {
-  return verdict?.kickback?.from === 'rebase';
-}
-
 interface RepairLedger {
   consumedInvalidations: number[];
   repairs: TestSuiteRemediationRecord[];
@@ -181,7 +175,7 @@ export async function recordTestSuiteRemediation(
   failure: TestSuiteRemediationFailure,
   rebaseVerdict: GateVerdict | null | undefined,
 ): Promise<TestSuiteRemediationRecord | undefined> {
-  if (!wasInvalidatedByRebase(rebaseVerdict)) return undefined;
+  if (rebaseVerdict?.kickback?.from !== 'rebase') return undefined;
   const invalidatedAt = rebaseVerdict!.checkedAt;
   const release = await acquireLedgerLock(projectRoot);
   try {
