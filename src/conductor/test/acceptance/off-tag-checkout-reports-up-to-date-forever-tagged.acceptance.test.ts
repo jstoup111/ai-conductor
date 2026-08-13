@@ -235,7 +235,7 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
     const result = await runEntry(fixture, home);
 
     expect(result.exitCode).toBe(0);
-    expect(result.output).toMatch(/identity.*v0\.4\.0.*checkout/i);
+    expect(result.output).toMatch(/identity.*v0\.4\.0.*checked-out tag/i);
     expect(result.output).toMatch(/up to date/i);
     expect(result.output).not.toMatch(/commits past|update available|v9\.9\.9/);
     expect(identityLines(result.output)).toHaveLength(1);

@@ -232,7 +232,8 @@ check_harness_update_tagged() {
     [ "$_distance" = "1" ] && commit_label="commit"
     if [ "$baseline" = "$latest_tag" ]; then
       warn "${_distance} ${commit_label} past ${baseline}, no newer release exists"
-      conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" || \
+        warn "Could not record when the installed release was checked."
       return 0
     fi
 
@@ -240,7 +241,9 @@ check_harness_update_tagged() {
   fi
 
   if ! semver_lt "$baseline" "$latest_tag"; then
-    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" || \
+      warn "Could not record when the installed release was checked."
+    ok "Harness is up to date at ${baseline}."
     return 0
   fi
 
@@ -340,7 +343,13 @@ check_harness_update() {
   auto_check=$(conductor_cfg_get autoCheck true) || return 1
   [ "$auto_check" = "false" ] && return 0
 
-  channel=$(conductor_cfg_get updateChannel tagged) || return 1
+  if ! channel=$(conductor_cfg_get updateChannel tagged); then
+    if ! command -v conduct-ts &>/dev/null; then
+      return 1
+    fi
+    warn "Conductor configuration could not be read; checking the default tagged channel."
+    channel=tagged
+  fi
   case "$channel" in
     stable) check_harness_update_stable ;;
     main)   check_harness_update_main ;;
