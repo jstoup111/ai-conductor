@@ -767,7 +767,7 @@ apply to this repository. See [self-hosting](../guides/self-hosting.md).
 
 ## Agent personas
 
-17 persona files live under `agents/`. A persona is a prompt template defining *who* does the work; a
+16 persona files live under `agents/`. A persona is a prompt template defining *who* does the work; a
 skill decides *when* to dispatch one and with what scoped context. Dispatch is by the host agent's
 subagent facility, not by the engine — the engine dispatches skills, and skills dispatch personas.
 
@@ -779,7 +779,6 @@ subagent facility, not by the engine — the engine dispatches skills, and skill
 | `prd-auditor.md` | Audits one `FR-N` against shipped code; finding authority, never fixes | `prd-audit` |
 | `remediation-planner.md` | Emits per-gap dispositions and concrete tasks; planning authority, never edits code | `remediate` |
 | `worktree-manager.md` | Git worktree lifecycle: creation, environment setup, merge-back, conflict resolution, proof-gated cleanup | `pipeline` |
-| `planner.md` | Expands brief requirements into implementable specs | Nothing — see below |
 | `cto-security.md` | Authn/authz, input validation, OWASP top 10, vulnerability surface | `assess` |
 | `cto-data-integrity.md` | Transactions, event sourcing, race conditions, migrations | `assess` |
 | `cto-dependencies.md` | Outdated packages, CVEs, license compliance, blocked upgrades | `assess` |
@@ -792,12 +791,6 @@ subagent facility, not by the engine — the engine dispatches skills, and skill
 | `cto-orchestrator.md` | Reads all nine specialist reports and produces one prioritized assessment | `assess` |
 
 `assess` therefore dispatches ten personas: the nine specialists plus the orchestrator.
-
-> **Known limitation.** `agents/planner.md` is listed in the harness persona roster but no skill
-> dispatches it. Grep hits are either the substring `remediation-planner` or the prose "the planner",
-> and the `plan` skill uses a generic plan agent rather than this file. Treating it as an active
-> persona means describing dead code. Tracked in
-> [#1018](https://github.com/jstoup111/ai-conductor/issues/1018).
 
 ## Known limitations
 

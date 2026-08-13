@@ -35,11 +35,6 @@ Use the harness agent personas when their specialized review or implementation r
 - **Role:** Checks domain integrity during TDD DOMAIN phases
 - **Authority:** Veto — can reject and send back to RED/GREEN
 
-### Planner
-- **Prompt:** `agents/planner.md`
-- **Role:** Expands requirements into specifications
-- **Output:** Structured specs with scope, edge cases, and story suggestions
-
 ## Dispatch Patterns
 
 ### TDD Cycle (Structural Enforcement)
