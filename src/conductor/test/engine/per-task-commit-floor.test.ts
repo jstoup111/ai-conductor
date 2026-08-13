@@ -331,6 +331,66 @@ describe('per-task-commit-floor', () => {
     });
   });
 
+  it('merges unresolved containment checks from both ledgers by timestamp', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'events.jsonl'),
+      JSON.stringify({
+        type: 'containment_check_unresolved',
+        failure: 'evaluation-failed',
+        taskId: '3',
+        ts: 2_000,
+      }) + '\n',
+    );
+    await writeFile(
+      join(dir, '.pipeline', 'hook-events.jsonl'),
+      JSON.stringify({
+        type: 'containment_check_unresolved',
+        failure: 'task-status-malformed',
+        taskId: '2',
+        ts: 1_000,
+      }) + '\n',
+    );
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.unresolvedChecks).toEqual([
+      { failure: 'task-status-malformed', taskId: '2', ts: 1_000 },
+      { failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
+    ]);
+  });
+
+  it('tolerates an absent hook ledger and marks its observations unrecorded', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.unresolvedChecks).toEqual([]);
+    expect(report.skipNotes).toContain('containment-floor: hook-events ledger is unrecorded');
+  });
+
+  it('skips malformed hook-ledger lines without losing readable engine-ledger events', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'events.jsonl'),
+      JSON.stringify({
+        type: 'containment_check_unresolved',
+        failure: 'evaluation-failed',
+        taskId: '3',
+        ts: 2_000,
+      }) + '\n',
+    );
+    await writeFile(join(dir, '.pipeline', 'hook-events.jsonl'), '{not json}\n');
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.unresolvedChecks).toEqual([
+      { failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
+    ]);
+  });
+
   it.each([
     ['an unreadable plan', async () => ({ projectRoot: dir, planPath: join(dir, 'missing.md') })],
     ['a git failure', async () => {

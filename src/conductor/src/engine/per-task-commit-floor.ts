@@ -12,6 +12,7 @@ import {
 import { evaluateScopeContainment } from './plan-scope-containment.js';
 import { parseScopeTrailers, type ScopeTrailer } from './scope-trailer.js';
 import { normalizeTasks } from './task-progress.js';
+import type { ConductorEvent } from '../types/events.js';
 
 const MAX_DERIVED_RATIONALE_LENGTH = 1_000;
 
@@ -51,7 +52,14 @@ export interface ContainmentFloorReport {
   satisfied: boolean;
   violations: ContainmentFloorViolation[];
   acceptedWidenings: AcceptedScopeWidening[];
+  unresolvedChecks: ContainmentCheckUnresolvedRecord[];
   skipNotes: string[];
+}
+
+export interface ContainmentCheckUnresolvedRecord {
+  failure: Extract<ConductorEvent, { type: 'containment_check_unresolved' }>['failure'];
+  taskId?: string;
+  ts: number;
 }
 
 export async function runPerTaskCommitFloor(args: {
@@ -137,6 +145,7 @@ export async function runContainmentFloor(args: {
     const commits = await listCommitsWithTrailers(args.projectRoot);
     const violations: ContainmentFloorViolation[] = [];
     const acceptedWidenings: AcceptedScopeWidening[] = [];
+    const unresolvedLedger = await readUnresolvedContainmentChecks(args.projectRoot);
 
     for (const commit of commits) {
       if (await isMergeCommit(args.projectRoot, commit.sha)) continue;
@@ -189,7 +198,8 @@ export async function runContainmentFloor(args: {
       satisfied: violations.length === 0,
       violations,
       acceptedWidenings,
-      skipNotes: [],
+      unresolvedChecks: unresolvedLedger.checks,
+      skipNotes: unresolvedLedger.skipNotes,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -225,7 +235,84 @@ function skippedContainmentFloor(message: string): ContainmentFloorReport {
     satisfied: true,
     violations: [],
     acceptedWidenings: [],
+    unresolvedChecks: [],
     skipNotes: [`containment-floor: ${message}`],
+  };
+}
+
+const UNRESOLVED_CONTAINMENT_FAILURES = new Set<ContainmentCheckUnresolvedRecord['failure']>([
+  'commit-message-unreadable',
+  'task-status-unreadable',
+  'task-status-malformed',
+  'evaluation-failed',
+]);
+
+/**
+ * The hook and engine own separate event files because they are separate
+ * processes. Read both as the same event schema, skipping only bad records so
+ * a corrupt hook append cannot hide valid engine records.
+ */
+async function readUnresolvedContainmentChecks(projectRoot: string): Promise<{
+  checks: ContainmentCheckUnresolvedRecord[];
+  skipNotes: string[];
+}> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  const ledgers = [
+    { name: 'events', path: join(pipelineDir, 'events.jsonl'), required: false },
+    { name: 'hook-events', path: join(pipelineDir, 'hook-events.jsonl'), required: true },
+  ];
+  const checks: ContainmentCheckUnresolvedRecord[] = [];
+  const skipNotes: string[] = [];
+
+  for (const ledger of ledgers) {
+    let raw: string;
+    try {
+      raw = await readFile(ledger.path, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (ledger.required) skipNotes.push('containment-floor: hook-events ledger is unrecorded');
+        continue;
+      }
+      skipNotes.push(`containment-floor: ${ledger.name} ledger unreadable`);
+      continue;
+    }
+
+    let malformed = false;
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const event = parseUnresolvedContainmentCheck(JSON.parse(line) as unknown);
+        if (event !== undefined) checks.push(event);
+      } catch {
+        malformed = true;
+      }
+    }
+    if (malformed) skipNotes.push(`containment-floor: ${ledger.name} ledger contains malformed records`);
+  }
+
+  return {
+    checks: checks.sort((left, right) => left.ts - right.ts),
+    skipNotes,
+  };
+}
+
+function parseUnresolvedContainmentCheck(value: unknown): ContainmentCheckUnresolvedRecord | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const event = value as Record<string, unknown>;
+  if (
+    event.type !== 'containment_check_unresolved'
+    || typeof event.failure !== 'string'
+    || !UNRESOLVED_CONTAINMENT_FAILURES.has(event.failure as ContainmentCheckUnresolvedRecord['failure'])
+    || typeof event.ts !== 'number'
+    || !Number.isFinite(event.ts)
+    || (event.taskId !== undefined && typeof event.taskId !== 'string')
+  ) {
+    return undefined;
+  }
+  return {
+    failure: event.failure as ContainmentCheckUnresolvedRecord['failure'],
+    ...(event.taskId === undefined ? {} : { taskId: event.taskId }),
+    ts: event.ts,
   };
 }
 
