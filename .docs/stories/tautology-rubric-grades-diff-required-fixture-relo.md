@@ -23,12 +23,20 @@ without an operator override.
 - Given any `BuildReviewInputs`, when `buildGraderPrompt` assembles the prompt, then
   the Tautology exceptions section enumerates exactly three closed-list entries and
   the third is fixture relocation, defined by a per-test predicate requiring all of:
-  (a) the changed test's diff shows a rename/relocation of a fixture path (visible as
-  `rename from`/`rename to`/`similarity index` headers or an equivalent
-  delete-plus-recreate of identical fixture content at a new path), (b) the same
+  (a) the changed test's diff shows a rename/relocation of a fixture path, including
+  the observed fixture-construction form where a removed `writeFile(oldPath, content)`
+  is replaced by directory creation plus `writeFile(newPath, content)` with the same
+  content even though Git emits no rename headers, as well as tracked-fixture
+  `rename from`/`rename to`/`similarity index` headers or equivalent delete-plus-create
+  evidence, (b) the same
   diff's production hunks change path-classification or path-handling behavior that
   forces the old fixture path to lose its pre-diff meaning, and (c) the changed test
   adds no new behavioral assertion beyond the path move.
+- Given the concrete `c.md` → `docs/c.md` fixture-construction hunk from #1545 and
+  the same diff's root-markdown classifier inversion, when the grader applies entry 3,
+  then it is explicitly instructed that the absence of Git rename headers does not
+  disqualify the relocation and that this test must not receive a Tautology finding
+  solely because its relocated form also passes pre-diff.
 - Given the assembled prompt, when the exceptions section is read, then the closed-list
   framing sentence ("A changed test qualifying under neither exception is measured
   normally" or its updated three-entry equivalent) still declares the list closed and
@@ -45,10 +53,11 @@ without an operator override.
 
 ### Done When
 - [ ] `buildGraderPrompt` output contains a three-entry closed Tautology exception list;
-      entry 3 states the relocation predicate with all three conditions (a)-(c).
+      entry 3 states the relocation predicate with all three conditions (a)-(c), including
+      the observed in-code fixture-construction relocation form.
 - [ ] A unit test in `src/conductor/test/engine/build-review-prompt.test.ts` asserts the
-      third entry's presence, its three conditions, and the retained closed-list +
-      measured-normally framing.
+      third entry's presence, its three conditions, the no-rename-header fixture form,
+      and the retained closed-list + measured-normally framing.
 - [ ] Existing build-review-prompt tests still pass unchanged except where they assert
       the exception list is exactly two entries.
 
@@ -96,20 +105,26 @@ diff-required relocation from a gratuitous one from the persisted verdict alone.
 #### Happy Path
 - Given the assembled prompt, when the relocation entry is read, then it instructs the
   grader: for every changed test evaluated under the relocation exception (whether
-  exempted or not), record in the verdict the rename evidence (old path → new path)
-  and the production hunk(s) that do or do not force the move — exempted relocations
-  are cited in `reasons`/finding prose on FAIL verdicts and in a PASS verdict's
-  `reasons` remaining permitted-empty shape only via the existing schema (no schema
-  change: cited evidence lives inside existing string fields).
+  exempted or not), append one `[relocation-audit]` entry to `reasons` naming the
+  disposition (`EXEMPTED` or `MEASURED`), old path → new path, and the production
+  hunk(s) that do or do not force the move. This audit entry is required on PASS and
+  FAIL and is explicitly evidence rather than a failing-rubric summary.
+- Given a PASS verdict containing one or more evaluated relocations, when the verdict
+  contract is read, then `reasons` is required to contain the corresponding audit
+  entries even though it may remain empty for a PASS with no evaluated relocations.
 
 #### Negative Paths
 - Given the assembled prompt, when the verdict schema block is read, then the JSON
   schema in the prompt is unchanged — no new keys — so downstream verdict parsing
-  (`artifacts.ts` findings handling) is untouched; evidence citation is prose inside
-  existing `findings.tautology` / `reasons` strings.
+  (`artifacts.ts` findings handling) is untouched; audit evidence is prose inside the
+  existing `reasons` strings, while `findings` remains reserved for actual failures
+  and remains omitted/empty on PASS.
+- Given the full verdict-writing instructions, when their `reasons` semantics are read,
+  then they do not also state that every `reasons` entry must summarize a failing rubric;
+  the general failure-summary rule explicitly permits the relocation-audit addition.
 
 ### Done When
-- [ ] Prompt instructs per-relocation evidence citation (old path, new path, forcing
-      hunk or its absence) inside existing verdict string fields.
-- [ ] A unit test asserts the citation instruction is present and that the schema line
-      in the prompt is unchanged.
+- [ ] Prompt instructs per-relocation audit citation (disposition, old path, new path,
+      forcing hunk or its absence) inside `reasons` on PASS and FAIL.
+- [ ] A unit test asserts the citation instruction, the non-conflicting `reasons`
+      semantics, failure-only `findings`, and the unchanged schema line.
