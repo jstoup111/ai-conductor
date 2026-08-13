@@ -1456,6 +1456,48 @@ else
   fi
 fi
 
+# ── 24. Tagged update identity copy parity ──────────────────────────────────
+# bin/update and bin/conduct intentionally retain parallel tagged-update entry
+# points. Keep their checkout-derived identity behavior byte-for-byte aligned,
+# and require both to delegate tag-to-identity resolution to the shared helper.
+echo ""
+echo -e "${BOLD}24. Tagged update identity copy parity${NC}"
+
+identity_block() {
+  awk '
+    /^  # The checkout is the sole identity authority\./ { capture=1 }
+    capture { print }
+    capture && /^  if ! \[\[ "\$baseline"/ { baseline_guard=1 }
+    capture && baseline_guard && /^  fi$/ { exit }
+  ' "$1"
+}
+
+update_identity_block=$(identity_block "${HARNESS_DIR}/bin/update")
+conduct_identity_block=$(identity_block "${HARNESS_DIR}/bin/conduct")
+
+if [ -z "$update_identity_block" ]; then
+  echo "    missing checkout identity block: bin/update"
+  assert "bin/update and bin/conduct share checkout-derived tagged identity behavior" 1
+elif [ -z "$conduct_identity_block" ]; then
+  echo "    missing checkout identity block: bin/conduct"
+  assert "bin/update and bin/conduct share checkout-derived tagged identity behavior" 1
+elif [ "$update_identity_block" != "$conduct_identity_block" ]; then
+  echo "    divergence: bin/update and bin/conduct have different checkout identity blocks"
+  assert "bin/update and bin/conduct share checkout-derived tagged identity behavior" 1
+else
+  assert "bin/update and bin/conduct share checkout-derived tagged identity behavior" 0
+fi
+
+duplicate_tag_identity_resolution=0
+for tagged_update_script in "${HARNESS_DIR}/bin/update" "${HARNESS_DIR}/bin/conduct"; do
+  direct_resolution=$(grep -nE 'tag[[:space:]]+--merged[[:space:]]+HEAD|rev-list[[:space:]]+--count[[:space:]].*\$baseline.*HEAD' "$tagged_update_script" || true)
+  if [ -n "$direct_resolution" ]; then
+    echo "    duplicate tag-to-identity resolution in ${tagged_update_script#"${HARNESS_DIR}/"}: ${direct_resolution}"
+    duplicate_tag_identity_resolution=1
+  fi
+done
+assert "bin/update and bin/conduct delegate tag-to-identity resolution to resolve_harness_identity" "$duplicate_tag_identity_resolution"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
