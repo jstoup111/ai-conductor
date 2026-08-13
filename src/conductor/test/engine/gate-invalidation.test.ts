@@ -4,6 +4,7 @@ import {
   featureTestPaths,
   GATE_SURFACE,
   isRuntimeSourcePath,
+  isTestPath,
   partitionDelta,
 } from '../../src/engine/gate-invalidation.js';
 
@@ -14,6 +15,17 @@ describe('gate-invalidation path predicates', () => {
 
   it('classifies a test path as NOT runtime source', () => {
     expect(isRuntimeSourcePath('src/x.test.ts')).toBe(false);
+  });
+
+  it.each([
+    ['x.test.ts', false, true],
+    ['test/y.ts', false, true],
+    ['test/notes.md', false, true],
+  ])('keeps %s test-only rather than runtime source', (path, runtimeSource, testPath) => {
+    expect({ runtimeSource: isRuntimeSourcePath(path), testPath: isTestPath(path) }).toEqual({
+      runtimeSource,
+      testPath,
+    });
   });
 
   it('classifies a docs path as NOT runtime source', () => {
