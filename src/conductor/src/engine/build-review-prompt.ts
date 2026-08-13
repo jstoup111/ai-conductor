@@ -48,7 +48,7 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
     : '(none)';
   const renderedAcceptedWidenings = acceptedWidenings.length > 0
     ? acceptedWidenings.map((widening) =>
-        `- Path: ${widening.path}\n  Rationale: ${widening.rationale}\n  Task ${widening.taskId}\n  Commit SHA: ${widening.sha}`,
+        `- Path: ${widening.path}\n  Rationale: ${widening.rationale}\n  Provenance: ${widening.derived ? 'Derived commit rationale' : 'Authored trailer'}\n  Task ${widening.taskId}\n  Commit SHA: ${widening.sha}`,
       ).join('\n')
     : '(none)';
   const renderedOperatorReseals = operatorReseals && operatorReseals.length > 0
