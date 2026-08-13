@@ -288,7 +288,16 @@ describe('buildGraderPrompt', () => {
     expect(removalBlock).toContain('RemovedApi');
     expect(removalBlock).toContain('Contract.removedMember');
     expect(removalBlock).not.toMatch(/transcript|maker summary|task-status/i);
-    expect(removalBlock).not.toMatch(/claude|codex|conduct-ts|\.pipeline\/|npm |pnpm |yarn |bun |shell|bash/i);
+
+    // Inspect only the fixed framing: evidence is intentionally rendered
+    // verbatim, so a legitimate path or symbol may itself contain a host or
+    // tool-like word.
+    const emptyRemovalBlock = buildGraderPrompt({
+      ...inputs,
+      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    }).match(/## Engine-derived removal evidence\n([\s\S]*?)$/)?.[1];
+    expect(emptyRemovalBlock).toBeDefined();
+    expect(emptyRemovalBlock).not.toMatch(/claude|codex|conduct-ts|\.pipeline\/|npm |pnpm |yarn |bun |shell|bash/i);
   });
 
 
