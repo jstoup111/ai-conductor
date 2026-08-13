@@ -3461,7 +3461,7 @@ TIER: M`,
         .not.toContain('shared parser changes atomically');
     });
 
-    it('renders and warning-logs containment violations with task, sha, and every path', async () => {
+    it('passes derived scope-widening evidence into the isolated grader prompt with provenance', async () => {
       const sha = await prepareContainmentRepo(
         ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
         'out of scope\n\nTask: 3',
@@ -3471,7 +3471,6 @@ TIER: M`,
         output: '{"verdict":"PASS"}',
         exitCode: 0,
       });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
@@ -3486,35 +3485,18 @@ TIER: M`,
         },
       );
 
-      try {
-        const result = await runner.run('build_review', emptyState);
-        const warnings = warnSpy.mock.calls.flat().join('\n');
+      await runner.run('build_review', emptyState);
 
-        // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-        expect(invoke).toHaveBeenCalledTimes(8);
-        expect(result.output).toContain('Task 3');
-        expect(result.output).toContain(sha);
-        expect(result.output).toContain('artifacts.ts');
-        expect(result.output).toContain('changelog-pr-finalizer-cli.ts');
-        expect(warnings).toContain('Task 3');
-        expect(warnings).toContain(sha);
-        expect(warnings).toContain('artifacts.ts');
-        expect(warnings).toContain('changelog-pr-finalizer-cli.ts');
-        const sidecar = JSON.parse(await readFile(
-          join(dir, '.pipeline/containment-floor.json'),
-          'utf-8',
-        )) as { violations: Array<{ taskId: string; sha: string; paths: string[] }> };
-        expect(sidecar.violations).toEqual([{
-          taskId: '3',
-          sha,
-          paths: ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
-        }]);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
+      expect(scopePrompt).toContain('artifacts.ts');
+      expect(scopePrompt).toContain('changelog-pr-finalizer-cli.ts');
+      expect(scopePrompt).toContain('out of scope');
+      expect(scopePrompt).toContain('"taskId":"3"');
+      expect(scopePrompt).toContain(sha);
     });
 
-    it('prepends containment violations to an ordinary grader failure output', async () => {
+    it('keeps grader failure output separate from derived scope-widening evidence', async () => {
       const sha = await prepareContainmentRepo(
         ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
         'out of scope\n\nTask: 3',
@@ -3524,7 +3506,6 @@ TIER: M`,
         output: 'grader exited before writing a verdict',
         exitCode: 1,
       });
-      const log = vi.fn();
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
@@ -3533,31 +3514,22 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
-          log,
           ...currentBuildReviewProof(),
         },
       );
 
       const result = await runner.run('build_review', emptyState);
       const output = result.output ?? '';
+      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
 
       expect(result.success).toBe(false);
-      expect(output).toContain('Task 3');
-      expect(output).toContain(sha);
-      expect(output).toContain('artifacts.ts');
-      expect(output).toContain('changelog-pr-finalizer-cli.ts');
-      expect(output).toContain('infrastructure failure: invalid-provider-result');
-      expect(log.mock.calls.flat().join('\n')).toContain('artifacts.ts');
-      expect(log.mock.calls.flat().join('\n')).toContain('changelog-pr-finalizer-cli.ts');
-      const sidecar = JSON.parse(await readFile(
-        join(dir, '.pipeline/containment-floor.json'),
-        'utf-8',
-      )) as { violations: Array<{ taskId: string; sha: string; paths: string[] }> };
-      expect(sidecar.violations).toEqual([{
-        taskId: '3',
-        sha,
-        paths: ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
-      }]);
+      expect(output).not.toContain('out of scope');
+      expect(scopePrompt).toContain('artifacts.ts');
+      expect(scopePrompt).toContain('changelog-pr-finalizer-cli.ts');
+      expect(scopePrompt).toContain('out of scope');
+      expect(scopePrompt).toContain('"taskId":"3"');
+      expect(scopePrompt).toContain(sha);
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
