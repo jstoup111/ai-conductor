@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   bumpKickbackGate,
+  bumpKickbackGateInLedger,
   readKickbackLedger,
   writeKickbackLedger,
   type KickbackGateEntry,
@@ -215,6 +216,36 @@ describe('kickback-ledger', () => {
         { cumulative: 3, count: 1 },
         { cumulative: 3, count: 2 },
       ]);
+    });
+
+    it('keeps cumulative build review failures across distinct trees isolated from test suite bumps', async () => {
+      const buildReviewEntries = [] as KickbackGateEntry[];
+      for (let index = 0; index < 8; index += 1) {
+        const { entry } = await bumpKickbackGateInLedger(dir, 'build_review', {
+            treeHash: `${index + 1}`.padStart(40, '0'),
+            resolvedCount: existingEntry.resolvedBefore,
+            reason: `build review failure ${index + 1}`,
+          });
+        buildReviewEntries.push(entry);
+      }
+      await bumpKickbackGateInLedger(dir, 'test_suite', {
+        treeHash: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        resolvedCount: existingEntry.resolvedBefore,
+        reason: 'test suite failure',
+      });
+      const ledger = await readKickbackLedger(dir);
+
+      expect({
+        buildReviewCumulative: buildReviewEntries.map(({ cumulative }) => cumulative),
+        buildReviewCounts: buildReviewEntries.map(({ count }) => count),
+        buildReviewCumulativeAfterTestSuiteBump: ledger.gates.build_review?.cumulative,
+        testSuiteCumulative: ledger.gates.test_suite?.cumulative,
+      }).toEqual({
+        buildReviewCumulative: [1, 2, 3, 4, 5, 6, 7, 8],
+        buildReviewCounts: [1, 1, 1, 1, 1, 1, 1, 1],
+        buildReviewCumulativeAfterTestSuiteBump: 8,
+        testSuiteCumulative: 1,
+      });
     });
 
     it('resets the count to one and stores a changed tree hash', () => {
