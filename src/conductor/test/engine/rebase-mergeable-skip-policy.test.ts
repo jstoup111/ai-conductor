@@ -1,10 +1,23 @@
 /**
  * `mergeable_skip` policy.
  *
- * At normal finish, a clean prospective merge is sufficient to preserve feature
- * history. Base delta and fallback provenance do not change that predicate;
- * only conflicting or indeterminate prospective merges enter the real rebase
- * path. Re-kick deliberately omits this finish-only policy and still rebases.
+ * A textually-clean `git merge-tree` says the branch and the base do not
+ * collide. It says NOTHING about whether the branch's gates — build_review,
+ * test_suite, manual_test — were graded against the base that is actually going
+ * to be merged into. On the `unattended-finish-spends-minutes-before-determinis`
+ * run, build_review graded at base `c6839018bf47` while `origin/main` moved
+ * ahead with real code, the text still merged cleanly, and the rebase was
+ * skipped — shipping a feature validated against a base that no longer exists.
+ *
+ * Two rules, both deterministic:
+ *   1. A base that advanced with code/test changes since the branch's
+ *      merge-base is not skippable on textual cleanliness alone.
+ *   2. A skip decision is never taken on a DEGRADED base — a `local` fallback
+ *      chosen because origin discovery or `git fetch` failed, where local
+ *      `main` in a daemon worktree can be arbitrarily far behind origin.
+ *
+ * A genuinely remote-less repository keeps the skip: its local base is not
+ * stale, it IS the truth. And the `noop` path (already current) is untouched.
  *
  * Scripted git runner only — no real repo, no remote, no network.
  */
@@ -45,6 +58,7 @@ function fakeGit(
  * prospective merge is textually CLEAN.
  */
 function cleanlyMergeableAgainstOrigin(
+  baseDelta: string,
   overrides: Array<{ match: string[]; result: Partial<GitResult> }> = [],
 ): { git: GitRunner; calls: string[][] } {
   return fakeGit([
@@ -62,7 +76,9 @@ function cleanlyMergeableAgainstOrigin(
       match: ['merge-tree', '--write-tree', '--quiet', 'origin/main', 'HEAD'],
       result: { exitCode: 0 },
     },
+    { match: ['merge-base', 'HEAD', 'origin/main'], result: { stdout: `${MERGE_BASE}\n` } },
     { match: ['rev-parse', 'origin/main'], result: { stdout: `${BASE_SHA}\n` } },
+    { match: ['diff', '--name-only', MERGE_BASE, 'origin/main'], result: { stdout: baseDelta } },
     { match: ['rebase'], result: { exitCode: 0 } },
   ]);
 }
@@ -79,20 +95,22 @@ describe('engine/rebase — mergeable_skip policy', () => {
     }
   }
 
-  it('skips when the base advanced with code changes but remains cleanly mergeable', async () => {
+  it('does NOT skip when the base advanced with code changes since the merge-base', async () => {
     await withRoot(async (dir) => {
-      const { git, calls } = cleanlyMergeableAgainstOrigin();
+      const { git, calls } = cleanlyMergeableAgainstOrigin(
+        'src/engine/conductor.ts\ndocs/reference/steps.md\n',
+      );
 
       const outcome = await performRebase(git, dir, 'main', { finishMergeabilityCheck: true });
 
-      expect(outcome.kind).toBe('mergeable_skip');
-      expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
+      expect(outcome.kind).not.toBe('mergeable_skip');
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     });
   });
 
-  it('skips a cleanly mergeable remote base', async () => {
+  it('DOES skip when the base advanced only in documentation', async () => {
     await withRoot(async (dir) => {
-      const { git, calls } = cleanlyMergeableAgainstOrigin();
+      const { git, calls } = cleanlyMergeableAgainstOrigin('docs/reference/steps.md\nREADME.md\n');
 
       const outcome = await performRebase(git, dir, 'main', { finishMergeabilityCheck: true });
 
@@ -106,7 +124,7 @@ describe('engine/rebase — mergeable_skip policy', () => {
     });
   });
 
-  it('skips on a local fallback when origin fetch fails but the merge is clean', async () => {
+  it('does NOT skip on a DEGRADED local base — origin exists but the fetch failed', async () => {
     await withRoot(async (dir) => {
       const { git, calls } = fakeGit([
         { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
@@ -116,21 +134,25 @@ describe('engine/rebase — mergeable_skip policy', () => {
           match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
           result: { stdout: 'refs/remotes/origin/main\n' },
         },
-        // Fetch failure falls back to LOCAL main; the finish policy still uses
-        // the clean prospective merge against that resolved base.
+        // The degrade: fetch fails, so resolveBase falls back to LOCAL main,
+        // which in a daemon worktree can be arbitrarily far behind origin.
         { match: ['fetch', 'origin', 'main'], result: { exitCode: 128 } },
         { match: ['rev-list', '--count', 'HEAD..main'], result: { stdout: '1\n' } },
         {
           match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'],
           result: { exitCode: 0 },
         },
+        { match: ['merge-base', 'HEAD', 'main'], result: { stdout: `${MERGE_BASE}\n` } },
+        // Even a docs-only delta must not buy a skip here: the comparison ref
+        // itself is untrustworthy.
+        { match: ['diff', '--name-only', MERGE_BASE, 'main'], result: { stdout: 'docs/x.md\n' } },
         { match: ['rebase'], result: { exitCode: 0 } },
       ]);
 
       const outcome = await performRebase(git, dir, 'main', { finishMergeabilityCheck: true });
 
-      expect(outcome.kind).toBe('mergeable_skip');
-      expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
+      expect(outcome.kind).not.toBe('mergeable_skip');
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     });
   });
 
@@ -145,7 +167,9 @@ describe('engine/rebase — mergeable_skip policy', () => {
           match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'],
           result: { exitCode: 0 },
         },
+        { match: ['merge-base', 'HEAD', 'main'], result: { stdout: `${MERGE_BASE}\n` } },
         { match: ['rev-parse', 'main'], result: { stdout: `${BASE_SHA}\n` } },
+        { match: ['diff', '--name-only', MERGE_BASE, 'main'], result: { stdout: 'docs/x.md\n' } },
       ]);
 
       const outcome = await performRebase(git, dir, 'main', { finishMergeabilityCheck: true });
@@ -160,14 +184,18 @@ describe('engine/rebase — mergeable_skip policy', () => {
     });
   });
 
-  it('skips when the base delta cannot be computed because it is irrelevant to mergeability', async () => {
+  it('fails closed: an uncomputable base delta is not skippable', async () => {
     await withRoot(async (dir) => {
-      const { git, calls } = cleanlyMergeableAgainstOrigin();
+      const { git, calls } = cleanlyMergeableAgainstOrigin('', [
+        // No merge-base resolvable → the "what moved on the base" question
+        // cannot be answered, so the skip cannot be justified.
+        { match: ['merge-base', 'HEAD', 'origin/main'], result: { exitCode: 1, stdout: '' } },
+      ]);
 
       const outcome = await performRebase(git, dir, 'main', { finishMergeabilityCheck: true });
 
-      expect(outcome.kind).toBe('mergeable_skip');
-      expect(calls.some((args) => args[0] === 'rebase')).toBe(false);
+      expect(outcome.kind).not.toBe('mergeable_skip');
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     });
   });
 });

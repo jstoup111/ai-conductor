@@ -210,14 +210,13 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
 
 });
 
-describe('engine/rebase — resolution reclassification: runtime markdown → changed', () => {
+describe('engine/rebase — resolution reclassification: docs-only → noop', () => {
   let repo: string;
   const g = (args: string[]) => execFile('git', args, { cwd: repo });
   const gc = (args: string[]) =>
     execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
 
-  // A repo whose ONLY conflict is on a root markdown file. Root harness markdown
-  // is runtime source; only the enumerated documentation paths are excluded.
+  // A repo whose ONLY conflict is on a .md (docs) file.
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-resolution-docs-'));
     await initTestRepo(repo);
@@ -240,7 +239,7 @@ describe('engine/rebase — resolution reclassification: runtime markdown → ch
     await rm(repo, { recursive: true, force: true });
   });
 
-  it('FR-2/FR-5: a runtime-markdown resolution reclassifies as changed', async () => {
+  it('FR-2/FR-5: a docs-only resolution reclassifies as noop (no downstream re-verify)', async () => {
     const git = makeGitRunner(repo);
     const pre = await performRebase(git, repo, 'main');
     expect(pre.kind).toBe('conflict_halt');
@@ -254,9 +253,9 @@ describe('engine/rebase — resolution reclassification: runtime markdown → ch
 
     const outcome = await resolveRebaseConflicts(git, repo, pre, resolver, 3);
 
-    // notes.md is outside the enumerated documentation paths, so it remains
-    // runtime source and invalidates downstream verification after resolution.
-    expect(outcome.kind).toBe('changed');
+    // notes.md is a docs path → noop (FR-5: docs never invalidate build/manual_test),
+    // even though the rebase completed and the branch is now current.
+    expect(outcome.kind).toBe('noop');
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
     expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).toContain('feat: notes');
   });

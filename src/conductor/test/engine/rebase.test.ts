@@ -734,7 +734,8 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
         satisfied: true,
         // The verdict names the exact ref, sha and kind the skip rested on.
         reason:
-          'branch is mergeable with origin/main@c6839018bf47 (remote); rebase skipped',
+          'branch is mergeable with origin/main@c6839018bf47 (remote), which has no ' +
+          'code/test changes since the merge-base; rebase skipped',
       }),
       state: { rebase: 'done', last_step: 'rebase' },
     });

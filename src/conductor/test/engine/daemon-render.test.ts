@@ -183,11 +183,12 @@ describe('renderDaemonEvent', () => {
         baseKind: 'remote',
       } as unknown as ConductorEvent),
     ).toEqual([
-      '· ✓ rebase skipped — cleanly mergeable with origin/main@c6839018bf47 (remote)',
+      '· ✓ rebase skipped — cleanly mergeable with origin/main@c6839018bf47 (remote), ' +
+        'no code/test changes on it since the merge-base',
     ]);
     // Legacy/absent fields still render, without inventing a ref.
     expect(lines({ type: 'rebase_mergeable_skip' } as unknown as ConductorEvent)).toEqual([
-      '· ✓ rebase skipped — cleanly mergeable with base',
+      '· ✓ rebase skipped — cleanly mergeable with base, no code/test changes on it since the merge-base',
     ]);
   });
 

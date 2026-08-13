@@ -43,8 +43,9 @@ describe('mergeability-first daemon finish', () => {
 
   /**
    * `baseAdvance` is the path the base gains after the feature branched. It is
-   * is deliberately irrelevant to the finish skip predicate: any clean
-   * prospective merge preserves feature history and existing evidence.
+   * the whole subject of the skip policy: a docs-only advance leaves every gate
+   * verdict on this branch valid, while a code advance means build_review,
+   * test_suite and manual_test were all graded against a base that has moved.
    */
   async function initCleanBehindFeature(
     baseAdvance: { path: string; content: string } = {
@@ -198,7 +199,7 @@ describe('mergeability-first daemon finish', () => {
   );
 
   it(
-    'skips when the base advanced with code but remains cleanly mergeable',
+    'does NOT skip when the base advanced with code — the gates were graded against a base that moved',
     async () => {
       const { featureHead } = await initCleanBehindFeature({
         path: 'src/sibling.ts',
@@ -237,9 +238,12 @@ describe('mergeability-first daemon finish', () => {
         skipped: eventTypes.includes('rebase_mergeable_skip'),
       }).toEqual({
         success: true,
-        outcome: 'mergeable_skip',
-        headMoved: false,
-        skipped: true,
+        // The branch is textually mergeable, so the real rebase runs cleanly and
+        // classifies as a code-changing rebase — which kicks the downstream
+        // gates back for re-verification instead of shipping stale verdicts.
+        outcome: 'changed',
+        headMoved: true,
+        skipped: false,
       });
     },
     30_000,
