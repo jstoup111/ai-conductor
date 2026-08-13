@@ -44,6 +44,12 @@ current passing result; when evidence is missing or stale, the verifier obtains
 the required current result. A previous session's report, marker, or provider
 response does not substitute for current repository and external evidence.
 
+Both passing verdicts are equally acceptable proof: `REUSED` for a current
+passing result the verifier reused, and `EXECUTED` for one it obtained during
+this pass. The coordinator never requires `EXECUTED` when `REUSED` is available
+— re-running a suite that is already current buys no evidence and costs the
+whole suite's runtime.
+
 When that verifier exits non-zero, the coordinator **STOP**s before any choice
 or options and leaves `.pipeline/finish-choice` unwritten. It preserves the
 evidence and routes an implementation failure to `/tdd` or `/pipeline`; it does
