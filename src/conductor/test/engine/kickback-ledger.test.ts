@@ -208,6 +208,28 @@ describe('kickback-ledger', () => {
     });
   });
 
+  it('treats resetting a missing build review ledger as a no-op', async () => {
+    await expect(resetKickbackGateCumulativeInLedger(dir, 'build_review')).resolves.toBeUndefined();
+
+    await expect(readFile(join(dir, '.pipeline/kickback-ledger.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it('does not interrupt a reset when the build review ledger cannot be read', async () => {
+    const unreadableLedgerPath = join(dir, '.pipeline/kickback-ledger.json');
+    await mkdir(unreadableLedgerPath, { recursive: true });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(resetKickbackGateCumulativeInLedger(dir, 'build_review')).resolves.toBeUndefined();
+      await expect(readFile(unreadableLedgerPath)).rejects.toMatchObject({ code: 'EISDIR' });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   describe('bumpKickbackGate', () => {
     const existingEntry: KickbackGateEntry = {
       count: 1,
