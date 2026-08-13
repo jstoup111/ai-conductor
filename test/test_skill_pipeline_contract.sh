@@ -67,11 +67,13 @@ conduct_suite_guidance_contract_holds() {
 scope_choice_contract_holds() {
   local harness_file="$1"
   local explore_file="$2"
+  local plan_file="$3"
 
   grep -qF 'The operator chooses the fix breadth before approach confirmation.' "$harness_file" \
     && grep -qF 'Ask how comprehensive the fix should be before recommending or confirming an approach.' "$explore_file" \
     && grep -qF 'Do not default silently to minimal, balanced, or comprehensive scope.' "$explore_file" \
-    && grep -qF 'Record the operator’s answer as the scope boundary.' "$explore_file"
+    && grep -qF 'Record the operator’s answer as the scope boundary.' "$explore_file" \
+    && grep -qF 'Expand scope only when the operator has confirmed that expansion.' "$plan_file"
 }
 
 confirmed_breadth_contract_holds() {
@@ -136,10 +138,10 @@ else
   pass "legacy skills/test-suite directory is absent"
 fi
 
-if scope_choice_contract_holds "$HARNESS_DIR/HARNESS.md" "$EXPLORE_SKILL_FILE"; then
+if scope_choice_contract_holds "$HARNESS_DIR/HARNESS.md" "$EXPLORE_SKILL_FILE" "$PLAN_SKILL_FILE"; then
   pass "DECIDE requires an operator-selected fix breadth before approach confirmation"
 else
-  fail "DECIDE must ask and record the operator's fix breadth before approach confirmation and forbid silent scope defaults"
+  fail "DECIDE must ask and record the operator's fix breadth before approach confirmation, forbid silent scope defaults, and make plan expansion operator-controlled"
 fi
 
 for downstream_skill in \

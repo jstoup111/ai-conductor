@@ -35,6 +35,13 @@ describe('Story 1: operator-controlled fix comprehensiveness', () => {
       expect(downstreamContract).toMatch(/(?:block|must not|do not).+(?:expansion|broader).+(?:confirm|approval)/is);
     }
   });
+
+  it('does not let planning unconditionally widen or narrow the operator-confirmed outcome', () => {
+    expect(plan).toMatch(/operator-confirmed.+(?:breadth|scope)/is);
+    expect(plan).toMatch(/(?:do not|must not|never).+(?:widen|expand).+(?:without|unless).+operator/is);
+    expect(plan).toMatch(/(?:do not|must not|never).+narrow.+(?:outcome|scope)/is);
+    expect(plan).not.toMatch(/expand scope where valuable/i);
+  });
 });
 
 describe('Story 2: ADRs only for structural change', () => {

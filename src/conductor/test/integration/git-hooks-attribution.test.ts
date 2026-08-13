@@ -335,6 +335,12 @@ describe('integration/git-hooks-attribution', () => {
       await seedTaskStatus([
         { id: '7', status: 'in_progress', files: ['declared.ts'] },
       ]);
+      await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+      await writeFile(
+        join(dir, '.ai-conductor', 'config.yml'),
+        'build_review:\n  scopeContainmentEnforced: true\n',
+        'utf-8',
+      );
       const res = await commitFile('outside-floor.ts', 'outside', 'feat: advisory containment\n\nTask: 7');
 
       expect(res.code).toBe(0);

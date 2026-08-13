@@ -39,10 +39,11 @@ publication *mechanics* are the coordinator's.
 ### 1. Fresh Verification
 
 Before any provider receives FINISH work, the coordinator uses the engine's
-configured aggregate verifier for current completion evidence. It reuses a
-current passing result; when evidence is missing or stale, the verifier obtains
-the required current result. A previous session's report, marker, or provider
-response does not substitute for current repository and external evidence.
+configured aggregate verifier for current completion evidence. It reports
+`REUSED PASS` for a current passing result; when evidence is missing or stale,
+it obtains and reports `EXECUTED PASS` for the required current result. A
+previous session's report, marker, or provider response does not substitute for
+current repository and external evidence.
 
 Both passing verdicts are equally acceptable proof: `REUSED` for a current
 passing result the verifier reused, and `EXECUTED` for one it obtained during
