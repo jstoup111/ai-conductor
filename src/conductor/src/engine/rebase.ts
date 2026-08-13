@@ -1045,6 +1045,20 @@ export async function resolveRebaseConflicts(
     return conflictOutcome;
   }
 
+  // The rebase state retains ORIG_HEAD while paused: it is the feature tip
+  // before replay began. Its merge-base with `onto` is the base before the
+  // advance, which lets the resolved outcome describe the complete base
+  // advance rather than the replayed feature patch.
+  const preAdvanceBaseResult = await git(['merge-base', 'ORIG_HEAD', onto]);
+  const preAdvanceBase = preAdvanceBaseResult.stdout.trim();
+  if (preAdvanceBaseResult.exitCode !== 0 || !preAdvanceBase) {
+    return {
+      kind: 'conflict_halt',
+      conflicts: conflictOutcome.kind === 'conflict_halt' ? conflictOutcome.conflicts : [],
+      reason: 'could not derive the pre-advance base for resolved rebase classification',
+    };
+  }
+
   // Feature commit subjects that must survive: all commits in <onto>..ORIG_HEAD.
   // ORIG_HEAD is the pre-rebase feature tip (set by git before it starts replaying).
   const subjR = await git(['log', '--format=%s', `${onto}..ORIG_HEAD`]);
@@ -1106,9 +1120,10 @@ export async function resolveRebaseConflicts(
       };
     }
 
-    // Both guards pass — reclassify by whether code/test paths changed while
-    // retaining the complete delta for base-advance attribution.
-    const allChangedPaths = await changedPathsBetween(git, onto, 'HEAD');
+    // Both guards pass — classify the complete base advance, not `onto..HEAD`:
+    // that latter range is the replayed feature patch and omits base-only
+    // changes while incorrectly including feature-only ones.
+    const allChangedPaths = await changedPathsBetween(git, preAdvanceBase, onto);
     const changedCodePaths = filterCodeOrTestPaths(allChangedPaths);
     return changedCodePaths.length > 0
       ? { kind: 'changed', changedCodePaths, allChangedPaths }

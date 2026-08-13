@@ -77,7 +77,7 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 /** Non-conflicting repo: `feat` branch cleanly rebases onto `main`. */
-async function buildCleanRepo(baseAdvancePath = 'docs/c.md'): Promise<{
+async function buildCleanRepo(baseAdvancePath = 'c.md'): Promise<{
   repo: string;
   g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 }> {
@@ -97,8 +97,6 @@ async function buildCleanRepo(baseAdvancePath = 'docs/c.md'): Promise<{
   await g(['commit', '-q', '-m', 'feat: add b']);
 
   await g(['checkout', '-q', 'main']);
-  // `docs/c.md` remains the excluded clean-repo fixture. Callers can instead
-  // request root `c.md` to prove the inverted default treats it as source.
   await mkdir(dirname(join(repo, baseAdvancePath)), { recursive: true });
   await writeFile(join(repo, baseAdvancePath), 'unrelated\n');
   await g(['add', '.']);
@@ -255,7 +253,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(false);
   });
 
-  it('negative: no pr_url recorded — clean normal finish uses mergeable skip with zero guard queries', async () => {
+  it('negative: no pr_url recorded — normal finish rebases a root source advance with zero guard queries', async () => {
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -283,7 +281,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
 
     expect(calls).toHaveLength(0);
     const afterSha = (await g(['rev-parse', 'feat'])).stdout.trim();
-    expect(afterSha).toBe(beforeSha);
+    expect(afterSha).not.toBe(beforeSha);
     expect(await fileExists(join(repo, '.pipeline/HALT'))).toBe(false);
     expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(true);
   });

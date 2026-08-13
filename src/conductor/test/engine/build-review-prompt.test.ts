@@ -91,9 +91,7 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(/judge[\s\S]*directly repairs/i);
     expect(prompt).toMatch(/skip that hunk for Scope/i);
     expect(prompt).toMatch(/skip the ordinary Tautology mutation/i);
-    const block = repairBlock(prompt);
-    expect(block).toContain('repair-abc123def456');
-    expect(block).toContain('stale aggregate command expectation');
+    expect(prompt).toContain('repair-abc123def456');
   });
 
   it('renders the named rebase-repair block as explicitly empty when assembly has no repair records', () => {

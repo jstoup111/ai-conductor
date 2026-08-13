@@ -294,6 +294,54 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
       await rm(rootRepo, { recursive: true, force: true });
     }
   });
+
+  it('classifies a resolved conflict from the complete base advance, not the replayed feature patch', async () => {
+    const deltaRepo = await mkdtemp(join(tmpdir(), 'rebase-resolution-complete-delta-'));
+    const deltaGit = (args: string[]) => execFile('git', args, { cwd: deltaRepo });
+    const deltaGc = (args: string[]) =>
+      execFile('git', ['-c', 'core.editor=true', ...args], { cwd: deltaRepo });
+    try {
+      await initTestRepo(deltaRepo);
+      await writeFile(join(deltaRepo, 'conflict.ts'), 'base\n');
+      await writeFile(join(deltaRepo, 'base-only.ts'), 'base\n');
+      await deltaGit(['add', '.']);
+      await deltaGit(['commit', '-q', '-m', 'init']);
+
+      await deltaGit(['checkout', '-q', '-b', 'feat']);
+      await writeFile(join(deltaRepo, 'conflict.ts'), 'feature\n');
+      await writeFile(join(deltaRepo, 'feature-only.ts'), 'feature\n');
+      await deltaGit(['add', '.']);
+      await deltaGit(['commit', '-q', '-m', 'feat: conflict and feature-only']);
+
+      await deltaGit(['checkout', '-q', 'main']);
+      await writeFile(join(deltaRepo, 'conflict.ts'), 'main\n');
+      await writeFile(join(deltaRepo, 'base-only.ts'), 'main-only\n');
+      await deltaGit(['add', '.']);
+      await deltaGit(['commit', '-q', '-m', 'main: conflict and base-only']);
+      await deltaGit(['checkout', '-q', 'feat']);
+
+      const git = makeGitRunner(deltaRepo);
+      const pre = await performRebase(git, deltaRepo, 'main');
+      expect(pre.kind).toBe('conflict_halt');
+      const outcome = await resolveRebaseConflicts(git, deltaRepo, pre, async () => {
+        await writeFile(join(deltaRepo, 'conflict.ts'), 'resolved\n');
+        await deltaGit(['add', 'conflict.ts']);
+        await deltaGc(['rebase', '--continue']);
+        return { resolved: true };
+      }, 3);
+
+      expect(outcome).toMatchObject({
+        kind: 'changed',
+        changedCodePaths: ['base-only.ts', 'conflict.ts'],
+        allChangedPaths: ['base-only.ts', 'conflict.ts'],
+      });
+      if (outcome.kind === 'changed' || outcome.kind === 'noop') {
+        expect(outcome.allChangedPaths).not.toContain('feature-only.ts');
+      }
+    } finally {
+      await rm(deltaRepo, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── Shared gate wrapper both call sites use (#300) ────────────────────────────
