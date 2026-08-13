@@ -191,6 +191,8 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
 
     expect(text).toMatch(/replace[\s\S]{0,200}(?:in place|superseded)/i);
     expect(text).toMatch(/no[\s\S]{0,80}amendment record/i);
+    expect(text).toMatch(/(?:pre-existing|legacy|existing)[\s\S]{0,180}amendment blocks?[\s\S]{0,240}(?:resolve|fold)[\s\S]{0,180}current behavioral text[\s\S]{0,180}(?:same DECIDE pass|same pass)/i);
+    expect(text).toMatch(/(?:cannot|unable to)[\s\S]{0,180}determine[\s\S]{0,180}current behavior[\s\S]{0,240}correctness[\s\S]{0,100}assumption gate[\s\S]{0,160}(?:rather than|never)[\s\S]{0,100}delet/i);
     expect(text).not.toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
   });
 });
