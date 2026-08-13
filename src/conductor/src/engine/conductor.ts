@@ -7357,6 +7357,14 @@ export class Conductor {
                     : 'grader returned FAIL without reasons';
                 const kickback = await consumeKickbackBudget('build_review', evidence);
                 const count = kickback.entry.count;
+                if (kickback.cumulativeExhausted) {
+                  const reason = 'build_review cumulative kickback cap exceeded';
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
                 if (!kickback.exhausted) {
 
                   // #989: a build_review FAIL resolves a structured routing
