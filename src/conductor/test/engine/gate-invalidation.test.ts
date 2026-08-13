@@ -16,6 +16,12 @@ describe('gate-invalidation path predicates', () => {
     expect(isRuntimeSourcePath('src/x.test.ts')).toBe(false);
   });
 
+  it('keeps test paths out of runtime source, including markdown below test/', () => {
+    expect(isRuntimeSourcePath('x.test.ts')).toBe(false);
+    expect(isRuntimeSourcePath('test/y.ts')).toBe(false);
+    expect(isRuntimeSourcePath('test/guide.md')).toBe(false);
+  });
+
   it('classifies a docs path as NOT runtime source', () => {
     expect(isRuntimeSourcePath('.docs/y.md')).toBe(false);
   });
@@ -62,6 +68,25 @@ describe('partitionDelta', () => {
 });
 
 describe('classifyGateInvalidation', () => {
+  it('preserves the pre-split gate sets for a mixed feature-source, test, and stable-docs delta', () => {
+    const result = classifyGateInvalidation(
+      ['src/feature.ts', 'test/feature.test.ts', 'docs/guide.md', '.docs/plan.md'],
+      ['src/feature.ts', 'test/feature.test.ts'],
+      true,
+    );
+
+    expect(result).toEqual({
+      invalidated: [
+        'build_review',
+        'test_suite',
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ],
+      preserved: [],
+    });
+  });
+
   it('preserves everything on an empty delta', () => {
     const result = classifyGateInvalidation([], [], true);
 

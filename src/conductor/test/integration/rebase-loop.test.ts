@@ -166,14 +166,10 @@ describe('integration/rebase-loop', () => {
 
   // Advance BASE with a NON-conflicting commit (a brand-new file). Leaves the
   // checkout back on the feature branch.
-  async function advanceBaseNonConflicting(): Promise<string> {
+  async function advanceBaseNonConflicting(path = 'docs/SIBLING.md'): Promise<string> {
     await git('checkout', BASE);
-    // Under `docs/`, not the root: harness markdown outside the four
-    // enumerated documentation exclusions classifies as source (Task 9), so a
-    // root-level SIBLING.md would make this a code/test base advance and
-    // correctly defeat the mergeable skip these cases exercise.
-    await mkdir(join(dir, 'docs'), { recursive: true });
-    await writeFile(join(dir, 'docs/SIBLING.md'), '# merged sibling PR\n');
+    await mkdir(join(dir, path, '..'), { recursive: true });
+    await writeFile(join(dir, path), '# merged sibling PR\n');
     await git('add', '.');
     await git('commit', '-m', 'sibling PR merged to base');
     const sha = await git('rev-parse', 'HEAD');
@@ -509,6 +505,35 @@ describe('integration/rebase-loop', () => {
       .map(([, args]) => args as string[]);
     expect(gitArgv.flat()).not.toContain('fetch');
     expect(gitArgv.flat()).not.toContain('ls-remote');
+  });
+
+  it('rebases a source-classified root SIBLING.md base advance instead of taking the docs-only skip', async () => {
+    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    const baseSha = await advanceBaseNonConflicting('SIBLING.md');
+
+    const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, {
+      finishMergeabilityCheck: true,
+    });
+
+    expect(outcome.kind).toBe('changed');
+    expect(await branchContains(baseSha)).toBe(true);
+  });
+
+  it('routes a root SIBLING.md base advance through the production loop rebase/invalidation path', async () => {
+    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    const baseSha = await advanceBaseNonConflicting('SIBLING.md');
+    await writeState(statePath, { ...FRONT_DONE });
+    const rebaseEvents: Array<{ changedPaths?: string[]; allChangedPaths?: string[] }> = [];
+    events.on('rebase_changed', (event) => {
+      if (event.type === 'rebase_changed') rebaseEvents.push(event);
+    });
+
+    await conductorWith(passthroughRunner([])).run();
+
+    expect(await branchContains(baseSha)).toBe(true);
+    expect(rebaseEvents).toContainEqual(expect.objectContaining({
+      changedPaths: ['SIBLING.md'], allChangedPaths: ['SIBLING.md'],
+    }));
   });
 
   it('uses the same local base for conflict recovery when prospective merge conflicts', async () => {

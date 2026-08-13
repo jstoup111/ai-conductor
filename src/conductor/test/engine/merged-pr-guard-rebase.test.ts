@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile, access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
@@ -77,7 +77,7 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 /** Non-conflicting repo: `feat` branch cleanly rebases onto `main`. */
-async function buildCleanRepo(): Promise<{
+async function buildCleanRepo(baseAdvancePath = 'docs/c.md'): Promise<{
   repo: string;
   g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 }> {
@@ -97,13 +97,10 @@ async function buildCleanRepo(): Promise<{
   await g(['commit', '-q', '-m', 'feat: add b']);
 
   await g(['checkout', '-q', 'main']);
-  // Docs-only base advance: this fixture's subject is the merged-PR guard, and
-  // it needs the branch to take the mergeable-SKIP path. A base that gains
-  // code/test paths is no longer skippable on textual cleanliness alone —
-  // which now includes root-level markdown, so this file lives under `docs/`
-  // (harness markdown outside the four documentation exclusions is source).
-  await mkdir(join(repo, 'docs'), { recursive: true });
-  await writeFile(join(repo, 'docs/c.md'), 'unrelated\n');
+  // `docs/c.md` remains the excluded clean-repo fixture. Callers can instead
+  // request root `c.md` to prove the inverted default treats it as source.
+  await mkdir(dirname(join(repo, baseAdvancePath)), { recursive: true });
+  await writeFile(join(repo, baseAdvancePath), 'unrelated\n');
   await g(['add', '.']);
   await g(['commit', '-q', '-m', 'main: add c']);
 
@@ -289,6 +286,28 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     expect(afterSha).toBe(beforeSha);
     expect(await fileExists(join(repo, '.pipeline/HALT'))).toBe(false);
     expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(true);
+  });
+
+  it('root-level markdown is runtime source, so normal rebase does not take the docs-only mergeable skip', async () => {
+    ({ repo, g } = await buildCleanRepo('c.md'));
+    statePath = join(repo, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await seedPreRebaseState(statePath, repo);
+
+    const baseSha = (await g(['rev-parse', 'main'])).stdout.trim();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult) },
+      events,
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+      fromStep: 'rebase',
+    } as never);
+
+    await conductor.run();
+
+    expect((await g(['merge-base', '--is-ancestor', baseSha, 'feat'])).stdout).toBe('');
   });
 
   // ── TS-4: cost bound — exactly one guard query at rebase entry ────────────

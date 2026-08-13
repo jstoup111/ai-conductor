@@ -240,6 +240,54 @@ describe('deterministic BUILD verification group', () => {
       ]);
   });
 
+  it('records the observing gate for both native suite and non-suite deterministic failures through Conductor', async () => {
+    const recorded: string[] = [];
+    const record = vi.spyOn(Conductor.prototype as unknown as {
+      recordDeterministicGateRepair: (gate: string) => Promise<undefined>;
+    }, 'recordDeterministicGateRepair').mockImplementation(async (gate) => {
+      recorded.push(gate);
+      return undefined;
+    });
+
+    async function runFailure(kind: 'test_suite' | 'wiring_check'): Promise<void> {
+      const projectRoot = await mkdtemp(join(tmpdir(), `build-verification-${kind}-identity-`));
+      dirs.push(projectRoot);
+      const stateFilePath = join(projectRoot, 'conduct-state.json');
+      await writeFile(stateFilePath, JSON.stringify({ plan: 'done', build: 'done' }));
+      const conductor = new Conductor({
+        stateFilePath,
+        stepRunner: {
+          run: vi.fn(async (step) => step === 'build'
+            ? { success: false, output: 'stop after deterministic rewind' }
+            : Promise.reject(new Error(`unexpected dispatch: ${step}`))),
+        },
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        fromStep: 'wiring_check',
+        mode: 'auto',
+        maxRetries: 1,
+        config: { validation_concurrency: 2 },
+        fullSuiteVerifier: {
+          inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+          ensure: vi.fn(async () => kind === 'test_suite'
+            ? { status: 'FAILED' as const, reason: 'test_failure' as never, message: 'suite failed' }
+            : { status: 'REUSED' as const, evidence: {} as never }),
+        },
+        onRecovery: async () => 'quit',
+      });
+      if (kind === 'wiring_check') {
+        vi.spyOn(conductor as unknown as { runWiringCheckStep: () => Promise<{ success: boolean; output: string }> }, 'runWiringCheckStep')
+          .mockResolvedValue({ success: false, output: 'wiring deterministic failure' });
+      }
+      await conductor.run();
+    }
+
+    await runFailure('test_suite');
+    await runFailure('wiring_check');
+
+    expect(recorded).toEqual(['test_suite', 'wiring_check']);
+  });
+
   it('does not persist a native suite as done when interrupted before its failed objective verdict joins', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-repair-'));
     dirs.push(projectRoot);

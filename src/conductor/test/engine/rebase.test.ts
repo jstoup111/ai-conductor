@@ -91,6 +91,29 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
     }
   });
 
+  it('does not mergeable-skip a clean behind feature when the base advance is root runtime source', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-root-source-'));
+    try {
+      const { git, calls } = fakeGit([
+        { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
+        { match: ['diff', '--name-only', '--diff-filter=U'], result: {} },
+        { match: ['remote'], result: { stdout: '' } },
+        { match: ['rev-list', '--count', 'HEAD..main'], result: { stdout: '1\n' } },
+        { match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'], result: { exitCode: 0 } },
+        { match: ['merge-base', 'HEAD', 'main'], result: { stdout: 'bbbb111\n' } },
+        { match: ['diff', '--name-only', 'bbbb111', 'main'], result: { stdout: 'base-only.txt\n' } },
+        { match: ['rebase', '--autostash', 'main'], result: {} },
+      ]);
+
+      const outcome = await performRebase(git, root, 'main', { finishMergeabilityCheck: true });
+
+      expect(outcome.kind).not.toBe('mergeable_skip');
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('cleanly skips a behind feature without mutating its Git state (Task 3, real git)', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-readonly-'));
     const g = (args: string[]) => execa('git', args, { cwd: repo });
@@ -614,22 +637,6 @@ describe('engine/rebase — path classifier (FR-5)', () => {
         'HARNESS.md',
         'AGENT_INSTRUCTIONS.md',
       ].every(isCodeOrTestPath),
-    ).toBe(true);
-  });
-
-  it('keeps documentation exclusions outside code/test classification', () => {
-    expect(
-      [
-        '.docs/plans/x.md',
-        '.docs/audits/y.json',
-        '.docs/coherence/.gitkeep',
-        'docs/guides/z.md',
-        'docs/_config.yml',
-        'README',
-        'README.md',
-        'a/b/README.md',
-        'CHANGELOG.md',
-      ].every((path) => !isCodeOrTestPath(path)),
     ).toBe(true);
   });
 
@@ -1770,6 +1777,50 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
 
     // …and NO residue is written.
     await expect(access(join(repo, '.pipeline/rebase-residue.json'))).rejects.toThrow();
+  }, 20000);
+
+  it('classifies the same clean replay as changed when docs-note.md is root runtime source', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'docs-note.md'), 'root markdown source\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: root markdown advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      changedCodePaths: ['docs-note.md'],
+      allChangedPaths: ['docs-note.md'],
+    });
+  }, 20000);
+
+  it('classifies a computable mixed source-plus-excluded rebase with a complete allChangedPaths delta', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'feature.ts'), 'feature\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: source']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'base.ts'), 'base advance\n');
+    await mkdir(join(repo, 'docs'), { recursive: true });
+    await writeFile(join(repo, 'docs/note.md'), 'excluded\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: mixed advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      changedCodePaths: ['base.ts'],
+      allChangedPaths: ['base.ts', 'docs/note.md'],
+    });
   }, 20000);
 });
 

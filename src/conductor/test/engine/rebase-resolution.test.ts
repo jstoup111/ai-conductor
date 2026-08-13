@@ -265,6 +265,47 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
   });
 });
 
+describe('engine/rebase — resolution reclassification: root markdown → changed', () => {
+  let repo: string;
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const gc = (args: string[]) =>
+    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'rebase-resolution-root-'));
+    await initTestRepo(repo);
+    await writeFile(join(repo, 'notes.md'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'notes.md'), 'feature notes\n');
+    await g(['commit', '-q', '-am', 'feat: notes']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'notes.md'), 'main notes\n');
+    await g(['commit', '-q', '-am', 'main: notes']);
+    await g(['checkout', '-q', 'feat']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('keeps a root notes.md conflict runtime-source after resolution instead of reclassifying it as docs-only noop', async () => {
+    const git = makeGitRunner(repo);
+    const pre = await performRebase(git, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
+      await writeFile(join(repo, 'notes.md'), 'merged notes\n');
+      await g(['add', 'notes.md']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3);
+
+    expect(outcome.kind).toBe('changed');
+  });
+});
+
 // ── Shared gate wrapper both call sites use (#300) ────────────────────────────
 
 describe('engine/rebase — runGatedRebaseResolution (shared gate, real git)', () => {

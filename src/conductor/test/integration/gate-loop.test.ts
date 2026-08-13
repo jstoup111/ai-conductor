@@ -1666,7 +1666,7 @@ describe('integration/gate-loop', () => {
     // `build_review_repair_context` event. Without this wiring the event is
     // unreachable outside tests.
     async function runWithProvenance(
-      repairProvenance: unknown,
+      repairProvenance: StepRunResult['repairProvenance'],
     ): Promise<Array<Record<string, unknown>>> {
       await writeState(statePath, { ...FRONT_DONE });
       const runner: StepRunner = {
@@ -1716,6 +1716,41 @@ describe('integration/gate-loop', () => {
 
     it('emits nothing when the runner assembled no provenance', async () => {
       expect(await runWithProvenance(undefined)).toEqual([]);
+    });
+
+    it('continues configured build_review grading when repair-context persistence throws', async () => {
+      const originalEmit = events.emit.bind(events);
+      const emit = vi.spyOn(events, 'emit').mockImplementation(async (event) => {
+        if (event.type === 'build_review_repair_context') {
+          throw new Error('simulated provenance persistence failure');
+        }
+        return originalEmit(event);
+      });
+
+      const provenance = { disposition: 'context_available' as const, repairCount: 1 };
+      const received: unknown[] = [];
+      await writeState(statePath, { ...FRONT_DONE });
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build_review') {
+            received.push(provenance);
+            await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({ verdict: 'PASS', reasons: [] }));
+            return { success: true, repairProvenance: provenance };
+          }
+          return satisfy(step);
+        },
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+        verifyArtifacts: true, mode: 'auto', daemon: true, fromStep: 'build', maxRetries: 1,
+        config: { build_review: { enabled: true } }, shipmentEvidence: validShipmentEvidence,
+      });
+
+      await expect(conductor.run()).resolves.toBeUndefined();
+      expect(received).toEqual([provenance]);
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'build_review_repair_context', ...provenance,
+      }));
     });
   });
 
