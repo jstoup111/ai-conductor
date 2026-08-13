@@ -2002,6 +2002,16 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
       expect(outcome.featureSurface).toBeUndefined();
     }
 
+    // Contrast: the SAME rebase with a computable D carries the unfiltered
+    // delta — proving the undefined above is the fail-closed withholding of
+    // an otherwise-populated field, not a field that never exists.
+    await g(['reset', '-q', '--hard', preTree]);
+    const computable = await performRebase(real, repo, 'main');
+    expect(computable.kind).toBe('changed');
+    if (computable.kind === 'changed') {
+      expect(computable.allChangedPaths).toEqual(['unrelated.ts']);
+    }
+
     const pdir = await mkdtemp(join(tmpdir(), 'rebase-verdict-d11-'));
     await mkdir(join(pdir, '.pipeline'), { recursive: true });
     const r = await applyRebaseVerdicts(pdir, outcome as RebaseOutcome, true);
