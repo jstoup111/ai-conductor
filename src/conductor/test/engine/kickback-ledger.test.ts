@@ -2,6 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
+
+import { rename } from 'node:fs/promises';
 import {
   bumpKickbackGate,
   bumpKickbackGateInLedger,
@@ -151,35 +158,46 @@ describe('kickback-ledger', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyWinner));
 
-    const ledgers: KickbackLedger[] = Array.from({ length: 10 }, (_, index) => ({
+    const currentLedger: KickbackLedger = {
       version: 1,
       gates: {
         wiring_check: {
-          count: index + 2,
-          cumulative: index + 1,
-          treeHash: `${index + 1}`.padStart(40, '0'),
-          lastReason: `attempt ${index + 1}`,
+          count: 2,
+          cumulative: 1,
+          treeHash: '0000000000000000000000000000000000000001',
+          lastReason: 'current writer',
           priorVerdict: false,
-          resolvedBefore: index + 1,
+          resolvedBefore: 1,
         },
       },
-    }));
+    };
+    const originalRename = vi.mocked(rename).getMockImplementation()!;
+    let enteredRename!: () => void;
+    const renameStarted = new Promise<void>((resolve) => { enteredRename = resolve; });
+    let releaseRename!: () => void;
+    const releaseGate = new Promise<void>((resolve) => { releaseRename = resolve; });
+    vi.mocked(rename).mockImplementationOnce(async (from, to) => {
+      enteredRename();
+      await releaseGate;
+      return originalRename(from, to);
+    });
 
-    const successfulReads = await Promise.all([
-      readKickbackLedger(dir),
-      ...ledgers.map(async (ledger) => {
-        const write = writeKickbackLedger(dir, ledger);
-        const observed = await readKickbackLedger(dir);
-        await write;
-        return observed;
-      }),
-    ]);
+    try {
+      const write = writeKickbackLedger(dir, currentLedger);
+      await renameStarted;
+      const observedDuringWrite = await readKickbackLedger(dir);
+      expect(observedDuringWrite).toEqual({
+        ...legacyWinner,
+        gates: {
+          wiring_check: { ...legacyWinner.gates.wiring_check, cumulative: 0 },
+        },
+      });
 
-    expect(successfulReads[0].gates.wiring_check?.cumulative).toBe(0);
-    for (const ledger of successfulReads) {
-      for (const entry of Object.values(ledger.gates)) {
-        expect(entry.cumulative).toEqual(expect.any(Number));
-      }
+      releaseRename();
+      await write;
+      await expect(readKickbackLedger(dir)).resolves.toEqual(currentLedger);
+    } finally {
+      vi.mocked(rename).mockImplementation(originalRename);
     }
 
     const raw = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8');

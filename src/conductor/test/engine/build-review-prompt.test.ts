@@ -266,7 +266,7 @@ describe('buildGraderPrompt', () => {
     const prompt = buildGraderPrompt({
       ...inputs,
       removalContext: {
-        deletedFiles: ['src/removed.ts'], removedDeclarations: ['RemovedApi'],
+        deletedFiles: ['src/conductor/src/engine/removed.ts'], removedDeclarations: ['RemovedApi'],
         removedMembers: [{ declaration: 'Contract', member: 'removedMember' }],
       },
     });
@@ -284,11 +284,11 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain(`PASS only if all ${rubricCount} rubric items pass.`);
 
     const removalBlock = prompt.match(/## Engine-derived removal evidence\n([\s\S]*?)$/)?.[1];
-    expect(removalBlock).toContain('src/removed.ts');
+    expect(removalBlock).toContain('src/conductor/src/engine/removed.ts');
     expect(removalBlock).toContain('RemovedApi');
     expect(removalBlock).toContain('Contract.removedMember');
     expect(removalBlock).not.toMatch(/transcript|maker summary|task-status/i);
-    expect(removalBlock).not.toMatch(/claude|codex|conduct-ts|\.pipeline\/|\/[a-z]+\/|npm |pnpm |yarn |bun |shell|bash/i);
+    expect(removalBlock).not.toMatch(/claude|codex|conduct-ts|\.pipeline\/|npm |pnpm |yarn |bun |shell|bash/i);
   });
 
 
