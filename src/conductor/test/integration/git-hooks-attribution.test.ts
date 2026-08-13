@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 
@@ -16,7 +17,7 @@ import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 // plan land. See .docs/plans/deterministic-evidence-attribution.md.
 
 const execFileAsync = promisify(execFile);
-const CONDUCT_TS_BIN_DIR = join(process.cwd(), '..', '..', 'bin');
+const CONDUCT_TS_BIN_DIR = join(fileURLToPath(new URL('../../../..', import.meta.url)), 'bin');
 
 describe('integration/git-hooks-attribution', () => {
   let dir: string;
