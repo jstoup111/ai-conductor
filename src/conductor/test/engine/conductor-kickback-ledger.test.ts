@@ -354,4 +354,66 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       expect.objectContaining({ cumulative: initialEntry.cumulative + 1 }),
     ]);
   });
+
+  it('records eight build_review laps cumulatively while preserving per-tree counts', async () => {
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<Extract<ConductorEvent, { type: 'kickback' }>> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+
+    for (let lap = 1; lap <= 8; lap += 1) {
+      await writeState(statePath, {
+        run_started_at: 1,
+        complexity_tier: 'S',
+        track: 'technical',
+        worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
+        conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
+        architecture_review: 'skipped', acceptance_specs: 'skipped',
+        wiring_check: 'skipped', test_suite: 'done',
+      });
+      await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+        tasks: Array.from({ length: lap }, (_, id) => ({ id: `t${id}`, status: 'completed' })),
+      }));
+
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
+              verdict: 'FAIL',
+              rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+              findings: { tautology: ['semantic failure remains'] },
+            }));
+            return { success: true };
+          }
+          throw new Error('stop after recording this build_review kickback');
+        },
+      };
+
+      await new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events,
+        projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
+        fromStep: 'build_review', maxRetries: 1,
+        config: {
+          build_review: { enabled: true },
+          cumulative_kickback_bound: { enabled: false },
+          kickback_escalation: { enabled: false },
+        },
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
+      } as never).run().catch(() => {});
+    }
+
+    const buildReviewKickbacks = kickbacks.filter((event) => event.from === 'build_review');
+    expect(buildReviewKickbacks.map(({ count, cumulativeCount }) => ({ count, cumulativeCount }))).toEqual(
+      Array.from({ length: 8 }, (_, index) => ({ count: 1, cumulativeCount: index + 1 })),
+    );
+
+    const otherGateKickback: Extract<ConductorEvent, { type: 'kickback' }> = {
+      type: 'kickback', from: 'test_suite', to: 'build', count: 1,
+    };
+    expect(otherGateKickback.cumulativeCount).toBeUndefined();
+  });
 });
