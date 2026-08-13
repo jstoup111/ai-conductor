@@ -99,6 +99,9 @@ export async function readTestSuiteRemediations(
     const parsed = JSON.parse(
       await readFile(join(projectRoot, BUILD_REVIEW_REPAIR_LEDGER), 'utf8'),
     ) as Partial<RepairLedger>;
+    if (Array.isArray((parsed as { consumedInvalidations?: unknown }).consumedInvalidations)) {
+      return [];
+    }
     if (!Array.isArray(parsed.repairs)) return [];
     return parsed.repairs.filter(
       (repair): repair is TestSuiteRemediationRecord =>

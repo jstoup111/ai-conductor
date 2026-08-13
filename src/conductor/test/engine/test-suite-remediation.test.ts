@@ -154,6 +154,35 @@ describe('recordTestSuiteRemediation', () => {
     })).rejects.toThrow('timed out acquiring build-review rebase-repair ledger lock');
   });
 
+  it('reads legacy and malformed ledgers as empty while retaining valid siblings', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const ledgerPath = join(dir, BUILD_REVIEW_REPAIR_LEDGER);
+
+    await writeFile(ledgerPath, JSON.stringify({
+      consumedInvalidations: [101],
+      repairs: [{
+        id: 'repair-legacy', gate: 'test_suite', reason: 'old', diagnostic: 'old', rebaseInvalidatedAt: 101,
+      }],
+    }));
+    await expect(readTestSuiteRemediations(dir)).resolves.toEqual([]);
+
+    await writeFile(ledgerPath, '{ invalid JSON');
+    await expect(readTestSuiteRemediations(dir)).resolves.toEqual([]);
+
+    const validRepair = {
+      id: 'repair-valid',
+      gate: 'test_suite',
+      reason: 'missing_test',
+      diagnostic: 'agents/planner.md has no matching test',
+      rebaseInvalidatedAt: 101,
+    };
+    await writeFile(ledgerPath, JSON.stringify({ repairs: [
+      validRepair,
+      { ...validRepair, id: 42 },
+    ] }));
+    await expect(readTestSuiteRemediations(dir)).resolves.toEqual([validRepair]);
+  });
+
   it('reads every recorded base advance in event-log order', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline', 'events.jsonl'), [
