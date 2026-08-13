@@ -6,6 +6,7 @@ import {
   type TestSuiteRemediationRecord,
 } from './test-suite-remediation.js';
 import type { AcceptedScopeWidening } from './per-task-commit-floor.js';
+import { deriveBuildReviewRemovals, type BuildReviewRemovalContext } from './build-review-removals.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -47,6 +48,8 @@ export interface BuildReviewInputs {
   repairContext?: TestSuiteRemediationRecord[];
   /** Commit-local scope widenings accepted by the containment evaluator. */
   acceptedWidenings?: AcceptedScopeWidening[];
+  /** Diff-derived removal evidence for the grader, never an exemption. */
+  removalContext?: BuildReviewRemovalContext;
 }
 
 /**
@@ -137,6 +140,7 @@ export async function assembleBuildReviewInputs(
     trackingRefSha: resolution.trackingRefSha,
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
+    removalContext: deriveBuildReviewRemovals(diffResult.stdout),
     repairContext:
       planIsInFeatureRoot
         ? await readTestSuiteRemediations(featureRoot)
