@@ -174,10 +174,13 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     await expect(readFile(join(repoDir, '.pipeline', 'hook-events.jsonl'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
 
-    const report = await runContainmentFloor({ projectRoot: repoDir, planPath });
-    expect(report.acceptedWidenings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: unrelatedPath, derived: true }),
-    ]));
+    const report = await runContainmentFloor({
+      projectRoot: repoDir,
+      planPath,
+      scopeContainmentEnforced: false,
+    });
+    expect(report.acceptedWidenings).toEqual([]);
+    expect(report.skipNotes).toEqual([]);
     expect(graderPrompt([])).not.toContain(unrelatedPath);
   });
 

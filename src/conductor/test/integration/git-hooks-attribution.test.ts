@@ -326,10 +326,18 @@ describe('integration/git-hooks-attribution', () => {
       );
       await writeFile(join(dir, 'one.txt'), '1', 'utf-8');
       await writeFile(join(dir, 'two.txt'), '2', 'utf-8');
+      const hookPath = join(dir, '.pipeline', 'git-hooks', 'commit-msg');
+      const hook = await readFile(hookPath, 'utf-8');
+      await writeFile(
+        hookPath,
+        hook.replace('conduct-ts scope-check "$COMMIT_MSG_FILE"', 'false'),
+        'utf-8',
+      );
       await git('add', 'one.txt', 'two.txt');
       const res = await git('commit', '-m', 'feat: bundled change\n\nTask: 1');
       expect(res.code).toBe(0);
       expect(res.stderr).not.toContain('staged diff spans files of multiple plan tasks');
+      expect(res.stderr).not.toContain('commit-msg: scope-check abstained (exit 1); allowing commit');
     });
 
     it('commits an out-of-floor staged path with the scope advisory on stderr', async () => {

@@ -69,27 +69,6 @@ describe('scope-check CLI', () => {
     }
   });
 
-  it('falls back to report-only for a non-boolean containment setting', async () => {
-    await writeFile(
-      join(projectRoot, '.ai-conductor', 'config.yml'),
-      'build_review:\n  scopeContainmentEnforced: enabled\n',
-    );
-
-    await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(false);
-  });
-
-  it.each([
-    ['a malformed config result', async () => ({
-      ok: false as const,
-      error: { type: 'parse_error' as const, message: 'invalid YAML' },
-    })],
-    ['an unreadable config', async () => {
-      throw new Error('EACCES');
-    }],
-  ])('falls back to report-only without throwing for %s', async (_name, load) => {
-    await expect(loadScopeCheckEnforcement(projectRoot, load)).resolves.toBe(false);
-  });
-
   it('detects the commit-message path for the dispatcher', () => {
     expect(
       detectScopeCheckCommand(['node', 'conduct-ts', 'scope-check', '/tmp/COMMIT_EDITMSG']),

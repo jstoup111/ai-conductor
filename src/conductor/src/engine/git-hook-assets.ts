@@ -258,8 +258,6 @@ export const COMMIT_MSG_HOOK = [
   '    CONDUCT_SCOPE_CHECK_PROJECT_ROOT="$WORKTREE_ROOT" conduct-ts scope-check "$COMMIT_MSG_FILE" || rc=$?',
   '    if [[ "$rc" == "3" ]]; then',
   '      echo "commit-msg: scope-check recorded ambiguity (exit 3); allowing commit" >&2',
-  '    elif [[ "$rc" != "0" ]]; then',
-  '      echo "commit-msg: scope-check abstained (exit $rc); allowing commit" >&2',
   '    fi',
   '  fi',
   '',

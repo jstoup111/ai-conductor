@@ -105,6 +105,48 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
+  it('rejects a path under an undeclared directory with that exact path', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['src/conductor/src/daemon/backlog.ts'],
+        task,
+      }),
+    ).toEqual({
+      allowed: false,
+      taskId: '3',
+      offendingPaths: ['src/conductor/src/daemon/backlog.ts'],
+    });
+  });
+
+  it('does not treat a declared file as a prefix for another directory', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['src/other/unrelated-config.test.ts'],
+        task: { id: '3', status: 'in_progress', files: ['config.ts'] },
+      }),
+    ).toEqual({
+      allowed: false,
+      taskId: '3',
+      offendingPaths: ['src/other/unrelated-config.test.ts'],
+    });
+  });
+
+  it('evaluates a declared path absent from disk without throwing', () => {
+    expect(() => evaluateScopeContainment({
+      stagedPaths: ['src/conductor/src/engine/not-on-disk.ts'],
+      task: { id: '3', status: 'in_progress', files: ['src/conductor/src/engine/not-on-disk.ts'] },
+    })).not.toThrow();
+  });
+
+  it('does not allow a longer filename sharing a machinery allowlist prefix', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['CHANGELOG.md.backup'],
+        task,
+      }),
+    ).toEqual({ allowed: false, taskId: '3', offendingPaths: ['CHANGELOG.md.backup'] });
+  });
+
   it('allows a path widened by a Scope trailer for this commit', () => {
     expect(
       evaluateScopeContainment({

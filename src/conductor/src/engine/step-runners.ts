@@ -2173,6 +2173,7 @@ export class DefaultStepRunner implements StepRunner {
         containmentReport = await runContainmentFloor({
           projectRoot: this.projectDir,
           planPath,
+          scopeContainmentEnforced: buildReviewConfig.scopeContainmentEnforced,
         });
       } catch {
         // Fail-soft: containment telemetry must never fail build_review.
@@ -2255,6 +2256,7 @@ export class DefaultStepRunner implements StepRunner {
         containmentReport ??= await runContainmentFloor({
           projectRoot: this.projectDir,
           planPath,
+          scopeContainmentEnforced: buildReviewConfig.scopeContainmentEnforced,
         });
         await writeFile(
           join(effectivePipelineDir, 'containment-floor.json'),
@@ -2263,7 +2265,9 @@ export class DefaultStepRunner implements StepRunner {
         );
         floorAdvisoryLines = [
           ...renderPerTaskFloorReport(floorReport),
-          ...renderContainmentFloorReport(containmentReport),
+          ...(buildReviewConfig.scopeContainmentEnforced
+            ? renderContainmentFloorReport(containmentReport)
+            : []),
         ];
         if (floorAdvisoryLines.length > 0) {
           for (const line of floorAdvisoryLines) {

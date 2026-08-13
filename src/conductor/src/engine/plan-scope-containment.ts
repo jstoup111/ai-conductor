@@ -29,6 +29,12 @@ function isSameDirectory(path: string, declaredPath: string): boolean {
   return declaredDirectory !== '' && fileMatchesPlanPath(pathDirectory(path), declaredDirectory);
 }
 
+function isMachineryAuthoredPath(path: string, machineryPath: string): boolean {
+  return machineryPath.endsWith('/')
+    ? path.startsWith(machineryPath)
+    : path === machineryPath || path.startsWith(`${machineryPath}/`);
+}
+
 /**
  * Determines whether every staged path is declared by the active plan task.
  *
@@ -66,7 +72,7 @@ export function evaluateScopeContainment({
 
   const offendingPaths = stagedPaths.filter(
     (path) =>
-      !MACHINERY_AUTHORED_PATHS.some((machineryPath) => path.startsWith(machineryPath)) &&
+      !MACHINERY_AUTHORED_PATHS.some((machineryPath) => isMachineryAuthoredPath(path, machineryPath)) &&
       !declaredFiles.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)) &&
       !declaredFiles.some((declaredPath) =>
         fileMatchesPlanPath(path, declaredPath.replace(/(\.[^./]+)$/, '.test$1')),

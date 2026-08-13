@@ -122,6 +122,7 @@ export async function runPerTaskCommitFloor(args: {
 export async function runContainmentFloor(args: {
   projectRoot: string;
   planPath: string;
+  scopeContainmentEnforced?: boolean;
 }): Promise<ContainmentFloorReport> {
   try {
     await assertGitRepository(args.projectRoot);
@@ -171,7 +172,7 @@ export async function runContainmentFloor(args: {
           if (task.files.some((declaredPath) => fileMatchesPlanPath(scope.path, declaredPath))) {
             continue;
           }
-          acceptedWidenings.push({
+          if (args.scopeContainmentEnforced !== false) acceptedWidenings.push({
             path: scope.path,
             ...resolveScopeWideningRationale(scope.path, scopeTrailers, message),
             taskId: task.id,
@@ -181,7 +182,7 @@ export async function runContainmentFloor(args: {
 
         if (!result.allowed) {
           for (const path of result.offendingPaths) {
-            acceptedWidenings.push({
+            if (args.scopeContainmentEnforced !== false) acceptedWidenings.push({
               path,
               ...resolveScopeWideningRationale(path, scopeTrailers, message),
               taskId: task.id,
@@ -195,9 +196,9 @@ export async function runContainmentFloor(args: {
     return {
       satisfied: violations.length === 0,
       violations,
-      acceptedWidenings,
+      acceptedWidenings: args.scopeContainmentEnforced === false ? [] : acceptedWidenings,
       unresolvedChecks: unresolvedLedger.checks,
-      skipNotes: unresolvedLedger.skipNotes,
+      skipNotes: args.scopeContainmentEnforced === false ? [] : unresolvedLedger.skipNotes,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -278,8 +279,7 @@ function parseUnresolvedContainmentCheck(value: unknown): ContainmentCheckUnreso
     event.type !== 'containment_check_unresolved'
     || typeof event.failure !== 'string'
     || !UNRESOLVED_CONTAINMENT_FAILURES.has(event.failure as ContainmentCheckUnresolvedRecord['failure'])
-    || typeof event.ts !== 'number'
-    || !Number.isFinite(event.ts)
+    || !isValidEventTimestamp(event.ts)
     || (event.taskId !== undefined && typeof event.taskId !== 'string')
   ) {
     return undefined;
@@ -288,8 +288,17 @@ function parseUnresolvedContainmentCheck(value: unknown): ContainmentCheckUnreso
     type: 'containment_check_unresolved',
     failure: event.failure as ContainmentCheckUnresolvedRecord['failure'],
     ...(event.taskId === undefined ? {} : { taskId: event.taskId }),
-    ts: event.ts,
+    ts: normalizeEventTimestamp(event.ts),
   };
+}
+
+function isValidEventTimestamp(value: unknown): value is number | string {
+  return (typeof value === 'number' && Number.isFinite(value))
+    || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+function normalizeEventTimestamp(value: number | string): number {
+  return typeof value === 'number' ? value : Date.parse(value);
 }
 
 async function assertGitRepository(projectRoot: string): Promise<void> {

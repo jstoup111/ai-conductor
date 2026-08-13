@@ -3536,7 +3536,7 @@ TIER: M`,
       expect(scopePrompt).toContain(sha);
     });
 
-    it('runs the containment floor but omits accepted widenings from build_review by default', async () => {
+    it('does not persist, render, or forward accepted widenings when containment is disabled', async () => {
       await prepareContainmentRepo(['outside.ts'], 'out of scope\n\nTask: 3');
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const runner = new DefaultStepRunner(
@@ -3555,9 +3555,8 @@ TIER: M`,
 
       const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
       const floor = JSON.parse(await readFile(join(dir, '.pipeline', 'containment-floor.json'), 'utf8'));
-      expect(floor.acceptedWidenings).toEqual(expect.arrayContaining([
-        expect.objectContaining({ path: 'outside.ts', derived: true }),
-      ]));
+      expect(floor.acceptedWidenings).toEqual([]);
+      expect(floor.skipNotes).toEqual([]);
       expect(prompts).not.toContain('"path":"outside.ts","rationale"');
     });
 
