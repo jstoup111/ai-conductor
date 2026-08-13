@@ -255,12 +255,10 @@ describe('recordTestSuiteRemediation', () => {
       }),
     ].join('\n') + '\n');
 
-    await expect(Promise.all([absent, readBaseAdvanceHistory(dir)])).resolves.toEqual([
-      [],
-      [
-        { paths: ['src/first.ts'], ts: '2026-08-13T11:00:00.000Z' },
-        { paths: ['src/second.ts'], ts: '2026-08-13T11:01:00.000Z' },
-      ],
+    expect(absent, 'an absent event log reads as empty history').toEqual([]);
+    await expect(readBaseAdvanceHistory(dir)).resolves.toEqual([
+      { paths: ['src/first.ts'], ts: '2026-08-13T11:00:00.000Z' },
+      { paths: ['src/second.ts'], ts: '2026-08-13T11:01:00.000Z' },
     ]);
   });
 });
