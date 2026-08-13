@@ -6,6 +6,7 @@ import {
   bumpKickbackGate,
   readKickbackLedger,
   writeKickbackLedger,
+  type KickbackGateEntry,
   type KickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
 
@@ -171,7 +172,7 @@ describe('kickback-ledger', () => {
   });
 
   describe('bumpKickbackGate', () => {
-    const existingEntry = {
+    const existingEntry: KickbackGateEntry = {
       count: 1,
       cumulative: 0,
       treeHash: '0123456789abcdef0123456789abcdef01234567',
@@ -191,10 +192,29 @@ describe('kickback-ledger', () => {
         entry: {
           ...existingEntry,
           count: 2,
+          cumulative: 1,
           lastReason: 'different failure wording',
         },
         exhausted: false,
       });
+    });
+
+    it('increments the cumulative count whether progress resets the per-tree count or not', () => {
+      const changedTree = bumpKickbackGate({ ...existingEntry, count: 2, cumulative: 2 }, {
+        treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+        resolvedCount: existingEntry.resolvedBefore,
+        reason: 'tree moved',
+      });
+      const unchangedTree = bumpKickbackGate({ ...existingEntry, count: 1, cumulative: 2 }, {
+        treeHash: existingEntry.treeHash,
+        resolvedCount: existingEntry.resolvedBefore,
+        reason: 'still failing',
+      });
+
+      expect([changedTree.entry, unchangedTree.entry]).toMatchObject([
+        { cumulative: 3, count: 1 },
+        { cumulative: 3, count: 2 },
+      ]);
     });
 
     it('resets the count to one and stores a changed tree hash', () => {

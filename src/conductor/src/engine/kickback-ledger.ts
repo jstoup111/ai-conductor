@@ -165,6 +165,7 @@ export function bumpKickbackGate(
     entry: {
       ...previous,
       count: nextCount,
+      cumulative: previous.cumulative + 1,
       treeHash: input.treeHash,
       lastReason: input.reason,
       resolvedBefore: input.resolvedCount,
