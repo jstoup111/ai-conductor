@@ -42,6 +42,16 @@ Concretely:
    `.docs/architecture|plans|specs|stories/` must be justified by the approved plan; an
    unjustified self-amendment is a Scope FAIL.
 
+   > **Amended 2026-08-12 by #1502:** the sub-rule admits a second justification source — a diff
+   > modifying a protected DECIDE artifact is justified either by the approved plan **or** by an
+   > operator `conduct-ts reseal` covering that path, judged against the rationale the operator
+   > recorded. An amendment justified by neither remains a Scope FAIL, unchanged. A reseal
+   > authorizes an amendment committed *after* BUILD entry, which no pre-BUILD plan can ever carry,
+   > so the plan-only reading made every reseal permanently unsatisfiable (observed terminal on
+   > #1223 across three dispatches). See
+   > `adr-2026-08-12-operator-reseal-as-second-scope-justification`. Decisions 1 and 2 above are
+   > unaffected and this ADR remains APPROVED.
+
 No new module, no new persisted state, no new gate, no new human checkpoint.
 
 ## Why this option

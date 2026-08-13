@@ -97,6 +97,13 @@ out-of-scope work fails the gate.
   already-approved artifact, and must be justified by the approved plan or scored as a Scope
   failure.
 
+> **Amended 2026-08-12 by #1502:** the rule admits a second justification source — the plan **or**
+> an operator `conduct-ts reseal` covering that path, judged against its recorded rationale. An
+> edit justified by neither is still a Scope failure, as asserted above. A reseal authorizes an
+> amendment committed after BUILD entry, which no pre-BUILD plan can carry, so the plan-only
+> reading made every reseal permanently unsatisfiable. See
+> `.docs/decisions/adr-2026-08-12-operator-reseal-as-second-scope-justification.md`.
+
 ### Negative Paths
 
 - **Given** the same prompt,
