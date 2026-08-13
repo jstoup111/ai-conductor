@@ -59,6 +59,9 @@ export function evaluateScopeContainment({
     (path) =>
       !MACHINERY_AUTHORED_PATHS.some((machineryPath) => path.startsWith(machineryPath)) &&
       !declaredFiles.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)) &&
+      !declaredFiles.some((declaredPath) =>
+        fileMatchesPlanPath(path, declaredPath.replace(/(\.[^./]+)$/, '.test$1')),
+      ) &&
       !scopeTrailers.some((trailer) => fileMatchesPlanPath(path, trailer.path)),
   );
 

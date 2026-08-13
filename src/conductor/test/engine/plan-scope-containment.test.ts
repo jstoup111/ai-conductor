@@ -48,6 +48,15 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
+  it('allows the test sibling of a declared file', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['src/conductor/src/engine/config.test.ts'],
+        task: { id: '3', status: 'in_progress', files: ['src/conductor/src/engine/config.ts'] },
+      }),
+    ).toEqual({ allowed: true });
+  });
+
   it('does not over-accept a filename that merely ends in the declared path', () => {
     expect(
       evaluateScopeContainment({
