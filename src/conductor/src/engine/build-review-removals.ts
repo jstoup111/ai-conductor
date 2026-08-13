@@ -76,7 +76,7 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
       continue;
     }
     const member = scope && removedMember(removed);
-    if (member) result.removedMembers.push({ declaration: scope, member });
+    if (scope && member) result.removedMembers.push({ declaration: scope, member });
   }
 
   return result;
