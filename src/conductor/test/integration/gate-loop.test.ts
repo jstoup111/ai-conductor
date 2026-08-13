@@ -1702,7 +1702,7 @@ describe('integration/gate-loop', () => {
       return provenanceEvents;
     }
 
-    it('persists each distinguishable grading disposition returned by the build_review runner', async () => {
+    it('persists each distinguishable grading disposition returned by the build_review runner, and nothing when no provenance was assembled', async () => {
       expect(
         await runWithProvenance({ disposition: 'context_available', repairCount: 3 }),
       ).toEqual([
@@ -1712,9 +1712,9 @@ describe('integration/gate-loop', () => {
           repairCount: 3,
         }),
       ]);
-    });
 
-    it('emits nothing when the runner assembled no provenance', async () => {
+      // The absent case must stay silent — meaningful only in contrast to the
+      // emission above, so both live in one test.
       expect(await runWithProvenance(undefined)).toEqual([]);
     });
 
