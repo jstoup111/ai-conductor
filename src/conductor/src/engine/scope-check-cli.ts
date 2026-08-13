@@ -16,7 +16,7 @@ export interface ScopeCheckCommand {
 
 /**
  * The resolved shipped default. Flip this single value only after live
- * containment-floor evidence supports enforcing scope refusals.
+ * containment-floor evidence supports changing scope-check recording behavior.
  */
 const DEFAULT_SCOPE_CHECK_ENFORCEMENT = false;
 
@@ -46,8 +46,7 @@ export interface ScopeCheckDependencies {
   projectRoot: string;
   commitMessagePath: string;
   /**
-   * Resolved containment enforcement mode. The shipped default is report-only
-   * until live containment-floor evidence earns the one-line enforcement flip.
+   * Resolved containment recording mode. It never makes the commit hook block.
    */
   enforce?: boolean;
   readFile?: (path: string) => Promise<string>;
@@ -58,9 +57,8 @@ export interface ScopeCheckDependencies {
 /**
  * Check a staged commit against its Task trailer's declared paths.
  *
- * Exit 0 means allowed (including a report-only violation or a check that does
- * not apply); 2 means positively refused; 3 means the applicable check could
- * not be resolved.
+ * Exit 0 means allowed, not applicable, or an advisory out-of-floor path; 3
+ * means the applicable check could not be resolved.
  */
 export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<number> {
   const read = deps.readFile ?? ((path: string) => readFile(path, 'utf8'));
@@ -106,9 +104,8 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
     if (result.allowed) return 0;
 
     const print = deps.print ?? ((message: string) => writeSync(process.stderr.fd, `${message}\n`));
-    print(renderScopeRefusal(result.taskId, result.offendingPaths));
-    const enforce = deps.enforce ?? DEFAULT_SCOPE_CHECK_ENFORCEMENT;
-    return enforce ? 2 : 0;
+    print(renderScopeAdvisory(result.taskId, result.offendingPaths));
+    return 0;
   } catch {
     return 3;
   }
@@ -146,11 +143,16 @@ function parseScopeContainmentTasks(raw: string): ScopeContainmentTask[] {
   });
 }
 
-function renderScopeRefusal(taskId: string, offendingPaths: readonly string[]): string {
+const MAX_RENDERED_OFFENDING_PATHS = 20;
+
+function renderScopeAdvisory(taskId: string, offendingPaths: readonly string[]): string {
+  const renderedPaths = offendingPaths.slice(0, MAX_RENDERED_OFFENDING_PATHS);
+  const remainingPathCount = offendingPaths.length - renderedPaths.length;
   return [
-    `scope-check: refusing Task ${taskId}; staged paths are outside its declared scope:`,
-    ...offendingPaths.map((path) => `  ${path}`),
-    'Narrow this commit to the task declaration, or justify each widening by adding:',
-    ...offendingPaths.map((path) => `  Scope: ${path} — <rationale>`),
+    `scope-check: Task ${taskId} has staged paths outside its declared scope (advisory):`,
+    ...renderedPaths.map((path) => `  ${path}`),
+    ...(remainingPathCount === 0 ? [] : [`  … ${remainingPathCount} more undeclared paths`]),
+    'Record each widening by adding:',
+    ...renderedPaths.map((path) => `  Scope: ${path} — <rationale>`),
   ].join('\n');
 }

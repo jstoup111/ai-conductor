@@ -76,7 +76,7 @@ describe('scope-check CLI', () => {
     expect(output).toEqual([]);
   });
 
-  it('reports every undeclared path in the shipped report-only mode with copy-pasteable Scope trailers and no deletion advice', async () => {
+  it.each([false, true])('advises on every undeclared path with copy-pasteable Scope trailers when enforcement is %s', async (enforce) => {
     const output: string[] = [];
 
     await expect(
@@ -85,24 +85,30 @@ describe('scope-check CLI', () => {
         commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
         readFile: async (path) =>
           path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+        enforce,
         stagedPaths: async () => [
-          'src/conductor/src/engine/artifacts.ts',
-          'src/conductor/src/engine/changelog-pr-finalizer-cli.ts',
+          'src/conductor/src/unrelated/artifacts.ts',
+          'src/conductor/src/other/changelog-pr-finalizer-cli.ts',
         ],
         print: (message) => output.push(message),
       }),
     ).resolves.toBe(0);
 
-    expect(output.join('\n')).toContain('Task 3');
-    expect(output.join('\n')).toContain('src/conductor/src/engine/artifacts.ts');
-    expect(output.join('\n')).toContain('src/conductor/src/engine/changelog-pr-finalizer-cli.ts');
-    expect(output.join('\n')).toContain('Scope: src/conductor/src/engine/artifacts.ts — <rationale>');
-    expect(output.join('\n')).toContain('Scope: src/conductor/src/engine/changelog-pr-finalizer-cli.ts — <rationale>');
-    expect(output.join('\n').toLowerCase()).not.toContain('delete');
+    const diagnostic = output.join('\n');
+    expect(diagnostic).toContain('Task 3');
+    expect(diagnostic).toContain('src/conductor/src/unrelated/artifacts.ts');
+    expect(diagnostic).toContain('src/conductor/src/other/changelog-pr-finalizer-cli.ts');
+    expect(diagnostic).toContain('Scope: src/conductor/src/unrelated/artifacts.ts — <rationale>');
+    expect(diagnostic).toContain('Scope: src/conductor/src/other/changelog-pr-finalizer-cli.ts — <rationale>');
+    expect(diagnostic.toLowerCase()).not.toContain('refus');
   });
 
-  it('refuses every undeclared path when enforcement is enabled', async () => {
+  it('bounds its advisory diagnostic for 200 undeclared paths', async () => {
     const output: string[] = [];
+    const stagedPaths = Array.from(
+      { length: 200 },
+      (_value, index) => `src/conductor/src/unrelated-${index}.ts`,
+    );
 
     await expect(
       runScopeCheck({
@@ -111,14 +117,17 @@ describe('scope-check CLI', () => {
         enforce: true,
         readFile: async (path) =>
           path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
-        stagedPaths: async () => ['src/conductor/src/engine/artifacts.ts'],
+        stagedPaths: async () => stagedPaths,
         print: (message) => output.push(message),
       }),
-    ).resolves.toBe(2);
+    ).resolves.toBe(0);
 
     expect(output).toHaveLength(1);
     expect(output[0]).toContain('Task 3');
-    expect(output[0]).toContain('src/conductor/src/engine/artifacts.ts');
+    expect(output[0]).toContain('src/conductor/src/unrelated-0.ts');
+    expect(output[0]).toContain('more undeclared paths');
+    expect(output[0]).not.toContain('src/conductor/src/unrelated-199.ts');
+    expect(output[0].length).toBeLessThan(5_000);
   });
 
   it.each([
