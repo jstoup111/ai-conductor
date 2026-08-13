@@ -168,7 +168,12 @@ describe('integration/rebase-loop', () => {
   // checkout back on the feature branch.
   async function advanceBaseNonConflicting(): Promise<string> {
     await git('checkout', BASE);
-    await writeFile(join(dir, 'SIBLING.md'), '# merged sibling PR\n');
+    // Under `docs/`, not the root: harness markdown outside the four
+    // enumerated documentation exclusions classifies as source (Task 9), so a
+    // root-level SIBLING.md would make this a code/test base advance and
+    // correctly defeat the mergeable skip these cases exercise.
+    await mkdir(join(dir, 'docs'), { recursive: true });
+    await writeFile(join(dir, 'docs/SIBLING.md'), '# merged sibling PR\n');
     await git('add', '.');
     await git('commit', '-m', 'sibling PR merged to base');
     const sha = await git('rev-parse', 'HEAD');

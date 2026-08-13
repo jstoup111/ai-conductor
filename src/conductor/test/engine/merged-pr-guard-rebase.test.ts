@@ -13,7 +13,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -99,8 +99,11 @@ async function buildCleanRepo(): Promise<{
   await g(['checkout', '-q', 'main']);
   // Docs-only base advance: this fixture's subject is the merged-PR guard, and
   // it needs the branch to take the mergeable-SKIP path. A base that gains
-  // code/test paths is no longer skippable on textual cleanliness alone.
-  await writeFile(join(repo, 'c.md'), 'unrelated\n');
+  // code/test paths is no longer skippable on textual cleanliness alone —
+  // which now includes root-level markdown, so this file lives under `docs/`
+  // (harness markdown outside the four documentation exclusions is source).
+  await mkdir(join(repo, 'docs'), { recursive: true });
+  await writeFile(join(repo, 'docs/c.md'), 'unrelated\n');
   await g(['add', '.']);
   await g(['commit', '-q', '-m', 'main: add c']);
 
