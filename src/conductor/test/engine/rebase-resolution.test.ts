@@ -295,6 +295,38 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
     }
   });
 
+  it('fails closed when the resolved complete base-advance diff cannot be computed', async () => {
+    const preAdvanceBase = (await g(['merge-base', 'feat', 'main'])).stdout.trim();
+    const onto = (await g(['rev-parse', 'main'])).stdout.trim();
+    const realGit = makeGitRunner(repo);
+    const pre = await performRebase(realGit, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    const git = async (args: string[], opts?: Parameters<typeof realGit>[1]) => {
+      if (
+        args[0] === 'diff' &&
+        args[1] === '--name-only' &&
+        args[2] === preAdvanceBase &&
+        args[3] === onto
+      ) {
+        return { exitCode: 1, stdout: '', stderr: 'simulated base-advance diff failure' };
+      }
+      return realGit(args, opts);
+    };
+    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
+      await writeFile(join(repo, 'docs/notes.md'), 'merged notes\n');
+      await g(['add', 'docs/notes.md']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3);
+
+    expect(outcome).toMatchObject({ kind: 'changed', changedCodePaths: [] });
+    if (outcome.kind === 'changed') {
+      expect(outcome.allChangedPaths).toBeUndefined();
+      expect(outcome.featureSurface).toBeUndefined();
+    }
+  });
+
   it('classifies a resolved conflict from the complete base advance, not the replayed feature patch', async () => {
     const deltaRepo = await mkdtemp(join(tmpdir(), 'rebase-resolution-complete-delta-'));
     const deltaGit = (args: string[]) => execFile('git', args, { cwd: deltaRepo });

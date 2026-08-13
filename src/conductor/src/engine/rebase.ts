@@ -1122,8 +1122,22 @@ export async function resolveRebaseConflicts(
 
     // Both guards pass — classify the complete base advance, not `onto..HEAD`:
     // that latter range is the replayed feature patch and omits base-only
-    // changes while incorrectly including feature-only ones.
-    const allChangedPaths = await changedPathsBetween(git, preAdvanceBase, onto);
+    // changes while incorrectly including feature-only ones. Unlike the
+    // general helper, a failed diff here cannot be treated as an empty delta:
+    // doing so would falsely return noop after a completed resolution.
+    let allChangedPaths: string[];
+    try {
+      const delta = await git(['diff', '--name-only', preAdvanceBase, onto]);
+      if (delta.exitCode !== 0) {
+        return { kind: 'changed', changedCodePaths: [] };
+      }
+      allChangedPaths = delta.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    } catch {
+      return { kind: 'changed', changedCodePaths: [] };
+    }
     const changedCodePaths = filterCodeOrTestPaths(allChangedPaths);
     return changedCodePaths.length > 0
       ? { kind: 'changed', changedCodePaths, allChangedPaths }
