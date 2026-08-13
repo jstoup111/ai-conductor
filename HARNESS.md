@@ -148,7 +148,6 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 - `prd-auditor.md` — Audits shipped implementation against the PRD's functional requirements at SHIP (finding-authority, per-FR verdict + gap-class, no-fix)
 - `remediation-planner.md` — Plans how to close a blocking audit's gaps: a disposition + concrete tasks per gap routed to the right step, or a HALT for architectural-clarity / product-scope (planning-authority, no-fix)
 - `domain-reviewer.md` — Checks domain integrity, has veto authority
-- `planner.md` — Expands requirements into specs
 - `worktree-manager.md` — Manages git worktrees for feature isolation and parallel execution
 - `cto-security.md` — Security auditor: auth, input validation, OWASP top 10
 - `cto-data-integrity.md` — Data integrity: transactions, event sourcing, race conditions
