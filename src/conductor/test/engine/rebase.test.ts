@@ -109,7 +109,8 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
       await g(['commit', '-q', '-m', 'feature change']);
 
       await g(['checkout', '-q', 'main']);
-      await writeFile(join(repo, 'base-only.txt'), 'base\n');
+      await mkdir(join(repo, 'docs'));
+      await writeFile(join(repo, 'docs/base-only.txt'), 'base\n');
       await g(['add', '.']);
       await g(['commit', '-q', '-m', 'base advance']);
       await g(['checkout', '-q', 'feature']);
@@ -601,6 +602,19 @@ describe('engine/rebase — path classifier (FR-5)', () => {
     expect(isCodeOrTestPath('.docs/plans/x.md')).toBe(false);
     expect(isCodeOrTestPath('README.md')).toBe(false);
     expect(isCodeOrTestPath('docs/guide.md')).toBe(false);
+  });
+
+  it('treats harness markdown outside the documentation paths as code/test', () => {
+    expect(
+      [
+        'agents/planner.md',
+        'skills/tdd/SKILL.md',
+        'tech-context/x.md',
+        'templates/y.md',
+        'HARNESS.md',
+        'AGENT_INSTRUCTIONS.md',
+      ].every(isCodeOrTestPath),
+    ).toBe(true);
   });
 
   it('filterCodeOrTestPaths keeps only invalidating paths', () => {
@@ -1649,7 +1663,8 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     // so classifyClean reports `noop` — yet the replay gives feat's commit a
     // new parent and therefore a new sha.
     await g(['checkout', '-q', 'main']);
-    await writeFile(join(repo, 'docs-note.md'), 'docs only\n');
+    await mkdir(join(repo, 'docs'));
+    await writeFile(join(repo, 'docs/docs-note.md'), 'docs only\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'docs: base advance']);
     const onto = (await g(['rev-parse', 'HEAD'])).stdout.trim();

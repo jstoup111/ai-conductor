@@ -382,7 +382,6 @@ export function isCodeOrTestPath(path: string): boolean {
   if (p.startsWith('.docs/')) return false;
   if (p.startsWith('docs/')) return false;
   if (/(^|\/)README(\.[A-Za-z]+)?$/i.test(p)) return false;
-  if (/\.(md|mdx|txt|rst)$/i.test(p)) return false;
   // Everything else (src/**, test/**, lib/**, config, etc.) is code/test.
   return true;
 }
