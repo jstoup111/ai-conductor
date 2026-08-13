@@ -28,12 +28,22 @@ export interface BaseAdvance {
  */
 export async function readBaseAdvanceHistory(projectRoot: string): Promise<BaseAdvance[]> {
   const eventsPath = join(projectRoot, '.pipeline', 'events.jsonl');
-  const content = await readFile(eventsPath, 'utf8');
+  let content: string;
+  try {
+    content = await readFile(eventsPath, 'utf8');
+  } catch {
+    return [];
+  }
   const advances: BaseAdvance[] = [];
 
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
-    const event = JSON.parse(line) as Record<string, unknown>;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
     if (event.type !== 'rebase_changed' || typeof event.ts !== 'string') continue;
     const paths = Array.isArray(event.allChangedPaths)
       ? event.allChangedPaths

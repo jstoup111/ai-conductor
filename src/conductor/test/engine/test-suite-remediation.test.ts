@@ -133,4 +133,33 @@ describe('recordTestSuiteRemediation', () => {
       },
     ]);
   });
+
+  it('skips malformed event records and treats an absent event log as empty history', async () => {
+    const absent = await readBaseAdvanceHistory(dir);
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'events.jsonl'), [
+      JSON.stringify({
+        type: 'rebase_changed',
+        changedPaths: ['src/first.ts'],
+        allChangedPaths: ['src/first.ts'],
+        ts: '2026-08-13T11:00:00.000Z',
+      }),
+      '{ this is not JSON',
+      JSON.stringify({
+        type: 'rebase_changed',
+        changedPaths: ['src/second.ts'],
+        allChangedPaths: ['src/second.ts'],
+        ts: '2026-08-13T11:01:00.000Z',
+      }),
+    ].join('\n') + '\n');
+
+    await expect(Promise.all([absent, readBaseAdvanceHistory(dir)])).resolves.toEqual([
+      [],
+      [
+        { paths: ['src/first.ts'], ts: '2026-08-13T11:00:00.000Z' },
+        { paths: ['src/second.ts'], ts: '2026-08-13T11:01:00.000Z' },
+      ],
+    ]);
+  });
 });
