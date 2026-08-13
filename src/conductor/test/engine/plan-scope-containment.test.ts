@@ -113,6 +113,19 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
+  it('allows docs and generated artifacts alongside task-declared paths', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: [
+          'src/conductor/src/engine/config.ts',
+          'docs/reference/configuration.md',
+          'CHANGELOG.md',
+        ],
+        task,
+      }),
+    ).toEqual({ allowed: true });
+  });
+
   it('allows a path widened by a Scope trailer for this commit', () => {
     expect(
       evaluateScopeContainment({
