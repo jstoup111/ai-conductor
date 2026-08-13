@@ -1371,9 +1371,6 @@ assert "undeterminable checkout: identity line names it unverifiable" \
   "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
 assert "undeterminable checkout: offers no update" \
   "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
-assert "undeterminable checkout: writes no currentVersion" \
-  "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
-
 # A stale cache is deliberately not an identity source. It must remain
 # untouched and must not turn an undeterminable checkout into an update offer.
 HOME_DIR=$(make_isolated_home)
@@ -1383,6 +1380,33 @@ assert "undeterminable checkout: stale record does not resurrect an offer" \
   "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
 assert "undeterminable checkout: leaves pre-existing currentVersion untouched" \
   "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
+# ─── Task 13: no reachable release tag ────────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Task 13 — no reachable release tag${NC}"
+
+# v0.3.0 remains in this repository but is not merged into the orphan HEAD.
+# This is deliberately distinct from the earlier behavior coverage: it proves
+# the fixture's Git precondition before asserting the user-visible outcome.
+REPO=$(make_repo "t13-no-reachable-tag")
+git -C "$REPO" checkout -q --orphan no-release-history
+git -C "$REPO" reset -q
+printf 'orphan checkout\n' > "$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m "orphan checkout"
+HOME_DIR=$(make_isolated_home)
+
+assert "no-reachable-tag fixture: no v*.*.* tag is merged into HEAD" \
+  "$([ -z "$(git -C "$REPO" tag --merged HEAD -l 'v*.*.*')" ] && echo 0 || echo 1)"
+run_update "$REPO" "$HOME_DIR"
+assert "no-reachable-tag fixture: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+assert "no-reachable-tag fixture: reports an unverifiable identity" \
+  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
+assert "no-reachable-tag fixture: offers no update" \
+  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
+assert "no-reachable-tag fixture: writes no currentVersion" \
+  "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
 
 # ─── Story 5: no-TTY guidance ───────────────────────────────────────────────
 
