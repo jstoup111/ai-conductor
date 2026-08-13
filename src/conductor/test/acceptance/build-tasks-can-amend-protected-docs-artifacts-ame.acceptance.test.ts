@@ -195,6 +195,13 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
     expect(text).toMatch(/(?:cannot|unable to)[\s\S]{0,180}determine[\s\S]{0,180}current behavior[\s\S]{0,240}correctness[\s\S]{0,100}assumption gate[\s\S]{0,160}(?:rather than|never)[\s\S]{0,100}delet/i);
     expect(text).not.toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
   });
+
+  it('keeps the additive amendment form while excepting story artifacts from amendment records', async () => {
+    const text = await readContract('HARNESS.md');
+
+    expect(text).toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
+    expect(text).toMatch(/\.docs\/stories\/[\s\S]{0,200}replace[\s\S]{0,120}in place[\s\S]{0,120}no amendment record/i);
+  });
 });
 
 describe('TS-2: the authoring boundary exposes a blocking protected-target check', () => {

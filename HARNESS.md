@@ -89,10 +89,11 @@ narrow or broaden the requested outcome.
 
 ### DECIDE Artifact Amendment Ownership
 
-When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE amends that artifact
-in place on the spec branch before the first BUILD entry. Add the correction beside the original
-assertion in this additive form; never rewrite or delete the original text and never create a separate
-amendment record:
+When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE corrects that artifact
+in place on the spec branch before the first BUILD entry. Story artifacts under `.docs/stories/` are the
+exception: replace superseded assertions in place and leave no amendment record. For all other accepted
+DECIDE artifacts, add the correction beside the original assertion in this additive form; never rewrite
+or delete the original text and never create a separate amendment record:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
