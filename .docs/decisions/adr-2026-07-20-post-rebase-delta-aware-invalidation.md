@@ -22,6 +22,16 @@ byte-identical and the rebase only reconciled a test file / pulled in unrelated 
    --name-only preTree..HEAD)`. Because the feature's own commits appear in *both* trees, this
    tree-to-tree diff already captures **main-side changes + conflict resolutions**, and
    `isCodeOrTestPath` (`rebase.ts:164`) already excludes `.docs/`, `CHANGELOG.md`, and markdown.
+
+   > **Amended 2026-08-13 by #1535:** the blanket markdown exclusion described here no longer
+   > holds. `adr-2026-08-13-markdown-default-inversion` inverts the predicate's default so that
+   > only `.docs/`, `docs/`, `README*`, and `CHANGELOG.md` are excluded, and all other markdown —
+   > `agents/*.md`, `skills/**/SKILL.md`, `tech-context/`, `templates/`, root `HARNESS.md` and
+   > `AGENT_INSTRUCTIONS.md` — is classified as code/test. Reason: 47 test files read that
+   > markdown as data, so excluding it under-declared the gate surfaces, which this ADR's own
+   > binding soundness invariant (below) names as a correctness bug and instructs to widen toward
+   > re-run. This ADR's Decision is unchanged — it governs how a classified delta maps to
+   > per-gate preserve-or-rerun, not which paths are classified as code/test.
 2. `applyRebaseVerdicts` (`rebase.ts:780`) invalidates a **fixed** set on any `changed` outcome —
    `{build, build_review, wiring_check, (+manual_test if it ran)}` (`rebase.ts:857`). It uses
    `changedCodePaths` **only** for the human-readable evidence string (`rebase.ts:813`), never to
