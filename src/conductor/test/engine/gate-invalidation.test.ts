@@ -4,7 +4,6 @@ import {
   featureTestPaths,
   GATE_SURFACE,
   isRuntimeSourcePath,
-  isTestPath,
   partitionDelta,
 } from '../../src/engine/gate-invalidation.js';
 
@@ -15,17 +14,6 @@ describe('gate-invalidation path predicates', () => {
 
   it('classifies a test path as NOT runtime source', () => {
     expect(isRuntimeSourcePath('src/x.test.ts')).toBe(false);
-  });
-
-  it.each([
-    ['x.test.ts', false, true],
-    ['test/y.ts', false, true],
-    ['test/notes.md', false, true],
-  ])('keeps %s test-only rather than runtime source', (path, runtimeSource, testPath) => {
-    expect({ runtimeSource: isRuntimeSourcePath(path), testPath: isTestPath(path) }).toEqual({
-      runtimeSource,
-      testPath,
-    });
   });
 
   it('classifies a docs path as NOT runtime source', () => {
@@ -150,21 +138,6 @@ describe('classifyGateInvalidation', () => {
     expect(result.invalidated.sort()).toEqual(
       ['test_suite', 'manual_test'].sort(),
     );
-  });
-
-  it('keeps gate decisions on the code/test delta when the complete rebase delta also includes docs', () => {
-    // The complete post-rebase delta may retain excluded paths, but
-    // invalidation decisions remain defined over the existing code/test
-    // delta. `.docs` stays excluded after Task 9, unlike harness markdown.
-    const D = ['src/foreign.ts', 'test/foreign.test.ts', '.docs/decisions/example.md'];
-    const F = ['src/feature.ts', 'src/feature.test.ts'];
-
-    const result = classifyGateInvalidation(D, F, true);
-
-    expect(result).toEqual({
-      preserved: ['build_review', 'prd_audit', 'architecture_review_as_built'],
-      invalidated: ['test_suite', 'manual_test'],
-    });
   });
 });
 

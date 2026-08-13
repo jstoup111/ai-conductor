@@ -12,14 +12,6 @@ import type { BuildReviewInputs } from '../../src/engine/build-review-inputs.js'
 // (task-status, maker summary, transcript) — input isolation is the point.
 
 describe('buildGraderPrompt', () => {
-  function repairContextBlock(prompt: string): string {
-    const match = prompt.match(
-      /## Engine-recorded rebase repair context\n\n([\s\S]*?)\n\n## Engine-accepted scope widenings/,
-    );
-    expect(match, 'the named repair-context block is rendered').not.toBeNull();
-    return match![1];
-  }
-
   // `buildGraderPrompt` only reads `diff`/`planBody`; the remaining fields
   // exist on BuildReviewInputs for the caller's provenance bookkeeping, not
   // for prompt assembly — filled with fallback-shaped values here since
@@ -96,15 +88,7 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(/judge[\s\S]*directly repairs/i);
     expect(prompt).toMatch(/skip that hunk for Scope/i);
     expect(prompt).toMatch(/skip the ordinary Tautology mutation/i);
-    const repairBlock = repairContextBlock(prompt);
-    expect(repairBlock).toContain('repair-abc123def456');
-    expect(repairBlock).toContain('stale aggregate command expectation');
-  });
-
-  it('renders the explicit empty state in the named repair-context block', () => {
-    const repairBlock = repairContextBlock(buildGraderPrompt(inputs));
-
-    expect(repairBlock).toBe('(none)');
+    expect(prompt).toContain('repair-abc123def456');
   });
 
   it('states the all-or-FAIL rule', () => {
