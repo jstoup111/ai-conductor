@@ -83,6 +83,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'deprecated_step',
   'rebase_changed',
   'rebase_gate_invalidated',
+  'build_review_repair_context',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -299,8 +300,36 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 74 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(74);
+  it('defines and persists the three closed build-review repair-context provenance cases', () => {
+    const provenance = [
+      {
+        type: 'build_review_repair_context',
+        disposition: 'context_available',
+        repairCount: 2,
+      },
+      {
+        type: 'build_review_repair_context',
+        disposition: 'none_warranted',
+      },
+      {
+        type: 'build_review_repair_context',
+        disposition: 'no_join',
+      },
+    ] satisfies ConductorEvent[];
+
+    expect({
+      provenance,
+      sink: EVENT_SINKS.build_review_repair_context,
+      persisted: persistedEventTypes().includes('build_review_repair_context'),
+    }).toEqual({
+      provenance,
+      sink: { render: false, persist: true, audit: false },
+      persisted: true,
+    });
+  });
+
+  it('is total over all 75 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(75);
   });
 
   it('routes verdict_freshness to every sink', () => {

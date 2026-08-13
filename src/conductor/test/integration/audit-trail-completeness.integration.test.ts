@@ -88,6 +88,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   verdict_freshness: 'friction-mapped',
   build_review_base: 'not-audited-by-design',
   build_review_stale_mirage_regrade: 'not-audited-by-design',
+  build_review_repair_context: 'not-audited-by-design',
   mode_skip: 'not-audited-by-design', // skipped steps must have zero records
   build_stall: 'not-audited-by-design',
   build_progress: 'not-audited-by-design',
@@ -258,6 +259,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'build_review_stale_mirage_regrade',
     mergeBase: 'abc123',
     regradeCount: 1,
+  },
+  build_review_repair_context: {
+    type: 'build_review_repair_context',
+    disposition: 'context_available',
+    repairCount: 1,
   },
   mode_skip: { type: 'mode_skip', step: 'bootstrap', mode: 'fresh', reason: 'already bootstrapped' },
   build_stall: {

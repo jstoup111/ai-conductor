@@ -42,6 +42,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   verdict_freshness: { render: true, persist: true, audit: true },
   build_review_base: { render: true, persist: false, audit: false },
   build_review_stale_mirage_regrade: { render: true, persist: false, audit: false },
+  build_review_repair_context: { render: false, persist: true, audit: false },
   mode_skip: { render: false, persist: true, audit: false },
   build_stall: { render: true, persist: true, audit: false },
   build_progress: { render: true, persist: true, audit: false },
