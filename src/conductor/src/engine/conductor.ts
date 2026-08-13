@@ -182,6 +182,7 @@ import {
 import {
   bumpKickbackGateInLedger,
   clearKickbackLedger,
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
   resetKickbackGateCumulativeInLedger,
   writeKickbackLedger,
@@ -7358,9 +7359,14 @@ export class Conductor {
                 const kickback = await consumeKickbackBudget('build_review', evidence);
                 const count = kickback.entry.count;
                 if (kickback.cumulativeExhausted) {
-                  const reason = 'build_review cumulative kickback cap exceeded';
+                  const reason =
+                    `build_review cumulative kickback cap exceeded (cumulative ` +
+                    `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
+                    `${kickback.entry.lastReason || 'no reasons recorded'}`;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;

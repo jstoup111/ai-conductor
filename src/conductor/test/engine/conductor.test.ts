@@ -192,10 +192,18 @@ describe('engine/conductor', () => {
       config: { build_review: { enabled: true } },
     });
 
+    const haltReasons: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReasons.push(event.reason);
+    });
+
     await conductor.run();
 
     expect(calls).toEqual(['build_review']);
     expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    expect(haltReasons).toEqual([
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): tautology: fixture failure\n[tautology] fixture failure',
+    ]);
   });
 
   it('keeps the interactive CLI constructor free of daemon operator-park options', async () => {
