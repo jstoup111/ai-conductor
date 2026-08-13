@@ -243,6 +243,16 @@ describe('buildGraderPrompt', () => {
     expect(empty).toMatch(/Engine-derived removal evidence[\s\S]*\(none\)/);
   });
 
+  it('defines removal maintenance through all three per-test conditions', () => {
+    const prompt = buildGraderPrompt(inputs);
+    expect(prompt).toMatch(/all three conditions/i);
+    expect(prompt).toMatch(/specific deleted file[\s\S]*deleted export[\s\S]*removed type member/i);
+    expect(prompt).toMatch(/changed lines reference[\s\S]*specific removal/i);
+    expect(prompt).toMatch(/adds no assertion about behavior that[\s\S]*still exists/i);
+    expect(prompt).toMatch(/per changed test, never[\s\S]*per diff/i);
+    expect(prompt).toMatch(/adds a new behavioral assertion[\s\S]*measured normally/i);
+  });
+
 
   it('never references task-status, maker summary, or maker internal state', () => {
     const prompt = buildGraderPrompt(inputs);

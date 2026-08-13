@@ -84,6 +84,14 @@ recorded stale base-state expectations, skip the ordinary Tautology mutation
 check and instead verify the pre-repair test fails against the rebased state
 while the repaired test passes. Unmatched work remains subject to every rubric.
 
+For a changed test to count as removal maintenance, all three conditions must
+hold: (1) Engine-derived removal evidence contains a specific deleted file,
+deleted export, or removed type member; (2) that test's changed lines reference
+that specific removal; and (3) the change adds no assertion about behavior that
+still exists after this diff. Evaluate this predicate per changed test, never
+per diff: deleting something does not exempt every test it touches. A test that
+also adds a new behavioral assertion is still measured normally on that assertion.
+
 Completeness must be judged holistically: read the plan and the diff as a
 whole and form a judgement of whether the diff, taken together, delivers
 everything the plan describes. Do NOT reason about completeness on a
