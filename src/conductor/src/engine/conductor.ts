@@ -7423,6 +7423,7 @@ export class Conductor {
                     to: reworkTarget,
                     evidence: reworkEvidence,
                     count,
+                    cumulativeCount: kickback.entry.cumulative,
                   });
                   pendingRetryHints.set(reworkTarget, reworkHint);
 

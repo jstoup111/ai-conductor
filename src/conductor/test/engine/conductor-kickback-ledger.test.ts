@@ -13,6 +13,7 @@ import {
 import { HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 
 describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
   let dir: string;
@@ -269,8 +270,14 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       },
     };
 
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<Extract<ConductorEvent, { type: 'kickback' }>> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+
     await new Conductor({
-      stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
+      stateFilePath: statePath, stepRunner: runner, events,
       projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
       fromStep: 'build_review', maxRetries: 1,
       config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
@@ -285,6 +292,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       priorVerdict: false,
       resolvedBefore: 1,
     });
+    expect(kickbacks[0]).toMatchObject({ count: 1, cumulativeCount: 3 });
   });
 
   it('clears build_review cumulative failures only after a PASS', async () => {
