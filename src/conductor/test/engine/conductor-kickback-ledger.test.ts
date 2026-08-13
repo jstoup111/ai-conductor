@@ -286,4 +286,64 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       resolvedBefore: 1,
     });
   });
+
+  it('clears build_review cumulative failures only after a PASS', async () => {
+    const initialEntry = {
+      count: 2,
+      cumulative: 4,
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      lastReason: 'repeated semantic failure',
+      priorVerdict: true,
+      resolvedBefore: 1,
+    };
+
+    const runVerdict = async (verdict: 'PASS' | 'FAIL') => {
+      await writeState(statePath, {
+        run_started_at: 1,
+        complexity_tier: 'S',
+        track: 'technical',
+        worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
+        conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
+        architecture_review: 'skipped', acceptance_specs: 'skipped', build: 'done',
+        wiring_check: 'skipped', test_suite: 'done',
+      });
+      await writeKickbackLedger(dir, { version: 1, gates: { build_review: initialEntry } });
+
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build_review') {
+            await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
+              verdict,
+              rubric: verdict === 'PASS'
+                ? { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false }
+                : { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+            }));
+            return { success: true };
+          }
+          throw new Error('stop after build_review status recording');
+        },
+      };
+
+      await new Conductor({
+        stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
+        projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
+        fromStep: 'build_review', maxRetries: 1,
+        config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
+      } as never).run().catch(() => {});
+
+      return (await readKickbackLedger(dir)).gates.build_review;
+    };
+
+    const passEntry = await runVerdict('PASS');
+    const failEntry = await runVerdict('FAIL');
+
+    expect([passEntry, failEntry]).toEqual([
+      { ...initialEntry, cumulative: 0 },
+      expect.objectContaining({ cumulative: initialEntry.cumulative + 1 }),
+    ]);
+  });
 });

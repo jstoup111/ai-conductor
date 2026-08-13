@@ -183,6 +183,7 @@ import {
   bumpKickbackGateInLedger,
   clearKickbackLedger,
   readKickbackLedger,
+  resetKickbackGateCumulativeInLedger,
   writeKickbackLedger,
 } from './kickback-ledger.js';
 import {
@@ -8130,6 +8131,9 @@ export class Conductor {
           // stamped 'done' here. For all other steps, here.
           if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
             await this.saveConductorStepStatus(state, step.name, 'done');
+          }
+          if (step.name === 'build_review') {
+            await resetKickbackGateCumulativeInLedger(this.projectRoot, step.name);
           }
           state[step.name] = 'done';
           lastSettledUnit = { kind: 'step', name: step.name };
