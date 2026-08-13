@@ -87,6 +87,14 @@ export async function sweepFeatureWorktreeScratch(options: {
   readonly worktreeBase: string;
   readonly events: ConductorEventEmitter;
   readonly log: (message: string) => void;
+  /**
+   * The daemon supplies a per-worktree scope so each cleanup decision reaches
+   * that feature's ledger before it is forwarded to daemon-wide rendering.
+   */
+  readonly startFeatureEventScope?: (worktreePath: string) => {
+    readonly events: ConductorEventEmitter;
+    stop(): void;
+  };
 }): Promise<void> {
   let entries: string[] = [];
   try {
@@ -95,10 +103,14 @@ export async function sweepFeatureWorktreeScratch(options: {
     options.log(`provider scratch worktree enumeration failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   for (const slug of entries) {
+    const worktreePath = join(options.worktreeBase, slug);
+    const scope = options.startFeatureEventScope?.(worktreePath);
     try {
-      await sweepScratch({ worktreeRoot: join(options.worktreeBase, slug), events: options.events });
+      await sweepScratch({ worktreeRoot: worktreePath, events: scope?.events ?? options.events });
     } catch (error) {
       options.log(`provider scratch sweep failed for ${slug}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      scope?.stop();
     }
   }
   await collectLegacyScratch({ events: options.events });

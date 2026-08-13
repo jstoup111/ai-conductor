@@ -10,6 +10,7 @@ import {
   type SandboxFs,
   withSandboxBuildEnv,
 } from '../../../src/engine/self-host/sandbox-build-env.js';
+import { verifyTokenLiveness } from '../../../src/engine/self-host/token-liveness.js';
 
 describe('minimal Claude self-host sandbox', () => {
   let root: string;
@@ -177,7 +178,7 @@ describe('minimal Claude self-host sandbox', () => {
     expect(await readdir(base)).toEqual([]);
   });
 
-  it('defaults the Claude config home and child env beneath worktree scratch', async () => {
+  it('keeps Claude sandbox state in worktree scratch while token liveness uses and removes OS temp state', async () => {
     const { baseDir: _explicitBaseDir, ...defaulted } = options();
     const scratchRoot = join(worktree, '.daemon', 'scratch', 'run-12', '1-claude');
     const sandbox = await provisionSandboxBuildEnv({
@@ -196,6 +197,18 @@ describe('minimal Claude self-host sandbox', () => {
       expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
       expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'sandbox-build-env', runId: 'run-12', attempt: 1, ownerPid: process.pid });
       expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
+
+      let livenessConfigDir = '';
+      await verifyTokenLiveness({
+        token: 'test-token',
+        spawner: async (_argv, env) => {
+          livenessConfigDir = env.CLAUDE_CONFIG_DIR!;
+          return { exitCode: 0, stdout: JSON.stringify({ is_error: false }), timedOut: false };
+        },
+      });
+      expect(livenessConfigDir.startsWith(`${tmpdir()}/`)).toBe(true);
+      expect(livenessConfigDir.startsWith(`${scratchRoot}/`)).toBe(false);
+      await expect(access(livenessConfigDir)).rejects.toThrow();
     } finally {
       await sandbox.teardown();
     }

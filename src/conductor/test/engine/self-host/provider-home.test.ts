@@ -4,7 +4,12 @@ import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFi
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import { provisionProviderHome } from '../../../src/engine/self-host/provider-home.js';
+import {
+  ProviderHomeProvisionError,
+  provisionProviderHome,
+  realProviderHomeFs,
+  type ProviderHomeFs,
+} from '../../../src/engine/self-host/provider-home.js';
 import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 
 const execFile = promisify(execFileCb);
@@ -141,6 +146,49 @@ describe('provider-aware self-host homes', () => {
     ).rejects.toThrow('[REDACTED]');
     expect((await (await import('node:fs/promises')).readdir(baseDir))).toEqual([]);
     await rm(root, { recursive: true, force: true });
+  });
+
+  it('preserves the missing-skills error and releases its default scratch lease', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-missing-skills-'));
+    const worktree = join(root, 'worktree');
+    const scratchHome = join(worktree, '.daemon', 'scratch', 'run-14', '5-claude');
+    await mkdir(worktree, { recursive: true });
+    let observedLease: Record<string, unknown> | undefined;
+    const fs: ProviderHomeFs = {
+      ...realProviderHomeFs,
+      pathExists: async (path) => {
+        if (path === join(worktree, 'skills')) {
+          observedLease = JSON.parse(await readFile(join(scratchHome, 'owner.json'), 'utf8'));
+          return false;
+        }
+        return realProviderHomeFs.pathExists(path);
+      },
+    };
+
+    try {
+      await expect(provisionProviderHome({
+        provider: { id: 'claude' },
+        worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-missing-skills',
+        runId: 'run-14',
+        attempt: 5,
+        fs,
+      })).rejects.toEqual(expect.objectContaining({
+        name: ProviderHomeProvisionError.name,
+        message: `Self-host worktree is missing required asset 'skills' at ${join(worktree, 'skills')}.`,
+      }));
+      expect(observedLease).toMatchObject({
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-missing-skills',
+        runId: 'run-14',
+        attempt: 5,
+        ownerPid: process.pid,
+      });
+      await expect(access(scratchHome)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('releases the production-written scratch lease when preparation fails after acquisition', async () => {

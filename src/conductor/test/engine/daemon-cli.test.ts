@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { access, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
+import { access, chmod, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
@@ -449,16 +449,15 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
   });
 
-  it('wires the CLI-created provider scratch sweep across concrete worktrees', async () => {
+  it('persists each CLI-created provider scratch cleanup decision to its feature ledger', async () => {
     const worktreeBase = join(root, '.worktrees');
-    const dead = join(worktreeBase, 'dead');
-    const live = join(worktreeBase, 'live');
-    const unleased = join(worktreeBase, 'unleased');
-    await Promise.all([mkdir(dead, { recursive: true }), mkdir(live, { recursive: true }), mkdir(unleased, { recursive: true })]);
-    const deadHome = await acquireScratchHome({ worktreeRoot: dead, repository: 'owner/repo', featureSlug: 'dead', runId: 'R', attempt: 1, provider: 'codex', ownerPid: 99999999 });
-    const liveHome = await acquireScratchHome({ worktreeRoot: live, repository: 'owner/repo', featureSlug: 'live', runId: 'R', attempt: 1, provider: 'claude', ownerPid: process.pid });
-    const noLease = join(unleased, '.daemon', 'scratch', 'R', '1-codex');
-    await mkdir(noLease, { recursive: true });
+    const feature = join(worktreeBase, 'provider-scratch');
+    await mkdir(feature, { recursive: true });
+    const deadHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, provider: 'codex', ownerPid: 99999999 });
+    const liveHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 2, provider: 'claude', ownerPid: process.pid });
+    const failedHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'F', attempt: 3, provider: 'codex', ownerPid: 99999998 });
+    const failedRun = join(feature, '.daemon', 'scratch', 'F');
+    await chmod(failedRun, 0o555);
     const daemonModule = await import('../../src/engine/daemon.js');
     const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async (deps) => {
       await deps.sweepProviderScratch?.();
@@ -478,8 +477,28 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
       expect(runDaemonSpy).toHaveBeenCalledOnce();
       await expect(access(deadHome)).rejects.toThrow();
       await expect(access(liveHome)).resolves.toBeUndefined();
-      await expect(access(noLease)).resolves.toBeUndefined();
+      await expect(access(failedHome)).resolves.toBeUndefined();
+      const ledger = (await readFile(join(feature, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const cleanupEvents = ledger.map((event) => ({
+        type: event.type,
+        repository: event.repository,
+        featureSlug: event.featureSlug,
+        runId: event.runId,
+        attempt: event.attempt,
+        path: event.path,
+        reason: event.reason,
+      }));
+      expect(cleanupEvents).toHaveLength(3);
+      expect(cleanupEvents).toEqual(expect.arrayContaining([
+        { type: 'scratch_cleanup_reclaimed', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, path: deadHome, reason: 'dead-owner' },
+        { type: 'scratch_cleanup_retained', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 2, path: liveHome, reason: 'live-owner' },
+        { type: 'scratch_cleanup_failed', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'F', attempt: 3, path: failedHome, reason: expect.any(String) },
+      ]));
     } finally {
+      await chmod(failedRun, 0o755);
       vi.restoreAllMocks();
     }
   });

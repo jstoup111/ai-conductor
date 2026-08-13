@@ -1458,7 +1458,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
-      sweepProviderScratch: () => sweepFeatureWorktreeScratch({ worktreeBase, events, log }),
+      sweepProviderScratch: () => sweepFeatureWorktreeScratch({
+        worktreeBase,
+        events,
+        log,
+        startFeatureEventScope: (worktreePath) => startFeatureEventPersistence(worktreePath, events),
+      }),
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls
       // back to polling alone. Otherwise, the daemon uses event-driven re-kick
