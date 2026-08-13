@@ -226,6 +226,23 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain('fed987cba654');
   });
 
+  it('renders populated and empty removal evidence as evidence, escaping backticks', () => {
+    const populated = buildGraderPrompt({
+      ...inputs,
+      removalContext: { deletedFiles: ['src/old`file.ts'], removedDeclarations: ['OldApi'], removedMembers: [{ declaration: 'Contract', member: 'oldField' }] },
+    });
+    const empty = buildGraderPrompt({
+      ...inputs,
+      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    });
+    expect(populated).toMatch(/removal evidence/i);
+    expect(populated).toMatch(/evidence,? not an exemption/i);
+    expect(populated).toContain('src/old\\`file.ts');
+    expect(populated).toContain('OldApi');
+    expect(populated).toContain('Contract.oldField');
+    expect(empty).toMatch(/Engine-derived removal evidence[\s\S]*\(none\)/);
+  });
+
 
   it('never references task-status, maker summary, or maker internal state', () => {
     const prompt = buildGraderPrompt(inputs);

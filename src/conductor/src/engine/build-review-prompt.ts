@@ -20,7 +20,19 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
     repairContext = [],
     acceptedWidenings = [],
     entryPoints = [],
+    removalContext,
   } = inputs;
+  const escapeEvidence = (value: string) => value.replaceAll('`', '\\`');
+  const renderedRemovalContext = removalContext && (
+    removalContext.deletedFiles.length + removalContext.removedDeclarations.length + removalContext.removedMembers.length > 0
+  )
+    ? [
+        ...removalContext.deletedFiles.map((path) => `- Deleted file: ${escapeEvidence(path)}`),
+        ...removalContext.removedDeclarations.map((name) => `- Removed exported declaration: ${escapeEvidence(name)}`),
+        ...removalContext.removedMembers.map(({ declaration, member }) =>
+          `- Removed member: ${escapeEvidence(declaration)}.${escapeEvidence(member)}`),
+      ].join('\n')
+    : '(none)';
   const renderedEntryPoints = entryPoints.length > 0
     ? entryPoints.map((entryPoint) => `- ${entryPoint}`).join('\n')
     : '(not-judged: config.wiring.entry_points is absent or empty; do not infer entry points)';
@@ -123,5 +135,12 @@ evidence, not exemptions, for the Scope rubric. Judge whether each rationale
 actually justifies the widened path:
 
 ${renderedAcceptedWidenings}
+
+## Engine-derived removal evidence
+
+The following removals are diff-derived evidence, not an exemption. Evaluate
+them only under the Tautology exception rules below:
+
+${renderedRemovalContext}
 `;
 }
