@@ -308,6 +308,15 @@ diff --git a/src/classify.ts b/src/classify.ts
     ]).toEqual([true, true, true, true, true]);
   });
 
+  it('requires a relocation audit in reasons without changing the verdict schema', () => {
+    const prompt = buildGraderPrompt(inputs);
+    const auditContract = 'For every changed test evaluated under the fixture relocation exception, append exactly one `[relocation-audit]` entry to `reasons` on PASS or FAIL: `[relocation-audit] (EXEMPTED|MEASURED): old path → new path; production hunk(s) (do|do not) force the move`. These audit-only entries are evidence, not failing-rubric summaries, and are permitted in addition to one-line summaries for failed rubric items. A PASS with one or more evaluated relocations requires the corresponding audit entries; a PASS with no evaluated relocations may leave `reasons` empty. `findings` remains failure-only and must be omitted or empty on PASS.';
+    const schema = "{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean, wiring: boolean } }";
+    const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    expect(prompt).toMatch(new RegExp(`${escapeRegex(auditContract)}[\\s\\S]*${escapeRegex(schema)}`));
+  });
+
   it('leaves every non-Tautology rubric item and the all-or-FAIL rule intact with populated removal evidence', () => {
     const prompt = buildGraderPrompt({
       ...inputs,
