@@ -565,6 +565,8 @@ export type ConductorEvent =
       /** A clean rebase changed code/test paths → downstream re-verification. */
       type: 'rebase_changed';
       changedPaths: string[];
+      /** Complete unfiltered delta, distinct from the gate-invalidation path set. */
+      allChangedPaths?: string[];
     }
   | {
       /** A gate was re-verified post-rebase in gate-first mode. */

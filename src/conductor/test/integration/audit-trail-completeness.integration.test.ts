@@ -301,7 +301,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   loop_converged: { type: 'loop_converged' },
   rebase_noop: { type: 'rebase_noop' },
   rebase_mergeable_skip: { type: 'rebase_mergeable_skip' },
-  rebase_changed: { type: 'rebase_changed', changedPaths: ['a.ts'] },
+  rebase_changed: {
+    type: 'rebase_changed',
+    changedPaths: ['a.ts'],
+    allChangedPaths: ['a.ts', 'docs/guide.md'],
+  },
   rebase_gate_reverified: { type: 'rebase_gate_reverified', step: 'build_review', skippedDispatch: false },
   rebase_gate_preserved: {
     type: 'rebase_gate_preserved',
