@@ -58,30 +58,45 @@ export interface ScopeCheckDependencies {
 /**
  * Check a staged commit against its Task trailer's declared paths.
  *
- * Exit 0 means allowed (including a report-only violation); 2 means positively
- * refused; every other value is intentionally an abstention so the shell hook
- * can fail open.
+ * Exit 0 means allowed (including a report-only violation or a check that does
+ * not apply); 2 means positively refused; 3 means the applicable check could
+ * not be resolved.
  */
 export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<number> {
+  const read = deps.readFile ?? ((path: string) => readFile(path, 'utf8'));
+  let commitMessage: string;
   try {
-    const read = deps.readFile ?? ((path: string) => readFile(path, 'utf8'));
-    const commitMessage = await read(deps.commitMessagePath);
-    const taskId = extractBodyTaskIds(commitMessage)[0];
-    if (taskId === undefined) return 1;
+    commitMessage = await read(deps.commitMessagePath);
+  } catch {
+    return 3;
+  }
+  const taskId = extractBodyTaskIds(commitMessage)[0];
+  if (taskId === undefined) return 0;
 
-    const taskStatus = await read(`${deps.projectRoot}/.pipeline/task-status.json`);
-    const tasks = parseScopeContainmentTasks(taskStatus);
-    const activeTask = tasks.find((task) => task.id === taskId);
-    if (
-      activeTask === undefined ||
-      activeTask.status !== 'in_progress' ||
-      activeTask.files === undefined ||
-      activeTask.files.length === 0 ||
-      !tasks.some((task) => task.files !== undefined)
-    ) {
-      return 1;
-    }
+  let taskStatus: string;
+  try {
+    taskStatus = await read(`${deps.projectRoot}/.pipeline/task-status.json`);
+  } catch (error) {
+    return isMissingFileError(error) ? 0 : 3;
+  }
 
+  let tasks: ScopeContainmentTask[];
+  try {
+    tasks = parseScopeContainmentTasks(taskStatus);
+  } catch {
+    return 3;
+  }
+  const activeTask = tasks.find((task) => task.id === taskId);
+  if (
+    activeTask === undefined ||
+    activeTask.status !== 'in_progress' ||
+    activeTask.files === undefined ||
+    activeTask.files.length === 0
+  ) {
+    return 0;
+  }
+
+  try {
     const stagedPaths = await (deps.stagedPaths ?? (() => listStagedPaths(deps.projectRoot)))();
     const result = evaluateScopeContainment({
       stagedPaths,
@@ -95,8 +110,12 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
     const enforce = deps.enforce ?? DEFAULT_SCOPE_CHECK_ENFORCEMENT;
     return enforce ? 2 : 0;
   } catch {
-    return 1;
+    return 3;
   }
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
 
 async function listStagedPaths(projectRoot: string): Promise<string[]> {

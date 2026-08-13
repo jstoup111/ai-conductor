@@ -122,11 +122,12 @@ describe('scope-check CLI', () => {
   });
 
   it.each([
-    ['missing Task trailer', 'feat(engine): no task\n', TASK_STATUS],
-    ['missing task-status data', MESSAGE, undefined],
-    ['a malformed task-status file', MESSAGE, '{'],
-    ['a stale task row', MESSAGE, JSON.stringify({ tasks: [{ id: '3', status: 'completed', files: ['config.ts'] }] })],
-  ])('abstains silently on %s in either mode', async (_name, message, status) => {
+    ['missing Task trailer', 'feat(engine): no task\n', TASK_STATUS, 0],
+    ['missing task-status data', MESSAGE, undefined, 0],
+    ['a stale task row', MESSAGE, JSON.stringify({ tasks: [{ id: '3', status: 'completed', files: ['config.ts'] }] }), 0],
+    ['an active task without declared files', MESSAGE, JSON.stringify({ tasks: [{ id: '3', status: 'in_progress', files: [] }] }), 0],
+    ['a malformed task-status file', MESSAGE, '{', 3],
+  ])('exits with the classified result for %s in either mode', async (_name, message, status, expectedExitCode) => {
     const output: string[] = [];
 
     for (const enforce of [false, true]) {
@@ -137,7 +138,7 @@ describe('scope-check CLI', () => {
           enforce,
           readFile: async (path) => {
             if (path.endsWith('task-status.json')) {
-              if (status === undefined) throw new Error('ENOENT');
+              if (status === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
               return status;
             }
             return message;
@@ -145,9 +146,23 @@ describe('scope-check CLI', () => {
           stagedPaths: async () => ['src/conductor/src/engine/artifacts.ts'],
           print: (line) => output.push(line),
         }),
-      ).resolves.toBe(1);
+      ).resolves.toBe(expectedExitCode);
     }
 
     expect(output).toEqual([]);
+  });
+
+  it('exits 3 when staged-path evaluation throws after resolving the active task', async () => {
+    await expect(
+      runScopeCheck({
+        projectRoot: '/repo',
+        commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+        readFile: async (path) =>
+          path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+        stagedPaths: async () => {
+          throw new Error('git failed');
+        },
+      }),
+    ).resolves.toBe(3);
   });
 });
