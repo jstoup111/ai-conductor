@@ -127,6 +127,8 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
     await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
     await git('checkout', '-b', 'feature/per-task-floor');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'hook-events.jsonl'), '', 'utf-8');
   }
 
   /** Commit a trivial file change carrying the given Task: trailer (or no
