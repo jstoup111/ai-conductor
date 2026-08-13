@@ -183,6 +183,27 @@ describe('recordTestSuiteRemediation', () => {
     await expect(readTestSuiteRemediations(dir)).resolves.toEqual([validRepair]);
   });
 
+  it('writes and reads the current repair shape over a legacy ledger', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'events.jsonl'), `${JSON.stringify({
+      type: 'rebase_changed',
+      allChangedPaths: ['agents/planner.md'],
+      ts: '2026-08-13T10:01:00.000Z',
+    })}\n`);
+    await writeFile(join(dir, BUILD_REVIEW_REPAIR_LEDGER), JSON.stringify({
+      consumedInvalidations: [101],
+      repairs: [],
+    }));
+
+    const record = await recordTestSuiteRemediation(dir, 'test_suite', {
+      reason: 'missing_test',
+      message: 'agents/planner.md has no matching test',
+      observedAt: Date.parse('2026-08-13T10:02:00.000Z'),
+    });
+
+    expect(await readTestSuiteRemediations(dir)).toEqual([record]);
+  });
+
   it('reads every recorded base advance in event-log order', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline', 'events.jsonl'), [
