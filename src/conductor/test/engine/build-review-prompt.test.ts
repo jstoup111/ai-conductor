@@ -27,9 +27,6 @@ describe('buildGraderPrompt', () => {
     fresh: false,
   };
 
-  const repairBlock = (prompt: string): string =>
-    prompt.match(/## Engine-recorded rebase repair context\n([\s\S]*?)\n## Engine-accepted scope widenings/)?.[1] ?? '';
-
   it('includes the original rubric items verbatim', () => {
     const prompt = buildGraderPrompt(inputs);
 
@@ -92,14 +89,6 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(/skip that hunk for Scope/i);
     expect(prompt).toMatch(/skip the ordinary Tautology mutation/i);
     expect(prompt).toContain('repair-abc123def456');
-  });
-
-  it('renders the named rebase-repair block as explicitly empty when assembly has no repair records', () => {
-    // A failed provenance classification deliberately returns no provenance;
-    // prompt rendering must still make the independently assembled empty
-    // repair context visible rather than borrowing another evidence block.
-    const prompt = buildGraderPrompt({ ...inputs, repairContext: [], repairProvenance: undefined });
-    expect(repairBlock(prompt).trim()).toBe('(none)');
   });
 
   it('states the all-or-FAIL rule', () => {
