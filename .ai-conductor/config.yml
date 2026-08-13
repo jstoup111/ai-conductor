@@ -48,6 +48,9 @@ build_progress_halt:
 # putting counterfactual/plan-holistic judgement on the strongest reasoner.
 # rootCause inherits the engine's medium-effort default (narrowest rubric).
 build_review:
+  # Enable this repository's advisory containment recordings. The shipped
+  # default remains false, so consumer repositories must opt in explicitly.
+  scopeContainmentEnforced: true
   rubrics:
     # tautology is opt-in engine-wide (#1682: its scoped-run preflight only
     # recognizes Vitest/pytest output); this repo runs Vitest, so enable it.
@@ -66,6 +69,13 @@ build_review:
     rootCause:
       llm_provider: codex
       model: gpt-5.6-sol
+
+wiring:
+  entry_points:
+    - src/conductor/src/index.ts
+    - src/conductor/src/daemon-cli.ts
+    - src/conductor/src/intake-loop-cli.ts
+    - src/conductor/src/engine/engineer-cli.ts
 
 # Native pre-SHIP aggregate verification. The project-owned npm script runs
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
