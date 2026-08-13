@@ -334,7 +334,7 @@ describe('integration/git-hooks-attribution', () => {
 
     it('commits an out-of-floor staged path with the scope advisory on stderr', async () => {
       await seedTaskStatus([
-        { id: '7', status: 'in_progress', files: ['declared.ts'] },
+        { id: '7', status: 'in_progress', files: ['src/declared.ts'] },
       ]);
       await mkdir(join(dir, '.ai-conductor'), { recursive: true });
       await writeFile(
