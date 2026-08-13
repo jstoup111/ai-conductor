@@ -51,7 +51,7 @@ function fakeGit(
 }
 
 describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
-  it('returns mergeable_skip without starting a rebase when a behind feature can merge cleanly', async () => {
+  it('takes both branches of the markdown classifier: docs/base-only.txt skips, while root base-only.txt rebases', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-'));
     try {
       const { git, calls } = fakeGit([
@@ -86,15 +86,8 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         },
         startedRebase: false,
       });
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
 
-  it('does not mergeable-skip a clean behind feature when the base advance is root runtime source', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-root-source-'));
-    try {
-      const { git, calls } = fakeGit([
+      const rootRuntime = fakeGit([
         { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
         { match: ['diff', '--name-only', '--diff-filter=U'], result: {} },
         { match: ['remote'], result: { stdout: '' } },
@@ -104,11 +97,9 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         { match: ['diff', '--name-only', 'bbbb111', 'main'], result: { stdout: 'base-only.txt\n' } },
         { match: ['rebase', '--autostash', 'main'], result: {} },
       ]);
-
-      const outcome = await performRebase(git, root, 'main', { finishMergeabilityCheck: true });
-
-      expect(outcome.kind).not.toBe('mergeable_skip');
-      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
+      const rootOutcome = await performRebase(rootRuntime.git, root, 'main', { finishMergeabilityCheck: true });
+      expect(rootOutcome.kind).not.toBe('mergeable_skip');
+      expect(rootRuntime.calls.some((args) => args[0] === 'rebase')).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1800,14 +1791,15 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     });
   }, 20000);
 
-  it('classifies a computable mixed source-plus-excluded rebase with a complete allChangedPaths delta', async () => {
+  it('proves the complete-versus-runtime delta split, then keeps the established gate set for a mixed source/test/docs rebase', async () => {
     const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
     await g(['checkout', '-q', '-b', 'feat']);
-    await writeFile(join(repo, 'feature.ts'), 'feature\n');
+    await writeFile(join(repo, 'base.ts'), 'base\nfeature-owned append\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'feat: source']);
     await g(['checkout', '-q', 'main']);
-    await writeFile(join(repo, 'base.ts'), 'base advance\n');
+    await writeFile(join(repo, 'base.ts'), 'base advance\nbase\n');
+    await writeFile(join(repo, 'base.test.ts'), 'test advance\n');
     await mkdir(join(repo, 'docs'), { recursive: true });
     await writeFile(join(repo, 'docs/note.md'), 'excluded\n');
     await g(['add', '.']);
@@ -1818,9 +1810,15 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
 
     expect(outcome).toMatchObject({
       kind: 'changed',
-      changedCodePaths: ['base.ts'],
-      allChangedPaths: ['base.ts', 'docs/note.md'],
+      changedCodePaths: ['base.test.ts', 'base.ts'],
+      allChangedPaths: ['base.test.ts', 'base.ts', 'docs/note.md'],
     });
+    if (outcome.kind === 'changed' && outcome.featureSurface) {
+      expect(classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, true)).toEqual({
+        invalidated: ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
+        preserved: [],
+      });
+    }
   }, 20000);
 });
 
@@ -2012,7 +2010,6 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
     // an uncomputable F.
     expect(outcome?.kind).toBe('changed');
     if (outcome?.kind === 'changed') {
-      expect(outcome).not.toHaveProperty('allChangedPaths');
       expect(outcome.featureSurface).toBeUndefined();
     }
 

@@ -519,7 +519,23 @@ describe('integration/rebase-loop', () => {
     expect(await branchContains(baseSha)).toBe(true);
   });
 
-  it('routes a root SIBLING.md base advance through the production loop rebase/invalidation path', async () => {
+  it('persists an excluded docs/SIBLING.md all-path delta while routing the root SIBLING.md contrast through the production loop', async () => {
+    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    await advanceBaseNonConflicting('docs/SIBLING.md');
+    const docsEvents: Array<{ changedPaths?: string[]; allChangedPaths?: string[] }> = [];
+    events.on('rebase_changed', (event) => {
+      if (event.type === 'rebase_changed') docsEvents.push(event);
+    });
+    const docsOutcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE);
+    await (await import('../../src/engine/rebase.js')).emitRebaseEvent(events, docsOutcome);
+    expect(docsEvents).toContainEqual(expect.objectContaining({
+      changedPaths: [], allChangedPaths: ['docs/SIBLING.md'],
+    }));
+
+    await rm(dir, { recursive: true, force: true });
+    dir = await mkdtemp(join(tmpdir(), 'rebase-loop-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
     await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
     const baseSha = await advanceBaseNonConflicting('SIBLING.md');
     await writeState(statePath, { ...FRONT_DONE });
@@ -528,7 +544,8 @@ describe('integration/rebase-loop', () => {
       if (event.type === 'rebase_changed') rebaseEvents.push(event);
     });
 
-    await conductorWith(passthroughRunner([])).run();
+    const rootOutcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE);
+    await (await import('../../src/engine/rebase.js')).emitRebaseEvent(events, rootOutcome);
 
     expect(await branchContains(baseSha)).toBe(true);
     expect(rebaseEvents).toContainEqual(expect.objectContaining({

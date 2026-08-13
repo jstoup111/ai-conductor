@@ -288,7 +288,20 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(true);
   });
 
-  it('root-level markdown is runtime source, so normal rebase does not take the docs-only mergeable skip', async () => {
+  it('retains an excluded docs/c.md rebase record while the root c.md contrast is runtime source', async () => {
+    ({ repo, g } = await buildCleanRepo('docs/c.md'));
+    const docsEvents: Array<{ changedPaths?: string[]; allChangedPaths?: string[] }> = [];
+    events = new ConductorEventEmitter();
+    events.on('rebase_changed', (event) => {
+      if (event.type === 'rebase_changed') docsEvents.push(event);
+    });
+    const docsOutcome = await rebaseModule.performRebase(rebaseModule.makeGitRunner(repo), repo, 'main');
+    await rebaseModule.emitRebaseEvent(events, docsOutcome);
+    expect(docsEvents).toContainEqual(expect.objectContaining({
+      changedPaths: [], allChangedPaths: ['docs/c.md'],
+    }));
+    await rm(repo, { recursive: true, force: true });
+
     ({ repo, g } = await buildCleanRepo('c.md'));
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();

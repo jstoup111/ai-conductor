@@ -243,7 +243,7 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
     await rm(repo, { recursive: true, force: true });
   });
 
-  it('FR-2/FR-5: a docs-only resolution reclassifies as noop (no downstream re-verify)', async () => {
+  it('FR-2/FR-5: docs/notes.md resolves as noop, while a root notes.md conflict resolves as changed', async () => {
     const git = makeGitRunner(repo);
     const pre = await performRebase(git, repo, 'main');
     expect(pre.kind).toBe('conflict_halt');
@@ -260,49 +260,39 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
     // docs/notes.md is a docs path → noop (FR-5: docs never invalidate build/manual_test),
     // even though the rebase completed and the branch is now current.
     expect(outcome.kind).toBe('noop');
+    if (outcome.kind === 'noop') expect(outcome.allChangedPaths).toEqual(['docs/notes.md']);
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
     expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).toContain('feat: notes');
-  });
-});
 
-describe('engine/rebase — resolution reclassification: root markdown → changed', () => {
-  let repo: string;
-  const g = (args: string[]) => execFile('git', args, { cwd: repo });
-  const gc = (args: string[]) =>
-    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
-
-  beforeEach(async () => {
-    repo = await mkdtemp(join(tmpdir(), 'rebase-resolution-root-'));
-    await initTestRepo(repo);
-    await writeFile(join(repo, 'notes.md'), 'base\n');
-    await g(['add', '.']);
-    await g(['commit', '-q', '-m', 'init']);
-    await g(['checkout', '-q', '-b', 'feat']);
-    await writeFile(join(repo, 'notes.md'), 'feature notes\n');
-    await g(['commit', '-q', '-am', 'feat: notes']);
-    await g(['checkout', '-q', 'main']);
-    await writeFile(join(repo, 'notes.md'), 'main notes\n');
-    await g(['commit', '-q', '-am', 'main: notes']);
-    await g(['checkout', '-q', 'feat']);
-  });
-
-  afterEach(async () => {
-    await rm(repo, { recursive: true, force: true });
-  });
-
-  it('keeps a root notes.md conflict runtime-source after resolution instead of reclassifying it as docs-only noop', async () => {
-    const git = makeGitRunner(repo);
-    const pre = await performRebase(git, repo, 'main');
-    expect(pre.kind).toBe('conflict_halt');
-
-    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
-      await writeFile(join(repo, 'notes.md'), 'merged notes\n');
-      await g(['add', 'notes.md']);
-      await gc(['rebase', '--continue']);
-      return { resolved: true };
-    }, 3);
-
-    expect(outcome.kind).toBe('changed');
+    const rootRepo = await mkdtemp(join(tmpdir(), 'rebase-resolution-root-contrast-'));
+    const rootGit = (args: string[]) => execFile('git', args, { cwd: rootRepo });
+    const rootGc = (args: string[]) => execFile('git', ['-c', 'core.editor=true', ...args], { cwd: rootRepo });
+    try {
+      await initTestRepo(rootRepo);
+      await writeFile(join(rootRepo, 'notes.md'), 'base\n');
+      await rootGit(['add', '.']);
+      await rootGit(['commit', '-q', '-m', 'init']);
+      await rootGit(['checkout', '-q', '-b', 'feat']);
+      await writeFile(join(rootRepo, 'notes.md'), 'feature notes\n');
+      await rootGit(['commit', '-q', '-am', 'feat: notes']);
+      await rootGit(['checkout', '-q', 'main']);
+      await writeFile(join(rootRepo, 'notes.md'), 'main notes\n');
+      await rootGit(['commit', '-q', '-am', 'main: notes']);
+      await rootGit(['checkout', '-q', 'feat']);
+      const rootRunner = makeGitRunner(rootRepo);
+      const rootPre = await performRebase(rootRunner, rootRepo, 'main');
+      expect(rootPre.kind).toBe('conflict_halt');
+      const rootOutcome = await resolveRebaseConflicts(rootRunner, rootRepo, rootPre, async () => {
+        await writeFile(join(rootRepo, 'notes.md'), 'merged notes\n');
+        await rootGit(['add', 'notes.md']);
+        await rootGc(['rebase', '--continue']);
+        return { resolved: true };
+      }, 3);
+      expect(rootOutcome).toMatchObject({ kind: 'changed', changedCodePaths: ['notes.md'], allChangedPaths: ['notes.md'] });
+      expect((await rootGit(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+    } finally {
+      await rm(rootRepo, { recursive: true, force: true });
+    }
   });
 });
 
