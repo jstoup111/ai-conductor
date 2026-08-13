@@ -176,7 +176,6 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
   it.each([
     ['conflict-check', 'skills/conflict-check/SKILL.md'],
     ['architecture-review', 'skills/architecture-review/SKILL.md'],
-    ['stories', 'skills/stories/SKILL.md'],
   ])('%s requires the additive dated mutation now, never a later task or parallel record', async (_name, path) => {
     const text = await readContract(path);
 
@@ -185,6 +184,14 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
     expect(text).toMatch(/original[\s\S]{0,160}(?:remain|preserv|never (?:rewrite|delete))/i);
     expect(text).toMatch(/no (?:separate|parallel) (?:record|ledger|artifact)/i);
     expect(text).toMatch(/never[\s\S]{0,180}(?:later phase|BUILD|plan task|defer)/i);
+  });
+
+  it('requires stories to replace superseded assertions in place without an amendment record', async () => {
+    const text = await readContract('skills/stories/SKILL.md');
+
+    expect(text).toMatch(/replace[\s\S]{0,200}(?:in place|superseded)/i);
+    expect(text).toMatch(/no[\s\S]{0,80}amendment record/i);
+    expect(text).not.toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
   });
 });
 
