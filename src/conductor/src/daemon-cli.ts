@@ -2184,7 +2184,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         ? `${event.baseRef}@${(event.baseSha ?? 'unknown').slice(0, 12)} (${event.baseKind ?? 'unknown'})`
         : 'base';
       log(
-        `${dot} ${chalk.green('✓')} ${chalk.green(`rebase skipped — cleanly mergeable with ${against}, no code/test changes on it since the merge-base`)}`,
+        `${dot} ${chalk.green('✓')} ${chalk.green(`rebase skipped — cleanly mergeable with ${against}`)}`,
       );
       break;
     }

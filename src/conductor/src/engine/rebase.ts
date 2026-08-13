@@ -109,23 +109,8 @@ export interface ResolvedBase {
   kind: 'remote' | 'local';
   /** The bare branch name (without `origin/`), e.g. `main` / `trunk`. */
   branch: string;
-  /**
-   * Why a `local` base was chosen, when it was chosen as a FALLBACK rather than
-   * because the repository genuinely has no origin.
-   *
-   * The distinction is load-bearing for the mergeable-skip policy. `no-origin`
-   * means the local branch IS the truth — nothing it could be stale against.
-   * `discovery-failed` / `fetch-failed` mean an origin exists and we simply
-   * could not read it, so the local branch may be arbitrarily far behind the
-   * base this branch will actually be merged into. Undefined for a `remote`
-   * base.
-   */
+  /** Why a `local` base was chosen instead of the origin default branch. */
   degraded?: 'no-origin' | 'discovery-failed' | 'fetch-failed';
-}
-
-/** True when this base cannot be trusted to represent what the branch merges into. */
-export function isDegradedBase(base: ResolvedBase): boolean {
-  return base.degraded === 'discovery-failed' || base.degraded === 'fetch-failed';
 }
 
 /**
@@ -523,65 +508,6 @@ export class ProtectedArtifactSealRejection extends Error {
  *   changed            → clean rebase that changed code/test paths (FR-5).
  *   conflict_halt      → a conflict or rebase error; rebase left paused.
  */
-/**
- * Decide whether a TEXTUALLY clean prospective merge is enough to skip the
- * rebase entirely.
- *
- * `git merge-tree --write-tree --quiet` proves only that the two trees do not
- * collide. It proves nothing about whether this branch's gates — `build_review`
- * grades the plan against the diff, `test_suite` proves an exact tree,
- * `manual_test` exercises runtime behavior — were formed against the base that
- * is actually going to be merged into. Skipping on textual cleanliness alone
- * ships a feature validated against a base that has moved on.
- *
- * Two refusals, both deterministic and both fail-closed:
- *
- *   - **Degraded base.** When origin exists but discovery or `git fetch`
- *     failed, `resolveBase` silently compares against LOCAL `<base>`, which in
- *     a daemon worktree can be arbitrarily far behind origin — so the 'clean'
- *     verdict is meaningless. A repository with genuinely NO origin is not
- *     degraded: its local base is the truth.
- *   - **The base moved in code.** When the base has gained code or test paths
- *     since this branch's merge-base, every gate verdict on this branch predates
- *     them. Rebase and let the existing delta-aware invalidation decide what to
- *     re-verify.
- *
- * An uncomputable merge-base or delta is not skippable: the justification for
- * the skip could not be established, and shipping on an unestablished
- * justification is exactly the failure this guard exists for.
- */
-export async function classifyMergeableSkip(
-  git: GitRunner,
-  base: ResolvedBase,
-): Promise<
-  | { skippable: true; baseSha: string | null }
-  | { skippable: false; reason: 'degraded-base' | 'base-moved-in-code' | 'base-delta-uncomputable' }
-> {
-  if (isDegradedBase(base)) {
-    return { skippable: false, reason: 'degraded-base' };
-  }
-
-  const mergeBaseResult = await git(['merge-base', 'HEAD', base.ref]);
-  const mergeBase = mergeBaseResult.exitCode === 0 ? mergeBaseResult.stdout.trim() : '';
-  if (!mergeBase) {
-    return { skippable: false, reason: 'base-delta-uncomputable' };
-  }
-
-  let baseDelta: string[];
-  try {
-    baseDelta = await changedPathsBetween(git, mergeBase, base.ref);
-  } catch {
-    return { skippable: false, reason: 'base-delta-uncomputable' };
-  }
-  if (baseDelta.some(isCodeOrTestPath)) {
-    return { skippable: false, reason: 'base-moved-in-code' };
-  }
-
-  const shaResult = await git(['rev-parse', base.ref]);
-  const baseSha = shaResult.exitCode === 0 && shaResult.stdout.trim() ? shaResult.stdout.trim() : null;
-  return { skippable: true, baseSha };
-}
-
 /** Optional capabilities injectable into `performRebase` (Task 15). */
 /**
  * The running feature's `feature_desc`, read from the worktree's own conduct
@@ -671,18 +597,13 @@ export async function performRebase(
     ? await classifyProspectiveMerge(git, base.ref)
     : undefined;
   if (prospectiveMerge === 'clean') {
-    const skip = await classifyMergeableSkip(git, base);
-    if (skip.skippable) {
-      return {
-        kind: 'mergeable_skip',
-        baseRef: base.ref,
-        baseSha: skip.baseSha,
-        baseKind: base.kind,
-      };
-    }
-    // Not skippable: fall through to the real rebase below. A textually clean
-    // merge rebases cleanly too, so this costs a `changed`/`noop` outcome and a
-    // downstream re-verification — never a conflict-resolution loop.
+    const shaResult = await git(['rev-parse', base.ref]);
+    return {
+      kind: 'mergeable_skip',
+      baseRef: base.ref,
+      baseSha: shaResult.exitCode === 0 && shaResult.stdout.trim() ? shaResult.stdout.trim() : null,
+      baseKind: base.kind,
+    };
   }
   // A reported conflict (and an indeterminate assessment) deliberately falls
   // through to the established seal, rebase, and bounded resolver path below.
@@ -1218,7 +1139,7 @@ export async function applyRebaseVerdicts(
         ? 'branch already current with base'
         : outcome.kind === 'mergeable_skip'
           ? `branch is mergeable with ${outcome.baseRef}@${outcome.baseSha ?? 'unknown'} ` +
-            `(${outcome.baseKind}), which has no code/test changes since the merge-base; rebase skipped`
+            `(${outcome.baseKind}); rebase skipped`
         : outcome.kind === 'changed' && outcome.featureSurface === undefined
           ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
           : 'rebased onto base (code changed — downstream re-verify)',
