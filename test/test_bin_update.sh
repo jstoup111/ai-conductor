@@ -1261,9 +1261,8 @@ run_update_tty "$REPO" "$HOME_DIR" n
 assert "post-release before newer tag: reports identity and offers v0.3.0 → v0.4.0" \
   "$( [ "$CODE" -eq 0 ] && case "$OUT" in *"1 commit past v0.3.0"*) true;; *) false;; esac && case "$OUT" in *"v0.3.0 → v0.4.0"*) true;; *) false;; esac && echo 0 || echo 1)"
 
-# A checkout between release tags with neither an exact tag nor a previously
-# recorded tagged identity cannot safely compare releases. It must report that
-# status as unverifiable instead of seeding from the latest remote tag.
+# A checkout between release tags still has a reachable v0.3.0 baseline, so it
+# has a determinable post-release identity even without a recorded cache.
 REPO=$(make_repo "i17-unknown-identity")
 git -C "$REPO" commit -q --allow-empty -m "between releases"
 BETWEEN_RELEASES_SHA=$(git -C "$REPO" rev-parse HEAD)
@@ -1273,9 +1272,14 @@ git -C "$REPO" checkout -q "$BETWEEN_RELEASES_SHA"
 HOME_DIR=$(make_isolated_home)
 
 run_update "$REPO" "$HOME_DIR"
-assert "unknown tagged identity does not offer an update" "$(case "$OUT" in *"Harness update available"*) echo 1;; *) echo 0;; esac)"
-assert "unknown tagged identity reports an unverifiable installed version" "$(case "$OUT" in *"unverifiable"*) echo 0;; *) echo 1;; esac)"
-assert "unknown tagged identity does not record the latest tag" "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
+# See .docs/decisions/adr-2026-08-09-unverifiable-trigger-is-no-reachable-tag.md.
+assert "between-releases checkout offers v0.3.0 → v0.4.0" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
+# See .docs/decisions/adr-2026-08-09-unverifiable-trigger-is-no-reachable-tag.md.
+assert "between-releases checkout reports its post-release identity and source" \
+  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: v0.3.0+1 (source: checkout)' && echo 0 || echo 1)"
+# See .docs/decisions/adr-2026-08-09-unverifiable-trigger-is-no-reachable-tag.md.
+assert "between-releases checkout records its v0.3.0 baseline, not v0.4.0" \
+  "$( [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" != "v0.4.0" ] && echo 0 || echo 1)"
 
 # A non-exact checkout can still be a tagged install when its prior successful
 # update recorded the tag. That record is the fallback authority.
