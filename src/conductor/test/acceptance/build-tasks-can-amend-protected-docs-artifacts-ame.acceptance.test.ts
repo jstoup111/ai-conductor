@@ -186,6 +186,14 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
     expect(text).toMatch(/never[\s\S]{0,180}(?:later phase|BUILD|plan task|defer)/i);
   });
 
+  it('keeps conflict-check additive for non-story artifacts while replacing story assertions in place', async () => {
+    const text = await readContract('skills/conflict-check/SKILL.md');
+
+    expect(text).toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
+    expect(text).toMatch(/(?:non-story|other)[\s\S]{0,160}(?:original[\s\S]{0,120}(?:remain|preserv)|additive)/i);
+    expect(text).toMatch(/stor(?:y|ies)[\s\S]{0,160}(?:replace|replacement)[\s\S]{0,100}in place[\s\S]{0,100}(?:no|without)[\s\S]{0,60}(?:amendment )?record/i);
+  });
+
   it('requires stories to replace superseded assertions in place without an amendment record', async () => {
     const text = await readContract('skills/stories/SKILL.md');
 
