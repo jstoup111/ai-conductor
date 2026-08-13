@@ -2,11 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import {
+  readBaseAdvanceHistory,
   readTestSuiteRemediations,
   type TestSuiteRemediationRecord,
 } from './test-suite-remediation.js';
 import type { AcceptedScopeWidening } from './per-task-commit-floor.js';
 import { deriveBuildReviewRemovals, type BuildReviewRemovalContext } from './build-review-removals.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -90,6 +92,7 @@ export class MergeBaseError extends Error {
 export async function assembleBuildReviewInputs(
   git: GitRunner,
   planPath: string,
+  events?: Pick<ConductorEventEmitter, 'emit'>,
 ): Promise<BuildReviewInputs> {
   const resolution = await resolveFreshBase(git);
 
@@ -131,6 +134,23 @@ export async function assembleBuildReviewInputs(
   const planIsInFeatureRoot =
     basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs';
 
+  const repairContext = planIsInFeatureRoot
+    ? await readTestSuiteRemediations(featureRoot)
+    : [];
+
+  if (events) {
+    const disposition = repairContext.length > 0
+      ? { disposition: 'context_available' as const, repairCount: repairContext.length }
+      : planIsInFeatureRoot && (await readBaseAdvanceHistory(featureRoot)).length > 0
+        ? { disposition: 'no_join' as const }
+        : { disposition: 'none_warranted' as const };
+    try {
+      await events.emit({ type: 'build_review_repair_context', ...disposition });
+    } catch {
+      // Provenance is advisory: grader input assembly remains authoritative.
+    }
+  }
+
   return {
     diff: diffResult.stdout,
     planBody,
@@ -141,9 +161,6 @@ export async function assembleBuildReviewInputs(
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
     removalContext: deriveBuildReviewRemovals(diffResult.stdout),
-    repairContext:
-      planIsInFeatureRoot
-        ? await readTestSuiteRemediations(featureRoot)
-        : [],
+    repairContext,
   };
 }
