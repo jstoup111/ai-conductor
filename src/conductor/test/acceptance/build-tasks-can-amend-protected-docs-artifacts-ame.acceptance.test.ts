@@ -75,6 +75,24 @@ async function readContract(relativePath: string): Promise<string> {
   return readFile(join(REPO_ROOT, relativePath), 'utf8');
 }
 
+function hasStoryOnlyAmendmentException(contract: string): boolean {
+  const exception = contract.match(
+    /Story artifacts under `\.docs\/stories\/`[\s\S]{0,220}?exception[\s\S]{0,220}?\./i,
+  )?.[0];
+
+  return (
+    exception !== undefined &&
+    !/\b(?:plans?|specs?|ADRs?|architecture documents|coherence mappings)\b/i.test(exception)
+  );
+}
+
+function widenStoryAmendmentException(contract: string): string {
+  return contract.replace(
+    'Story artifacts under `.docs/stories/`',
+    'Story artifacts under `.docs/stories/`, plans, specs, and ADRs',
+  );
+}
+
 interface LandFixture {
   repo: string;
   worktree: string;
@@ -192,9 +210,8 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
 
     expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/stor(?:y|ies)[\s\S]{0,160}(?:replace|replacement)[\s\S]{0,100}in place[\s\S]{0,100}(?:no|without)[\s\S]{0,60}(?:amendment )?record/i);
-    expect(
-      'Story artifacts and all other accepted DECIDE artifacts are the exception.',
-    ).not.toMatch(additiveNonStoryContract);
+    expect(hasStoryOnlyAmendmentException(text)).toBe(true);
+    expect(hasStoryOnlyAmendmentException(widenStoryAmendmentException(text))).toBe(false);
   });
 
   it('keeps architecture-review additive for non-story artifacts while replacing story assertions in place', async () => {
@@ -203,9 +220,8 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
 
     expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/stor(?:y|ies)[\s\S]{0,160}(?:replace|replacement)[\s\S]{0,100}in place[\s\S]{0,100}(?:no|without)[\s\S]{0,60}(?:amendment )?record/i);
-    expect(
-      'Every accepted DECIDE artifact is exempt from the additive amendment.',
-    ).not.toMatch(additiveNonStoryContract);
+    expect(hasStoryOnlyAmendmentException(text)).toBe(true);
+    expect(hasStoryOnlyAmendmentException(widenStoryAmendmentException(text))).toBe(false);
   });
 
   it('requires stories to replace superseded assertions in place without an amendment record', async () => {
@@ -242,9 +258,8 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
 
     expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/\.docs\/stories\/[\s\S]{0,200}replace[\s\S]{0,120}in place[\s\S]{0,120}no amendment record/i);
-    expect(
-      'All accepted DECIDE artifacts are the exception: replace superseded assertions in place.',
-    ).not.toMatch(additiveNonStoryContract);
+    expect(hasStoryOnlyAmendmentException(text)).toBe(true);
+    expect(hasStoryOnlyAmendmentException(widenStoryAmendmentException(text))).toBe(false);
   });
 });
 
