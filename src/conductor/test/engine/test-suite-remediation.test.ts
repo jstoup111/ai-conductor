@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 
 import {
   BUILD_REVIEW_REPAIR_LEDGER,
+  readBaseAdvanceHistory,
   readTestSuiteRemediations,
   recordTestSuiteRemediation,
   wasInvalidatedByRebase,
@@ -100,5 +101,36 @@ describe('recordTestSuiteRemediation', () => {
     );
 
     expect(record?.id).toMatch(/^repair-/);
+  });
+
+  it('reads every recorded base advance in event-log order', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'events.jsonl'), [
+      JSON.stringify({ type: 'step_started', step: 'rebase', ts: '2026-08-13T10:00:00.000Z' }),
+      JSON.stringify({
+        type: 'rebase_changed',
+        changedPaths: ['src/gate.ts'],
+        allChangedPaths: ['src/gate.ts', 'docs/guide.md'],
+        ts: '2026-08-13T10:01:00.000Z',
+      }),
+      JSON.stringify({ type: 'gate_verdict', step: 'build_review', ts: '2026-08-13T10:02:00.000Z' }),
+      JSON.stringify({
+        type: 'rebase_changed',
+        changedPaths: ['test/gate.test.ts'],
+        allChangedPaths: ['test/gate.test.ts'],
+        ts: '2026-08-13T10:03:00.000Z',
+      }),
+    ].join('\n') + '\n');
+
+    await expect(readBaseAdvanceHistory(dir)).resolves.toEqual([
+      {
+        paths: ['src/gate.ts', 'docs/guide.md'],
+        ts: '2026-08-13T10:01:00.000Z',
+      },
+      {
+        paths: ['test/gate.test.ts'],
+        ts: '2026-08-13T10:03:00.000Z',
+      },
+    ]);
   });
 });

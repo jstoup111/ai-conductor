@@ -17,6 +17,34 @@ export interface TestSuiteRemediationRecord {
   rebaseInvalidatedAt: number;
 }
 
+export interface BaseAdvance {
+  paths: string[];
+  ts: string;
+}
+
+/**
+ * Read the complete path deltas from every recorded base advance. The JSONL
+ * sequence is append-only, so preserving its scan order preserves chronology.
+ */
+export async function readBaseAdvanceHistory(projectRoot: string): Promise<BaseAdvance[]> {
+  const eventsPath = join(projectRoot, '.pipeline', 'events.jsonl');
+  const content = await readFile(eventsPath, 'utf8');
+  const advances: BaseAdvance[] = [];
+
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue;
+    const event = JSON.parse(line) as Record<string, unknown>;
+    if (event.type !== 'rebase_changed' || typeof event.ts !== 'string') continue;
+    const paths = Array.isArray(event.allChangedPaths)
+      ? event.allChangedPaths
+      : event.changedPaths;
+    if (!Array.isArray(paths) || !paths.every((path) => typeof path === 'string')) continue;
+    advances.push({ paths, ts: event.ts });
+  }
+
+  return advances;
+}
+
 export function wasInvalidatedByRebase(
   verdict: { kickback?: { from?: string } } | null | undefined,
 ): boolean {
