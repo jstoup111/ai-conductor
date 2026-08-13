@@ -297,6 +297,7 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
 
   it('resolves without a new halt when the optional complete base-advance base cannot be computed', async () => {
     const onto = (await g(['rev-parse', 'main'])).stdout.trim();
+    const preSha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
     const realGit = makeGitRunner(repo);
     const pre = await performRebase(realGit, repo, 'main');
     expect(pre.kind).toBe('conflict_halt');
@@ -322,6 +323,20 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
     if (outcome.kind === 'changed' || outcome.kind === 'noop') {
       expect(outcome.allChangedPaths).toBeUndefined();
     }
+
+    // Contrast: the same resolution with a derivable pre-advance base carries
+    // the complete delta — the undefined above is attribution degrading
+    // gracefully, not a field the resolver never populates.
+    await g(['reset', '-q', '--hard', preSha]);
+    const rePre = await performRebase(realGit, repo, 'main');
+    expect(rePre.kind).toBe('conflict_halt');
+    const attributed = await resolveRebaseConflicts(realGit, repo, rePre, async () => {
+      await writeFile(join(repo, 'docs/notes.md'), 'merged notes again\n');
+      await g(['add', 'docs/notes.md']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3);
+    expect(attributed).toMatchObject({ kind: 'noop', allChangedPaths: ['docs/notes.md'] });
   });
 
   it('keeps replayed paths for invalidation while carrying the complete base advance separately', async () => {
