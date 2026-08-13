@@ -647,7 +647,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     }
   }, 30000);
 
-  it('persists the cumulative-cap loop_halt reason through the event spine', async () => {
+  it('carries the cumulative-cap reason on the emitted loop_halt and the operator halt marker', async () => {
     const state: Record<string, unknown> = {};
     for (const step of ALL_STEPS) {
       if (step.name === 'build_review') break;
@@ -660,8 +660,15 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     await writeKickbackLedger(dir, { version: 1, gates: { build_review: {
       count: 1, cumulative: 5, treeHash: 'previous-tree', lastReason: 'tautology: stale assertion', priorVerdict: true, resolvedBefore: 0,
     } } });
-    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
-    persister.start();
+    // Asserted on the emitter and the halt marker, NOT on .pipeline/events.jsonl:
+    // `loop_halt` is declared persist:false, and flipping that declaration is
+    // Task 1 of the loop-halt-never-reaches-events-jsonl feature (ADR
+    // adr-2026-08-11-halt-events-ride-the-persisted-spine). This feature owns
+    // the reason text, not the sink policy.
+    const haltReasons: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt' && typeof event.reason === 'string') haltReasons.push(event.reason);
+    });
     const runner: StepRunner = { run: async (step) => {
       if (step === 'build_review') await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
         verdict: 'FAIL', reasons: ['tautology: stale assertion'], findings: { tautology: ['stale assertion'] },
@@ -674,12 +681,11 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
       mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'build_review',
       config: { build_review: { enabled: true } },
     }).run();
-    persister.stop();
 
-    const eventsLog = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
-    expect(eventsLog.find((event) => event.type === 'loop_halt')?.reason).toBe(
-      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): tautology: stale assertion\n[tautology] stale assertion',
-    );
+    const expectedReason =
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): tautology: stale assertion\n[tautology] stale assertion';
+    expect(haltReasons).toContain(expectedReason);
+    expect(await readFile(join(dir, '.pipeline/HALT'), 'utf8')).toContain(expectedReason);
   }, 30000);
 
   it.each([

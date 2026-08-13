@@ -128,6 +128,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
 | `wiring` | object | none | [wiring](#wiring) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
+| `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
 | `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
 | `provider_preparation_timeout_minutes` | number | `5` | [provider_preparation_timeout_minutes](#provider_preparation_timeout_minutes) |
@@ -944,6 +945,31 @@ also not gated by this flag (`src/conductor/src/types/config.ts:302-308`).
 
 The flag applies to active build kickbacks only. `wiring_check` is a deprecated compatibility no-op
 and never produces a kickback. See [`.pipeline/build-outcome.json`](artifacts.md#core-state).
+
+## cumulative_kickback_bound
+
+Kill-switch for the cumulative `build_review` convergence bound.
+
+| Key | Type | Default |
+| --- | --- | --- |
+| `cumulative_kickback_bound.enabled` | boolean | `true` |
+
+Contract (`src/conductor/src/engine/config.ts:1056-1079`), mirroring
+[`kickback_escalation`](#kickback_escalation): absent or `null` yields `{ enabled: true }`; a
+boolean is taken as given; anything malformed — non-object, unknown inner key, or non-boolean
+`enabled` — is replaced with `{ enabled: true }` with **no warning**. A block carrying an unknown
+sibling key is replaced wholesale, so a sibling `enabled: false` in that block is NOT honored.
+
+The per-gate kickback counter resets whenever the tree moves, so a feature that changes the tree
+every lap can re-earn a full budget indefinitely. The cumulative counter is incremented outside the
+progress branch and is therefore tree-movement-proof: after
+`MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW` laps (`kickback-ledger.ts:35`), `build_review` terminates in
+an operator-visible `needs-human` halt naming the cumulative count instead of looping. A passing
+`build_review` resets the counter.
+
+Consumed at `src/conductor/src/engine/conductor.ts:3703` (`?? true`). Setting `enabled: false`
+disables only the terminal halt; the counter is still maintained and still reported on the
+`kickback` event's `cumulativeCount`, so the history stays observable.
 
 ## daemon_verbose
 

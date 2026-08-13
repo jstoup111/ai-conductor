@@ -154,7 +154,7 @@ ${renderedAcceptedWidenings}
 ## Engine-derived removal evidence
 
 The following removals are diff-derived evidence, not an exemption. Evaluate
-them only under the Tautology exception rules below:
+them only under the Tautology exception rules stated above:
 
 ${renderedRemovalContext}
 `;
