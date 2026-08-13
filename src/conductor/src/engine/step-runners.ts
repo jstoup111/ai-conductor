@@ -32,7 +32,10 @@ import {
 } from './artifacts.js';
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
-import { assembleBuildReviewInputs } from './build-review-inputs.js';
+import {
+  assembleBuildReviewInputs,
+  type BuildReviewRepairProvenance,
+} from './build-review-inputs.js';
 import {
   runContainmentFloor,
   runPerTaskCommitFloor,
@@ -1731,6 +1734,7 @@ export class DefaultStepRunner implements StepRunner {
     // step — this is pure fire-and-forget telemetry the conductor turns into
     // a `build_review_base` event after this runner returns.
     let baseFreshness: StepRunResult['baseFreshness'];
+    let repairProvenance: StepRunResult['repairProvenance'];
     try {
       baseFreshness = {
         mergeBase: inputs.mergeBase,
@@ -1738,11 +1742,17 @@ export class DefaultStepRunner implements StepRunner {
         remoteHeadSha: inputs.remoteHeadSha,
         fresh: inputs.fresh,
       };
+      // Task 24: grading provenance rides the same fire-and-forget telemetry
+      // path — the conductor emits `build_review_repair_context` from it.
+      repairProvenance = inputs.repairProvenance;
     } catch {
       baseFreshness = undefined;
+      repairProvenance = undefined;
     }
-    const withBaseFreshness = (r: StepRunResult): StepRunResult =>
-      baseFreshness ? { ...r, baseFreshness } : r;
+    const withBaseFreshness = (r: StepRunResult): StepRunResult => {
+      const withFreshness = baseFreshness ? { ...r, baseFreshness } : r;
+      return repairProvenance ? { ...withFreshness, repairProvenance } : withFreshness;
+    };
 
     // Per-task "work happened at all" floor (#781): purely additive,
     // non-blocking telemetry computed alongside the grader dispatch. It

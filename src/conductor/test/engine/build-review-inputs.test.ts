@@ -14,7 +14,6 @@ import type { BuildReviewInputs } from '../../src/engine/build-review-inputs.js'
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
-import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results (same pattern
 // as test/engine/rebase.test.ts's fakeGit).
@@ -286,24 +285,27 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.repairContext).toEqual([repair]);
     });
 
-    it('emits a closed provenance disposition for available, unwarranted, and unmatched repair context', async () => {
+    it('classifies a closed provenance disposition for available, unwarranted, and unmatched repair context', async () => {
       const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+
+      const advanceLedger = () =>
+        writeFile(
+          join(dir, '.pipeline/events.jsonl'),
+          JSON.stringify({
+            type: 'rebase_changed',
+            ts: new Date(100).toISOString(),
+            allChangedPaths: ['src/base.ts'],
+          }) + '\n',
+        );
 
       const cases = [
         {
           name: 'context available',
           prepare: async () => {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
-            await writeFile(
-              join(dir, '.pipeline/events.jsonl'),
-              JSON.stringify({
-                type: 'rebase_changed',
-                ts: new Date(100).toISOString(),
-                allChangedPaths: ['src/base.ts'],
-              }) + '\n',
-            );
+            await advanceLedger();
             await recordTestSuiteRemediation(dir, 'test_suite', {
               reason: 'command_failed',
               message: 'src/base.ts changed the aggregate command expectation',
@@ -321,14 +323,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           name: 'no join',
           prepare: async () => {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
-            await writeFile(
-              join(dir, '.pipeline/events.jsonl'),
-              JSON.stringify({
-                type: 'rebase_changed',
-                ts: new Date(100).toISOString(),
-                allChangedPaths: ['src/base.ts'],
-              }) + '\n',
-            );
+            await advanceLedger();
           },
           expected: { disposition: 'no_join' },
         },
@@ -337,41 +332,31 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       for (const scenario of cases) {
         await rm(join(dir, '.pipeline'), { recursive: true, force: true });
         await scenario.prepare();
-        const events = new ConductorEventEmitter();
-        const provenance: unknown[] = [];
-        events.on('build_review_repair_context', (event) => {
-          provenance.push(event);
-        });
 
-        await assembleBuildReviewInputs(realGit(), scopedPlanPath, events);
+        const inputs = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
 
-        expect(provenance, scenario.name).toEqual([
-          expect.objectContaining({
-            type: 'build_review_repair_context',
-            ...scenario.expected,
-          }),
-        ]);
+        expect(inputs.repairProvenance, scenario.name).toEqual(scenario.expected);
       }
     });
 
-    it('returns grader inputs when advisory provenance emission fails', async () => {
-      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
-      await mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+    it('leaves a plan outside a feature root unattributed rather than guessing a disposition', async () => {
+      const looseePlanPath = join(dir, 'plan.md');
+      await writeFile(looseePlanPath, '# Plan body\n\nFixture plan.\n');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/events.jsonl'),
+        JSON.stringify({
+          type: 'rebase_changed',
+          ts: new Date(100).toISOString(),
+          allChangedPaths: ['src/base.ts'],
+        }) + '\n',
+      );
 
-      const inputs = await assembleBuildReviewInputs(realGit(), scopedPlanPath, {
-        emit: async () => {
-          throw new Error('events ledger unavailable');
-        },
-      });
+      const inputs = await assembleBuildReviewInputs(realGit(), looseePlanPath);
 
-      expect(inputs).toMatchObject({
-        planBody: '# Plan body\n\nFixture plan.\n',
-        repairContext: [],
-      });
-      expect(inputs.diff).toContain('feature.txt');
+      expect(inputs.repairContext).toEqual([]);
+      expect(inputs.repairProvenance).toEqual({ disposition: 'none_warranted' });
     });
-
   });
 
   // Regression fixture for the stale-tracking-ref incident (#870/#872): a

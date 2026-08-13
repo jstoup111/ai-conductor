@@ -23,6 +23,7 @@ import {
   writeHaltMarker,
 } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
+import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import type {
   AuthenticationReadiness,
   CodexProbeFailure,
@@ -598,6 +599,14 @@ export interface StepRunResult {
     remoteHeadSha: string | null;
     fresh: boolean;
   };
+  /**
+   * Task 24 (rebase-invalidated-test-failures-never-reach-build): which of the
+   * three repair-context cases this build_review graded under, from
+   * `assembleBuildReviewInputs`. Pure telemetry — the conductor emits a
+   * `build_review_repair_context` event from it and never lets it affect the
+   * step outcome.
+   */
+  repairProvenance?: BuildReviewRepairProvenance;
 }
 
 export interface SpotAuditDispatchResult {
@@ -5866,6 +5875,21 @@ export class Conductor {
                 trackingRefSha: result.baseFreshness.trackingRefSha,
                 remoteHeadSha: result.baseFreshness.remoteHeadSha,
                 fresh: result.baseFreshness.fresh,
+              });
+            } catch {
+              // Never block/fail build_review over telemetry emission.
+            }
+          }
+
+          // Task 24 (rebase-invalidated-test-failures-never-reach-build):
+          // grading-provenance telemetry, emitted once per build_review that
+          // successfully assembled grader inputs. Same fire-and-forget
+          // contract as `build_review_base` above.
+          if (step.name === 'build_review' && result.repairProvenance) {
+            try {
+              await emitTracked({
+                type: 'build_review_repair_context',
+                ...result.repairProvenance,
               });
             } catch {
               // Never block/fail build_review over telemetry emission.

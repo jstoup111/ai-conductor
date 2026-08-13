@@ -10,7 +10,7 @@
  * - Stories 4/5: durable advance history -> deterministic gate failure ->
  *   gate-agnostic repair ledger, with unrelated failures left unattributed.
  * - Stories 6/7: repair ledger -> production build-review input assembly ->
- *   grader prompt + persisted grading-provenance event.
+ *   grader prompt + the grading-provenance disposition the conductor persists.
  *
  * Single-operation classifier, schema, malformed-ledger, lock, and legacy-
  * normalization cases remain owned by the plan's lower-layer TDD tasks.
@@ -272,13 +272,8 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
         observedAt: observedAt + 1,
       });
 
-      const inputs = await (assembleBuildReviewInputs as unknown as (
-        git: GitRunner,
-        plan: string,
-        events: ConductorEventEmitter,
-      ) => ReturnType<typeof assembleBuildReviewInputs>)(buildReviewGit(), planPath, events);
+      const inputs = await assembleBuildReviewInputs(buildReviewGit(), planPath);
       const prompt = buildGraderPrompt(inputs);
-      const ledger = await readEvents(eventsPath);
 
       expect(inputs.repairContext).toHaveLength(2);
       for (const repair of inputs.repairContext ?? []) {
@@ -287,11 +282,13 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
       }
       expect(prompt).toContain('This context is evidence, not an exemption');
       expect(prompt).toContain('Unmatched work remains subject to every rubric');
-      expect(ledger).toContainEqual(expect.objectContaining({
-        type: 'build_review_repair_context',
+      // The provenance the conductor persists as `build_review_repair_context`.
+      // Its emission leg (StepRunResult -> conductor -> ledger) is pinned by
+      // test/integration/gate-loop.test.ts's "build_review grading provenance".
+      expect(inputs.repairProvenance).toEqual({
         disposition: 'context_available',
         repairCount: 2,
-      }));
+      });
     } finally {
       persister.stop();
     }

@@ -3448,6 +3448,22 @@ TIER: M`,
       });
     });
 
+    // Task 24 (rebase-invalidated-test-failures-never-reach-build): the
+    // middle leg of grading provenance — whatever assembly classified must
+    // reach the conductor on StepRunResult, or the event is never emitted.
+    it('carries the assembled grading provenance through to the conductor', async () => {
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.repairProvenance).toEqual({ disposition: 'none_warranted' });
+    });
+
     it('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: false,

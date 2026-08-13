@@ -1659,6 +1659,66 @@ describe('integration/gate-loop', () => {
     });
   });
 
+  describe('build_review grading provenance (Task 24)', () => {
+    // The production emission leg: `runBuildReview` returns the provenance
+    // `assembleBuildReviewInputs` classified, and THIS loop — the configured
+    // production entry point — turns it into the persisted
+    // `build_review_repair_context` event. Without this wiring the event is
+    // unreachable outside tests.
+    async function runWithProvenance(
+      repairProvenance: unknown,
+    ): Promise<Array<Record<string, unknown>>> {
+      await writeState(statePath, { ...FRONT_DONE });
+      const runner: StepRunner = {
+        run: async (step) => {
+          if (step === 'build_review') {
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({ verdict: 'PASS', reasons: [] }),
+            );
+            return { success: true, ...(repairProvenance ? { repairProvenance } : {}) };
+          }
+          return satisfy(step);
+        },
+      };
+      const provenanceEvents: Array<Record<string, unknown>> = [];
+      events.on('build_review_repair_context', (event) => {
+        provenanceEvents.push(event as unknown as Record<string, unknown>);
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config: { build_review: { enabled: true } },
+        shipmentEvidence: validShipmentEvidence,
+      });
+      await conductor.run();
+      return provenanceEvents;
+    }
+
+    it('persists each distinguishable grading disposition returned by the build_review runner', async () => {
+      expect(
+        await runWithProvenance({ disposition: 'context_available', repairCount: 3 }),
+      ).toEqual([
+        expect.objectContaining({
+          type: 'build_review_repair_context',
+          disposition: 'context_available',
+          repairCount: 3,
+        }),
+      ]);
+    });
+
+    it('emits nothing when the runner assembled no provenance', async () => {
+      expect(await runWithProvenance(undefined)).toEqual([]);
+    });
+  });
+
   describe('build_review retry cap HALTs (TS-6)', () => {
     it('exactly MAX_KICKBACKS_PER_GATE (2) kickbacks then LOOP_HALT_MARKER + loop_halt, no further dispatch', async () => {
       await writeState(statePath, { ...FRONT_DONE });
