@@ -1961,6 +1961,7 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
     // an uncomputable F.
     expect(outcome?.kind).toBe('changed');
     if (outcome?.kind === 'changed') {
+      expect(outcome).not.toHaveProperty('allChangedPaths');
       expect(outcome.featureSurface).toBeUndefined();
     }
 
