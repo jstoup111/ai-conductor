@@ -13,6 +13,8 @@ import { evaluateScopeContainment } from './plan-scope-containment.js';
 import { parseScopeTrailers, type ScopeTrailer } from './scope-trailer.js';
 import { normalizeTasks } from './task-progress.js';
 
+const MAX_DERIVED_RATIONALE_LENGTH = 1_000;
+
 /**
  * Per-task work-happened floor (task 1 of the per-task-commit-floor plan):
  * for every plan task id, confirm it is EITHER covered by a commit carrying
@@ -155,11 +157,6 @@ export async function runContainmentFloor(args: {
           task: { id: task.id, status: 'in_progress', files: task.files },
           scopeTrailers,
         });
-        if (!result.allowed) {
-          violations.push({ taskId: task.id, sha: commit.sha, paths: result.offendingPaths });
-          continue;
-        }
-
         for (const scope of scopeTrailers) {
           if (!files.some((path) => path === scope.path || path.startsWith(`${scope.path}/`))) {
             continue;
@@ -167,14 +164,23 @@ export async function runContainmentFloor(args: {
           if (task.files.some((declaredPath) => fileMatchesPlanPath(scope.path, declaredPath))) {
             continue;
           }
-          const rationale = resolveScopeWideningRationale(scope.path, scopeTrailers);
-          if (rationale === undefined) continue;
           acceptedWidenings.push({
             path: scope.path,
-            ...rationale,
+            ...resolveScopeWideningRationale(scope.path, scopeTrailers, message),
             taskId: task.id,
             sha: commit.sha,
           });
+        }
+
+        if (!result.allowed) {
+          for (const path of result.offendingPaths) {
+            acceptedWidenings.push({
+              path,
+              ...resolveScopeWideningRationale(path, scopeTrailers, message),
+              taskId: task.id,
+              sha: commit.sha,
+            });
+          }
         }
       }
     }
@@ -194,11 +200,24 @@ export async function runContainmentFloor(args: {
 function resolveScopeWideningRationale(
   path: string,
   scopeTrailers: readonly ScopeTrailer[],
-): Pick<AcceptedScopeWidening, 'rationale' | 'derived'> | undefined {
+  commitMessage: string,
+): Pick<AcceptedScopeWidening, 'rationale' | 'derived'> {
   const trailer = scopeTrailers.find((scope) => scope.path === path);
-  if (trailer === undefined) return undefined;
+  if (trailer !== undefined) return { rationale: trailer.rationale, derived: false };
 
-  return { rationale: trailer.rationale, derived: false };
+  const rationale = commitMessage
+    .split('\n')
+    .filter((line) => !/^Task:\s/.test(line))
+    .join('\n')
+    .trim() || 'Commit message unavailable';
+
+  return {
+    rationale:
+      rationale.length > MAX_DERIVED_RATIONALE_LENGTH
+        ? `${rationale.slice(0, MAX_DERIVED_RATIONALE_LENGTH - 1)}…`
+        : rationale,
+    derived: true,
+  };
 }
 
 function skippedContainmentFloor(message: string): ContainmentFloorReport {
