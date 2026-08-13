@@ -13,7 +13,6 @@ const explore = contract('skills/explore/SKILL.md');
 const architectureReview = contract('skills/architecture-review/SKILL.md');
 const stories = contract('skills/stories/SKILL.md');
 const plan = contract('skills/plan/SKILL.md');
-const planner = contract('agents/planner.md');
 
 describe('Story 1: operator-controlled fix comprehensiveness', () => {
   it('asks how comprehensive the fix should be before confirming an approach and blocks without an answer', () => {
@@ -37,11 +36,11 @@ describe('Story 1: operator-controlled fix comprehensiveness', () => {
     }
   });
 
-  it('does not let the planner unconditionally widen or narrow the operator-confirmed outcome', () => {
-    expect(planner).toMatch(/operator-confirmed.+(?:breadth|scope)/is);
-    expect(planner).toMatch(/(?:do not|must not|never).+(?:widen|expand).+(?:without|unless).+operator/is);
-    expect(planner).toMatch(/(?:do not|must not|never).+narrow.+(?:outcome|scope)/is);
-    expect(planner).not.toMatch(/expand scope where valuable/i);
+  it('does not let planning unconditionally widen or narrow the operator-confirmed outcome', () => {
+    expect(plan).toMatch(/scope boundary:.+binding/is);
+    expect(plan).toMatch(/preserve.+confirmed.+(?:narrow|comprehensive).+(?:breadth|outcome)/is);
+    expect(plan).toMatch(/do not permit.+broader expansion.+unless.+operator confirms/is);
+    expect(plan).not.toMatch(/expand scope where valuable/i);
   });
 });
 
