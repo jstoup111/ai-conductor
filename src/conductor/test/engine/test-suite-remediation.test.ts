@@ -10,6 +10,7 @@ import {
   readBaseAdvanceHistory,
   readTestSuiteRemediations,
   recordTestSuiteRemediation,
+  resolveBaseAdvanceForFailure,
   wasInvalidatedByRebase,
 } from '../../src/engine/test-suite-remediation.js';
 
@@ -39,6 +40,18 @@ describe('failureMatchesBaseAdvance', () => {
         observedAt: '2026-08-13T10:00:00.000Z',
       }),
     ]).toEqual([true, false]);
+  });
+});
+
+describe('resolveBaseAdvanceForFailure', () => {
+  it('finds a prior matching advance across the feature history', () => {
+    const plannerAdvance = { paths: ['agents/planner.md'], ts: '2026-08-13T10:01:00.000Z' };
+    const latestAdvance = { paths: ['agents/evaluator.md'], ts: '2026-08-13T10:03:00.000Z' };
+
+    expect(resolveBaseAdvanceForFailure([plannerAdvance, latestAdvance], {
+      diagnostic: 'agents/planner.md has an invalid reference',
+      observedAt: '2026-08-13T10:04:00.000Z',
+    })).toBe(plannerAdvance);
   });
 });
 

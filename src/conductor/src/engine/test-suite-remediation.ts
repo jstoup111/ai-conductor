@@ -37,6 +37,13 @@ export function failureMatchesBaseAdvance(
     && diagnosticOverlapsBaseAdvance(advance, failure.diagnostic);
 }
 
+export function resolveBaseAdvanceForFailure(
+  advances: readonly BaseAdvance[],
+  failure: { diagnostic: string; observedAt: string },
+): BaseAdvance | undefined {
+  return advances.find((advance) => failureMatchesBaseAdvance(advance, failure));
+}
+
 /**
  * Read the complete path deltas from every recorded base advance. The JSONL
  * sequence is append-only, so preserving its scan order preserves chronology.
