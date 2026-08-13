@@ -293,10 +293,13 @@ else
   fail "finish must delegate aggregate verification without a project CLI name"
 fi
 
-if grep -q 'EXECUTED' <<<"$FINISH_SUITE_SECTION" && grep -q 'REUSED' <<<"$FINISH_SUITE_SECTION"; then
+FINISH_SUITE_TEXT="$(tr '\n' ' ' <<<"$FINISH_SUITE_SECTION")"
+
+if grep -qiE 'reuses a current passing result' <<<"$FINISH_SUITE_TEXT" \
+  && grep -qiE 'evidence is missing or stale.*verifier obtains' <<<"$FINISH_SUITE_TEXT"; then
   pass "finish accepts both EXECUTED and REUSED passing proof"
 else
-  fail "finish must recognize both EXECUTED and REUSED passing proof"
+  fail "finish must reuse current passing proof and obtain proof when evidence is missing or stale"
 fi
 
 if grep -qiE '\*\*Full test suite\*\*.*Run it fresh|Run (it|the full test suite) fresh' <<<"$FINISH_SUITE_SECTION"; then

@@ -31,6 +31,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { ConductorOptions, StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { readHaltClass } from '../../src/engine/halt-marker.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -193,14 +194,18 @@ describe('acceptance: cumulative build_review convergence bound (#1521 Stories 3
     expect(haltReasons[0]).toContain('6');
     expect(haltReasons[0]).toContain('5');
     expect(haltReasons[0]).toContain(lastReason);
+    // The sixth failed review consumes and persists the counter, but does not
+    // emit a kickback: the cap halts before it can rewind to build.
     expect(kickbacks).toEqual([
       { count: 1, cumulativeCount: 1 },
       { count: 1, cumulativeCount: 2 },
       { count: 1, cumulativeCount: 3 },
       { count: 1, cumulativeCount: 4 },
       { count: 1, cumulativeCount: 5 },
-      { count: 1, cumulativeCount: 6 },
     ]);
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { build_review: { cumulative: 6, count: 1 } },
+    });
   }, 60_000);
 });
 
