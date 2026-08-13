@@ -133,6 +133,28 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
     });
 
+    it('derives removal context from the exact assembled diff', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/old.ts b/src/old.ts\ndeleted file mode 100644\n' } },
+      ]);
+      await expect(assembleBuildReviewInputs(git, planPath)).resolves.toMatchObject({
+        removalContext: { deletedFiles: ['src/old.ts'], removedDeclarations: [], removedMembers: [] },
+      });
+    });
+
+    it('returns an explicitly empty removal context for an additive diff', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/new.ts b/src/new.ts\n+export const added = true;\n' } },
+      ]);
+      await expect(assembleBuildReviewInputs(git, planPath)).resolves.toMatchObject({
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+      });
+    });
+
     it('stale base: fetches, recomputes merge-base against the refreshed ref, fresh=false', async () => {
       const { git } = fakeGit([
         { match: ['remote'], result: { exitCode: 0, stdout: 'origin\n' } },

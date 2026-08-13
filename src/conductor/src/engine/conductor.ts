@@ -182,7 +182,9 @@ import {
 import {
   bumpKickbackGateInLedger,
   clearKickbackLedger,
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
+  resetKickbackGateCumulativeInLedger,
   writeKickbackLedger,
 } from './kickback-ledger.js';
 import {
@@ -3698,6 +3700,7 @@ export class Conductor {
     // Both the budget and this single-use baseline live in the durable ledger,
     // so daemon re-dispatch cannot reset either loop guard.
     const kickbackEscalationEnabled = this.config.kickback_escalation?.enabled ?? true;
+    const cumulativeKickbackBoundEnabled = this.config.cumulative_kickback_bound?.enabled ?? true;
 
     const pendingBuildKickbackGate = async (): Promise<string | null> => {
       const ledger = await readKickbackLedger(this.projectRoot);
@@ -3748,6 +3751,7 @@ export class Conductor {
           ...ledger.gates,
           [sourceGate]: {
             count: existing?.count ?? 0,
+            cumulative: existing?.cumulative ?? 0,
             treeHash: treeBefore,
             lastReason: existing?.lastReason ?? '',
             priorVerdict: false, // active D2 baseline: kickback began on a failing gate
@@ -7355,6 +7359,19 @@ export class Conductor {
                     : 'grader returned FAIL without reasons';
                 const kickback = await consumeKickbackBudget('build_review', evidence);
                 const count = kickback.entry.count;
+                if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
+                  const reason =
+                    `build_review cumulative kickback cap exceeded (cumulative ` +
+                    `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
+                    `${kickback.entry.lastReason || 'no reasons recorded'}`;
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
                 if (!kickback.exhausted) {
 
                   // #989: a build_review FAIL resolves a structured routing
@@ -7407,6 +7424,7 @@ export class Conductor {
                     to: reworkTarget,
                     evidence: reworkEvidence,
                     count,
+                    cumulativeCount: kickback.entry.cumulative,
                   });
                   pendingRetryHints.set(reworkTarget, reworkHint);
 
@@ -8129,6 +8147,9 @@ export class Conductor {
           // stamped 'done' here. For all other steps, here.
           if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
             await this.saveConductorStepStatus(state, step.name, 'done');
+          }
+          if (step.name === 'build_review') {
+            await resetKickbackGateCumulativeInLedger(this.projectRoot, step.name);
           }
           state[step.name] = 'done';
           lastSettledUnit = { kind: 'step', name: step.name };

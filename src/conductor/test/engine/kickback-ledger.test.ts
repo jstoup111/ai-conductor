@@ -2,10 +2,21 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
+
+import { rename } from 'node:fs/promises';
 import {
   bumpKickbackGate,
+  bumpKickbackGateInLedger,
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
+  resetKickbackGateCumulativeInLedger,
   writeKickbackLedger,
+  type KickbackGateEntry,
   type KickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
 
@@ -54,7 +65,7 @@ describe('kickback-ledger', () => {
   });
 
   it('round-trips populated gate entries', async () => {
-    const ledger: KickbackLedger = {
+    const ledger = {
       version: 1,
       gates: {
         wiring_check: {
@@ -67,34 +78,193 @@ describe('kickback-ledger', () => {
       },
     };
 
-    await writeKickbackLedger(dir, ledger);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger));
 
-    await expect(readKickbackLedger(dir)).resolves.toEqual(ledger);
+    await expect(readKickbackLedger(dir)).resolves.toEqual({
+      ...ledger,
+      gates: { wiring_check: { ...ledger.gates.wiring_check, cumulative: 0 } },
+    });
+  });
+
+  it('defaults a legacy build review entry without cumulative to zero', async () => {
+    const legacyLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'production export is orphaned',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyLedger));
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({
+      ...legacyLedger,
+      gates: {
+        build_review: {
+          ...legacyLedger.gates.build_review,
+          cumulative: 0,
+        },
+      },
+    });
+  });
+
+  it.each(['3', null])('rejects a malformed cumulative value of %j', async (cumulative) => {
+    const malformedLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'production export is orphaned',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(malformedLedger));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('corrupt ledger'));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('never leaves a torn ledger for readers during concurrent writes', async () => {
-    const ledgers: KickbackLedger[] = Array.from({ length: 10 }, (_, index) => ({
+    const legacyWinner = {
       version: 1,
       gates: {
         wiring_check: {
-          count: index + 1,
-          treeHash: `${index}`.padStart(40, '0'),
-          lastReason: `attempt ${index + 1}`,
+          count: 1,
+          treeHash: '0000000000000000000000000000000000000000',
+          lastReason: 'legacy winner',
           priorVerdict: false,
-          resolvedBefore: index,
+          resolvedBefore: 0,
         },
       },
-    }));
+    };
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyWinner));
 
-    await Promise.all(ledgers.map((ledger) => writeKickbackLedger(dir, ledger)));
+    const currentLedger: KickbackLedger = {
+      version: 1,
+      gates: {
+        wiring_check: {
+          count: 2,
+          cumulative: 1,
+          treeHash: '0000000000000000000000000000000000000001',
+          lastReason: 'current writer',
+          priorVerdict: false,
+          resolvedBefore: 1,
+        },
+      },
+    };
+    const originalRename = vi.mocked(rename).getMockImplementation()!;
+    let enteredRename!: () => void;
+    const renameStarted = new Promise<void>((resolve) => { enteredRename = resolve; });
+    let releaseRename!: () => void;
+    const releaseGate = new Promise<void>((resolve) => { releaseRename = resolve; });
+    vi.mocked(rename).mockImplementationOnce(async (from, to) => {
+      enteredRename();
+      await releaseGate;
+      return originalRename(from, to);
+    });
+
+    try {
+      const write = writeKickbackLedger(dir, currentLedger);
+      await renameStarted;
+      const observedDuringWrite = await readKickbackLedger(dir);
+      expect(observedDuringWrite).toEqual({
+        ...legacyWinner,
+        gates: {
+          wiring_check: { ...legacyWinner.gates.wiring_check, cumulative: 0 },
+        },
+      });
+
+      releaseRename();
+      await write;
+      await expect(readKickbackLedger(dir)).resolves.toEqual(currentLedger);
+    } finally {
+      vi.mocked(rename).mockImplementation(originalRename);
+    }
 
     const raw = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8');
     expect(() => JSON.parse(raw)).not.toThrow();
   });
 
+  it('resets only build review cumulative failures while retaining its count', async () => {
+    const ledger: KickbackLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 4,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'repeated semantic failure',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+        test_suite: {
+          count: 1,
+          cumulative: 3,
+          treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+          lastReason: 'unrelated test failure',
+          priorVerdict: false,
+          resolvedBefore: 6,
+        },
+      },
+    };
+    await writeKickbackLedger(dir, ledger);
+
+    await resetKickbackGateCumulativeInLedger(dir, 'build_review');
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({
+      ...ledger,
+      gates: {
+        ...ledger.gates,
+        build_review: { ...ledger.gates.build_review, cumulative: 0 },
+      },
+    });
+  });
+
+  it('treats resetting a missing build review ledger as a no-op', async () => {
+    await expect(resetKickbackGateCumulativeInLedger(dir, 'build_review')).resolves.toBeUndefined();
+
+    await expect(readFile(join(dir, '.pipeline/kickback-ledger.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it('does not interrupt a reset when the build review ledger cannot be read', async () => {
+    const unreadableLedgerPath = join(dir, '.pipeline/kickback-ledger.json');
+    await mkdir(unreadableLedgerPath, { recursive: true });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(resetKickbackGateCumulativeInLedger(dir, 'build_review')).resolves.toBeUndefined();
+      await expect(readFile(unreadableLedgerPath)).rejects.toMatchObject({ code: 'EISDIR' });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   describe('bumpKickbackGate', () => {
-    const existingEntry = {
+    const existingEntry: KickbackGateEntry = {
       count: 1,
+      cumulative: 0,
       treeHash: '0123456789abcdef0123456789abcdef01234567',
       lastReason: 'first failure',
       priorVerdict: false,
@@ -112,9 +282,59 @@ describe('kickback-ledger', () => {
         entry: {
           ...existingEntry,
           count: 2,
+          cumulative: 1,
           lastReason: 'different failure wording',
         },
+        cumulativeExhausted: false,
         exhausted: false,
+      });
+    });
+
+    it('increments the cumulative count whether progress resets the per-tree count or not', () => {
+      const changedTree = bumpKickbackGate({ ...existingEntry, count: 2, cumulative: 2 }, {
+        treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+        resolvedCount: existingEntry.resolvedBefore,
+        reason: 'tree moved',
+      });
+      const unchangedTree = bumpKickbackGate({ ...existingEntry, count: 1, cumulative: 2 }, {
+        treeHash: existingEntry.treeHash,
+        resolvedCount: existingEntry.resolvedBefore,
+        reason: 'still failing',
+      });
+
+      expect([changedTree.entry, unchangedTree.entry]).toMatchObject([
+        { cumulative: 3, count: 1 },
+        { cumulative: 3, count: 2 },
+      ]);
+    });
+
+    it('keeps cumulative build review failures across distinct trees isolated from test suite bumps', async () => {
+      const buildReviewEntries = [] as KickbackGateEntry[];
+      for (let index = 0; index < 8; index += 1) {
+        const { entry } = await bumpKickbackGateInLedger(dir, 'build_review', {
+            treeHash: `${index + 1}`.padStart(40, '0'),
+            resolvedCount: existingEntry.resolvedBefore,
+            reason: `build review failure ${index + 1}`,
+          });
+        buildReviewEntries.push(entry);
+      }
+      await bumpKickbackGateInLedger(dir, 'test_suite', {
+        treeHash: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+        resolvedCount: existingEntry.resolvedBefore,
+        reason: 'test suite failure',
+      });
+      const ledger = await readKickbackLedger(dir);
+
+      expect({
+        buildReviewCumulative: buildReviewEntries.map(({ cumulative }) => cumulative),
+        buildReviewCounts: buildReviewEntries.map(({ count }) => count),
+        buildReviewCumulativeAfterTestSuiteBump: ledger.gates.build_review?.cumulative,
+        testSuiteCumulative: ledger.gates.test_suite?.cumulative,
+      }).toEqual({
+        buildReviewCumulative: [1, 2, 3, 4, 5, 6, 7, 8],
+        buildReviewCounts: [1, 1, 1, 1, 1, 1, 1, 1],
+        buildReviewCumulativeAfterTestSuiteBump: 8,
+        testSuiteCumulative: 1,
       });
     });
 
@@ -163,6 +383,31 @@ describe('kickback-ledger', () => {
         entry: { count: 2 },
         exhausted: true,
       });
+    });
+
+    it('reports cumulative exhaustion only beyond the shared build review cap', () => {
+      const atCap = bumpKickbackGate(
+        { ...existingEntry, cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW - 1 },
+        {
+          treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+          resolvedCount: existingEntry.resolvedBefore,
+          reason: 'another semantic failure',
+        },
+      );
+      const beyondCap = bumpKickbackGate(
+        { ...existingEntry, cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW },
+        {
+          treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+          resolvedCount: existingEntry.resolvedBefore,
+          reason: 'one semantic failure too many',
+        },
+      );
+
+      expect({
+        cap: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+        atCap: atCap.cumulativeExhausted,
+        beyondCap: beyondCap.cumulativeExhausted,
+      }).toEqual({ cap: 5, atCap: false, beyondCap: true });
     });
   });
 });

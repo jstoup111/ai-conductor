@@ -518,6 +518,8 @@ export type ConductorEvent =
       evidence?: string;
       /** How many times this gate has been re-opened this feature. */
       count: number;
+      /** Total build-review laps across progress resets; absent for other kickback sources. */
+      cumulativeCount?: number;
       /**
        * #647 D3 (adr-2026-07-13-kickback-build-no-op-escalation): audit
        * discriminator distinguishing a kickback that produced real build

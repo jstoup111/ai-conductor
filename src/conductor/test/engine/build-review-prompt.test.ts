@@ -226,6 +226,80 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain('fed987cba654');
   });
 
+  it('renders populated and empty removal evidence as evidence, escaping backticks', () => {
+    const populated = buildGraderPrompt({
+      ...inputs,
+      removalContext: { deletedFiles: ['src/old`file.ts'], removedDeclarations: ['OldApi'], removedMembers: [{ declaration: 'Contract', member: 'oldField' }] },
+    });
+    const empty = buildGraderPrompt({
+      ...inputs,
+      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    });
+    expect(populated).toMatch(/removal evidence/i);
+    expect(populated).toMatch(/evidence,? not an exemption/i);
+    expect(populated).toContain('src/old\\`file.ts');
+    expect(populated).toContain('OldApi');
+    expect(populated).toContain('Contract.oldField');
+    expect(empty).toMatch(/Engine-derived removal evidence[\s\S]*\(none\)/);
+  });
+
+  it('defines removal maintenance through all three per-test conditions', () => {
+    const prompt = buildGraderPrompt(inputs);
+    expect(prompt).toMatch(/all three conditions/i);
+    expect(prompt).toMatch(/specific deleted file[\s\S]*deleted export[\s\S]*removed type member/i);
+    expect(prompt).toMatch(/changed lines reference[\s\S]*specific removal/i);
+    expect(prompt).toMatch(/adds no assertion about behavior that[\s\S]*still exists/i);
+    expect(prompt).toMatch(/per changed test, never[\s\S]*per diff/i);
+    expect(prompt).toMatch(/adds a new behavioral assertion[\s\S]*measured normally/i);
+  });
+
+  it('renders the two Tautology exceptions as an explicitly closed list', () => {
+    const prompt = buildGraderPrompt(inputs);
+    const exceptions = prompt.match(/The Tautology exceptions are an explicitly closed list:[\s\S]*?measured normally\./)?.[0] ?? '';
+    expect(exceptions).toMatch(/1\. Rebase repair:[\s\S]*Engine-recorded rebase repair context block/i);
+    expect(exceptions).toMatch(/2\. Removal maintenance:[\s\S]*Engine-derived removal evidence block/i);
+    expect(exceptions).toMatch(/qualifying under neither exception is measured normally/i);
+    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(2);
+  });
+
+  it('leaves every non-Tautology rubric item and the all-or-FAIL rule intact with populated removal evidence', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      removalContext: {
+        deletedFiles: ['src/conductor/src/engine/removed.ts'], removedDeclarations: ['RemovedApi'],
+        removedMembers: [{ declaration: 'Contract', member: 'removedMember' }],
+      },
+    });
+    const rubric = prompt.match(/Score the diff against exactly these (\w+) rubric items:\n([\s\S]*?)\n\nFor Wiring/)?.[2] ?? '';
+    const items = [...rubric.matchAll(/^\d+\. ([^:]+): ([\s\S]*?)(?=\n\d+\.|$)/gm)];
+    const nonTautology = items.filter(([, name]) => name !== 'Tautology').map(([, name, text]) => `${name}: ${text}`);
+    expect(nonTautology).toEqual(expect.arrayContaining([
+      expect.stringContaining('Scope: diff scoped to the plan, no unrelated files.'),
+      expect.stringContaining('Root cause: the change addresses the stated defect, not a symptom.'),
+      expect.stringContaining("Completeness: every planned task's work is present in the diff."),
+      expect.stringContaining('Wiring: a static property of the diff'),
+    ]));
+    const rubricCount = prompt.match(/exactly these (\w+) rubric items/)?.[1];
+    expect(rubricCount).toBeTruthy();
+    expect(prompt).toContain(`PASS only if all ${rubricCount} rubric items pass.`);
+
+    const removalBlock = prompt.match(/## Engine-derived removal evidence\n([\s\S]*?)$/)?.[1];
+    expect(removalBlock).toContain('src/conductor/src/engine/removed.ts');
+    expect(removalBlock).toContain('RemovedApi');
+    expect(removalBlock).toContain('Contract.removedMember');
+    expect(removalBlock).not.toMatch(/transcript|maker summary|task-status/i);
+
+    // Inspect only the fixed framing: evidence is intentionally rendered
+    // verbatim, so a legitimate path or symbol may itself contain a host or
+    // tool-like word.
+    const emptyRemovalBlock = buildGraderPrompt({
+      ...inputs,
+      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    }).match(/## Engine-derived removal evidence\n([\s\S]*?)$/)?.[1];
+    expect(emptyRemovalBlock).toBeDefined();
+    expect(emptyRemovalBlock).not.toMatch(/claude|codex|conduct-ts|\.pipeline\/|npm |pnpm |yarn |bun |shell|bash/i);
+  });
+
 
   it('never references task-status, maker summary, or maker internal state', () => {
     const prompt = buildGraderPrompt(inputs);

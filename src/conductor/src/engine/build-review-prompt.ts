@@ -20,7 +20,19 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
     repairContext = [],
     acceptedWidenings = [],
     entryPoints = [],
+    removalContext,
   } = inputs;
+  const escapeEvidence = (value: string) => value.replaceAll('`', '\\`');
+  const renderedRemovalContext = removalContext && (
+    removalContext.deletedFiles.length + removalContext.removedDeclarations.length + removalContext.removedMembers.length > 0
+  )
+    ? [
+        ...removalContext.deletedFiles.map((path) => `- Deleted file: ${escapeEvidence(path)}`),
+        ...removalContext.removedDeclarations.map((name) => `- Removed exported declaration: ${escapeEvidence(name)}`),
+        ...removalContext.removedMembers.map(({ declaration, member }) =>
+          `- Removed member: ${escapeEvidence(declaration)}.${escapeEvidence(member)}`),
+      ].join('\n')
+    : '(none)';
   const renderedEntryPoints = entryPoints.length > 0
     ? entryPoints.map((entryPoint) => `- ${entryPoint}`).join('\n')
     : '(not-judged: config.wiring.entry_points is absent or empty; do not infer entry points)';
@@ -71,6 +83,21 @@ If it does, skip that hunk for Scope. For a changed test that directly repairs
 recorded stale base-state expectations, skip the ordinary Tautology mutation
 check and instead verify the pre-repair test fails against the rebased state
 while the repaired test passes. Unmatched work remains subject to every rubric.
+
+For a changed test to count as removal maintenance, all three conditions must
+hold: (1) Engine-derived removal evidence contains a specific deleted file,
+deleted export, or removed type member; (2) that test's changed lines reference
+that specific removal; and (3) the change adds no assertion about behavior that
+still exists after this diff. Evaluate this predicate per changed test, never
+per diff: deleting something does not exempt every test it touches. A test that
+also adds a new behavioral assertion is still measured normally on that assertion.
+
+The Tautology exceptions are an explicitly closed list:
+1. Rebase repair: use the Engine-recorded rebase repair context block and only
+   the stale-base-state test rule stated above.
+2. Removal maintenance: use the Engine-derived removal evidence block and only
+   the three-condition per-test predicate stated above.
+A changed test qualifying under neither exception is measured normally.
 
 Completeness must be judged holistically: read the plan and the diff as a
 whole and form a judgement of whether the diff, taken together, delivers
@@ -123,5 +150,12 @@ evidence, not exemptions, for the Scope rubric. Judge whether each rationale
 actually justifies the widened path:
 
 ${renderedAcceptedWidenings}
+
+## Engine-derived removal evidence
+
+The following removals are diff-derived evidence, not an exemption. Evaluate
+them only under the Tautology exception rules stated above:
+
+${renderedRemovalContext}
 `;
 }

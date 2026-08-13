@@ -66,6 +66,7 @@ import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -127,6 +128,211 @@ describe('engine/conductor', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('halts build_review for a human when consuming the sixth cumulative kickback', async () => {
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build_review') break;
+      state[step.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'cumulative-build-review-cap';
+    state.run_started_at = Date.now();
+    await writeState(statePath, state as ConductState);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 1,
+          cumulative: 5,
+          treeHash: 'previous-tree',
+          lastReason: 'previous failure',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calls.push(step);
+        if (step === 'build_review') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/build-review.json'),
+            JSON.stringify({
+              verdict: 'FAIL',
+              reasons: ['tautology: fixture failure'],
+              findings: { tautology: ['fixture failure'] },
+              rubric: {
+                tautology: true,
+                scope: false,
+                rootCause: false,
+                completeness: false,
+                wiring: false,
+              },
+            }),
+          );
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'build_review',
+      maxRetries: 1,
+      config: { build_review: { enabled: true } },
+    });
+
+    const haltReasons: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReasons.push(event.reason);
+    });
+
+    await conductor.run();
+
+    expect(calls).toEqual(['build_review']);
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    expect(haltReasons).toEqual([
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): tautology: fixture failure\n[tautology] fixture failure',
+    ]);
+  });
+
+  it('emits one cumulative-cap halt when build_review exhausts both kickback bounds', async () => {
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build_review') break;
+      state[step.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'both-build-review-kickback-bounds';
+    state.run_started_at = Date.now();
+    await writeState(statePath, state as ConductState);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 5,
+          treeHash: null,
+          lastReason: 'previous failure',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build_review') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/build-review.json'),
+            JSON.stringify({
+              verdict: 'FAIL',
+              reasons: ['scope: unchanged tree'],
+              findings: { scope: ['unchanged tree'] },
+              rubric: {
+                tautology: false,
+                scope: true,
+                rootCause: false,
+                completeness: false,
+                wiring: false,
+              },
+            }),
+          );
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'build_review',
+      maxRetries: 1,
+      config: { build_review: { enabled: true } },
+    });
+    const haltReasons: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReasons.push(event.reason);
+    });
+
+    await conductor.run();
+
+    expect(haltReasons).toEqual([
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): scope: unchanged tree\n[scope] unchanged tree',
+    ]);
+    expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toContain('cumulative kickback cap');
+  });
+
+  it('preserves the ordinary per-tree kickback halt reason byte-for-byte for test_suite', async () => {
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'test_suite') break;
+      state[step.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'ordinary-test-suite-kickback-cap';
+    state.run_started_at = Date.now();
+    await writeState(statePath, state as ConductState);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        test_suite: {
+          count: 2,
+          cumulative: 2,
+          treeHash: null,
+          lastReason: 'previous suite failure',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    const suiteFailure = {
+      status: 'FAILED' as const,
+      reason: 'nonzero_exit' as const,
+      message: 'fixture suite failure',
+    };
+    const haltReasons: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReasons.push(event.reason);
+    });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      mode: 'auto',
+      fromStep: 'test_suite',
+      maxRetries: 1,
+      fullSuiteVerifier: {
+        inspect: async () => suiteFailure,
+        ensure: async () => suiteFailure,
+      },
+    });
+
+    await conductor.run();
+
+    const expected =
+      'test_suite failure unresolved after 2 build kickback(s) (cap 2): ' +
+      'full-suite verification failed (nonzero_exit): fixture suite failure\n' +
+      'Evidence: .pipeline/test-suite-evidence.json';
+    expect(haltReasons).toEqual([expected]);
+    expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toBe(`${expected}\n`);
   });
 
   it('keeps the interactive CLI constructor free of daemon operator-park options', async () => {
