@@ -206,6 +206,78 @@ describe('engine/conductor', () => {
     ]);
   });
 
+  it('emits one cumulative-cap halt when build_review exhausts both kickback bounds', async () => {
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build_review') break;
+      state[step.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'both-build-review-kickback-bounds';
+    state.run_started_at = Date.now();
+    await writeState(statePath, state as ConductState);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 5,
+          treeHash: null,
+          lastReason: 'previous failure',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build_review') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/build-review.json'),
+            JSON.stringify({
+              verdict: 'FAIL',
+              reasons: ['scope: unchanged tree'],
+              findings: { scope: ['unchanged tree'] },
+              rubric: {
+                tautology: false,
+                scope: true,
+                rootCause: false,
+                completeness: false,
+                wiring: false,
+              },
+            }),
+          );
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'build_review',
+      maxRetries: 1,
+      config: { build_review: { enabled: true } },
+    });
+    const haltReasons: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReasons.push(event.reason);
+    });
+
+    await conductor.run();
+
+    expect(haltReasons).toEqual([
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): scope: unchanged tree\n[scope] unchanged tree',
+    ]);
+    expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toContain('cumulative kickback cap');
+  });
+
   it('keeps the interactive CLI constructor free of daemon operator-park options', async () => {
     const source = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
     const constructor = source.match(
