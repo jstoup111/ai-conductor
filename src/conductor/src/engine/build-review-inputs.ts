@@ -139,12 +139,12 @@ export async function assembleBuildReviewInputs(
     : [];
 
   if (events) {
-    const disposition = repairContext.length > 0
-      ? { disposition: 'context_available' as const, repairCount: repairContext.length }
-      : planIsInFeatureRoot && (await readBaseAdvanceHistory(featureRoot)).length > 0
-        ? { disposition: 'no_join' as const }
-        : { disposition: 'none_warranted' as const };
     try {
+      const disposition = repairContext.length > 0
+        ? { disposition: 'context_available' as const, repairCount: repairContext.length }
+        : planIsInFeatureRoot && (await readBaseAdvanceHistory(featureRoot)).length > 0
+          ? { disposition: 'no_join' as const }
+          : { disposition: 'none_warranted' as const };
       await events.emit({ type: 'build_review_repair_context', ...disposition });
     } catch {
       // Provenance is advisory: grader input assembly remains authoritative.

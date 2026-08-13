@@ -265,14 +265,21 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
-      const repair = await recordTestSuiteRemediation(dir, {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/events.jsonl'),
+        JSON.stringify({
+          type: 'rebase_changed',
+          ts: new Date(100).toISOString(),
+          allChangedPaths: ['src/base.ts'],
+        }) + '\n',
+      );
+      const repair = await recordTestSuiteRemediation(dir, 'test_suite', {
         reason: 'command_failed',
-        message: 'base changed the aggregate command expectation',
-      }, {
-        satisfied: false,
-        checkedAt: 101,
-        kickback: { from: 'rebase', evidence: 'base advanced' },
+        message: 'src/base.ts changed the aggregate command expectation',
+        observedAt: 101,
       });
+      expect(repair).toBeDefined();
 
       const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
 
@@ -345,6 +352,24 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           }),
         ]);
       }
+    });
+
+    it('returns grader inputs when advisory provenance emission fails', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+
+      const inputs = await assembleBuildReviewInputs(realGit(), scopedPlanPath, {
+        emit: async () => {
+          throw new Error('events ledger unavailable');
+        },
+      });
+
+      expect(inputs).toMatchObject({
+        planBody: '# Plan body\n\nFixture plan.\n',
+        repairContext: [],
+      });
+      expect(inputs.diff).toContain('feature.txt');
     });
 
   });
