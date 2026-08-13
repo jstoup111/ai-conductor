@@ -272,19 +272,26 @@ run_conductor_cfg_accessors() {
       _ "$HARNESS_DIR/bin/lib/harness-common.sh" "$field" "$value" "$default"
 }
 
-# run_install_configure_conductor <home> <update_mode>
+# run_install_configure_conductor <home> <update_mode> [identity_fixture]
 # Loads the installer through its public configuration boundary, with the real
 # shared accessor library available beside the copied script.  The conduct-ts
 # fake persists the same scalar YAML fields that the production CLI owns.
+# `off-tag` and `exact-tag` create local Git checkouts whose release tag and
+# VERSION deliberately disagree, so installer identity must come from checkout
+# state rather than the fixture's VERSION file.
 run_install_configure_conductor() {
-  local home=$1 update_mode=$2 installer_dir fragment stubs
+  local home=$1 update_mode=$2 requested_fixture=${3:-} identity_fixture=${3:-exact-tag} installer_dir fragment stubs
   installer_dir="$TMP_ROOT/install-configure-${RANDOM}"
   fragment="$installer_dir/bin/install-configure-test"
   stubs="$installer_dir/stubs"
   mkdir -p "$installer_dir/bin/lib"
   ln -s "$HARNESS_DIR/skills" "$installer_dir/skills"
   ln -s "$HARNESS_DIR/HARNESS.md" "$installer_dir/HARNESS.md"
-  cp "$HARNESS_DIR/VERSION" "$installer_dir/VERSION"
+  if [ -n "$requested_fixture" ]; then
+    printf '9.9.9\n' > "$installer_dir/VERSION"
+  else
+    cp "$HARNESS_DIR/VERSION" "$installer_dir/VERSION"
+  fi
   cp "$HARNESS_DIR/bin/install" "$installer_dir/bin/install"
   cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$installer_dir/bin/lib/harness-common.sh"
   mkdir -p "$stubs"
@@ -326,6 +333,18 @@ EOF
   awk '/^# ─── Main /{exit} {print}' "$installer_dir/bin/install" > "$fragment"
   printf '%s\n' "UPDATE_MODE=$update_mode" 'configure_conductor' >> "$fragment"
   chmod +x "$fragment"
+  (
+    cd "$installer_dir"
+    git init -q -b installer-fixture
+    git config user.email "test@test.com"
+    git config user.name "Test"
+    git add -A
+    git commit -q -m "release v1.2.3"
+    git tag v1.2.3
+    if [ "$identity_fixture" = "off-tag" ]; then
+      git commit -q --allow-empty -m "post-release fixture commit"
+    fi
+  )
   : > "$home/install-config-calls"
 
   set +e
@@ -654,6 +673,22 @@ assert "installer first run calls shared conductor accessors" \
 assert "installer first run creates no legacy JSON config" \
   "$( [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json" ] && echo 0 || echo 1)"
 
+# A tagged-channel install that is one commit beyond its release tag must not
+# cache VERSION as though it described the installed checkout. The resolver
+# records the reachable v1.2.3 baseline; the fixture's deliberately different
+# VERSION makes that regression visible without a remote or external service.
+HOME_DIR=$(make_isolated_home)
+run_install_configure_conductor "$HOME_DIR" false off-tag
+assert "installer off-tag tagged-channel install persists its resolver baseline" \
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v1.2.3" ] && echo 0 || echo 1)"
+
+# Conversely, a checkout exactly at a release tag must retain that tag as the
+# persisted tagged-channel identity even when VERSION says something else.
+HOME_DIR=$(make_isolated_home)
+run_install_configure_conductor "$HOME_DIR" false exact-tag
+assert "installer exact-tag install persists its exact release tag" \
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v1.2.3" ] && echo 0 || echo 1)"
+
 # A legacy-only installation must seed before first-run detection. Otherwise,
 # the initial default writes would overwrite its channel and auto-check choice.
 HOME_DIR=$(make_isolated_home)
@@ -676,10 +711,13 @@ set_conductor_cfg "$HOME_DIR" updateChannel main
 set_conductor_cfg "$HOME_DIR" autoCheck false
 set_conductor_cfg "$HOME_DIR" currentVersion stale-version
 set_conductor_cfg "$HOME_DIR" lastCheckedAt stale-time
+printf '  unrelated: preserved\n' >> "$HOME_DIR/.ai-conductor/config.yml"
 run_install_configure_conductor "$HOME_DIR" true
 assert "installer update refreshes version and timestamp while preserving preferences" \
   "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" != "stale-version" ] && [ "$(cfg_get "$HOME_DIR" lastCheckedAt)" != "stale-time" ] && echo 0 || echo 1)"
-assert "installer update reads the channel before calling refresh accessors" \
+assert "installer update preserves unrelated configuration" \
+  "$( grep -qx '  unrelated: preserved' "$HOME_DIR/.ai-conductor/config.yml" && echo 0 || echo 1)"
+assert "installer update reads its channel then refreshes only current fields" \
   "$( grep -qx 'config read conductor.update_channel' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 3 ] && echo 0 || echo 1)"
 
 # ─── ST-1400-2: one-time legacy JSON seed ─────────────────────────────────
