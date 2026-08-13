@@ -3700,6 +3700,7 @@ export class Conductor {
     // Both the budget and this single-use baseline live in the durable ledger,
     // so daemon re-dispatch cannot reset either loop guard.
     const kickbackEscalationEnabled = this.config.kickback_escalation?.enabled ?? true;
+    const cumulativeKickbackBoundEnabled = this.config.cumulative_kickback_bound?.enabled ?? true;
 
     const pendingBuildKickbackGate = async (): Promise<string | null> => {
       const ledger = await readKickbackLedger(this.projectRoot);
@@ -7358,7 +7359,7 @@ export class Conductor {
                     : 'grader returned FAIL without reasons';
                 const kickback = await consumeKickbackBudget('build_review', evidence);
                 const count = kickback.entry.count;
-                if (kickback.cumulativeExhausted) {
+                if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
                   const reason =
                     `build_review cumulative kickback cap exceeded (cumulative ` +
                     `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
