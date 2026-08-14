@@ -7451,12 +7451,15 @@ export class Conductor {
                     `this build.`;
                   let reworkEvidence = evidence;
                   if (buildReviewFailRoute(parsed) === 'remediate') {
+                    const activePlanPath = await this.getActivePlanPath();
                     const outcome = await this.planRemediation(
                       state,
                       steps,
                       `build_review FAILED on completeness:\n${evidence}\nThe plan task ` +
                         `requires review. Check the approved plan’s existing tasks before ` +
-                        `proposing a plan-level change. Plan remediation per the /remediate ` +
+                        `proposing a plan-level change. ` +
+                        (activePlanPath ? `Active plan: ${activePlanPath}. ` : '') +
+                        `Plan remediation per the /remediate ` +
                         `skill and write .pipeline/remediation.json.`,
                       { source: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT },
                     );

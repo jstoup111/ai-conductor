@@ -10,7 +10,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { Conductor } from '../test-conductor.js';
 
-describe('engine/conductor — build_review remediation dispatch (Task 7)', () => {
+describe('engine/conductor — build_review remediation dispatch (Tasks 7 and 8)', () => {
   let dir: string | undefined;
 
   afterEach(async () => {
@@ -29,6 +29,11 @@ describe('engine/conductor — build_review remediation dispatch (Task 7)', () =
     await writeFile(
       join(dir, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+    );
+    const activePlanPath = '.docs/plans/active-remediation-plan.md';
+    await writeFile(
+      join(dir, '.pipeline', 'engine-state.json'),
+      JSON.stringify({ activePlanPath }),
     );
 
     let remediationContext: string | undefined;
@@ -83,5 +88,6 @@ describe('engine/conductor — build_review remediation dispatch (Task 7)', () =
     expect(remediationContext).toContain(
       'Check the approved plan’s existing tasks before proposing a plan-level change.',
     );
+    expect(remediationContext).toContain(activePlanPath);
   });
 });
