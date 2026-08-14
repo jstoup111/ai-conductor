@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   classifyBuildReviewRubricBranches,
   coordinateBuildReviewRubrics,
+  type BuildReviewCoordinationInput,
   type BuildReviewCoordinatorHooks,
 } from "../../src/engine/build-review-coordinator.js";
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
@@ -100,7 +101,7 @@ function inputs(): BuildReviewFrozenInputs {
 
 describe("build-review coordinator: frozen fan-out", () => {
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
-    const emit = vi.fn(async () => undefined);
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput['emit']>>[0]) => undefined);
 
     await coordinateBuildReviewRubrics({
       config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
