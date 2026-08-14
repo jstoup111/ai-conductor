@@ -7455,7 +7455,8 @@ export class Conductor {
                       state,
                       steps,
                       `build_review FAILED on completeness:\n${evidence}\nThe plan task ` +
-                        `may be under-decomposed. Plan remediation per the /remediate ` +
+                        `requires review. Check the approved plan’s existing tasks before ` +
+                        `proposing a plan-level change. Plan remediation per the /remediate ` +
                         `skill and write .pipeline/remediation.json.`,
                       { source: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT },
                     );
