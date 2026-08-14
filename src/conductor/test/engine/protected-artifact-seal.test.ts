@@ -234,6 +234,61 @@ it('reads only operator reseals from persisted v2 lineage', async () => {
   }]]);
 });
 
+it('degrades absent-rationale and unusable operator-reseal seals to safe evidence', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const commits = ['a', 'b'].map((character) => character.repeat(40));
+  const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+  const writeSeal = async (seal: unknown) => {
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal)}\n`);
+  };
+  const operatorResealWithoutReason = {
+    trigger: 'operator-reseal',
+    fromCommit: commits[0],
+    toCommit: commits[1],
+    paths: ['.docs/stories/feature.md'],
+  };
+
+  const absent = await readOperatorReseals(repo);
+  await writeSeal({
+    version: 2,
+    baselineCommit: commits[1],
+    protectedArtifacts: [],
+    rebaselines: [operatorResealWithoutReason],
+  });
+  const absentReason = await readOperatorReseals(repo);
+  await writeFile(sealPath, '{not JSON}\n');
+  const malformed = await readOperatorReseals(repo);
+  await writeSeal({ version: 1, baselineCommit: commits[1], protectedArtifacts: [] });
+  const versionOne = await readOperatorReseals(repo);
+  await writeSeal({ version: 2, baselineCommit: commits[1], protectedArtifacts: [], rebaselines: {} });
+  const nonArrayRebaselines = await readOperatorReseals(repo);
+  await rm(sealPath);
+  await mkdir(sealPath);
+  const unreadable = await readOperatorReseals(repo);
+
+  expect([
+    absent,
+    absentReason,
+    malformed,
+    versionOne,
+    nonArrayRebaselines,
+    unreadable,
+  ]).toEqual([
+    [],
+    [{
+      fromCommit: commits[0],
+      toCommit: commits[1],
+      paths: ['.docs/stories/feature.md'],
+      reason: '',
+    }],
+    [],
+    [],
+    [],
+    [],
+  ]);
+});
+
 describe('createProtectedArtifactSeal', () => {
   it('persists committed product, architecture, story, and plan content under its approved baseline', async () => {
     const repo = await makeRepo({
