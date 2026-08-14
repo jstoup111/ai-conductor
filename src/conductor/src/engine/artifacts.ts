@@ -34,7 +34,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
-import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { deriveEffectiveBuildReviewVerdict, parseBuildReviewAggregate } from './build-review-aggregate.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -1542,7 +1542,7 @@ export function validateBuildReviewVerdict(
   // New fan-out aggregates carry a stricter raw-results envelope in addition
   // to the legacy top-level verdict projection. A malformed envelope must not
   // be ignored merely because its compatibility fields happen to look valid.
-  if (e.aggregateVersion !== undefined && !parseBuildReviewAggregate(e)) {
+  if (e.aggregateVersion !== undefined && (!parseBuildReviewAggregate(e) || !deriveEffectiveBuildReviewVerdict(e))) {
     return { ok: false, reason: `${BUILD_REVIEW_VERDICT} aggregate is incomplete, malformed, or identity-mismatched` };
   }
   if (e.verdict !== 'PASS' && e.verdict !== 'FAIL') {

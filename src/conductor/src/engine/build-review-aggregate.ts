@@ -5,6 +5,7 @@ import {
   type BuildReviewLapId,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
+import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
 const RUBRICS = ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const;
@@ -32,6 +33,16 @@ export interface BuildReviewAggregateInput {
   readonly snapshotDigest: string;
   readonly results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>;
   readonly codeStamp?: string | null;
+}
+
+/** Raw and accepted-risk state remain independently inspectable after join. */
+export interface BuildReviewEffectiveVerdict {
+  readonly rawVerdict: 'PASS' | 'FAIL';
+  readonly verdict: 'PASS' | 'FAIL';
+  readonly acceptedFindingIds: readonly string[];
+  readonly unresolvedFindingIds: readonly string[];
+  readonly skippedRubrics: readonly BuildReviewRubricId[];
+  readonly infrastructureFailureRubrics: readonly BuildReviewRubricId[];
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -153,4 +164,45 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
   };
+}
+
+/**
+ * Applies only already-verified canonical finding IDs after strict raw join.
+ * Legacy objects cannot enter this reducer, and skips/infrastructure failures
+ * remain blocking even when every content finding has an accepted ID.
+ */
+export function deriveEffectiveBuildReviewVerdict(
+  value: unknown,
+  acceptedFindingIds: ReadonlySet<string> = new Set(),
+): BuildReviewEffectiveVerdict | undefined {
+  const aggregate = parseBuildReviewAggregate(value);
+  if (!aggregate) return undefined;
+  const accepted: string[] = [];
+  const unresolved: string[] = [];
+  const skipped: BuildReviewRubricId[] = [];
+  const infrastructure: BuildReviewRubricId[] = [];
+  for (const rubric of RUBRICS) {
+    const result = aggregate.results[rubric];
+    if (result.kind === 'skipped') {
+      skipped.push(rubric);
+      continue;
+    }
+    if (result.kind === 'infrastructure-failure') {
+      infrastructure.push(rubric);
+      continue;
+    }
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
+      });
+      if (!identity) return undefined;
+      (acceptedFindingIds.has(identity.id) ? accepted : unresolved).push(identity.id);
+    }
+  }
+  return Object.freeze({
+    rawVerdict: aggregate.verdict,
+    verdict: unresolved.length === 0 && skipped.length === 0 && infrastructure.length === 0 ? 'PASS' : 'FAIL',
+    acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
+    skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
+  });
 }

@@ -152,7 +152,7 @@ describe('engine/build-review verdict rubric contract', () => {
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({ done: true });
   });
 
-  it('accepts a strict raw aggregate through the legacy verdict contract but rejects a malformed envelope', () => {
+  it('accepts a current strict raw aggregate through the legacy predicate but rejects a malformed envelope', async () => {
     const lapId = parseBuildReviewLapId('lap-current')!;
     const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring') => ({
       kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
@@ -164,6 +164,7 @@ describe('engine/build-review verdict rubric contract', () => {
     });
 
     expect(validateBuildReviewVerdict(aggregate)).toMatchObject({ ok: true, verdict: 'PASS', codeStamp: 'head' });
+    await expect(checkGateCompletion(await writeVerdict(aggregate), 'build_review')).resolves.toMatchObject({ done: true });
     expect(validateBuildReviewVerdict({ ...aggregate, results: { ...aggregate.results, wiring: undefined } })).toEqual({
       ok: false, reason: expect.stringMatching(/aggregate.*incomplete/i),
     });
