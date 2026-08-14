@@ -309,6 +309,50 @@ describe('buildGraderPrompt', () => {
     ]).toEqual([true, true, true, true, true]);
   });
 
+  it('keeps the rubric byte-identical when reseal evidence is supplied', () => {
+    const protectedPathOutsideReseal = '.docs/architecture/not-resealed.md';
+    const resealedPath = '.docs/specs/resealed.md';
+    const rationale = 'the approved plan requires this correction';
+    const fromCommit = 'reseal-from-abc123';
+    const toCommit = 'reseal-to-def456';
+    const rubricItems = (prompt: string) =>
+      [...prompt.matchAll(/^\d\. (?:Tautology|Scope|Root cause|Completeness|Wiring): [\s\S]*?(?=\n\d\. |\n\nFor Wiring)/gm)]
+        .map(([item]) => item);
+    const resealSection = (prompt: string) => prompt.match(
+      /## Operator-authorized protected-artifact reseals\n\n([\s\S]*?)\n\n## Engine-derived removal evidence/,
+    )?.[1] ?? '';
+    const withoutReseal = buildGraderPrompt(inputs);
+    const withReseal = buildGraderPrompt({
+      ...inputs,
+      operatorReseals: [{
+        paths: [resealedPath],
+        reason: rationale,
+        fromCommit,
+        toCommit,
+      }],
+    });
+    const exactRubric = [
+      '1. Tautology: every new/changed test would fail without the diff.',
+      '2. Scope: diff scoped to the plan, no unrelated files. `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, and `.docs/stories/` are already-approved DECIDE artifacts; modification of one passes Scope only when the approved plan justifies it, otherwise it is a Scope failure.',
+      '3. Root cause: the change addresses the stated defect, not a symptom.',
+      "4. Completeness: every planned task's work is present in the diff.",
+      '5. Wiring: a static property of the diff — every new or changed production\nsurface is called from a path that reaches a configured production entry point.\nThis is code reachability as written, not runtime behavior; runtime behavior\nremains manual_test\'s mandate.',
+    ];
+
+    expect({
+      withoutReseal: rubricItems(withoutReseal),
+      withReseal: rubricItems(withReseal),
+      resealEvidence: [resealedPath, rationale, fromCommit, toCommit]
+        .map((value) => resealSection(withReseal).includes(value)),
+      protectedPathOutsideResealPresent: resealSection(withReseal).includes(protectedPathOutsideReseal),
+    }).toEqual({
+      withoutReseal: exactRubric,
+      withReseal: exactRubric,
+      resealEvidence: [true, true, true, true],
+      protectedPathOutsideResealPresent: false,
+    });
+  });
+
   it('renders populated and empty removal evidence as evidence, escaping backticks', () => {
     const populated = buildGraderPrompt({
       ...inputs,
