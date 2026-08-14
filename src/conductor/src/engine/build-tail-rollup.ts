@@ -46,6 +46,17 @@ export type BuildWindowsResult =
   | PartialBuildTailRollup
   | { state: 'unavailable' };
 
+export interface BuildReviewMetrics { readonly lapsToPass: number | undefined; readonly rubricFailureRates: Readonly<Record<string, { failures: number; judged: number }>>; readonly skipped: number; readonly cacheHits: number; }
+/** Raw rubric outcomes are counted before accepted risks affect the outer verdict. */
+export function computeBuildReviewMetrics(events: readonly BuildTailEvent[]): BuildReviewMetrics {
+  const rubricFailureRates: Record<string, { failures: number; judged: number }> = {}; const laps: string[] = []; let pass: string | undefined; let skipped = 0; let cacheHits = 0;
+  for (const e of events) {
+    if (e.type === 'build_review_rubric_result' && typeof e.rubric === 'string' && typeof e.lapId === 'string') { if (!laps.includes(e.lapId)) laps.push(e.lapId); const r = rubricFailureRates[e.rubric] ??= { failures: 0, judged: 0 }; r.judged++; if (e.verdict === 'FAIL') r.failures++; }
+    else if (e.type === 'build_review_rubric_skipped') skipped++; else if (e.type === 'build_review_cache_hit') cacheHits++; else if (e.type === 'build_review_outer_verdict' && e.effectiveVerdict === 'PASS' && typeof e.lapId === 'string' && pass === undefined) pass = e.lapId;
+  }
+  return { lapsToPass: pass === undefined ? undefined : laps.indexOf(pass) + 1, rubricFailureRates, skipped, cacheHits };
+}
+
 interface BuildProgressTick {
   ts: number;
   resolved: number;
