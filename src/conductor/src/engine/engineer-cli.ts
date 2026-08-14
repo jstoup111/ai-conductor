@@ -41,7 +41,7 @@ import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter — the
 // engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
 import { brainLoopAlive } from './engineer/brain-liveness.js';
-import { createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
+import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
@@ -1158,6 +1158,7 @@ export async function dispatchEngineer(
     // The file queue is wrapped with createDeliveryGuardedQueue (Task 8, TR-1) to detect
     // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
     case 'claim': {
+      try {
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
 
@@ -1224,7 +1225,8 @@ export async function dispatchEngineer(
       await queue.ack(envelope);
       try {
         await ledger.transition(envelope.source, envelope.sourceRef, 'claimed');
-      } catch {
+      } catch (error: unknown) {
+        if (error instanceof CorruptLedgerError) throw error;
         // Entry may be absent for a non-recording source — advisory transition.
       }
       // FR-13: persist a claim record so `engineer worktree --source-ref` can later
@@ -1240,6 +1242,16 @@ export async function dispatchEngineer(
         }),
       );
       return 0;
+      } catch (error: unknown) {
+        if (error instanceof CorruptLedgerError) {
+          printErr(
+            `engineer claim: intake ledger is corrupt at ${error.ledgerPath}; ` +
+              `quarantine path: ${error.ledgerPath}.corrupt-*`,
+          );
+          return 1;
+        }
+        throw error;
+      }
     }
 
     // ── forget ──────────────────────────────────────────────────────────────────
