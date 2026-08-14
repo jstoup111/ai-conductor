@@ -37,7 +37,12 @@ import {
   type PublicationTransition,
 } from '../../src/engine/finish-publication.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import type { StepRunner } from '../../src/engine/conductor.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { writeState } from '../../src/engine/state.js';
 import type { ConductState, FinishPublicationEvent } from '../../src/types/index.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { Conductor } from '../test-conductor.js';
 
 const PR_URL = 'https://github.com/acme/widget/pull/1487';
 const roots: string[] = [];
@@ -271,7 +276,10 @@ interface ObservedPr {
   labels: Array<{ name: string }>;
 }
 
-async function runProductionObservation(pr: ObservedPr) {
+async function runProductionObservation(
+  pr: ObservedPr,
+  options: { failView?: boolean } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), 'finish-publication-non-advance-'));
   roots.push(root);
   const pipeline = join(root, '.pipeline');
@@ -290,6 +298,7 @@ async function runProductionObservation(pr: ObservedPr) {
     architecture_review_as_built: 'done',
   };
   const ghCalls: string[][] = [];
+  const completedTransitions: PublicationTransition[] = [];
   const dispatchJudgment = vi.fn(async () => ({
     success: true,
     publicationDisposition: { kind: 'accepted' },
@@ -310,6 +319,7 @@ async function runProductionObservation(pr: ObservedPr) {
       ghCalls.push([...args]);
       if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
       if (args[0] === 'pr' && args[1] === 'view') {
+        if (options.failView) throw new Error('GitHub observation unavailable');
         return { stdout: JSON.stringify(pr) };
       }
       if (args[0] === 'pr' && args[1] === 'ready') {
@@ -326,10 +336,63 @@ async function runProductionObservation(pr: ObservedPr) {
     mode: 'auto',
     daemon: true,
     dispatchJudgment,
-    emit: async (_event: FinishPublicationEvent) => undefined,
+    emit: async (event: FinishPublicationEvent) => {
+      if (event.type === 'finish_publication_transition' && event.phase === 'completed') {
+        completedTransitions.push(event.transition);
+      }
+    },
   });
 
-  return { result, dispatchJudgment, ghCalls };
+  return { result, dispatchJudgment, ghCalls, completedTransitions };
+}
+
+async function finishRetryEventsFor(
+  disposition: Awaited<ReturnType<typeof runProductionObservation>>['result'],
+): Promise<string[]> {
+  const root = await mkdtemp(join(tmpdir(), 'finish-publication-halt-counter-'));
+  roots.push(root);
+  const pipeline = join(root, '.pipeline');
+  await mkdir(pipeline, { recursive: true });
+  const state: Record<string, unknown> = {
+    complexity_tier: 'M',
+    feature_desc: 'finish-publication-halt-counter',
+    track: 'technical',
+  };
+  for (const step of ALL_STEPS) {
+    if (step.name === 'finish') break;
+    state[step.name] = 'done';
+  }
+  const stateFilePath = join(pipeline, 'conduct-state.json');
+  await writeState(stateFilePath, state as ConductState);
+
+  const events = new ConductorEventEmitter();
+  const retryReasons: string[] = [];
+  events.on('step_retry', (event) => {
+    if (event.type === 'step_retry' && event.step === 'finish') retryReasons.push(event.reason);
+  });
+  const stepRunner: StepRunner = {
+    run: vi.fn(async () => {
+      throw new Error('the injected FINISH disposition should terminate this fixture');
+    }),
+  };
+  const conductor = new Conductor({
+    stateFilePath,
+    stepRunner,
+    finishPublication: { advance: vi.fn(async () => disposition) } as never,
+    events,
+    projectRoot: root,
+    fromStep: 'finish',
+    mode: 'auto',
+    daemon: true,
+    verifyArtifacts: false,
+    git: async () => ({ stdout: '' }),
+    gh: async () => ({ stdout: '' }),
+    runGh: async () => ({ stdout: '' }),
+    escalateBuildFailure: vi.fn(async () => ({})),
+  });
+
+  await conductor.run();
+  return retryReasons;
 }
 
 describe('Story 4 — production observation recognizes a halt-state PR before judgment', () => {
@@ -354,11 +417,30 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
         labels: [],
       },
     ],
+    [
+      'residual needs-remediation label beside ordinary authored prose',
+      {
+        url: PR_URL,
+        title: 'feat: ordinary authored title',
+        body: 'Reader-facing summary and validation evidence.',
+        isDraft: false,
+        labels: [{ name: 'needs-remediation' }],
+      },
+    ],
   ] satisfies Array<[string, ObservedPr]>)('resolves %s as human-required with zero judgment sessions', async (_name, pr) => {
-    const { result, dispatchJudgment, ghCalls } = await runProductionObservation(pr);
+    const {
+      result,
+      dispatchJudgment,
+      ghCalls,
+      completedTransitions,
+    } = await runProductionObservation(pr);
 
     expect(result).toEqual(expect.objectContaining({ kind: 'human_required' }));
     expect(dispatchJudgment).not.toHaveBeenCalled();
+    // A halt is terminal at observation: it neither retries FINISH nor spends
+    // a verified-publication progress slot.
+    expect(completedTransitions).toEqual([]);
+    await expect(finishRetryEventsFor(result)).resolves.toEqual([]);
     const viewCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view');
     expect(viewCall?.join(' ')).toContain('labels');
   });
@@ -374,5 +456,32 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
 
     expect(result).toEqual({ kind: 'publication_progress', transition: 'ready_pr' });
     expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an empty label list as a halt signal', async () => {
+    const { result, dispatchJudgment } = await runProductionObservation({
+      url: PR_URL,
+      title: 'feat: ordinary authored title',
+      body: 'Reader-facing summary and validation evidence.',
+      isDraft: true,
+      labels: [],
+    });
+
+    expect(result).not.toEqual(expect.objectContaining({ kind: 'human_required' }));
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('takes the degraded-observation path when gh pr view fails without claiming halt state', async () => {
+    const { result, dispatchJudgment, completedTransitions } = await runProductionObservation({
+      url: PR_URL,
+      title: 'feat: ordinary authored title',
+      body: 'Reader-facing summary and validation evidence.',
+      isDraft: true,
+      labels: [],
+    }, { failView: true });
+
+    expect(result).not.toEqual(expect.objectContaining({ kind: 'human_required' }));
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+    expect(completedTransitions).toEqual([]);
   });
 });
