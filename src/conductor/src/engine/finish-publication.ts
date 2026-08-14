@@ -1230,8 +1230,18 @@ export async function advancedPublicationTransition(
   transition: PublicationTransition,
   before: PublicationSnapshot,
   after: PublicationSnapshot,
-): Promise<Extract<AdvanceFinishPublicationResult, { kind: 'advanced' }> | undefined> {
-  if (!publicationTransitionDimensionMoved(transition, before, after)) return undefined;
+): Promise<
+  | Extract<AdvanceFinishPublicationResult, { kind: 'advanced' | 'human_required' }>
+  | undefined
+> {
+  const movement = publicationTransitionDimensionMovement(transition, before, after);
+  if (movement === 'indeterminate') return undefined;
+  if (movement === 'unmoved') {
+    // Task 10 replaces this compatibility reason with a dedicated reason and
+    // operator-facing detail. Until then, keep the result inside the existing
+    // typed human-required route rather than spending a retry budget.
+    return { kind: 'human_required', reason: 'judgment_halt_prose' };
+  }
 
   await emitPublicationEvent(emit, {
     type: 'finish_publication_transition', phase: 'completed', transition,
@@ -1239,35 +1249,66 @@ export async function advancedPublicationTransition(
   return { kind: 'advanced', transition };
 }
 
-function publicationTransitionDimensionMoved(
+function publicationTransitionDimensionMovement(
   transition: PublicationTransition,
   before: PublicationSnapshot,
   after: PublicationSnapshot,
-): boolean {
+): 'moved' | 'unmoved' | 'indeterminate' {
   const dimension = PUBLICATION_TRANSITION_DIMENSIONS[transition];
+  const afterValue = publicationTransitionDimensionValue(dimension, after);
+  if (afterValue === undefined) return 'indeterminate';
 
+  return publicationTransitionDimensionValue(dimension, before) === afterValue
+    ? 'unmoved'
+    : 'moved';
+}
+
+function publicationTransitionDimensionValue(
+  dimension: PublicationTransitionDimensions[PublicationTransition],
+  snapshot: PublicationSnapshot,
+): string | boolean | undefined {
   switch (dimension) {
     case 'pr.identity + branchPushed':
-      return before.pr.identity !== after.pr.identity || before.branchPushed !== after.branchPushed;
+      if (snapshot.pr.identity === 'indeterminate' || snapshot.branchPushed === 'indeterminate') {
+        return undefined;
+      }
+      return snapshot.pr.identity === 'one' && snapshot.branchPushed === 'valid';
     case 'releaseReadiness':
-      return before.releaseReadiness !== after.releaseReadiness;
+      return snapshot.releaseReadiness === 'indeterminate'
+        ? undefined
+        : snapshot.releaseReadiness;
     case 'pr.prose':
-      return publicationPrProse(before) !== publicationPrProse(after);
+      return publicationPrProse(snapshot);
     case 'shippedRecord':
-      return before.shippedRecord !== after.shippedRecord;
+      return snapshot.shippedRecord === 'indeterminate' ? undefined : snapshot.shippedRecord;
     case 'pr.ready':
-      return publicationPrReady(before) !== publicationPrReady(after);
+      return publicationPrReady(snapshot);
     case 'outcomeRecord':
-      return before.outcomeRecord !== after.outcomeRecord;
+      return snapshot.outcomeRecord === 'indeterminate' ? undefined : snapshot.outcomeRecord;
   }
 }
 
-function publicationPrProse(snapshot: PublicationSnapshot): PublicationPullRequest['identity'] | 'accepted' | 'stale' | 'placeholder' | 'halt' | 'indeterminate' {
-  return snapshot.pr.identity === 'one' ? snapshot.pr.prose : snapshot.pr.identity;
+function publicationPrProse(snapshot: PublicationSnapshot):
+  | PublicationPullRequest['identity']
+  | 'accepted'
+  | 'stale'
+  | 'placeholder'
+  | 'halt'
+  | undefined {
+  if (snapshot.pr.identity === 'indeterminate') return undefined;
+  return snapshot.pr.identity === 'one' && snapshot.pr.prose === 'indeterminate'
+    ? undefined
+    : snapshot.pr.identity === 'one'
+      ? snapshot.pr.prose
+      : snapshot.pr.identity;
 }
 
-function publicationPrReady(snapshot: PublicationSnapshot): PublicationPullRequest['identity'] | boolean {
-  return snapshot.pr.identity === 'one' ? snapshot.pr.ready : snapshot.pr.identity;
+function publicationPrReady(snapshot: PublicationSnapshot): PublicationPullRequest['identity'] | boolean | undefined {
+  return snapshot.pr.identity === 'indeterminate'
+    ? undefined
+    : snapshot.pr.identity === 'one'
+      ? snapshot.pr.ready
+      : snapshot.pr.identity;
 }
 
 /**
@@ -1324,20 +1365,18 @@ export async function advanceFinishPublication(
         }
       }
       const observedAfterEstablish = await input.observe();
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'establish_pr',
+        snapshot,
+        observedAfterEstablish,
+      );
+      if (transition) return transition;
       if (
         observedAfterEstablish.pr.identity === 'one' &&
         observedAfterEstablish.branchPushed === 'valid'
       ) {
-        return (await advancedPublicationTransition(
-          input.emit,
-          'establish_pr',
-          snapshot,
-          observedAfterEstablish,
-        )) ?? {
-          kind: 'publication_retry',
-          transition: 'establish_pr',
-          reason: 'pr_identity_not_verified_after_establish',
-        };
+        return { kind: 'advanced', transition: 'establish_pr' };
       }
       if (observedAfterEstablish.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
@@ -1381,23 +1420,19 @@ export async function advanceFinishPublication(
       if (observedAfterAuthoring.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
       }
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'author_pr_prose',
+        snapshot,
+        observedAfterAuthoring,
+      );
+      if (transition) return transition;
       if (
         observedAfterAuthoring.pr.identity === 'one' &&
         observedAfterAuthoring.pr.prose !== 'placeholder' &&
         observedAfterAuthoring.pr.prose !== 'indeterminate'
       ) {
-        return (await advancedPublicationTransition(
-          input.emit,
-          'author_pr_prose',
-          snapshot,
-          observedAfterAuthoring,
-        )) ?? {
-          kind: 'publication_retry',
-          transition: 'author_pr_prose',
-          reason: dispatchFailure
-            ? 'authoring_dispatch_failed'
-            : 'authoring_not_verified_after_pass',
-        };
+        return { kind: 'advanced', transition: 'author_pr_prose' };
       }
 
       return {
@@ -1476,19 +1511,15 @@ export async function advanceFinishPublication(
       }
 
       const observedAfterWrite = await input.observe();
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'write_shipped_record',
+        snapshot,
+        observedAfterWrite,
+      );
+      if (transition) return transition;
       if (observedAfterWrite.shippedRecord === 'valid') {
-        return (await advancedPublicationTransition(
-          input.emit,
-          'write_shipped_record',
-          snapshot,
-          observedAfterWrite,
-        )) ?? {
-          kind: 'publication_retry',
-          transition: 'write_shipped_record',
-          reason: writeFailure
-            ? 'shipped_record_write_failed'
-            : 'shipped_record_not_verified_after_write',
-        };
+        return { kind: 'advanced', transition: 'write_shipped_record' };
       }
       if (observedAfterWrite.shippedRecord === 'invalid') {
         return { kind: 'human_required', reason: 'invalid_shipped_record' };
@@ -1530,21 +1561,19 @@ export async function advanceFinishPublication(
       if (observedAfterPresentationRepair.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
       }
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'ready_pr',
+        snapshot,
+        observedAfterPresentationRepair,
+      );
+      if (transition) return transition;
       if (
         observedAfterPresentationRepair.pr.identity === 'one' &&
         observedAfterPresentationRepair.pr.prose === 'accepted' &&
         observedAfterPresentationRepair.pr.ready
       ) {
-        return (await advancedPublicationTransition(
-          input.emit,
-          'ready_pr',
-          snapshot,
-          observedAfterPresentationRepair,
-        )) ?? {
-          kind: 'publication_retry',
-          transition: 'ready_pr',
-          reason: 'presentation_not_verified_after_repair',
-        };
+        return { kind: 'advanced', transition: 'ready_pr' };
       }
 
       return {
