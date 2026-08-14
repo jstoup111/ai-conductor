@@ -2,7 +2,8 @@
 export const SMOKE_CAPABILITIES = [
   'hermetic',
   'toolchain',
-  'credentialed',
+  'credentialed:claude',
+  'credentialed:codex',
 ] as const;
 
 export type SmokeCapability = (typeof SMOKE_CAPABILITIES)[number];
@@ -95,7 +96,12 @@ function resolveAdvisorySmokeCapabilities(
       : hasCommand('toolchain')
       ? { outcome: 'ran' }
       : { outcome: 'skipped', unmet: 'toolchain' },
-    credentialed: forceSkipsCapability(environment, 'credentialed')
+    'credentialed:claude': forceSkipsCapability(environment, 'credentialed:claude')
+      ? { outcome: 'skipped', unmet: 'operator override' }
+      : environment.CLAUDE_CODE_OAUTH_TOKEN
+      ? { outcome: 'ran' }
+      : { outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    'credentialed:codex': forceSkipsCapability(environment, 'credentialed:codex')
       ? { outcome: 'skipped', unmet: 'operator override' }
       : environment.CLAUDE_CODE_OAUTH_TOKEN
       ? { outcome: 'ran' }
@@ -160,7 +166,12 @@ function resolveGateSmokeCapabilities(
       : hasCommand('toolchain')
       ? { outcome: 'ran' }
       : { outcome: 'failed', unmet: 'toolchain' },
-    credentialed: forceSkipsCapability(environment, 'credentialed')
+    'credentialed:claude': forceSkipsCapability(environment, 'credentialed:claude')
+      ? { outcome: 'failed', unmet: 'operator override' }
+      : environment.CLAUDE_CODE_OAUTH_TOKEN
+      ? { outcome: 'ran' }
+      : { outcome: 'failed', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    'credentialed:codex': forceSkipsCapability(environment, 'credentialed:codex')
       ? { outcome: 'failed', unmet: 'operator override' }
       : environment.CLAUDE_CODE_OAUTH_TOKEN
       ? { outcome: 'ran' }
@@ -172,7 +183,7 @@ function resolveGateSmokeCapabilities(
 export function assertGateCredentialedExecution(
   executedCapabilities: readonly SmokeCapability[],
 ): void {
-  if (!executedCapabilities.includes('credentialed')) {
+  if (!executedCapabilities.some((capability) => capability.startsWith('credentialed:'))) {
     throw new Error('Gate-mode smoke run executed no credentialed test files');
   }
 }

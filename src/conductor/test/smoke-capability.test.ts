@@ -13,19 +13,20 @@ describe('smoke capability declarations', () => {
     expect(SMOKE_CAPABILITIES).toEqual([
       'hermetic',
       'toolchain',
-      'credentialed',
+      'credentialed:claude',
+      'credentialed:codex',
     ]);
   });
 
   it('runs hermetic files and skips unavailable toolchain and credentialed files in advisory mode', () => {
-    expect(resolveAdvisorySmokeFile('test/example.smoke.test.ts', 'credentialed', {
+    expect(resolveAdvisorySmokeFile('test/example.smoke.test.ts', 'credentialed:claude', {
       hasCommand: () => false,
       environment: {},
     })).toEqual({ outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' });
   });
 
   it('fails rather than skipping or succeeding when a gate-mode credential is absent', () => {
-    const resolution = resolveGateSmokeFile('test/example.smoke.test.ts', 'credentialed', {
+    const resolution = resolveGateSmokeFile('test/example.smoke.test.ts', 'credentialed:claude', {
       hasCommand: () => true,
       environment: {},
     });
@@ -43,11 +44,11 @@ describe('smoke capability declarations', () => {
   });
 
   it('reports a capability force-skip as an operator override in advisory mode', () => {
-    const resolution = resolveAdvisorySmokeFile('test/example.smoke.test.ts', 'credentialed', {
+    const resolution = resolveAdvisorySmokeFile('test/example.smoke.test.ts', 'credentialed:claude', {
       hasCommand: () => true,
       environment: {
         CLAUDE_CODE_OAUTH_TOKEN: 'token',
-        SMOKE_FORCE_SKIP: 'capability:credentialed',
+        SMOKE_FORCE_SKIP: 'capability:credentialed:claude',
       },
     });
 
@@ -60,7 +61,7 @@ describe('smoke capability declarations', () => {
   it('reports a file force-skip as an operator override in advisory mode', () => {
     const resolution = resolveAdvisorySmokeFile(
       'test/engine/daemon-e2e-live.smoke.test.ts',
-      'credentialed',
+      'credentialed:claude',
       {
         hasCommand: () => true,
         environment: {
@@ -77,11 +78,11 @@ describe('smoke capability declarations', () => {
   });
 
   it('fails gate mode when an operator force-skips the credentialed capability', () => {
-    const resolution = resolveGateSmokeFile('test/example.smoke.test.ts', 'credentialed', {
+    const resolution = resolveGateSmokeFile('test/example.smoke.test.ts', 'credentialed:claude', {
       hasCommand: () => true,
       environment: {
         CLAUDE_CODE_OAUTH_TOKEN: 'token',
-        SMOKE_FORCE_SKIP: 'capability:credentialed',
+        SMOKE_FORCE_SKIP: 'capability:credentialed:claude',
       },
     });
 
@@ -108,7 +109,7 @@ describe('smoke capability declarations', () => {
       },
       {
         file: 'test/engine/daemon-e2e-live.smoke.test.ts',
-        capability: 'credentialed',
+        capability: 'credentialed:claude',
         outcome: 'failed',
         evidencePath: 'artifacts/smoke/daemon-e2e-live.log',
       },
@@ -117,7 +118,7 @@ describe('smoke capability declarations', () => {
     expect(emit.mock.calls).toEqual([
       ['smoke ledger: test/smoke/finish-record.smoke.test.ts [hermetic] ran'],
       ['smoke ledger: test/execution/codex-provider.smoke.test.ts [toolchain] skipped (unmet: codex)'],
-      ['smoke ledger: test/engine/daemon-e2e-live.smoke.test.ts [credentialed] failed (evidence: artifacts/smoke/daemon-e2e-live.log)'],
+      ['smoke ledger: test/engine/daemon-e2e-live.smoke.test.ts [credentialed:claude] failed (evidence: artifacts/smoke/daemon-e2e-live.log)'],
     ]);
   });
 
