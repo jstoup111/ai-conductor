@@ -188,6 +188,52 @@ it('preserves operator-reseal lineage order and every path in multi-path entries
   ]);
 });
 
+it('reads only operator reseals from persisted v2 lineage', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const commits = ['a', 'b', 'c', 'd', 'e'].map((character) => character.repeat(40));
+  const operatorReseal = {
+    trigger: 'operator-reseal',
+    fromCommit: commits[3],
+    toCommit: commits[4],
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+  };
+  const writeSeal = async (rebaselines: unknown[]) => {
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(join(repo, '.pipeline/protected-artifact-seal.json'), `${JSON.stringify({
+      version: 2,
+      baselineCommit: commits[4],
+      protectedArtifacts: [],
+      rebaselines,
+    })}\n`);
+  };
+
+  await writeSeal([{ ...operatorReseal, trigger: 'proactive-rebase' }]);
+  const proactiveRebases = await readOperatorReseals(repo);
+  await writeSeal([{ ...operatorReseal, trigger: 'defensive-history-rewrite' }]);
+  const defensiveHistoryRewrites = await readOperatorReseals(repo);
+  await writeSeal([{ ...operatorReseal, trigger: 'unrecognized-trigger' }]);
+  const unknownTriggers = await readOperatorReseals(repo);
+  await writeSeal([
+    { ...operatorReseal, trigger: 'proactive-rebase' },
+    { ...operatorReseal, trigger: 'defensive-history-rewrite' },
+    { ...operatorReseal, trigger: 'unrecognized-trigger' },
+    operatorReseal,
+  ]);
+
+  await expect(Promise.all([
+    proactiveRebases,
+    defensiveHistoryRewrites,
+    unknownTriggers,
+    readOperatorReseals(repo),
+  ])).resolves.toEqual([[], [], [], [{
+    fromCommit: commits[3],
+    toCommit: commits[4],
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+  }]]);
+});
+
 describe('createProtectedArtifactSeal', () => {
   it('persists committed product, architecture, story, and plan content under its approved baseline', async () => {
     const repo = await makeRepo({
