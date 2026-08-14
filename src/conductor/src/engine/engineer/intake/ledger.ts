@@ -97,19 +97,49 @@ export interface Ledger {
 
 type LedgerStore = Record<string, LedgerEntry>;
 
+export type LedgerLoadResult =
+  | { kind: 'absent' }
+  | { kind: 'ok'; store: LedgerStore }
+  | { kind: 'corrupt'; reason: string; bytes?: string };
+
 /** Composite dedup key: NUL-joined so source prefix cannot bleed into sourceRef. */
 function makeKey(source: string, sourceRef: string): string {
   return `${source}\0${sourceRef}`;
 }
 
-/** Load ledger from disk; returns empty store if file is absent or unreadable. */
-async function loadStore(path: string): Promise<LedgerStore> {
+/** Load ledger from disk, distinguishing a missing file from a failed read. */
+export async function loadStore(path: string): Promise<LedgerLoadResult> {
+  let raw: string;
   try {
-    const raw = await readFile(path, 'utf8');
-    return JSON.parse(raw) as LedgerStore;
-  } catch {
-    return {};
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { kind: 'absent' };
+    }
+    return {
+      kind: 'corrupt',
+      reason: error instanceof Error ? error.message : String(error),
+    };
   }
+
+  try {
+    return { kind: 'ok', store: JSON.parse(raw) as LedgerStore };
+  } catch (error) {
+    return {
+      kind: 'corrupt',
+      reason: error instanceof Error ? error.message : String(error),
+      bytes: raw,
+    };
+  }
+}
+
+async function readStore(path: string): Promise<LedgerStore> {
+  const result = await loadStore(path);
+  if (result.kind === 'absent') return {};
+  if (result.kind === 'corrupt') {
+    throw new CorruptLedgerError(path, result.reason);
+  }
+  return result.store;
 }
 
 /** Atomically write ledger to disk (tmp file + rename). Auto-creates parent dir. */
@@ -133,12 +163,12 @@ async function saveStore(path: string, store: LedgerStore): Promise<void> {
 export function createLedger(path: string): Ledger {
   return {
     async known(source: string, sourceRef: string): Promise<boolean> {
-      const store = await loadStore(path);
+      const store = await readStore(path);
       return makeKey(source, sourceRef) in store;
     },
 
     async record({ source, sourceRef }: { source: string; sourceRef: string }): Promise<void> {
-      const store = await loadStore(path);
+      const store = await readStore(path);
       const key = makeKey(source, sourceRef);
       if (!(key in store)) {
         const now = new Date().toISOString();
@@ -160,7 +190,7 @@ export function createLedger(path: string): Ledger {
       status: LedgerStatus,
       meta?: { branch?: string; prUrl?: string; writebackPending?: boolean },
     ): Promise<void> {
-      const store = await loadStore(path);
+      const store = await readStore(path);
       const key = makeKey(source, sourceRef);
       const entry = store[key];
       if (!entry) {
@@ -185,12 +215,12 @@ export function createLedger(path: string): Ledger {
     },
 
     async get(source: string, sourceRef: string): Promise<LedgerEntry | undefined> {
-      const store = await loadStore(path);
+      const store = await readStore(path);
       return store[makeKey(source, sourceRef)];
     },
 
     async forget(source: string, sourceRef: string): Promise<void> {
-      const store = await loadStore(path);
+      const store = await readStore(path);
       const key = makeKey(source, sourceRef);
       if (key in store) {
         delete store[key];
@@ -199,12 +229,12 @@ export function createLedger(path: string): Ledger {
     },
 
     async list(): Promise<LedgerEntry[]> {
-      const store = await loadStore(path);
+      const store = await readStore(path);
       return Object.values(store);
     },
 
     async reopen(source: string, sourceRef: string): Promise<void> {
-      const store = await loadStore(path);
+      const store = await readStore(path);
       const key = makeKey(source, sourceRef);
       const entry = store[key];
       if (!entry) return; // nothing to reopen — no-op.
@@ -218,7 +248,7 @@ export function createLedger(path: string): Ledger {
     },
 
     async requeueClaimed(source: string, sourceRef: string): Promise<{ acted: boolean }> {
-      const store = await loadStore(path);
+      const store = await readStore(path);
       const key = makeKey(source, sourceRef);
       const entry = store[key];
       if (!entry || entry.status !== 'claimed') return { acted: false }; // no-op — refuse on absent/non-claimed (ADR-2).

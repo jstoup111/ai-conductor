@@ -2,11 +2,15 @@
 // Covers: setting true, clearing (false), omission leaves existing flag untouched,
 // and existing {branch, prUrl} meta behavior remains unchanged.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CorruptLedgerError, createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
+import {
+  CorruptLedgerError,
+  createLedger,
+  loadStore,
+} from '../../../../src/engine/engineer/intake/ledger.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -31,6 +35,43 @@ describe('CorruptLedgerError', () => {
       ledgerPath: '/tmp/ledger.json',
       reason: 'invalid JSON',
     });
+  });
+});
+
+describe('loadStore()', () => {
+  it('distinguishes a missing ledger from a valid empty ledger without warning or quarantine', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const stderr = vi.spyOn(process.stderr, 'write');
+
+    try {
+      const absent = await loadStore(ledgerPath);
+      const ledger = createLedger(ledgerPath);
+      const entries = await ledger.list();
+      const afterAbsent = await readdir(dir);
+      await writeFile(ledgerPath, '{}', 'utf8');
+      const empty = await loadStore(ledgerPath);
+
+      expect({ absent, entries, corruptFiles: afterAbsent.filter((name) => name.startsWith('ledger.json.corrupt-')), empty, stderrWrites: stderr.mock.calls }).toEqual({
+        absent: { kind: 'absent' },
+        entries: [],
+        corruptFiles: [],
+        empty: { kind: 'ok', store: {} },
+        stderrWrites: [],
+      });
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('classifies a non-ENOENT read failure as corrupt and rejects ledger operations', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    await mkdir(ledgerPath);
+
+    await expect(loadStore(ledgerPath)).resolves.toMatchObject({
+      kind: 'corrupt',
+      reason: expect.stringContaining('EISDIR'),
+    });
+    await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
   });
 });
 
