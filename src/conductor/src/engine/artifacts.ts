@@ -1418,10 +1418,10 @@ function hasRecordedRemediationException(exception: unknown): boolean {
 }
 
 /**
- * Path to the build_review judgement gate's verdict artifact. Written by the
- * grader dispatched between `build` and `manual_test`; read back by the
- * completion predicate (Task 8) to decide PASS (advance) vs FAIL (kickback to
- * `build`). Gitignored run evidence, not a committed design artifact.
+ * Path to the build_review judgement gate's verdict artifact. The grader
+ * writes its judgement here and the engine replaces that temporary shape with
+ * the canonical public verdict before the completion predicate reads it.
+ * Gitignored run evidence, not a committed design artifact.
  */
 export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
 
@@ -1486,6 +1486,14 @@ export interface BuildReviewVerdict {
    * re-run. Never required for a verdict to parse. */
   codeStamp?: string | null;
 }
+
+const BUILD_REVIEW_RUBRIC_NAMES = [
+  'tautology',
+  'scope',
+  'rootCause',
+  'completeness',
+  'wiring',
+] as const;
 
 /**
  * Flatten a verdict's legacy summaries and structured findings for every
@@ -1614,6 +1622,97 @@ export function validateBuildReviewVerdict(
     result.codeStamp = e.codeStamp;
   }
   return result;
+}
+
+/**
+ * Convert the grader-owned judgement contract into the canonical public
+ * build-review verdict. The grader names failures explicitly; the engine
+ * owns the otherwise error-prone conversion to legacy `true means failed`
+ * rubric booleans. Canonical legacy artifacts remain accepted so in-flight
+ * providers and redispatches retain their existing fail-closed behavior.
+ */
+export function canonicalizeBuildReviewGraderVerdict(
+  ev: unknown,
+): ReturnType<typeof validateBuildReviewVerdict> {
+  if (typeof ev !== 'object' || ev === null || Array.isArray(ev)) {
+    return validateBuildReviewVerdict(ev);
+  }
+  const source = ev as Record<string, unknown>;
+  if (!Object.hasOwn(source, 'failedRubrics')) {
+    return validateBuildReviewVerdict(ev);
+  }
+  if (source.rubric !== undefined) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} grader output must not include both "failedRubrics" and "rubric"`,
+    };
+  }
+  if (source.verdict !== undefined) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} grader output must not include "verdict"; the engine derives it from failedRubrics`,
+    };
+  }
+  if (!Array.isArray(source.failedRubrics)) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "failedRubrics" must be an array`,
+    };
+  }
+  const allowed = new Set<string>(BUILD_REVIEW_RUBRIC_NAMES);
+  const failedRubrics = source.failedRubrics;
+  if (failedRubrics.some((name) => typeof name !== 'string' || !allowed.has(name))) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "failedRubrics" contains an unknown rubric`,
+    };
+  }
+  if (new Set(failedRubrics).size !== failedRubrics.length) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "failedRubrics" must not contain duplicates`,
+    };
+  }
+  const failures = new Set(failedRubrics);
+  if (typeof source.findings === 'object' && source.findings !== null && !Array.isArray(source.findings)) {
+    const findings = source.findings as Record<string, unknown>;
+    const unknownFinding = Object.keys(findings).find((name) => !allowed.has(name));
+    if (unknownFinding !== undefined) {
+      return {
+        ok: false,
+        reason: `${BUILD_REVIEW_VERDICT} "findings" contains unknown rubric ${JSON.stringify(unknownFinding)}`,
+      };
+    }
+    for (const name of BUILD_REVIEW_RUBRIC_NAMES) {
+      const candidate = findings[name];
+      if (Array.isArray(candidate) && candidate.length > 0 && !failures.has(name)) {
+        return {
+          ok: false,
+          reason: `${BUILD_REVIEW_VERDICT} "findings.${name}" is non-empty but ${name} is not named in failedRubrics`,
+        };
+      }
+      if (failures.has(name) && (!Array.isArray(candidate) || candidate.length === 0)) {
+        return {
+          ok: false,
+          reason: `${BUILD_REVIEW_VERDICT} "findings.${name}" must be non-empty when ${name} is named in failedRubrics`,
+        };
+      }
+    }
+  } else if (failedRubrics.length > 0) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "findings" must name every failed rubric`,
+    };
+  }
+  const rubric = Object.fromEntries(
+    BUILD_REVIEW_RUBRIC_NAMES.map((name) => [name, failures.has(name)]),
+  ) as unknown as BuildReviewRubric;
+  const { failedRubrics: _failedRubrics, ...canonical } = source;
+  return validateBuildReviewVerdict({
+    ...canonical,
+    verdict: failedRubrics.length === 0 ? 'PASS' : 'FAIL',
+    rubric,
+  });
 }
 
 /**

@@ -133,14 +133,17 @@ Before judging, run only the scoped tests exercised by this diff (the changed
 test files) through \`conduct-ts scoped-run\` — observe their output firsthand.
 
 When you are done, write your verdict to \`.pipeline/build-review.json\` using
-exactly this JSON schema:
+exactly this reviewer-output JSON schema:
 
-{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean, wiring: boolean } }
+{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] } }
 
-Each \`rubric\` boolean marks whether that item failed. \`reasons\` remains a
-backward-compatible one-line summary for each failing rubric item, plus any
-required relocation-audit evidence stated above. When \`rubric.completeness\` fails, populate
-\`findings.completeness\`; when \`rubric.wiring\` fails, populate
+The engine derives PASS when \`failedRubrics\` is empty and FAIL otherwise.
+It also derives the public rubric booleans from this list; do not write a
+\`verdict\` or \`rubric\` field yourself. Name every failed item and populate
+the matching \`findings.<rubric>\` list for each one.
+\`reasons\` remains a backward-compatible one-line summary for each failing
+rubric item, plus any required relocation-audit evidence stated above. When
+Completeness fails, populate \`findings.completeness\`; when Wiring fails, populate
 \`findings.wiring\`; use the matching \`findings.<rubric>\` key for the
 other rubric items. Each findings list contains **every independent finding**
 you observed for that item. Use one finding per array entry — do not compress multiple actionable
