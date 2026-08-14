@@ -42,6 +42,14 @@ export interface ProtectedArtifactRebaseline {
   reason?: string;
 }
 
+/** Operator-authorized protected-artifact reseal evidence for build review. */
+export interface OperatorReseal {
+  fromCommit: string;
+  toCommit: string;
+  paths: string[];
+  reason?: string;
+}
+
 export interface ProtectedArtifactSeal {
   version: 2;
   baselineCommit: string;
@@ -422,6 +430,16 @@ async function readExistingSeal(path: string): Promise<ProtectedArtifactSeal | u
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+/**
+ * Reads the operator-authorized subset of a feature's durable seal lineage.
+ */
+export async function readOperatorReseals(projectRoot: string): Promise<OperatorReseal[]> {
+  const seal = await readExistingSeal(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
+  return (seal?.rebaselines ?? [])
+    .filter(({ trigger }) => trigger === 'operator-reseal')
+    .map(({ fromCommit, toCommit, paths, reason }) => ({ fromCommit, toCommit, paths, reason }));
 }
 
 async function committedProtectedPaths(projectRoot: string, baselineCommit: string): Promise<string[]> {

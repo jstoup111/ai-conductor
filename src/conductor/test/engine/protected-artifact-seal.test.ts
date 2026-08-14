@@ -16,6 +16,7 @@ import {
   isActiveStepArtifactException,
   isProtectedArtifactPath,
   namesOwnFeature,
+  readOperatorReseals,
   resealProtectedArtifactSeal,
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
@@ -104,6 +105,32 @@ it('classifies decision records as protected wherever protected artifacts are se
     phase: 'BUILD',
     step: 'build',
   })).toEqual({ kind: 'protected', target: path });
+});
+
+it('reads persisted operator-reseal lineage for build-review evidence', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const fromCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const toCommit = 'a'.repeat(40);
+  await mkdir(join(repo, '.pipeline'), { recursive: true });
+  await writeFile(join(repo, '.pipeline/protected-artifact-seal.json'), `${JSON.stringify({
+    version: 2,
+    baselineCommit: toCommit,
+    protectedArtifacts: [],
+    rebaselines: [{
+      trigger: 'operator-reseal',
+      fromCommit,
+      toCommit,
+      paths: ['.docs/stories/feature.md'],
+      reason: 'Correct the approved story after operator review.',
+    }],
+  })}\n`);
+
+  await expect(readOperatorReseals(repo)).resolves.toEqual([{
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+    fromCommit,
+    toCommit,
+  }]);
 });
 
 describe('createProtectedArtifactSeal', () => {
