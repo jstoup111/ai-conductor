@@ -1716,6 +1716,51 @@ describe('advanceFinishPublication concurrent mutation reconciliation', () => {
 });
 
 describe('advanceFinishPublication PR prose judgment boundary', () => {
+  it('halts without spending a FINISH retry when a prose-authoring retry is no longer selectable', async () => {
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot())
+      // The judgment reports prose that needs authoring, but the fresh
+      // authoritative snapshot still selects judgment. Retrying authoring
+      // would therefore re-enter FINISH unable to perform what it names.
+      .mockResolvedValueOnce(readyPublicationSnapshot());
+
+    const disposition = await advanceFinishPublication({
+      observe,
+      effects: {
+        dispatchJudgment: async () => ({
+          kind: 'revision_required',
+          reason: 'placeholder',
+          detail: 'The title and body are placeholders.',
+        }),
+      },
+    });
+
+    expect(disposition).toMatchObject({ kind: 'human_required' });
+    expect(await routeFinishPublicationDisposition(disposition)).toMatchObject({ kind: 'halt' });
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a judgment retry when the fresh snapshot still selects judgment', async () => {
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot())
+      .mockResolvedValueOnce(readyPublicationSnapshot());
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'timed_out' }) },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'judge_pr_prose',
+      reason: 'judgment_timed_out',
+    });
+
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
   it('skips judgment for accepted PR prose and proceeds to final verification', async () => {
     const dispatchJudgment = vi.fn(async () => undefined);
 
