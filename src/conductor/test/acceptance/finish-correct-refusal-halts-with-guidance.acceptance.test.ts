@@ -62,12 +62,32 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
         },
       })),
     };
-    const coordinator = {
-      advance: async ({ dispatchJudgment }: { dispatchJudgment: (request: unknown) => Promise<{ publicationDisposition?: { detail?: string } }> }) => {
-        const result = await dispatchJudgment({ kind: 'finish_pr_prose_quality' });
-        return { kind: 'human_required' as const, reason: 'judgment_refused' as const, detail: result.publicationDisposition?.detail };
-      },
-    };
+    const prUrl = 'https://github.com/acme/widget/pull/1172';
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'auth') return { stdout: '' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            url: prUrl,
+            title: 'feat: publish refusal guidance',
+            body: 'Reader-facing summary and validation evidence.',
+            isDraft: true,
+            labels: [],
+          }),
+        };
+      }
+      throw new Error(`unexpected GitHub call: ${args.join(' ')}`);
+    });
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot,
+      stateFilePath,
+      baseBranch: 'main',
+      git: async (args) => args[0] === 'remote'
+        ? { stdout: 'origin\n' }
+        : { stdout: 'refs/remotes/origin/feat/finish-correct-refusal\n' },
+      gh,
+      observeReleaseReadiness: async () => 'present',
+    });
     const conductor = new Conductor({
       stateFilePath,
       stepRunner: provider,
@@ -80,7 +100,7 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
       verifyArtifacts: false,
       events: new ConductorEventEmitter(),
       git: async () => ({ stdout: '' }),
-      gh: async () => ({ stdout: '' }),
+      gh,
       runGh: async () => ({ stdout: '' }),
     });
 
@@ -91,6 +111,10 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
       'finish',
       expect.any(Object),
       expect.objectContaining({ finishProsePass: 'judge' }),
+    );
+    expect(gh).toHaveBeenCalledWith(
+      ['pr', 'view', prUrl, '--json', 'url,title,body,isDraft,labels'],
+      { cwd: projectRoot },
     );
     const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
     expect(halt).toContain('The PR prose judgment was refused and requires an operator decision.');

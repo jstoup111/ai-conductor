@@ -1621,7 +1621,12 @@ async function advanceFinishPublicationUnreconciled(
       const observedAfterWrite = await input.observe();
       if (writeFailure) {
         if (observedAfterWrite.shippedRecord === 'valid') {
-          return { kind: 'advanced', transition: 'write_shipped_record' };
+          return advancedPublicationTransition(
+            input.emit,
+            'write_shipped_record',
+            snapshot,
+            observedAfterWrite,
+          );
         }
         if (observedAfterWrite.shippedRecord === 'invalid') {
           return { kind: 'human_required', reason: 'invalid_shipped_record' };
@@ -1750,7 +1755,15 @@ async function advanceFinishPublicationUnreconciled(
 
       const observedAfterRecord = await input.observe();
       if (writeFailure) {
-        if (observedAfterRecord.outcomeRecord === 'valid') return { kind: 'complete' };
+        if (observedAfterRecord.outcomeRecord === 'valid') {
+          const advanced = await advancedPublicationTransition(
+            input.emit,
+            'record_outcome',
+            snapshot,
+            observedAfterRecord,
+          );
+          return advanced.kind === 'advanced' ? { kind: 'complete' } : advanced;
+        }
         return {
           kind: 'publication_retry',
           transition: 'record_outcome',

@@ -33,13 +33,15 @@ import {
   advanceFinishPublication,
   advancedPublicationTransition,
   FINISH_PUBLICATION_PROGRESS_ALLOWANCE,
+  type AdvanceFinishPublicationResult,
+  type PublicationDisposition,
   type PublicationSnapshot,
   type PublicationTransition,
 } from '../../src/engine/finish-publication.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { writeState } from '../../src/engine/state.js';
+import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, FinishPublicationEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../test-conductor.js';
@@ -71,6 +73,14 @@ function judgmentSnapshot(): PublicationSnapshot {
     shippedRecord: 'valid',
     outcomeRecord: 'missing',
   };
+}
+
+function asProductionPublicationDisposition(
+  result: AdvanceFinishPublicationResult,
+): PublicationDisposition {
+  return result.kind === 'advanced'
+    ? { kind: 'publication_progress', transition: result.transition }
+    : result;
 }
 
 describe('Story 2 — non-advancing judgment stops on its first occurrence', () => {
@@ -125,6 +135,21 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
       type: 'finish_publication_transition', phase: 'completed', transition: 'judge_pr_prose',
     });
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+
+    // Keep the injected Cycle B snapshot seam, but route its actual
+    // coordinator result through the counter-owning Conductor boundary.
+    await expect(finishRetryEventsFor(
+      asProductionPublicationDisposition(result),
+      async () => asProductionPublicationDisposition(await advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment },
+      })),
+    )).resolves.toMatchObject({
+      retryReasons: [],
+      publicationDispositions: ['human_required'],
+      publicationProgress: [],
+      finishStatus: 'failed',
+    });
   });
 });
 
@@ -351,8 +376,14 @@ async function runProductionObservation(
 }
 
 async function finishRetryEventsFor(
-  disposition: Awaited<ReturnType<typeof runProductionObservation>>['result'],
-): Promise<string[]> {
+  disposition: PublicationDisposition,
+  advanceOverride?: () => Promise<PublicationDisposition>,
+): Promise<{
+  retryReasons: string[];
+  publicationDispositions: string[];
+  publicationProgress: Array<{ transition: string; count: number }>;
+  finishStatus: string | undefined;
+}> {
   const root = await mkdtemp(join(tmpdir(), 'finish-publication-halt-counter-'));
   roots.push(root);
   const pipeline = join(root, '.pipeline');
@@ -371,18 +402,31 @@ async function finishRetryEventsFor(
 
   const events = new ConductorEventEmitter();
   const retryReasons: string[] = [];
+  const publicationDispositions: string[] = [];
+  const publicationProgress: Array<{ transition: string; count: number }> = [];
   events.on('step_retry', (event) => {
     if (event.type === 'step_retry' && event.step === 'finish') retryReasons.push(event.reason);
+  });
+  events.on('finish_publication_disposition', (event) => {
+    if (event.type === 'finish_publication_disposition') publicationDispositions.push(event.disposition);
+  });
+  events.on('finish_publication_progress', (event) => {
+    if (event.type === 'finish_publication_progress') {
+      publicationProgress.push({ transition: event.transition, count: event.count });
+    }
   });
   const stepRunner: StepRunner = {
     run: vi.fn(async () => {
       throw new Error('the injected FINISH disposition should terminate this fixture');
     }),
   };
+  const advance = vi.fn(async () => {
+    return advanceOverride?.() ?? disposition;
+  });
   const conductor = new Conductor({
     stateFilePath,
     stepRunner,
-    finishPublication: { advance: vi.fn(async () => disposition) } as never,
+    finishPublication: { advance } as never,
     events,
     projectRoot: root,
     fromStep: 'finish',
@@ -396,7 +440,13 @@ async function finishRetryEventsFor(
   });
 
   await conductor.run();
-  return retryReasons;
+  const persisted = await readState(stateFilePath);
+  return {
+    retryReasons,
+    publicationDispositions,
+    publicationProgress,
+    finishStatus: persisted.ok ? persisted.value.finish : undefined,
+  };
 }
 
 describe('Story 4 — production observation recognizes a halt-state PR before judgment', () => {
@@ -444,12 +494,17 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
     // A halt is terminal at observation: it neither retries FINISH nor spends
     // a verified-publication progress slot.
     expect(completedTransitions).toEqual([]);
-    await expect(finishRetryEventsFor(result)).resolves.toEqual([]);
+    await expect(finishRetryEventsFor(result)).resolves.toMatchObject({
+      retryReasons: [],
+      publicationDispositions: ['human_required'],
+      publicationProgress: [],
+      finishStatus: 'failed',
+    });
     const viewCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view');
     expect(viewCall?.join(' ')).toContain('labels');
   });
 
-  it('leaves ordinary authored prose with no halt signal on the normal publication path', async () => {
+  it('judges ordinary authored prose with no halt signal before selecting its transition', async () => {
     const { result, dispatchJudgment, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
@@ -458,8 +513,8 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
       labels: [],
     });
 
-    expect(result).toEqual({ kind: 'publication_progress', transition: 'ready_pr' });
-    expect(dispatchJudgment).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledOnce();
     expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
       expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
     );
@@ -474,8 +529,8 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
       labels: [],
     });
 
-    expect(result).not.toEqual(expect.objectContaining({ kind: 'human_required' }));
-    expect(dispatchJudgment).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledOnce();
     expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
       expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
     );

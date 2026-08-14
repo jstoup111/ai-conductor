@@ -82,6 +82,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'finish_publication_transition',
   'finish_publication_blocked',
   'finish_publication_disposition',
+  'finish_publication_progress',
   'kickback',
   'deprecated_step',
   'rebase_changed',
@@ -449,6 +450,19 @@ describe('event sink subscriptions', () => {
       provenance,
       sink: { render: false, persist: true, audit: false },
       persisted: true,
+    });
+  });
+
+  it('persists a Conductor-owned FINISH publication progress increment without adding friction audit noise', () => {
+    const progress = {
+      type: 'finish_publication_progress',
+      transition: 'judge_pr_prose',
+      count: 3,
+    } satisfies ConductorEvent;
+
+    expect({ progress, sinks: EVENT_SINKS.finish_publication_progress }).toEqual({
+      progress,
+      sinks: { render: false, persist: true, audit: false },
     });
   });
 
