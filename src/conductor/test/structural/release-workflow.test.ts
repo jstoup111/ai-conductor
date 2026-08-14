@@ -18,6 +18,43 @@ function job(value: unknown, label: string): WorkflowJob {
 }
 
 describe('structural: release workflow', () => {
+  it('makes every live-provider workflow matrix leg select, gate, and report only itself', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/live-daemon-e2e.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'live daemon E2E workflow');
+    const jobs = job(workflow.jobs, 'live daemon E2E workflow jobs');
+    const liveE2E = job(jobs['live-daemon-e2e'], 'live daemon E2E job');
+    const strategy = job(liveE2E.strategy, 'live daemon E2E strategy');
+    const matrix = job(strategy.matrix, 'live daemon E2E matrix');
+    const steps = liveE2E.steps as Array<Record<string, unknown>>;
+    const credentialCheck = steps.find((step) => step.name === 'Check live-provider credentials');
+    const smoke = steps.find((step) => step.name === 'Run complete release smoke tier in gate mode');
+
+    expect(matrix.include).toEqual([
+      {
+        provider: 'claude',
+        credential_env: 'CLAUDE_CODE_OAUTH_TOKEN',
+        smoke_file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts',
+      },
+      {
+        provider: 'codex',
+        credential_env: 'CODEX_API_KEY',
+        smoke_file: 'test/engine/daemon-e2e-live-codex.smoke.test.ts',
+      },
+    ]);
+    expect(job(credentialCheck, 'live-provider credential check').env)
+      .toMatchObject({ LIVE_PROVIDER_CREDENTIAL: '${{ secrets[matrix.credential_env] }}' });
+    expect(String(credentialCheck?.run)).toContain('${{ matrix.provider }}');
+    expect(String(credentialCheck?.run)).toContain('${{ matrix.credential_env }}');
+    expect(job(smoke, 'live-provider smoke').env).toEqual({
+      CREDENTIAL_ENV: '${{ matrix.credential_env }}',
+      LIVE_PROVIDER_CREDENTIAL: '${{ secrets[matrix.credential_env] }}',
+    });
+    expect(smoke?.run).toBe(
+      'env "$CREDENTIAL_ENV=$LIVE_PROVIDER_CREDENTIAL" npx vitest run --config vitest.smoke.config.ts "${{ matrix.smoke_file }}"',
+    );
+    expect(source).toMatch(/\$GITHUB_STEP_SUMMARY[\s\S]*\$\{\{ matrix\.provider \}\}[\s\S]*(?:gating|non-gating skip)[\s\S]*\$\{\{ matrix\.credential_env \}\}/);
+  });
+
   it('orders classify, smoke, and publish so only a publishable classification can spend or publish', async () => {
     const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
     const workflow = job(loadYaml(source), 'release workflow');
