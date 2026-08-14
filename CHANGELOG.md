@@ -52,6 +52,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - PRD audit now resolves date-prefixed PRD filenames for the active feature. ([implementation PR #1566](https://github.com/jstoup111/ai-conductor/pull/1566)).
 - Spec and implementation PRs no longer fail the release-metadata check when their issue-linking trailer follows a trailing Migration section. ([implementation PR #1569](https://github.com/jstoup111/ai-conductor/pull/1569)).
 - Fresh installs and updates now follow a stable branch that advances only after a release is fully published. ([implementation PR #1561](https://github.com/jstoup111/ai-conductor/pull/1561)).
+- `remediate` now routes a build_review gap to `build` when an existing approved-plan task already admits the fix, instead of incorrectly halting for a needless re-plan. ([implementation PR #1571](https://github.com/jstoup111/ai-conductor/pull/1571)).
 
 ## Migration
 
