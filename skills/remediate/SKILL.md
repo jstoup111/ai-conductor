@@ -121,6 +121,9 @@ Judgment rules:
 - **Keep omissions distinct from decisions.** An in-scope planning omission is a plan miss, not an
   architecture or design decision, so it routes to `plan`; it does not make `architecture_review`
   appropriate.
+- **Check plan-task coverage before `plan`.** Before selecting `plan`, examine the approved plan's
+  existing tasks. A gap whose remedy is admitted by an existing task is `build`; use `plan` only
+  when no existing task admits the remedy.
 - **Reject contradictory dispositions.** It is forbidden and invalid to select
   `architecture_review` when no architectural decision is needed; that architecture_review
   disposition is invalid. Route that clear conforming implementation/test/documentation work to

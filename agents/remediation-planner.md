@@ -63,6 +63,9 @@ exception — reserved for two human categories only.
   appropriate. Positive example: a plan omitted an approved validation task, so re-plan it.
   Negative example: do not reopen architecture review when no approved architectural change or
   clarification is required.
+- **Check plan-task coverage before `plan`.** Before selecting `plan`, examine the approved plan's
+  existing tasks. A gap whose remedy is admitted by an existing task is `build`; use `plan` only
+  when no existing task admits the remedy.
 - **Reject contradictory dispositions.** It is forbidden and invalid to select
   `architecture_review` when no architectural decision or product decision is needed; that
   `architecture_review` disposition is invalid. Route that clear conforming

@@ -43,4 +43,18 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect(buildReviewId?.[0]).not.toContain('test:<');
     expect(finishFailureId?.[0]).not.toContain('build_review:<');
   });
+
+  it('requires plan-task coverage before routing a gap to plan', async () => {
+    const text = await contract();
+
+    const coverageCheck = text.match(
+      /before selecting `plan`, examine the approved plan(?:'s)?\s+existing tasks/i,
+    );
+    const existingTaskRemedy = text.match(
+      /gap whose remedy is admitted by an existing task is `build`/i,
+    );
+
+    expect(coverageCheck).not.toBeNull();
+    expect(existingTaskRemedy).not.toBeNull();
+  });
 });
