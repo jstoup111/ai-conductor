@@ -192,16 +192,24 @@ async function land(fixture: LandFixture) {
 
 describe('TS-1: accepted-artifact amendments are performed during DECIDE', () => {
   it.each([
-    ['conflict-check', 'skills/conflict-check/SKILL.md'],
-    ['architecture-review', 'skills/architecture-review/SKILL.md'],
-  ])('%s requires the additive dated mutation now, never a later task or parallel record', async (_name, path) => {
+    ['conflict-check', 'skills/conflict-check/SKILL.md', true],
+    ['architecture-review', 'skills/architecture-review/SKILL.md', true],
+    ['stories', 'skills/stories/SKILL.md', false],
+  ])('%s applies the DECIDE correction now, never in a later phase or parallel record', async (_name, path, additive) => {
     const text = await readContract(path);
 
-    expect(text).toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
-    expect(text).toMatch(/(?:write|perform|mutate|amend)[\s\S]{0,220}(?:during|in|same)\s+(?:the\s+)?(?:DECIDE|pass|review)/i);
-    expect(text).toMatch(/original[\s\S]{0,160}(?:remain|preserv|never (?:rewrite|delete))/i);
-    expect(text).toMatch(/no (?:separate|parallel) (?:record|ledger|artifact)/i);
+    expect(text).toMatch(/(?:write|perform|mutate|amend|replace)[\s\S]{0,220}(?:during|in|same)\s+(?:the\s+)?(?:DECIDE|pass|review)/i);
     expect(text).toMatch(/never[\s\S]{0,180}(?:later phase|BUILD|plan task|defer)/i);
+
+    if (additive) {
+      expect(text).toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
+      expect(text).toMatch(/original[\s\S]{0,160}(?:remain|preserv|never (?:rewrite|delete))/i);
+      expect(text).toMatch(/no (?:separate|parallel) (?:record|ledger|artifact)/i);
+    } else {
+      expect(text).toMatch(/replace[\s\S]{0,200}(?:in place|superseded)/i);
+      expect(text).toMatch(/no[\s\S]{0,80}amendment record/i);
+      expect(text).not.toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
+    }
   });
 
   it('keeps conflict-check additive for non-story artifacts while replacing story assertions in place', async () => {
