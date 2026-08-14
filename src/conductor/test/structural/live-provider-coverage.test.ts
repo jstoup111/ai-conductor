@@ -1,3 +1,7 @@
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
@@ -7,6 +11,24 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { LIVE_E2E_PROVIDERS } from '../fixtures/live-e2e-providers.js';
 
 const CREDENTIALED_CAPABILITY_PREFIX = 'credentialed:';
+const structuralRoot = dirname(fileURLToPath(import.meta.url));
+
+function assertDescriptorCapabilityMapAgreement(
+  manifestProviders: readonly string[],
+  capabilityMapProviders: readonly string[],
+): void {
+  for (const provider of manifestProviders) {
+    if (!capabilityMapProviders.includes(provider)) {
+      throw new Error(`Descriptor manifest provider ${provider} has no structural smoke capability map entry`);
+    }
+  }
+
+  for (const provider of capabilityMapProviders) {
+    if (!manifestProviders.includes(provider)) {
+      throw new Error(`Structural smoke capability map provider ${provider} has no descriptor manifest entry`);
+    }
+  }
+}
 
 function assertLiveProviderCoverage(
   registeredProviders: readonly string[],
@@ -78,6 +100,26 @@ describe('structural: live provider coverage', () => {
       ['claude', 'codex'],
       ['claude'],
     )).toThrow('Live E2E leg codex has no credentialed smoke capability');
+  });
+
+  it('derives descriptor-owned structural capability-map entries from the manifest', async () => {
+    const smokeEntryPointSource = await readFile(join(structuralRoot, 'smoke-entry-point.test.ts'), 'utf8');
+
+    expect(smokeEntryPointSource).toContain('LIVE_E2E_PROVIDERS.map(({ id })');
+    expect(smokeEntryPointSource).not.toContain("'test/engine/daemon-e2e-live-claude.smoke.test.ts': 'credentialed:claude'");
+    expect(smokeEntryPointSource).not.toContain("'test/engine/daemon-e2e-live-codex.smoke.test.ts': 'credentialed:codex'");
+  });
+
+  it('names a provider disagreement between the descriptor manifest and structural capability map', () => {
+    expect(() => assertDescriptorCapabilityMapAgreement(
+      ['claude', 'codex'],
+      ['claude'],
+    )).toThrow('Descriptor manifest provider codex has no structural smoke capability map entry');
+
+    expect(() => assertDescriptorCapabilityMapAgreement(
+      ['claude'],
+      ['claude', 'codex'],
+    )).toThrow('Structural smoke capability map provider codex has no descriptor manifest entry');
   });
 
   it('names a live leg left behind for an unregistered provider', () => {
