@@ -244,7 +244,7 @@ async function saveStore(path: string, store: LedgerStore): Promise<void> {
 
 async function withLedgerLease<T>(lease: ConductStateLease, body: () => Promise<T>): Promise<T> {
   const acquired = await lease.acquire();
-  if (!acquired.ok) throw new Error(acquired.message);
+  if (!acquired.ok) throw new Error(`Unable to acquire intake ledger lease: ${acquired.message}`);
   let bodySucceeded = false;
   try {
     const result = await body();

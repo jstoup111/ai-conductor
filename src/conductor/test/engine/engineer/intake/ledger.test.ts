@@ -192,6 +192,35 @@ describe('loadStore()', () => {
 });
 
 describe('lease-bracketed ledger access', () => {
+  it('fails closed with an intake-ledger lease error before mutations or reads access the ledger', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const originalBytes = Buffer.from('{"preserved":true}');
+    const refusal = 'another process owns the lease';
+    const lease: ConductStateLease = {
+      acquire: async () => ({ ok: false, kind: 'timeout', message: refusal }),
+    };
+    const ledger = createLedger(ledgerPath, { lease });
+    const unreadableLedgerPath = join(dir, 'unreadable-ledger.json');
+    await writeFile(ledgerPath, originalBytes);
+    await mkdir(unreadableLedgerPath);
+    const readLedger = createLedger(unreadableLedgerPath, { lease });
+
+    const errors = await Promise.all([
+      ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }),
+      readLedger.known('github-issues', 'o/a#1'),
+      readLedger.get('github-issues', 'o/a#1'),
+      readLedger.list(),
+    ].map((operation) => operation.then(
+      () => undefined,
+      (error: unknown) => error instanceof Error ? error.message : String(error),
+    )));
+
+    expect({ errors, bytes: await readFile(ledgerPath) }).toEqual({
+      errors: Array(4).fill(`Unable to acquire intake ledger lease: ${refusal}`),
+      bytes: originalBytes,
+    });
+  });
+
   it.each([
     ['known', (ledger: ReturnType<typeof createLedger>) => ledger.known('github-issues', 'o/a#1')],
     ['get', (ledger: ReturnType<typeof createLedger>) => ledger.get('github-issues', 'o/a#1')],
