@@ -82,6 +82,7 @@ exception — reserved for two human categories only.
   an **intentional contract change** on this branch gets tasks updating the TEST to the new contract
   — never a task weakening the production code back to the old behavior. A test exposing a real impl
   bug gets impl-fix tasks. Use gap id `test:<failing file stem>`.
+- **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
 - **Tasks are concrete and file-scoped.** Each task names the `file:line` and exactly what to change,
   drawn from the gap's evidence — never "fix FR-10". A vague task is a failed plan.
 - **Evidence drives the plan.** Every disposition cites the gap's `file:line`. If the evidence is

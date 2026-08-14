@@ -119,6 +119,7 @@ Judgment rules:
   TEST to the new contract — never a task that weakens the production code to appease the old
   test. A test that reveals a real implementation bug gets impl-fix tasks. Reserve `halt` for a
   failure that evidences a genuine design ambiguity, not mere uncertainty about the fix.
+- **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
 - An `intended-drift` is `halt: product-scope` **only** if it reflects unplanned product
   functionality; if it preserves approved architecture, it is `build`. Route to
   `architecture_review` only when the approved architecture itself must change or be clarified.
