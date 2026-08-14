@@ -1230,6 +1230,52 @@ run_update_tty "$REPO" "$HOME_DIR" y
 assert "stable migrate failure: restores the stable checkout and original version identity" \
   "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
 
+PAIR=$(make_main_repo "stable-dirty")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-dirty-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+printf 'local dirty change\n' >> "$REPO/CHANGELOG.md"
+
+run_update "$REPO" "$HOME_DIR"
+assert "stable dirty: refuses the tagged fast-forward without mutating checkout or version" \
+  "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -Eqi 'clean|dirty|uncommitted' && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-diverged")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+git -C "$REPO" commit -q --allow-empty -m "local stable divergence"
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-diverged-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+
+run_update "$REPO" "$HOME_DIR"
+assert "stable diverged: refuses the remote release without mutating checkout or version" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
 PAIR=$(make_main_repo "s4-diverged")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 HOME_DIR=$(make_isolated_home)

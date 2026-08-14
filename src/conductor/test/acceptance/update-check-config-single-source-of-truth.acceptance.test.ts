@@ -221,6 +221,7 @@ case "\${args[*]}" in
   'rev-parse origin/stable') echo '${approvedSha}' ;;
   describe*${approvedSha}*) echo v1.2.4 ;;
   'rev-parse HEAD') echo '${installedSha}' ;;
+  'rev-parse --abbrev-ref HEAD') echo stable ;;
   'branch --show-current') echo stable ;;
   'merge-base --is-ancestor ${installedSha} ${approvedSha}') exit 0 ;;
   *) exit 0 ;;
@@ -248,6 +249,56 @@ esac
       channel: 'stable',
       fetchedStable: true,
       detachedToTag: false,
+    });
+  });
+
+  it('re-execs legacy bin/conduct exactly once after a stable update changes HEAD', async () => {
+    const harness = await makeHarness();
+    await writeUserConfig(
+      'conductor:\n  update_channel: stable\n  auto_check: true\n  current_version: v1.2.3\n',
+    );
+    const headState = join(scratch, 'fake-head');
+    const updateCount = join(scratch, 'update-invocations');
+    await writeFile(headState, 'old-head\n', 'utf8');
+    await writeFile(updateCount, '0\n', 'utf8');
+    await writeFile(
+      join(harness.root, 'bin', 'git'),
+      `#!/usr/bin/env bash
+args=("$@")
+if [ "\${args[0]:-}" = '-C' ]; then
+  args=("\${args[@]:2}")
+fi
+case "\${args[*]}" in
+  'rev-parse HEAD') cat '${headState}' ;;
+  *) exit 0 ;;
+esac
+`,
+      'utf8',
+    );
+    await writeFile(
+      harness.update,
+      `#!/usr/bin/env bash
+count=$(cat '${updateCount}')
+count=$((count + 1))
+printf '%s\\n' "$count" > '${updateCount}'
+if [ "$count" -eq 1 ]; then
+  printf 'new-head\\n' > '${headState}'
+fi
+exit 0
+`,
+      'utf8',
+    );
+
+    const result = await run(harness.conduct, ['--update'], harness.env);
+
+    expect({
+      exitCode: result.exitCode,
+      updateInvocations: Number((await readFile(updateCount, 'utf8')).trim()),
+      finalHead: (await readFile(headState, 'utf8')).trim(),
+    }).toEqual({
+      exitCode: 0,
+      updateInvocations: 2,
+      finalHead: 'new-head',
     });
   });
 
