@@ -455,9 +455,9 @@ describe('FINISH human-required halt marker', () => {
       await conductor.run();
 
       const haltBody = await readFile(join(pipelineDir, 'HALT'), 'utf8');
-      expect(provider).toHaveBeenCalledOnce();
+      expect(provider).not.toHaveBeenCalled();
       expect(haltBody).toContain('Next action:');
-      expect(haltBody).toContain(detail);
+      expect(haltBody).toContain('remediation halt signal');
       await expect(readFile(join(pipelineDir, 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -2017,7 +2017,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
     ],
   ] as const)(
-    'preserves the established route while forwarding detail only for human-required %s judgments',
+    'halts when a %s judgment requests an authoring retry that re-observation cannot select',
     async (_failure, judgmentResult, expected) => {
       const dispatchJudgment = vi.fn(async () => judgmentResult);
       const createShippedRecord = vi.fn(async () => undefined);
@@ -2028,7 +2028,11 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
           observe: async () => readyPublicationSnapshot(),
           effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
         }),
-      ).resolves.toEqual(expected);
+      ).resolves.toMatchObject(
+        expected.kind === 'publication_retry'
+          ? { kind: 'human_required', reason: 'publication_transition_unmoved' }
+          : expected,
+      );
 
       expect(dispatchJudgment).toHaveBeenCalledTimes(1);
       expect(createShippedRecord).not.toHaveBeenCalled();
@@ -2315,10 +2319,9 @@ describe('advanceFinishPublication accepted PR presentation', () => {
         }),
         effects: { dispatchJudgment, repairPresentation },
       }),
-    ).resolves.toEqual({
-      kind: 'publication_retry',
-      transition: 'author_pr_prose',
-      reason: 'authoring_required_after_judgment',
+    ).resolves.toMatchObject({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
     });
 
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);

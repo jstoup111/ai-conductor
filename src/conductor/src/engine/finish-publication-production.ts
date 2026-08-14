@@ -135,15 +135,25 @@ async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
 }
 
-function prProse(title: unknown, body: unknown, rawLabels: unknown): 'accepted' | 'stale' | 'placeholder' | 'halt' {
+function prHaltState(title: unknown, body: unknown, rawLabels: unknown): boolean {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
-  const text = `${prTitle}\n${prBody}`.trim();
   const labels = Array.isArray(rawLabels)
     ? rawLabels.map((label) => String((label as { name?: unknown } | null)?.name ?? ''))
     : [];
+  return hasHaltSignal({ title: prTitle, body: prBody, labels, isDraft: false });
+}
+
+function prProse(
+  title: unknown,
+  body: unknown,
+  halted: boolean,
+): 'accepted' | 'stale' | 'placeholder' | 'halt' {
+  const prTitle = typeof title === 'string' ? title : '';
+  const prBody = typeof body === 'string' ? body : '';
+  const text = `${prTitle}\n${prBody}`.trim();
   if (!text) return 'placeholder';
-  if (hasHaltSignal({ title: prTitle, body: prBody, labels, isDraft: false })) return 'halt';
+  if (halted) return 'halt';
   if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
@@ -322,11 +332,13 @@ export function createProductionFinishPublicationCoordinator(
                   labels?: unknown;
                 };
                 if (typeof pr.url === 'string') {
+                  const halted = prHaltState(pr.title, pr.body, pr.labels);
                   proseRevisionByPr.set(pr.url, `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`);
                   return {
                       state: 'one' as const,
                       url: pr.url,
-                      prose: prProse(pr.title, pr.body, pr.labels),
+                      prose: prProse(pr.title, pr.body, halted),
+                      ...(halted ? { halted: true as const } : {}),
                       ready: !pr.isDraft,
                     };
                 }

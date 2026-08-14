@@ -87,6 +87,8 @@ export type PublicationPullRequest =
       identity: 'one';
       url: string;
       prose: 'accepted' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      /** A machine-readable `needs-remediation` signal, distinct from prose judgment. */
+      halted?: true;
       ready: boolean;
     }
   | { identity: 'none' }
@@ -124,6 +126,8 @@ export type PullRequestObservation =
       state: 'one';
       url: string;
       prose: 'accepted' | 'stale' | 'placeholder' | 'halt';
+      /** The observer found a `needs-remediation` title, label, or body marker. */
+      halted?: true;
       ready: boolean;
     }
   | { state: 'missing' }
@@ -282,6 +286,7 @@ function mapPullRequest(
         identity: 'one',
         url: observation.url,
         prose: observation.prose,
+        ...(observation.halted === true ? { halted: true } : {}),
         ready: observation.ready,
       };
     case 'missing':
@@ -1502,7 +1507,7 @@ export async function advanceFinishPublication(
     });
   }
 
-  if (snapshot.pr.identity === 'one' && snapshot.pr.prose === 'halt') {
+  if (snapshot.pr.identity === 'one' && snapshot.pr.halted === true) {
     return { kind: 'human_required', reason: 'halt_state_pr' };
   }
 

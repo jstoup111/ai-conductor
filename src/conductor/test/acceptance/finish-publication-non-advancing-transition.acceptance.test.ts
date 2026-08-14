@@ -128,6 +128,15 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
   });
 });
 
+function healthyPr(): Extract<PublicationSnapshot['pr'], { identity: 'one' }> {
+  return {
+    identity: 'one',
+    url: PR_URL,
+    prose: 'accepted',
+    ready: true,
+  };
+}
+
 function healthySnapshot(): PublicationSnapshot {
   return {
     mode: 'daemon',
@@ -139,12 +148,7 @@ function healthySnapshot(): PublicationSnapshot {
     shipEvidence: 'valid',
     releaseReadiness: 'valid',
     branchPushed: 'valid',
-    pr: {
-      identity: 'one',
-      url: PR_URL,
-      prose: 'accepted',
-      ready: true,
-    },
+    pr: healthyPr(),
     shippedRecord: 'valid',
     outcomeRecord: 'missing',
   };
@@ -169,12 +173,12 @@ describe('Story 5 — legitimate publication revisits still advance', () => {
       },
       {
         transition: 'author_pr_prose',
-        before: { ...healthySnapshot(), pr: { ...healthySnapshot().pr, prose: 'placeholder' } },
-        after: { ...healthySnapshot(), pr: { ...healthySnapshot().pr, prose: 'stale' } },
+        before: { ...healthySnapshot(), pr: { ...healthyPr(), prose: 'placeholder' } },
+        after: { ...healthySnapshot(), pr: { ...healthyPr(), prose: 'stale' } },
       },
       {
         transition: 'judge_pr_prose',
-        before: { ...healthySnapshot(), pr: { ...healthySnapshot().pr, prose: 'stale' } },
+        before: { ...healthySnapshot(), pr: { ...healthyPr(), prose: 'stale' } },
         after: healthySnapshot(),
       },
       {
@@ -184,7 +188,7 @@ describe('Story 5 — legitimate publication revisits still advance', () => {
       },
       {
         transition: 'ready_pr',
-        before: { ...healthySnapshot(), pr: { ...healthySnapshot().pr, ready: false } },
+        before: { ...healthySnapshot(), pr: { ...healthyPr(), ready: false } },
         after: healthySnapshot(),
       },
       {
@@ -215,7 +219,7 @@ describe('Story 5 — legitimate publication revisits still advance', () => {
   it('completes a healthy publication run without human-required results or exhausting allowance', async () => {
     let snapshot: PublicationSnapshot = {
       ...healthySnapshot(),
-      pr: { ...healthySnapshot().pr, prose: 'placeholder', ready: false },
+      pr: { ...healthyPr(), prose: 'placeholder', ready: false },
       shippedRecord: 'missing',
     };
     const completedTransitions: PublicationTransition[] = [];
