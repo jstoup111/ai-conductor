@@ -168,4 +168,58 @@ describe('provisionLiveProviderHome', () => {
       await rm(sourceRoot, { recursive: true, force: true });
     }
   });
+
+  it('keeps concurrent provider legs environmentally disjoint', async () => {
+    const sourceRoot = await createSourceCheckout();
+    const originalEnvironment = {
+      CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+      CODEX_HOME: process.env.CODEX_HOME,
+      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+      CODEX_API_KEY: process.env.CODEX_API_KEY,
+    };
+    process.env.CLAUDE_CONFIG_DIR = '/operator/claude-home';
+    process.env.CODEX_HOME = '/operator/codex-home';
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'operator-claude-token';
+    process.env.CODEX_API_KEY = 'operator-codex-key';
+
+    try {
+      const [claudeHome, codexHome] = await Promise.all([
+        provisionLiveProviderHome(sourceRoot, {
+          id: 'claude',
+          prepareSelfHostAuth: async () => ({
+            env: { CLAUDE_CODE_OAUTH_TOKEN: 'claude-leg-token' },
+          }),
+        }),
+        provisionLiveProviderHome(sourceRoot, {
+          id: 'codex',
+          prepareSelfHostAuth: async () => ({
+            env: { CODEX_API_KEY: 'codex-leg-key' },
+          }),
+        }),
+      ]);
+      try {
+        expect(claudeHome.childEnv()).toMatchObject({
+          CLAUDE_CONFIG_DIR: claudeHome.homeDir,
+          CLAUDE_CODE_OAUTH_TOKEN: 'claude-leg-token',
+        });
+        expect(claudeHome.childEnv().CODEX_HOME).toBeUndefined();
+        expect(claudeHome.childEnv().CODEX_API_KEY).toBeUndefined();
+
+        expect(codexHome.childEnv()).toMatchObject({
+          CODEX_HOME: codexHome.homeDir,
+          CODEX_API_KEY: 'codex-leg-key',
+        });
+        expect(codexHome.childEnv().CLAUDE_CONFIG_DIR).toBeUndefined();
+        expect(codexHome.childEnv().CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+      } finally {
+        await Promise.all([claudeHome.teardown(), codexHome.teardown()]);
+      }
+    } finally {
+      for (const [name, value] of Object.entries(originalEnvironment)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
 });
