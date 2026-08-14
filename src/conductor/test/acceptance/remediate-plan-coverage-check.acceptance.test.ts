@@ -81,4 +81,12 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect(rationaleEvidence).not.toBeNull();
     expect(terminalPlan).not.toBeNull();
   });
+
+  it('preserves the sibling trigger guidance and its routes', async () => {
+    const text = await contract();
+
+    expect(text).toMatch(
+      /a clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`[\s\S]{0,160}a `build_stall` question answerable from committed artifacts routes `build`[\s\S]{0,160}(?:architecture|product|unanswerable) judgment routes `halt`/i,
+    );
+  });
 });
