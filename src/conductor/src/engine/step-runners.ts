@@ -48,7 +48,8 @@ import {
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { coordinateBuildReviewRubrics, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
-import { readBuildReviewCacheEntry } from './build-review-cache.js';
+import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
+import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { parseBuildReviewLapId, parseBuildReviewJudgedResult, type BuildReviewRubricResult } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
@@ -1725,6 +1726,18 @@ export class DefaultStepRunner implements StepRunner {
         rename,
       }),
       dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection),
+      writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
+      writeCache: async (entry) => writeBuildReviewCacheEntry(this.projectDir, entry, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
     });
 
     if (coordination.kind === 'gate-disabled') {
@@ -1734,19 +1747,43 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `build_review refused: ${coordination.reason}` };
     }
 
-    const results = Object.fromEntries(coordination.branches.map((branch) => [
-      branch.rubric,
-      branch.kind === 'cache-hit' || branch.kind === 'dispatched'
-        ? branch.result
-        : branch.kind === 'skipped'
-          ? branch
-          : {
-              kind: 'infrastructure-failure' as const,
-              rubric: branch.rubric,
-              reason: 'provider-error' as const,
-              detail: branch.reason,
-            },
-    ])) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+    const writeFailure = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
+      branch.kind === 'infrastructure-failure' && /(?:artifact|cache)-write-failed/.test(branch.reason),
+    );
+    if (writeFailure) {
+      return { success: false, output: `build_review evidence write failed for ${writeFailure.rubric}: ${writeFailure.reason}` };
+    }
+
+    const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
+      if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
+        const artifact = await readBuildReviewBranchArtifact(
+          this.projectDir,
+          branch.rubric,
+          lapId,
+          inputs.sourceSnapshot.digest,
+          {
+            readFile: async (path) => readFile(path, 'utf-8'),
+            mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+            writeFile,
+            rename,
+          },
+        );
+        return [branch.rubric, artifact?.result ?? {
+          kind: 'infrastructure-failure' as const,
+          rubric: branch.rubric,
+          reason: 'artifact-read-failed' as const,
+          detail: 'missing or invalid current-lap branch artifact',
+        }];
+      }
+      return [branch.rubric, branch.kind === 'skipped'
+        ? branch
+        : {
+            kind: 'infrastructure-failure' as const,
+            rubric: branch.rubric,
+            reason: 'provider-error' as const,
+            detail: branch.reason,
+          }];
+    }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,

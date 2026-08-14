@@ -13,6 +13,10 @@ import {
   classifyBuildReviewCacheLookup,
   type BuildReviewCacheEntry,
 } from "./build-review-cache.js";
+import {
+  parseBuildReviewBranchArtifact,
+  type BuildReviewBranchArtifact,
+} from "./build-review-artifacts.js";
 import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import {
   deriveBuildReviewRubricProjections,
@@ -88,6 +92,12 @@ export interface BuildReviewCoordinationInput {
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
   ) => Promise<unknown>;
+  /** Persist and return the validated, current-lap branch evidence. */
+  readonly writeArtifact: (
+    artifact: Omit<BuildReviewBranchArtifact, "version">,
+  ) => Promise<BuildReviewBranchArtifact>;
+  /** Persist one bounded semantic judgement; skips and failures never reach this effect. */
+  readonly writeCache: (entry: BuildReviewCacheEntry) => Promise<void>;
 }
 
 function preflightProjection(preflight: TautologyPreflightResult): {
@@ -115,6 +125,19 @@ function validCurrentResult(
 ): BuildReviewJudgedResult | undefined {
   const result = parseBuildReviewJudgedResult(candidate);
   return result && result.rubric === rubric && result.lapId === projection.lapId &&
+    result.snapshotDigest === projection.snapshotDigest ? result : undefined;
+}
+
+function validWrittenArtifact(
+  candidate: unknown,
+  rubric: BuildReviewRubricId,
+  projection: BuildReviewRubricProjection,
+): BuildReviewJudgedResult | undefined {
+  const artifact = parseBuildReviewBranchArtifact(candidate);
+  const result = artifact?.result;
+  return artifact?.rubric === rubric && artifact.lapId === projection.lapId &&
+    artifact.snapshotDigest === projection.snapshotDigest && result?.kind === "judged" &&
+    result.rubric === rubric && result.lapId === projection.lapId &&
     result.snapshotDigest === projection.snapshotDigest ? result : undefined;
 }
 
@@ -183,7 +206,20 @@ export async function coordinateBuildReviewRubrics(
       snapshotDigest: projection.snapshotDigest,
     });
     if (cache.kind === "hit") {
-      resolved.set(branch.rubric, { kind: "cache-hit", rubric: branch.rubric, result: cache.hit.result });
+      try {
+        const result = validWrittenArtifact(await input.writeArtifact({
+          rubric: branch.rubric,
+          lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest,
+          result: cache.hit.result,
+          provenance: cache.hit.provenance,
+        }), branch.rubric, projection);
+        resolved.set(branch.rubric, result
+          ? { kind: "cache-hit", rubric: branch.rubric, result }
+          : infrastructure(branch.rubric, "artifact-write-failed"));
+      } catch {
+        resolved.set(branch.rubric, infrastructure(branch.rubric, "artifact-write-failed"));
+      }
     } else {
       misses.push(branch);
     }
@@ -194,9 +230,34 @@ export async function coordinateBuildReviewRubrics(
       const projection = projections[rubric];
       try {
         const result = validCurrentResult(await input.dispatchModel(branch, projection), rubric, projection);
-        return result
-          ? { rubric, branch: { kind: "dispatched", rubric, result } as BuildReviewCoordinatedBranch }
-          : { rubric, branch: infrastructure(rubric, "invalid-provider-result") };
+        if (!result) return { rubric, branch: infrastructure(rubric, "invalid-provider-result") };
+        let written: BuildReviewJudgedResult | undefined;
+        try {
+          written = validWrittenArtifact(await input.writeArtifact({
+            rubric,
+            lapId: projection.lapId,
+            snapshotDigest: projection.snapshotDigest,
+            result,
+            provenance: { kind: "fresh" },
+          }), rubric, projection);
+        } catch {
+          return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
+        }
+        if (!written) return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
+        try {
+          await input.writeCache({
+            version: 1,
+            rubric,
+            contractVersion: projection.contractVersion,
+            projectionVersion: projection.projectionVersion,
+            projectionDigest: projection.digest,
+            policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
+            result: written,
+          });
+        } catch {
+          return { rubric, branch: infrastructure(rubric, "cache-write-failed") };
+        }
+        return { rubric, branch: { kind: "dispatched", rubric, result: written } as BuildReviewCoordinatedBranch };
       } catch {
         return { rubric, branch: infrastructure(rubric, "provider-error") };
       }

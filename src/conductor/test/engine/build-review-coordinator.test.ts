@@ -5,6 +5,7 @@ import {
   type BuildReviewCoordinatorHooks,
 } from "../../src/engine/build-review-coordinator.js";
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
+import type { BuildReviewCacheEntry } from "../../src/engine/build-review-cache.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type { ResolvedBuildReviewConfig } from "../../src/engine/resolved-config.js";
 
@@ -98,6 +99,113 @@ function inputs(): BuildReviewFrozenInputs {
 }
 
 describe("build-review coordinator: frozen fan-out", () => {
+  it("materializes a fresh result into both current-lap evidence stores before returning it", async () => {
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
+    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
+    const dispatchModel = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+    }));
+
+    await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: async () => ({
+        classification: "approved-exception" as const, exception: "empty-test-set" as const,
+        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
+        revertedProductionPatch: [], sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+      }),
+      readCache: async () => undefined,
+      dispatchModel,
+      writeArtifact,
+      writeCache,
+    });
+
+    expect(writeArtifact).toHaveBeenCalledTimes(5);
+    expect(writeCache).toHaveBeenCalledTimes(5);
+    expect(writeArtifact.mock.calls.every(([artifact]) => artifact.provenance.kind === "fresh")).toBe(true);
+    expect(writeCache.mock.calls.every(([entry]) => entry.result.kind === "judged")).toBe(true);
+  });
+
+  it("rematerializes an exact cache hit with provenance without rewriting its semantic entry", async () => {
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
+    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
+    const dispatchModel = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+    }));
+    const result = await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: async () => ({
+        classification: "approved-exception" as const, exception: "empty-test-set" as const,
+        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
+        revertedProductionPatch: [], sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+      }),
+      readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
+        version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v1" as const,
+        projectionDigest: projection.digest, policyFingerprint,
+        result: {
+          kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
+          snapshotDigest: "cached-snapshot", contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+        },
+      } : undefined,
+      dispatchModel, writeArtifact, writeCache,
+    });
+
+    expect(result).toMatchObject({ kind: "ready" });
+    expect(writeCache).toHaveBeenCalledTimes(4);
+    expect(writeArtifact.mock.calls.find(([artifact]) => artifact.rubric === "scope")?.[0]).toMatchObject({
+      lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "cache-hit", cachedLapId: "cached" },
+    });
+    expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("scope");
+  });
+
+  it("turns artifact write failure into an owning infrastructure result and never caches skips", async () => {
+    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
+    const result = await coordinateBuildReviewRubrics({
+      config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
+      inputs: { ...inputs(), entryPoints: [] }, lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async (branch, projection) => ({
+        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+      }),
+      writeArtifact: async (artifact) => {
+        if (artifact.rubric === "scope") throw new Error("disk full");
+        return { version: 1, ...artifact };
+      },
+      writeCache,
+    });
+
+    expect(result).toMatchObject({ kind: "ready" });
+    expect((result as Extract<typeof result, { kind: "ready" }>).branches.find((branch) => branch.rubric === "scope"))
+      .toEqual({ kind: "infrastructure-failure", rubric: "scope", reason: "artifact-write-failed" });
+    expect(writeCache).toHaveBeenCalledTimes(2);
+    expect(writeCache.mock.calls.map(([entry]) => entry.rubric)).toEqual(["rootCause", "completeness"]);
+  });
+
+  it("turns a cache write failure into an owning infrastructure result", async () => {
+    const result = await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: async () => ({
+        classification: "approved-exception" as const, exception: "empty-test-set" as const,
+        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
+        revertedProductionPatch: [], sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+      }),
+      readCache: async () => undefined,
+      dispatchModel: async (branch, projection) => ({
+        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+      }),
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async (entry) => {
+        if (entry.rubric === "scope") throw new Error("disk full");
+      },
+    });
+
+    expect((result as Extract<typeof result, { kind: "ready" }>).branches.find((branch) => branch.rubric === "scope"))
+      .toEqual({ kind: "infrastructure-failure", rubric: "scope", reason: "cache-write-failed" });
+  });
+
   it("runs one Tautology preflight, reuses exact hits, caps misses, and settles every branch", async () => {
     const active = { count: 0, peak: 0 };
     const dispatchModel = vi.fn(async (branch, projection) => {
@@ -129,6 +237,8 @@ describe("build-review coordinator: frozen fan-out", () => {
         ? { ...cachedScope, projectionDigest: projection.digest, policyFingerprint }
         : undefined,
       dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
     });
 
     expect(preflight).toHaveBeenCalledOnce();
@@ -153,6 +263,8 @@ describe("build-review coordinator: frozen fan-out", () => {
         sourceIdentities: { mergeBase: "base", headSha: "head" },
       }),
       readCache: async () => undefined, dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
     });
 
     if (result.kind !== "ready") throw new Error("expected a settled review lap");
