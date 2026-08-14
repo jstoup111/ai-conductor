@@ -1856,6 +1856,34 @@ complexity:
       });
     });
 
+    it('keeps legacy keys tolerant while the rubric execution subtree is fail-closed', () => {
+      const legacy = validateConfig({
+        build_review: { enabled: 'not-a-boolean', perTaskFloor: 'not-a-boolean' },
+      });
+      const rubricPolicy = validateConfig({
+        build_review: { rubrics: { wiring: { max_retries: 'many' } } },
+      });
+
+      expect({
+        legacy: legacy.ok
+          ? {
+              buildReview: legacy.config.build_review,
+              warnings: legacy.warnings,
+            }
+          : legacy,
+        rubricPolicy: rubricPolicy.ok ? rubricPolicy : rubricPolicy.error.message,
+      }).toEqual({
+        legacy: {
+          buildReview: expect.objectContaining({ enabled: true }),
+          warnings: [
+            expect.stringMatching(/build_review\.enabled/),
+            expect.stringMatching(/build_review\.perTaskFloor/),
+          ],
+        },
+        rubricPolicy: expect.stringMatching(/build_review\.rubrics\.wiring\.max_retries/),
+      });
+    });
+
     it('resolves absent key to enabled (default-on, #773 Task 4), no warning', () => {
       const result = validateConfig({ harness_version: '>=1.0.0' });
       expect(result.ok).toBe(true);

@@ -119,6 +119,46 @@ describe('LLM provider selection validation', () => {
   });
 });
 
+describe('build_review rubric validation', () => {
+  it.each([
+    {
+      name: 'an unknown rubric ID',
+      config: { build_review: { rubrics: { invented: {} } } },
+      path: 'build_review\\.rubrics\\.invented',
+    },
+    {
+      name: 'a malformed rubric execution policy',
+      config: { build_review: { rubrics: { scope: { effort: 'extreme' } } } },
+      path: 'build_review\\.rubrics\\.scope\\.effort',
+    },
+    {
+      name: 'invalid rubric concurrency',
+      config: { build_review: { maxParallel: 0 } },
+      path: 'build_review\\.maxParallel',
+    },
+    {
+      name: 'an enabled gate with no enabled rubrics',
+      config: {
+        build_review: {
+          rubrics: {
+            tautology: { enabled: false },
+            scope: { enabled: false },
+            rootCause: { enabled: false },
+            completeness: { enabled: false },
+            wiring: { enabled: false },
+          },
+        },
+      },
+      path: 'build_review\\.rubrics.*at least one enabled rubric',
+    },
+  ])('rejects $name before any rubric can dispatch', ({ config, path }) => {
+    const result = validateConfig(config);
+    const diagnostic = result.ok ? 'accepted invalid build review rubric configuration' : result.error.message;
+
+    expect(diagnostic).toMatch(new RegExp(path, 'i'));
+  });
+});
+
 describe('engine_refresh_min_interval_seconds config field', () => {
   it('accepts a positive number as-is', () => {
     const result = validateConfig({ engine_refresh_min_interval_seconds: 120 });
