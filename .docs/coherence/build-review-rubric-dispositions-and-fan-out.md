@@ -6,7 +6,7 @@
 **Verdict:** COVERED — no gaps or contradictions
 
 > **Amended 2026-08-14 after the operator-directed post-BUILD plan repair:** Tasks 1-40 remain the
-> original implementation history. Tasks `rem-build-review-1` through `rem-build-review-8` restore
+> original implementation history. Tasks `rem-build-review-1` through `rem-build-review-9` restore
 > production reachability for behavior already traced below. The new task rows and affected story
 > counterparts are additive; no FR, story, outcome, or ADR row changed meaning.
 
@@ -46,12 +46,12 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
 | fr | fr-25 | story-25 | covered | Story 25 content-addressably reuses semantic rubric results while rematerializing current-lap evidence. |
 
 ## Stories
-| story | story-1 | task-4, task-5, task-6, task-7, task-8, task-9, task-10, task-11, task-20, task-23, task-24, task-27, task-40, task-rem-build-review-2, task-rem-build-review-8 | covered | Registry, skills, domain, provider-aware production dispatch, artifacts, join, and acceptance proof implement separate attribution. |
+| story | story-1 | task-4, task-5, task-6, task-7, task-8, task-9, task-10, task-11, task-20, task-23, task-24, task-27, task-40, task-rem-build-review-2, task-rem-build-review-8, task-rem-build-review-9 | covered | Registry, skills, domain, provider-aware production dispatch, Scope-only landed evidence, artifacts, join, and acceptance proof implement separate attribution. |
 | story | story-2 | task-1, task-3, task-20, task-21, task-23, task-40, task-rem-build-review-2, task-rem-build-review-8 | covered | Config, auxiliary semaphore use, provider policy, coordinator dispatch, and acceptance proof cover bounded concurrency. |
 | story | story-3 | task-1, task-2, task-8, task-9, task-22, task-40, task-rem-build-review-5, task-rem-build-review-8 | covered | Default enablement, explicit disablement, neutral prerequisite skips, and provider-zero assertions are planned. |
 | story | story-4 | task-2, task-22, task-40 | covered | Config and coordinator both refuse enabled-zero coverage before provider work. |
 | story | story-5 | task-1, task-2, task-3, task-4, task-10, task-20, task-21, task-23, task-40, task-rem-build-review-2, task-rem-build-review-8 | covered | Policy schema, validation, resolution, fingerprint, provider-aware skill execution, and integration evidence align. |
-| story | story-6 | task-12, task-13, task-18, task-23, task-24, task-40, task-rem-build-review-2, task-rem-build-review-3 | covered | Snapshot, projections, cache rematerialization, provider isolation, artifact identity, and acceptance checks align. |
+| story | story-6 | task-12, task-13, task-18, task-23, task-24, task-40, task-rem-build-review-2, task-rem-build-review-3, task-rem-build-review-9 | covered | Snapshot, closed projections including landed Scope evidence, cache rematerialization, provider isolation, artifact identity, and acceptance checks align. |
 | story | story-7 | task-11, task-22, task-27, task-28, task-30, task-40, task-rem-build-review-5, task-rem-build-review-6, task-rem-build-review-7, task-rem-build-review-8 | covered | Closed outcomes, neutral skips, join, effective reducer, disposition-aware lifecycle consumers, and integration proof align. |
 | story | story-8 | task-5, task-6, task-7, task-8, task-9, task-11, task-16, task-18, task-19, task-21, task-23, task-24, task-26, task-27, task-28, task-40, task-rem-build-review-3, task-rem-build-review-5, task-rem-build-review-7, task-rem-build-review-8 | covered | All model, preflight, cache, branch, identity, join, and predicate failure seams fail closed. |
 | story | story-9 | task-5, task-6, task-7, task-8, task-9, task-11, task-25, task-26, task-27, task-40 | covered | Skill contracts emit complete typed findings and engine tasks validate/canonicalize every one. |
@@ -121,6 +121,7 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
 | task | task-rem-build-review-6 | story-7, story-11, story-12, story-13, story-16 | covered | The live runner applies exact feature-scoped dispositions after raw join while preserving unresolved siblings and raw evidence. |
 | task | task-rem-build-review-7 | story-7, story-8, story-11, story-13, story-23 | covered | The completion predicate shares the effective reducer only after strict freshness/schema checks and keeps legacy evidence fail-closed. |
 | task | task-rem-build-review-8 | story-1, story-2, story-3, story-5, story-7, story-8, story-11, story-12, story-13, story-16, story-18, story-20, story-21, story-22, story-23, story-25 | covered | Faithful fake boundaries exercise the real production runner, stores, predicate, and event persister without third-party calls. |
+| task | task-rem-build-review-9 | story-1, story-6 | covered | Merged #1556 operator-reseal records enter only the immutable Scope projection/digest and its registered judgement contract, preserving one fan-out topology and all other rubric boundaries. |
 
 ## ADRs in the Current Change Set
 | adr | adr-2026-07-07-build-review-judgement-gate | story-1, story-6, story-7, story-8, story-22, story-23, story-24 | covered | The amended/superseded decision retains one public engine gate, input starvation, fail-closed evidence, and routing; these stories preserve them while replacing one-shot topology and duplicate HEAD tests. |
@@ -141,3 +142,6 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
   rubric meaning, creates a parallel event channel, exposes resolutions to graders/cache keys, or
   weakens freshness. Repairing one production seam does not negate another; no cross-layer
   contradiction or kickback oscillation was found.
+- Post-#1556 check: operator reseals are upstream engine-owned judgement evidence, not dispositions
+  or future claims. Projecting them only to Scope satisfies the landed Scope-justification ADR and
+  #1563's closed-projection ADR simultaneously; neither accepted behavior negates the other.

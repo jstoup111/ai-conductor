@@ -5,7 +5,7 @@
 `.docs/decisions/adr-2026-08-13-stable-build-review-finding-dispositions.md`
 **Architecture review:** `.docs/decisions/architecture-review-2026-08-13-build-review-rubric-dispositions.md` (APPROVED)
 **Stories:** `.docs/stories/build-review-rubric-dispositions-and-fan-out.md`
-**Conflict check:** Clean recheck as of 2026-08-13 (5 resolved; 0 blocking; 0 degrading)
+**Conflict check:** Clean recheck as of 2026-08-14 (6 resolved; 0 blocking; 0 degrading)
 **Intake:** jstoup111/ai-conductor#1542
 
 > **Amended 2026-08-14 by the operator after #1562 merged and #1563's post-BUILD
@@ -16,6 +16,11 @@
 > reduction, and disposition-aware lifecycle completion. It adds no rubric, command, event schema,
 > ledger, provider, or product behavior outside the accepted scope.
 
+> **Amended 2026-08-14 after #1556 merged:** append `rem-build-review-9` so the landed
+> operator-reseal evidence channel remains production-reachable when this plan retires the scalar
+> grader. The task composes the two approved designs by carrying reseal records into the frozen
+> Scope projection and nowhere else; a reseal remains judged evidence, never an exemption.
+
 ## Summary
 
 Keep one public `build_review` gate while moving its five judgement concerns into independently
@@ -24,7 +29,7 @@ preceding `test_suite` PASS, runs only Tautology's missing reverted-production R
 content-addressably short-circuits unchanged rubric judgements, joins raw findings once, and applies
 operator dispositions afterward. Forty original TDD tasks cover configuration, skills, projection,
 preflight, caching, capped execution, stable identities, CLI authorization, the event spine,
-reporting, and publication. Eight post-BUILD remediation tasks repair the production composition
+reporting, and publication. Nine post-BUILD remediation tasks repair the production composition
 seams that the first implementation left disconnected while preserving the original task history.
 
 ## Technical Approach
@@ -37,6 +42,13 @@ freeze a source snapshot containing the full diff, approved plan, repair/widenin
 points, and removal evidence. A closed registry derives a versioned projection for each rubric.
 Skills receive only their projection; any field they may use is therefore present in the projection
 digest and participates in conservative cache invalidation.
+
+The operator-reseal records landed by #1556 join that frozen source after the normal seal reader has
+filtered them to literal `operator-reseal` lineage. They enter only the Scope projection, including
+their named paths, verbatim rationale, and commit range. The Scope digest therefore invalidates when
+that evidence changes, while Tautology, Root Cause, Completeness, and Wiring remain byte-insulated
+from it. The Scope skill judges whether the rationale authorizes the named amendment and treats
+unmatched paths normally; no deterministic bypass or standing `.docs/` permission is introduced.
 
 The five rubric IDs are domain values, never `StepName`s. A typed auxiliary executor reuses the
 group core's capped scheduling, fresh provider sessions, rate-limit coordination, fallback ladders,
@@ -99,10 +111,13 @@ state. Raw rubric failure metrics remain distinct from effective pass and accept
 ## Constraints and Prerequisites
 
 - The original task count is 40, the upper end of `/plan`'s warning band. The operator-directed
-  amendment raises the retained history to 48 addressable tasks because already-landed Tasks 1-40
-  cannot be rewritten or reused. The eight remediation tasks remain one bounded feature repair:
+  amendments raise the retained history to 49 addressable tasks because already-landed Tasks 1-40
+  cannot be rewritten or reused. The nine remediation tasks remain one bounded feature repair:
   fan-out, stable identity, caching, events, and disposition convergence share one aggregate and
   lifecycle gate contract.
+- PR #1556 is merged on `origin/main` at `bdd239ac7`; its seal reader, optional input field, prompt
+  compatibility path, and tests arrive through the normal engine-owned rebase. This feature must
+  compose with those landed surfaces rather than duplicate or replace them.
 - No `.docs/track/` file matches issue #1542 or this feature slug. The approved PRD's `Scope`
   section is therefore the binding scope boundary for this amendment; every remediation task maps
   to an existing FR and story.
@@ -1030,16 +1045,45 @@ implementation branches do not edit release artifacts.
 5. Commit `test(acceptance): prove repaired build review production wiring` with trailer
    `Task: rem-build-review-8`.
 
+### Task rem-build-review-9: Carry landed operator-reseal evidence into the Scope branch
+
+**Story:** 1
+**Story:** 6
+**Type:** integration
+**Files:** `src/conductor/src/engine/build-review-inputs.ts`, `src/conductor/src/engine/build-review-projections.ts`, `skills/build-review-scope/SKILL.md`, `src/conductor/test/engine/build-review-inputs.test.ts`, `src/conductor/test/engine/build-review-projections.test.ts`, `src/conductor/test/engine/build-review-rubric-skills.test.ts`, `src/conductor/test/acceptance/an-operator-s-protected-artifact-reseal-is-invisib.acceptance.test.ts`, `src/conductor/test/acceptance/build-review-rubric-fanout-and-dispositions.acceptance.test.ts`
+**Dependencies:** Tasks 12, 13; Tasks rem-build-review-1, rem-build-review-2
+
+1. After the engine-owned rebase supplies #1556, write failing tests that assemble current-proof
+   inputs with and without operator reseals; assert the immutable snapshot and Scope projection
+   carry the exact filtered paths, verbatim rationale, and commit range while the other four
+   projections contain none of that authority.
+2. Add failing digest/parser and skill-contract cases: any Scope-visible reseal change invalidates
+   the projection, absent or unusable seals remain an empty channel, unknown/machinery triggers
+   never enter it, and the Scope instructions require judging the rationale without exempting
+   unmatched paths or weakening another rubric.
+3. Run the named unit and acceptance suites; confirm RED because #1556 currently terminates at
+   `BuildReviewInputs`/`buildGraderPrompt`, while the fan-out snapshot, closed Scope projection, and
+   Scope skill omit its evidence and #1556's assembly fixtures do not supply the new current-suite
+   proof precondition.
+4. Freeze the landed `operatorReseals` field into the source snapshot, add it only to the exact-key
+   Scope projection/digest/parser, update the registered Scope skill contract, and adapt #1556's
+   fixtures to the existing proof boundary. Keep the legacy prompt contract green without using it
+   as the production fan-out route.
+5. Re-run the focused suites; confirm GREEN for populated/empty/instruction-shaped rationales,
+   named-path isolation, changed-evidence cache invalidation, and real `DefaultStepRunner` fan-out
+   with faithful provider fakes. Commit `fix(build-review): preserve reseal evidence in scope fan-out`
+   with trailer `Task: rem-build-review-9`.
+
 ## Story Coverage
 
 | Story | Primary tasks |
 |---:|---|
-| 1 | 4-11, 20, 23, 27, 40, rem-build-review-2, rem-build-review-8 |
+| 1 | 4-11, 20, 23, 27, 40, rem-build-review-2, rem-build-review-8, rem-build-review-9 |
 | 2 | 1, 3, 20, 21, 23, 40, rem-build-review-2, rem-build-review-8 |
 | 3 | 1, 2, 8, 9, 22, 40, rem-build-review-5, rem-build-review-8 |
 | 4 | 2, 22, 40 |
 | 5 | 1-4, 10, 21, 23, 40, rem-build-review-2, rem-build-review-8 |
-| 6 | 12, 13, 18, 23, 24, 40, rem-build-review-2, rem-build-review-3 |
+| 6 | 12, 13, 18, 23, 24, 40, rem-build-review-2, rem-build-review-3, rem-build-review-9 |
 | 7 | 11, 22, 27, 28, 30, 40, rem-build-review-5 through rem-build-review-8 |
 | 8 | 11, 16, 19, 21, 24, 26-28, 40, rem-build-review-3, rem-build-review-5, rem-build-review-7, rem-build-review-8 |
 | 9 | 5-9, 11, 25, 26, 40 |
@@ -1071,9 +1115,10 @@ implementation branches do not edit release artifacts.
 - **Batch 4 — observability and publication:** Tasks 34-40. Review event-spine reuse, metric
   denominators, accepted-risk parity, and full fake-boundary acceptance evidence.
 - **Batch 5 — post-BUILD production repair:** Tasks rem-build-review-1 through
-  rem-build-review-8. Review resolved-default routing, auxiliary provider/skill policy, durable
+  rem-build-review-9. Review resolved-default routing, auxiliary provider/skill policy, durable
   branch/cache effects, one-spine emission, skip truth table, disposition-aware runner/completion
-  parity, and faithful production-path acceptance evidence before resuming BUILD.
+  parity, Scope-only operator-reseal evidence, and faithful production-path acceptance evidence
+  before resuming BUILD.
 - Re-run the advisory overlap scan before BUILD and at each batch boundary because active branches
   overlap shared config, group, event, and finish surfaces.
 - Run the repository-required `test/test_harness_integrity.sh` before every implementation commit as
@@ -1093,6 +1138,11 @@ implementation repair requires no diagram change, new ADR, supersession, or arch
 marker. The event-spine verdict remains one schema and reader path: engine occurrences use the
 normal emitter/persister; the standalone CLI retains the already-approved same-schema sibling
 ledger under exceptions A/B.
+
+The post-#1556 composition check is also APPROVED. It adds one field to an already-approved frozen
+projection boundary and follows `adr-2026-08-12-operator-reseal-as-second-scope-justification`'s
+existing evidence semantics. No component, persistence surface, event, provider seam, or lifecycle
+edge changes, so the current diagrams and ADR set remain accurate.
 
 ## Remediation Verify-Claims Ledger
 
@@ -1114,6 +1164,10 @@ ledger under exceptions A/B.
 - **99% verified:** only CLI inspection applies accepted dispositions; live runner success and the
   completion predicate branch on the raw aggregate verdict; source basis is the aggregate, CLI,
   runner, and artifact predicate.
+- **100% verified:** merged #1556 reads operator reseals into `BuildReviewInputs` and renders them in
+  `buildGraderPrompt`, while #1563's production fan-out Scope projection and registered Scope skill
+  have no reseal field or rationale rule; source basis is merge `bdd239ac7`, the projection exact-key
+  parser, the Scope skill contract, and the runner's scalar/fan-out branch.
 - **Assumptions:** none. Every remediation claim is directly reproducible from the feature head, and
   the accepted PRD/stories/ADRs already decide the intended behavior.
 
@@ -1129,11 +1183,12 @@ events, CLI, finish/shipped publication, and existing build-review acceptance te
 rubric domain, projection, preflight, cache, identity, and disposition modules are new isolated
 paths. The scan is advisory; batch-boundary rescans and narrow shared-file commits are binding.
 
-The 2026-08-14 advisory rescan completed over the exact union of all 48 retained and remediation
-task paths with source ref `jstoup111/ai-conductor#1542`. It again reported broad overlap on the
+The 2026-08-14 advisory rescan completed over the exact union of all 49 retained and remediation
+tasks (93 unique paths) with source ref `jstoup111/ai-conductor#1542`. It again reported broad overlap on the
 shared engine/CLI/event/test surfaces; the first reported branches were
 `spec/647-kickback-evidence-invalidation`, `spec/651-park-all-dispatch-paths`,
 `spec/7b-adr-approved-before-writing-system-tests-is-onl`, and
 `spec/a-successful-finish-publication-transition-consume`. The result is advisory and introduces no
-new requirement conflict. Batch 5 keeps the shared-file changes dependency-ordered and requires the
-normal finish-time rebase rather than widening or deferring the repair.
+new requirement conflict; merged #1556 is no longer an active overlap entry. Batch 5 keeps the
+shared-file changes dependency-ordered and requires the normal finish-time rebase rather than
+widening or deferring the repair.
