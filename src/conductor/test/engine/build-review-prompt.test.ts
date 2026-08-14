@@ -356,6 +356,34 @@ describe('buildGraderPrompt', () => {
     });
   });
 
+  it('renders an untouched reseal as evidence without labeling a diff path as resealed', () => {
+    const resealedPath = '.docs/stories/operator-correction.md';
+    const diffPath = '.docs/stories/feature-authored-change.md';
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      diff: `diff --git a/${diffPath} b/${diffPath}\n+operator-visible diff change\n`,
+      operatorReseals: [{
+        paths: [resealedPath],
+        reason: 'An earlier operator correction remains review evidence.',
+        fromCommit: 'reseal-from-abc123',
+        toCommit: 'reseal-to-def456',
+      }],
+    });
+    const resealSection = prompt.match(
+      /## Operator-authorized protected-artifact reseals\n\n([\s\S]*?)\n\n## Engine-derived removal evidence/,
+    )?.[1] ?? '';
+
+    expect({
+      resealedPathPresent: resealSection.includes(resealedPath),
+      rationalePresent: resealSection.includes('An earlier operator correction remains review evidence.'),
+      diffPathAbsent: !resealSection.includes(diffPath),
+    }).toEqual({
+      resealedPathPresent: true,
+      rationalePresent: true,
+      diffPathAbsent: true,
+    });
+  });
+
   it('renders populated and empty removal evidence as evidence, escaping backticks', () => {
     const populated = buildGraderPrompt({
       ...inputs,

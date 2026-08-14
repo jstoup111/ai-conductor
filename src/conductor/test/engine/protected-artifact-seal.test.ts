@@ -133,6 +133,42 @@ it('reads persisted operator-reseal lineage for build-review evidence', async ()
   }]);
 });
 
+it('retains operator-reseal evidence after a proactive-rebase rotation', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const baseline = await git(repo, ['rev-parse', 'HEAD']);
+  const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: baseline });
+  await writeProjectFile(repo, '.docs/stories/feature.md', 'corrected story\n');
+  await git(repo, ['add', '.docs/stories/feature.md']);
+  await git(repo, ['commit', '-q', '-m', 'correct approved story']);
+  const resealCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const resealed = await resealProtectedArtifactSeal({
+    projectRoot: repo,
+    seal,
+    toCommit: resealCommit,
+    trigger: 'operator-reseal',
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+  });
+  await writeProjectFile(repo, 'README.md', 'rebase bookkeeping\n');
+  await git(repo, ['add', 'README.md']);
+  await git(repo, ['commit', '-q', '-m', 'rotate rebase lineage']);
+
+  await rotateProtectedArtifactSeal({
+    projectRoot: repo,
+    seal: resealed,
+    toCommit: await git(repo, ['rev-parse', 'HEAD']),
+    trigger: 'proactive-rebase',
+    paths: [],
+  });
+
+  await expect(readOperatorReseals(repo)).resolves.toEqual([{
+    fromCommit: baseline,
+    toCommit: resealCommit,
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+  }]);
+});
+
 it('preserves operator-reseal lineage order and every path in multi-path entries', async () => {
   const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
   const commits = ['a', 'b', 'c', 'd'].map((character) => character.repeat(40));
