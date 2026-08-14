@@ -1572,13 +1572,6 @@ export function validateBuildReviewVerdict(
     }
   }
 
-  if (rubric.wiring === true && (findings?.wiring?.length ?? 0) === 0) {
-    return {
-      ok: false,
-      reason: `${BUILD_REVIEW_VERDICT} "findings.wiring" must be a non-empty string array when rubric.wiring is true`,
-    };
-  }
-
   const failedRubrics = ['tautology', 'scope', 'rootCause', 'completeness', 'wiring']
     .filter((name) => rubric[name as keyof BuildReviewRubric] === true);
   if (e.verdict === 'PASS' && failedRubrics.length > 0) {
@@ -1591,6 +1584,13 @@ export function validateBuildReviewVerdict(
     return {
       ok: false,
       reason: `${BUILD_REVIEW_VERDICT} "verdict" FAIL requires at least one rubric flag to be true`,
+    };
+  }
+
+  if (rubric.wiring === true && (findings?.wiring?.length ?? 0) === 0) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "findings.wiring" must be a non-empty string array when rubric.wiring is true`,
     };
   }
 
