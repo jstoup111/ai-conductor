@@ -1,6 +1,6 @@
 ---
 name: remediate
-description: "Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human."
+description: "Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human."
 enforcement: gating
 phase: ship
 standalone: true
@@ -9,10 +9,10 @@ requires: [verify-claims]
 
 ## Purpose
 
-Turns a **blocking SHIP gate into action**. When `prd-audit`, `architecture-review --as-built`, or
-the `finish` verification reports gaps the daemon would otherwise HALT on, this skill reasons over
-each blocking gap and decides *how the daemon should proceed* — autonomously where it can,
-human-in-the-loop only where it must.
+Turns a **blocking gate into action**. When `build_review` fails, or when `prd-audit`,
+`architecture-review --as-built`, or the `finish` verification reports SHIP gaps the daemon would
+otherwise HALT on, this skill reasons over each blocking gap and decides *how the daemon should
+proceed* — autonomously where it can, human-in-the-loop only where it must.
 
 **Correctness gate:** a gap's disposition and its routing target rest on a claim about the gap's
 nature. Per the `/verify-claims` protocol, ground that classification in the audit evidence with a
@@ -33,7 +33,8 @@ If a gap can be turned into concrete work, it is **not** a HALT. This skill plan
 dispositions and writes tasks. It does **not** edit code, write tests, or amend the PRD; the step it
 kicks back to does that.
 
-**Run at SHIP, only when a prior audit BLOCKED — dispatched by the conductor on the blocking path.**
+**Run when `build_review` fails, or at SHIP when a prior audit BLOCKED — dispatched by the
+conductor on the blocking path.**
 
 ## Practices
 
@@ -223,7 +224,9 @@ Headers re-parse via the Task 18 grammar and must include:
 
 ## Verification
 
-- [ ] Read the blocking gaps from `.pipeline/prd-audit.md` (and `.pipeline/architecture-review-as-built.md` if present), or the stall-question from `.pipeline/build-stall-question.md`
+- [ ] Read the blocking gaps from `.pipeline/build-review.json`, `.pipeline/prd-audit.md` (and
+      `.pipeline/architecture-review-as-built.md` if present), or the stall-question from
+      `.pipeline/build-stall-question.md`
 - [ ] One disposition per blocking gap or stall-question — nothing blocking omitted
 - [ ] HALT used ONLY for `architectural-clarity`, `product-scope`, or (stall-question) `unanswerable`; every other gap/question routed to a step
 - [ ] A gap whose ONLY defect is published PR prose (placeholder/wrong-template body, stale title,
@@ -235,5 +238,6 @@ Headers re-parse via the Task 18 grammar and must include:
 - [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,
       never to `build` or `acceptance_specs`
 - [ ] A `plan` rationale names the examined plan task IDs and why none admits the fix
-- [ ] `id` format correct: `FR-N`, `test:<stem>`, `adr-<stem>`, or `stall:<slug>`
+- [ ] `id` format correct: `FR-N`, `build_review:<stem>`, `test:<stem>`, `adr-<stem>`, or
+      `stall:<slug>`
 - [ ] Valid JSON written to `.pipeline/remediation.json` matching the contract exactly
