@@ -48,14 +48,15 @@ describe('smoke capability declarations', () => {
     });
   });
 
-  it('fails rather than skipping or succeeding when a gate-mode credential is absent', () => {
+  it('records a credential-absent gate provider leg as a named non-gating skip', () => {
     const resolution = resolveGateSmokeFile('test/example.smoke.test.ts', 'credentialed:claude', {
       hasCommand: () => true,
       environment: {},
     });
 
     expect(resolution).toEqual({
-      outcome: 'failed',
+      outcome: 'skipped',
+      provider: 'claude',
       unmet: 'CLAUDE_CODE_OAUTH_TOKEN',
     });
   });
@@ -79,7 +80,7 @@ describe('smoke capability declarations', () => {
       ),
     }).toEqual({
       claude: { outcome: 'ran' },
-      codex: { outcome: 'failed', unmet: 'CODEX_API_KEY' },
+      codex: { outcome: 'skipped', provider: 'codex', unmet: 'CODEX_API_KEY' },
     });
   });
 
