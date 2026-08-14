@@ -231,8 +231,23 @@ export function renderReport(eventsJsonlPath: string): string {
   sections.push(renderRetries(events));
   sections.push(renderTokenSpend(events));
   sections.push(renderOperatorParkBoundaries(events));
+  sections.push(renderBuildReviewMetrics(events));
 
   return sections.join('\n\n');
+}
+
+function renderBuildReviewMetrics(events: ParsedEvent[]): string {
+  const lines = ['## Build Review Metrics', ''];
+  const results = events.filter((event) => event.type === 'build_review_rubric_result');
+  const skips = events.filter((event) => event.type === 'build_review_rubric_skipped');
+  const cacheHits = events.filter((event) => event.type === 'build_review_cache_hit').length;
+  const pass = events.find((event) => event.type === 'build_review_outer_verdict' && event.effectiveVerdict === 'PASS');
+  if (results.length === 0 && skips.length === 0 && cacheHits === 0 && !pass) return `${lines.join('\n')}No build-review metrics recorded`;
+  lines.push(`Effective laps-to-pass: ${pass?.lapId ?? 'not reached'}`);
+  lines.push(`Reduced coverage (skipped, not pass): ${skips.length}`);
+  lines.push(`Cache hits: ${cacheHits}`);
+  for (const result of results) lines.push(`Raw ${result.rubric}: ${result.verdict}`);
+  return lines.join('\n');
 }
 
 // ─── Section: Operator Park Boundaries ──────────────────────────────────────
