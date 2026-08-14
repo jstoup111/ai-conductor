@@ -1458,7 +1458,11 @@ describe('advanceFinishPublication PR identity', () => {
 
     await expect(
       advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
-    ).resolves.toEqual({ kind: 'human_required', reason: 'judgment_halt_prose' });
+    ).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: 'The establish_pr transition left pr.identity + branchPushed unchanged at false.',
+    });
 
     expect(observe).toHaveBeenCalledTimes(2);
     expect(dispatchJudgment).not.toHaveBeenCalled();
@@ -1547,7 +1551,11 @@ describe('advanceFinishPublication durable shipped evidence', () => {
         observe,
         effects: { dispatchJudgment, createShippedRecord },
       }),
-    ).resolves.toEqual({ kind: 'human_required', reason: 'judgment_halt_prose' });
+    ).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: 'The write_shipped_record transition left shippedRecord unchanged at missing.',
+    });
 
     expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
       writes: 1,
