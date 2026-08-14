@@ -6,7 +6,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { describe, expect, it } from 'vitest';
-import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
+import type {
+  AuthenticationReadiness,
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+} from '../../src/execution/llm-provider.js';
 import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
@@ -211,6 +216,23 @@ export async function assertDescriptorAuthenticationSource(
   }
 }
 
+function readinessRemediation(readiness: Exclude<AuthenticationReadiness, { state: 'ready' }>): string {
+  return readiness.state === 'probe-failed'
+    ? 'Retry the Codex readiness probe.'
+    : readiness.remediation ?? 'Restore the configured provider credential.';
+}
+
+/**
+ * A live leg must not spend against a provider whose own readiness probe did
+ * not affirmatively accept its selected authentication source.
+ */
+export async function assertLiveProviderReadiness(provider: LLMProvider): Promise<void> {
+  const readiness = await provider.readiness?.();
+  if (!readiness || readiness.state === 'ready') return;
+
+  throw new Error(`Provider readiness is ${readiness.state}: ${readinessRemediation(readiness)}`);
+}
+
 async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
   return existsSync(join(worktreeDir, '.pipeline/DONE')) &&
     !existsSync(join(worktreeDir, '.pipeline/HALT')) &&
@@ -235,6 +257,7 @@ export async function runLiveE2ERunBody(
     credential,
   );
   await assertDescriptorAuthenticationSource(descriptor, provider);
+  await assertLiveProviderReadiness(provider);
   let meter = new TokenMeter(provider);
   let providerHome: ProviderHome | undefined;
   let provisioned: ProvisionedHome | undefined;

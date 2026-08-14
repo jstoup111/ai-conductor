@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { AuthenticationReadiness, LLMProvider } from '../../src/execution/llm-provider.js';
 import type { LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import type { LiveE2ERunBodyDependencies } from './live-e2e-run-body.js';
 
@@ -82,6 +82,85 @@ describe('runLiveE2ERunBody authentication source', () => {
       if (priorHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = priorHome;
       await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [
+      'unusable',
+      { provider: 'codex', source: 'api-key', state: 'unusable', remediation: 'Replace the API key.' },
+      'Provider readiness is unusable: Replace the API key.',
+    ],
+    [
+      'probe-failed',
+      {
+        provider: 'codex',
+        source: 'api-key',
+        state: 'probe-failed',
+        probeFailure: { kind: 'timeout', facts: {} },
+      },
+      'Provider readiness is probe-failed: Retry the Codex readiness probe.',
+    ],
+  ] as const)('stops a %s provider before any paid dispatch and reports remediation', async (_state, readiness, expectedError) => {
+    const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
+      runLiveE2ERunBody: (
+        descriptor: LiveE2EProviderDescriptor,
+        tokenCap: number,
+        dependencies?: LiveE2ERunBodyDependencies,
+      ) => Promise<void>;
+    };
+    const priorKey = process.env.CODEX_API_KEY;
+    let dispatches = 0;
+    const readinessCheck = vi.fn(async (): Promise<AuthenticationReadiness> => readiness);
+    const provider: LLMProvider = {
+      readiness: readinessCheck,
+      invoke: vi.fn(async () => {
+        dispatches += 1;
+        throw new Error('provider must not dispatch');
+      }),
+      invokeInteractive: vi.fn(async () => {
+        dispatches += 1;
+        throw new Error('provider must not dispatch');
+      }),
+    };
+    const createProvider = vi.fn(() => provider);
+    const provisionProviderHome = vi.fn(async (): Promise<never> => {
+      throw new Error('an unready provider must not provision a home');
+    });
+    const descriptor = {
+      id: 'codex',
+      binaryName: 'codex',
+      credentialEnvVar: 'CODEX_API_KEY',
+      createProvider,
+      expectedAuthenticationSource: 'api-key',
+      resolveAuthenticationSource: async (candidate: LLMProvider) => {
+        const result = await candidate.readiness?.();
+        if (!result) throw new Error('Codex provider must expose readiness');
+        return result.source;
+      },
+    } as unknown as LiveE2EProviderDescriptor;
+
+    try {
+      process.env.CODEX_API_KEY = 'live-codex-key';
+
+      await expect(runLiveE2ERunBody(descriptor, 1, {
+        binaryAvailable: () => true,
+        provisionProviderHome,
+      })).rejects.toThrow(expectedError);
+      expect({
+        providerConstructions: createProvider.mock.calls.length,
+        readinessChecks: readinessCheck.mock.calls.length,
+        provisionAttempts: provisionProviderHome.mock.calls.length,
+        dispatches,
+      }).toEqual({
+        providerConstructions: 1,
+        readinessChecks: 2,
+        provisionAttempts: 0,
+        dispatches: 0,
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
     }
   });
 
