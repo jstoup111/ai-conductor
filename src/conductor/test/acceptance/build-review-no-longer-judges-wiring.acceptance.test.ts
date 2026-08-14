@@ -52,7 +52,12 @@ afterEach(async () => {
 
 describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () => {
   it('runs the named build_review-to-build kickback for a wiring-only grader FAIL', async () => {
-    const dir = await initRepo('build-review-wiring-');
+    const mainRoot = await initRepo('build-review-wiring-');
+    await writeFile(join(mainRoot, 'README.md'), '# fixture\n');
+    await git(mainRoot, 'add', 'README.md');
+    await git(mainRoot, 'commit', '-qm', 'base');
+    const dir = join(mainRoot, '.worktrees', 'wiring-review');
+    await git(mainRoot, 'worktree', 'add', '-qb', 'feature/wiring-review', dir);
     const planPath = join(dir, '.docs', 'plans', 'fixture.md');
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -69,8 +74,7 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
     );
     await writeFile(join(dir, 'src', 'entry.ts'), 'export function main(): void {}\n');
     await git(dir, 'add', '.');
-    await git(dir, 'commit', '-qm', 'base');
-    await git(dir, 'checkout', '-qb', 'feature/wiring-review');
+    await git(dir, 'commit', '-qm', 'add wiring-review fixture');
     await writeFile(
       join(dir, 'src', 'orphan.ts'),
       'export function orphanedProductionSurface(): string { return "unreached"; }\n',
@@ -175,7 +179,9 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
     const completion = await checkStepCompletion(dir, 'build_review', { config });
     expect(completion.done).toBe(false);
     expect(completion.routeClass).toBe('named-route');
-    expect(completion.reason).toContain('orphanedProductionSurface');
+    expect(completion.reason).toContain('unresolved findings');
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8'))
+      .resolves.toContain('orphanedProductionSurface');
   });
 });
 
