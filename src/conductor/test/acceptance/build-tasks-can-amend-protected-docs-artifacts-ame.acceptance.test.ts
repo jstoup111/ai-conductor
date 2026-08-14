@@ -205,7 +205,10 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
 
   it('keeps conflict-check additive for non-story artifacts while replacing story assertions in place', async () => {
     const text = await readContract('skills/conflict-check/SKILL.md');
-    const additiveNonStoryContract = /accepted\s+DECIDE\s+artifact[\s\S]{0,180}\.docs\/stories\/[\s\S]{0,100}narrow\s+exception[\s\S]{0,220}all\s+other\s+accepted\s+DECIDE\s+artifacts[\s\S]{0,220}Amended\s+YYYY-MM-DD\s+by\s+#NNN[\s\S]{0,260}non-story\s+artifacts[\s\S]{0,160}original\s+assertion\s+remains[\s\S]{0,120}do\s+not\s+rewrite\s+or\s+delete/i;
+    // One ordered selector: the DECIDE-timing and no-parallel-record clauses are
+    // asserted inside the non-story scoping this diff introduces, so neither can be
+    // satisfied by the merge-base prose that scoped them to every artifact.
+    const additiveNonStoryContract = /accepted\s+DECIDE\s+artifact[\s\S]{0,80}during\s+the\s+DECIDE\s+pass[\s\S]{0,80}never\s+defer[\s\S]{0,60}BUILD\s+task[\s\S]{0,100}\.docs\/stories\/[\s\S]{0,100}narrow\s+exception[\s\S]{0,220}all\s+other\s+accepted\s+DECIDE\s+artifacts[\s\S]{0,220}Amended\s+YYYY-MM-DD\s+by\s+#NNN[\s\S]{0,260}non-story\s+artifacts[\s\S]{0,160}original\s+assertion\s+remains[\s\S]{0,120}do\s+not\s+rewrite\s+or\s+delete[\s\S]{0,80}create\s+no\s+separate\s+record[\s\S]{0,120}spec-branch\s+baseline\s+before\s+BUILD/i;
 
     expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/stor(?:y|ies)[\s\S]{0,160}(?:replace|replacement)[\s\S]{0,100}in place[\s\S]{0,100}(?:no|without)[\s\S]{0,60}(?:amendment )?record/i);
@@ -215,7 +218,10 @@ describe('TS-1: accepted-artifact amendments are performed during DECIDE', () =>
 
   it('keeps architecture-review additive for non-story artifacts while replacing story assertions in place', async () => {
     const text = await readContract('skills/architecture-review/SKILL.md');
-    const additiveNonStoryContract = /accepted DECIDE assertion[\s\S]{0,180}amend that non-story artifact[\s\S]{0,220}Amended\s+YYYY-MM-DD\s+by\s+#NNN[\s\S]{0,280}every non-story artifact[\s\S]{0,160}original assertion remains preserved[\s\S]{0,140}\.docs\/stories\/[\s\S]{0,100}exception/i;
+    // Same ordering discipline as the conflict-check case: the DECIDE-timing and
+    // no-parallel-record clauses are pinned inside the non-story scoping, so the
+    // merge-base prose — which scoped them to every artifact — cannot satisfy them.
+    const additiveNonStoryContract = /accepted DECIDE assertion[\s\S]{0,60}amend that non-story artifact[\s\S]{0,40}during the DECIDE pass[\s\S]{0,40}do not instruct a later phase[\s\S]{0,60}make the change[\s\S]{0,220}Amended\s+YYYY-MM-DD\s+by\s+#NNN[\s\S]{0,280}every non-story artifact[\s\S]{0,160}original assertion remains preserved[\s\S]{0,80}never\s+rewrite\s+or\s+delete[\s\S]{0,80}create\s+no\s+separate\s+record[\s\S]{0,60}\.docs\/stories\/[\s\S]{0,100}exception[\s\S]{0,200}spec-branch\s+baseline\s+before\s+BUILD/i;
 
     expect(text).toMatch(additiveNonStoryContract);
     expect(text).toMatch(/stor(?:y|ies)[\s\S]{0,160}(?:replace|replacement)[\s\S]{0,100}in place[\s\S]{0,100}(?:no|without)[\s\S]{0,60}(?:amendment )?record/i);
