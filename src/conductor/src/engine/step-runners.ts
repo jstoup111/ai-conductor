@@ -30,7 +30,6 @@ import {
   findArtifactFiles,
   resolveFeaturePlanPath,
   BUILD_REVIEW_VERDICT,
-  canonicalizeBuildReviewGraderVerdict,
 } from './artifacts.js';
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
@@ -48,7 +47,6 @@ import {
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
-import { buildGraderPrompt } from './build-review-prompt.js';
 import { coordinateBuildReviewRubrics, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
 import { readBuildReviewCacheEntry } from './build-review-cache.js';
 import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
@@ -1982,9 +1980,6 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
-    const prependFloorAdvisory = (output: string): string =>
-      floorAdvisoryLines.length > 0 ? `${floorAdvisoryLines.join('\n')}\n\n${output}` : output;
-
     // A declared replication is mechanically verified at the build_review
     // gate. Unlike the advisory floors above, a mismatch is a blocking gate
     // result and is never used to derive RED evidence.
@@ -2019,191 +2014,60 @@ export class DefaultStepRunner implements StepRunner {
       if (!equivalence.success) return withBaseFreshness(equivalence);
     }
 
-    // The lifecycle still exposes one public build_review step. Its new
-    // coordinator owns the bounded auxiliary fan-out and receives the one
-    // frozen snapshot; the legacy scalar path remains only while branch
-    // artifact/aggregate compatibility is introduced by later tasks.
-    //
     // The deterministic floor and declared-copy checks deliberately precede
     // this dispatch: they are gate-owned preconditions, and must remain
     // observable even when configuration activates the rubric fan-out.
+    // An explicit whole-gate opt-out is the only route that avoids the
+    // coordinator. The resolved config defaults an absent raw block to
+    // enabled, so raw config shape can never select the retired scalar grader.
+    if (!buildReviewConfig.enabled) {
+      return withBaseFreshness({ success: true, output: 'build_review disabled' });
+    }
+
+    // The lifecycle still exposes one public build_review step. Its
+    // coordinator owns the bounded auxiliary fan-out and receives the one
+    // frozen snapshot. The injectable coordinator remains a narrow test seam.
+    const withFloorAdvisory = (result: StepRunResult): StepRunResult => ({
+      ...result,
+      ...(typeof result.output === 'string' && floorAdvisoryLines.length > 0
+        ? { output: `${floorAdvisoryLines.join('\n')}\n\n${result.output}` }
+        : {}),
+    });
     if (this.buildReviewCoordinator) {
-      return withBaseFreshness(await this.buildReviewCoordinator(inputs, buildReviewConfig));
+      return withBaseFreshness(withFloorAdvisory(
+        await this.buildReviewCoordinator(inputs, buildReviewConfig),
+      ));
     }
 
-    // The public gate owns the rubric fan-out in production too. The
-    // injectable coordinator above remains a narrow test seam; it is never
-    // the condition for using the five independent rubric sessions.
-    if (this.config?.build_review !== undefined) {
-      return withBaseFreshness(await this.runRubricBuildReview(inputs, buildReviewConfig));
-    }
-
-    const prompt = buildGraderPrompt(inputs);
-
-    // Track every model attempted during the ladder walk so a full-ladder
-    // exhaustion failure names every model tried.
-    const attemptedModels: string[] = [];
-    const providerResult = await this.executeProviderAwareOneShot(
-      'build_review',
-      {
-        prompt,
-        dangerouslySkipPermissions: true,
-        cwd: this.projectDir,
-      },
-    );
-    const result =
-      providerResult ??
-      (await (async () => {
-        // Legacy scalar-provider adapter: retain the grader's internal native
-        // model ladder and fresh one-shot session contract.
-        const resolved = this.resolvedConfigFor('build_review');
-        const { v4: uuidv4 } = await import('uuid');
-        const trackingProvider: LLMProvider = {
-          invoke: (invokeOpts) => {
-            attemptedModels.push(invokeOpts.model ?? '');
-            return this.provider.invoke(invokeOpts);
-          },
-          invokeInteractive: (invokeOpts) =>
-            this.provider.invokeInteractive(invokeOpts),
-        };
-        return this.modelAvailability.invokeWithLadder(trackingProvider, {
-          prompt,
-          sessionId: uuidv4(),
-          resume: false,
-          dangerouslySkipPermissions: true,
-          model: this.modelAvailability.effectiveModel(resolved.model).model,
-          effort: resolved.effort,
-          cwd: this.projectDir,
-        }, async () => ({ sessionId: uuidv4(), resume: false }));
-      })());
-    if (providerResult) {
-      attemptedModels.push(
-        ...providerResult.attempts.flatMap((attempt) =>
-          attempt.invoked && attempt.model ? [attempt.model] : [],
-        ),
-      );
-    }
-    this.callCount++;
-    const withProviderMetadata = (r: StepRunResult): StepRunResult =>
-      ({
-        ...r,
-        ...(result.observedIntervals
-          ? { observedIntervals: result.observedIntervals }
-          : {}),
-        ...(providerResult
-          ? {
-            ...this.providerAttribution(providerResult),
-            ...(providerResult.resolvedModel
-              ? { model: providerResult.resolvedModel }
-              : {}),
-            ...(providerResult.tokenUsage
-              ? { tokenUsage: providerResult.tokenUsage }
-              : {}),
-          }
-          : {}),
-      });
-    const finalize = (r: StepRunResult): StepRunResult =>
-      withBaseFreshness(withProviderMetadata({
-        ...r,
-        ...(typeof r.output === 'string'
-          ? { output: prependFloorAdvisory(r.output) }
-          : {}),
-      }));
-
-    if (result.authFailure) {
-      return finalize({ success: false, output: result.output, authFailure: true });
-    }
-    if (result.permissionDenied) {
-      return finalize({
-        success: false,
-        output: result.output,
-        permissionDenied: true,
-        ...(result.authentication
-          ? { authentication: result.authentication }
-          : {}),
-      });
-    }
-    if (result.rateLimited) {
-      return finalize({
-        success: false,
-        output: result.output,
-        rateLimited: true,
-        waitSeconds: result.waitSeconds ?? 300,
-      });
-    }
-    if (result.sessionExpired) {
-      return finalize({ success: false, output: result.output, sessionExpired: true });
-    }
-    if (result.success) {
-      const finalized = await this.finalizeBuildReviewVerdict();
-      if (!finalized.ok) return finalize({ success: false, output: finalized.reason });
-      return finalize({ success: true, output: result.output });
-    }
-
-    // Full-ladder exhaustion: every attempted model reported unavailable.
-    // Name them all so the eventual HALT is diagnosable from daemon.log alone.
-    // #814: this is a grader-DISPATCH failure (no model could run the grader),
-    // not a returned FAIL — flag it so the conductor backs off and names it.
-    if (result.modelUnavailable && attemptedModels.length > 1) {
-      return finalize({
-        success: false,
-        output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
-        graderDispatchFailed: true,
-      });
-    }
-
-    // #814: generic grader-dispatch failure — the grader session ended without
-    // success (subprocess crashed / exited non-zero / died at startup) and never
-    // wrote a PASS/FAIL verdict. A fast empty-output death here is exactly what
-    // collapsed the retry ladder in ~118ms with "no reason recorded". Never
-    // return an empty output (it renders blank), and flag it as a dispatch
-    // failure so the conductor backs off between re-dispatches and the HALT
-    // names an infrastructure cause rather than a code-quality rejection.
-    const graderOutput =
-      typeof result.output === 'string' && result.output.trim().length > 0
-        ? result.output
-        : 'build_review grader session ended without a result — it failed to start or exited before writing a PASS/FAIL verdict';
-    return finalize({ success: false, output: graderOutput, graderDispatchFailed: true });
+    return withBaseFreshness(withFloorAdvisory(
+      await this.runRubricBuildReview(inputs, buildReviewConfig),
+    ));
   }
 
-  /**
-   * Replace the grader-authored judgement with the engine-owned canonical
-   * public verdict and attach its code stamp when enabled. This is the
-   * deterministic seam that converts an explicit failed-rubric list into the
-   * legacy `true means failed` booleans consumed by existing gate readers.
-   */
-  private async finalizeBuildReviewVerdict(): Promise<{ ok: true } | { ok: false; reason: string }> {
+  private async stampBuildReviewVerdict(): Promise<void> {
+    if (!resolveGateCodeValidityConfig(this.config).enabled) {
+      // gate_code_validity disabled: restore pre-feature behavior exactly —
+      // no read-back, no codeStamp field, no git-diff calls.
+      return;
+    }
     const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
     let parsed: unknown;
     try {
       const raw = await readFile(verdictPath, 'utf-8');
       parsed = JSON.parse(raw);
     } catch {
-      return {
-        ok: false,
-        reason: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must record a complete PASS/FAIL verdict`,
-      };
+      return;
     }
-    const validation = canonicalizeBuildReviewGraderVerdict(parsed);
-    if (!validation.ok) return validation;
-    const canonical: Record<string, unknown> = {
-      verdict: validation.verdict,
-      ...(validation.reasons !== undefined ? { reasons: validation.reasons } : {}),
-      ...(validation.findings !== undefined ? { findings: validation.findings } : {}),
-      rubric: validation.rubric,
-    };
-    if (resolveGateCodeValidityConfig(this.config).enabled) {
-      canonical.codeStamp = await currentCommitSha(this.projectDir).catch(() => null);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return;
     }
+    const codeStamp = await currentCommitSha(this.projectDir).catch(() => null);
+    const stamped = { ...(parsed as Record<string, unknown>), codeStamp };
     try {
-      await writeFile(verdictPath, JSON.stringify(canonical, null, 2), 'utf-8');
+      await writeFile(verdictPath, JSON.stringify(stamped, null, 2), 'utf-8');
     } catch {
-      return {
-        ok: false,
-        reason: `${BUILD_REVIEW_VERDICT} could not be finalized by the engine`,
-      };
+      // Best-effort augmentation only — never fail the step over a write error.
     }
-    return { ok: true };
   }
 
   private async fileExists(path: string): Promise<boolean> {

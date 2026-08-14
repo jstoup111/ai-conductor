@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, writeFile, access, mkdir } from 'node:fs/promise
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { execa } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -3149,15 +3149,26 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
-    it('uses the production rubric coordinator by default when build_review is configured', async () => {
+    it.each([
+      {
+        name: 'build_review is absent and defaults to enabled',
+        config: { wiring: { entry_points: ['src/index.ts'] } } as HarnessConfig,
+      },
+      {
+        name: 'a partial rubric override inherits the remaining enabled rubrics',
+        config: {
+          build_review: {
+            rubrics: { scope: { model: 'opus' } },
+          },
+          wiring: { entry_points: ['src/index.ts'] },
+        } as HarnessConfig,
+      },
+    ])('uses the production rubric coordinator when $name', async ({ config }) => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
-        config: {
-          build_review: { enabled: true, perTaskFloor: false },
-          wiring: { entry_points: ['src/index.ts'] },
-        },
+        config,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
@@ -3179,38 +3190,23 @@ TIER: M`,
       );
     });
 
-    it.each([
-      {
-        name: 'complete five-flag PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
-        success: true,
-      },
-      ...(['tautology', 'scope', 'rootCause', 'completeness'] as const).map((missing) => ({
-        name: `PASS missing rubric.${missing}`,
-        rubric: Object.fromEntries(
-          ['tautology', 'scope', 'rootCause', 'completeness']
-            .filter((name) => name !== missing)
-            .map((name) => [name, false]),
-        ),
-        success: false,
-      })),
-    ])('returns $success for a $name verdict', async ({ rubric, success }) => {
-      const verdictPath = join(dir, '.pipeline', 'build-review.json');
-      const invoke = vi.fn().mockImplementation(async () => {
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric }), 'utf-8');
-        return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+    it('does not dispatch the coordinator or legacy scalar grader when the whole gate is disabled', async () => {
+      const provider = createMockProvider();
+      const coordinate = vi.fn(async () => ({ success: true, output: 'unexpected coordinator dispatch' }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        config: { build_review: { enabled: false } } as HarnessConfig,
+        buildReviewCoordinator: coordinate,
+        ...currentBuildReviewProof(),
       });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        { gitRunner: scriptedGit(), planPath, ...currentBuildReviewProof() },
-      );
 
-      const result = await runner.run('build_review', emptyState);
-
-      expect(result.success).toBe(success);
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: 'build_review disabled',
+      });
+      expect(coordinate).not.toHaveBeenCalled();
+      expect(provider.invoke).not.toHaveBeenCalled();
     });
 
     afterEach(async () => {
@@ -3285,11 +3281,11 @@ TIER: M`,
 
       await runner.run('build_review', emptyState);
 
-      const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-      expect(prompt).toContain('shared.ts');
-      expect(prompt).toContain('shared parser changes atomically');
-      expect(prompt).toContain('Task 3');
-      expect(prompt).toContain(sha);
+      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      expect(prompts).toContain('shared.ts');
+      expect(prompts).toContain('shared parser changes atomically');
+      expect(prompts).toContain('Task 3');
+      expect(prompts).toContain(sha);
     });
 
     it('renders and warning-logs containment violations with task, sha, and every path', async () => {
@@ -3374,7 +3370,7 @@ TIER: M`,
       expect(output).toContain(sha);
       expect(output).toContain('artifacts.ts');
       expect(output).toContain('changelog-pr-finalizer-cli.ts');
-      expect(output.endsWith('grader exited before writing a verdict')).toBe(true);
+      expect(output).toContain('infrastructure failure: invalid-provider-result');
       expect(log.mock.calls.flat().join('\n')).toContain('artifacts.ts');
       expect(log.mock.calls.flat().join('\n')).toContain('changelog-pr-finalizer-cli.ts');
       const sidecar = JSON.parse(await readFile(
@@ -3388,27 +3384,7 @@ TIER: M`,
       }]);
     });
 
-    it('preserves observed intervals through the build-review scalar adapter', async () => {
-      const observedIntervals = [{ startedAtMs: 500, durationMs: 45 }];
-      const invoke = vi.fn().mockResolvedValue({
-        success: true,
-        output: '{"verdict":"PASS"}',
-        exitCode: 0,
-        observedIntervals,
-      });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        { gitRunner: scriptedGit(), planPath, ...currentBuildReviewProof() },
-      );
-
-      const result = await runner.run('build_review', emptyState);
-
-      expect(result.observedIntervals?.[0]).toBe(observedIntervals[0]);
-    });
-
-    it('dispatches with a fresh uuid and resume:false, never the constructor session', async () => {
+    it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -3420,44 +3396,13 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      expect(invoke).toHaveBeenCalledOnce();
-      const opts = invoke.mock.calls[0][0] as InvokeOptions;
-      expect(opts.resume).toBe(false);
-      expect(opts.sessionId).not.toBe('session-1');
-      // A real uuid, not empty/undefined.
-      expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
-    });
-
-    it('preserves authentication metadata on a legacy scalar permission denial', async () => {
-      const authentication = {
-        provider: 'codex' as const,
-        source: 'api-key' as const,
-        state: 'ready' as const,
-      };
-      const invoke = vi.fn().mockResolvedValue({
-        success: false,
-        output: 'Codex permission review denied the required action.',
-        exitCode: 1,
-        permissionDenied: true,
-        authentication,
-      });
-      const provider: LLMProvider = {
-        invoke,
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
-      };
-      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
-        planPath,
-        ...currentBuildReviewProof(),
-      });
-
-      const result = await runner.run('build_review', emptyState);
-
-      expect(result).toMatchObject({
-        success: false,
-        permissionDenied: true,
-        authentication,
-      });
+      expect(invoke).toHaveBeenCalledTimes(4);
+      for (const [options] of invoke.mock.calls) {
+        const opts = options as InvokeOptions;
+        expect(opts.resume).toBe(false);
+        expect(opts.sessionId).not.toBe('session-1');
+        expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+      }
     });
 
     it('resolves the feature\'s own plan by featureDesc stem, not the alphabetically-last plan file (#788)', async () => {
@@ -3487,9 +3432,9 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      const opts = invoke.mock.calls[0][0] as InvokeOptions;
-      expect(opts.prompt).toContain('Grade against this one.');
-      expect(opts.prompt).not.toContain('Wrong plan.');
+      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      expect(prompts).toContain('Grade against this one.');
+      expect(prompts).not.toContain('Wrong plan.');
     });
 
     // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
@@ -3592,133 +3537,6 @@ TIER: M`,
       expect(result.success).toBe(false);
     });
 
-    // gate-step-completion-validates-against-code-state (Task 3): the engine
-    // cannot control what JSON the grader writes, so it augments the verdict
-    // file post-write with the HEAD SHA it was formed against.
-    describe('codeStamp augmentation', () => {
-      function initGitRepo(repoDir: string): string {
-        execSync('git init -q', { cwd: repoDir });
-        execSync('git config user.email test@example.com', { cwd: repoDir });
-        execSync('git config user.name Test', { cwd: repoDir });
-        execSync('git add -A', { cwd: repoDir });
-        execSync('git commit -q -m init', { cwd: repoDir });
-        return execSync('git rev-parse HEAD', { cwd: repoDir }).toString().trim();
-      }
-
-      it('attaches codeStamp = current HEAD to a freshly written build-review.json', async () => {
-        const headSha = initGitRepo(dir);
-        const verdictPath = join(dir, '.pipeline', 'build-review.json');
-        const invoke = vi.fn().mockImplementation(async () => {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false } }), 'utf-8');
-          return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
-        });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-          ...currentBuildReviewProof(),
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(true);
-        const written = JSON.parse(await readFile(verdictPath, 'utf-8'));
-        expect(written.codeStamp).toBe(headSha);
-        expect(written.verdict).toBe('PASS');
-      });
-
-      it('replaces grader failedRubrics with engine-derived canonical rubric booleans', async () => {
-        const headSha = initGitRepo(dir);
-        const verdictPath = join(dir, '.pipeline', 'build-review.json');
-        const invoke = vi.fn().mockImplementation(async () => {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ reasons: [], failedRubrics: [] }), 'utf-8');
-          return { success: true, output: '{"failedRubrics":[]}', exitCode: 0 };
-        });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(true);
-        expect(JSON.parse(await readFile(verdictPath, 'utf-8'))).toEqual({
-          verdict: 'PASS',
-          reasons: [],
-          rubric: {
-            tautology: false,
-            scope: false,
-            rootCause: false,
-            completeness: false,
-            },
-          codeStamp: headSha,
-        });
-      });
-
-      it('rejects a successful dispatch when build-review.json is missing', async () => {
-        initGitRepo(dir);
-        const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-          ...currentBuildReviewProof(),
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(false);
-      });
-
-      it('rejects a successful dispatch when build-review.json is unparseable', async () => {
-        initGitRepo(dir);
-        const verdictPath = join(dir, '.pipeline', 'build-review.json');
-        const invoke = vi.fn().mockImplementation(async () => {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, 'not json {{{', 'utf-8');
-          return { success: true, output: 'not json {{{', exitCode: 0 };
-        });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(false);
-      });
-
-      // Rework (cycle 1): gate_code_validity.enabled=false must restore
-      // byte-identical pre-feature behavior — no codeStamp field written at
-      // all, not even null.
-      it('does not attach codeStamp when gate_code_validity.enabled is false', async () => {
-        initGitRepo(dir);
-        const verdictPath = join(dir, '.pipeline', 'build-review.json');
-        const invoke = vi.fn().mockImplementation(async () => {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false } }), 'utf-8');
-          return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
-        });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-          config: { gate_code_validity: { enabled: false } } as unknown as HarnessConfig,
-          ...currentBuildReviewProof(),
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(true);
-        const written = JSON.parse(await readFile(verdictPath, 'utf-8'));
-        expect('codeStamp' in written).toBe(false);
-        expect(written.verdict).toBe('PASS');
-      });
-    });
   });
 
   describe('resolveSetupFailure one-shot dispatch', () => {
