@@ -11,6 +11,7 @@ import {
   runDaemonLogs,
   detectDaemonObserveCommand,
 } from '../../src/engine/daemon-observe-cli.js';
+import { renderDashboard } from '../../src/engine/daemon-dashboard.js';
 
 // Liveness probes: ALIVE = no throw; DEAD = throw ESRCH.
 const ALIVE: KillProbe = () => {};
@@ -40,6 +41,12 @@ async function writePidfile(
 }
 
 describe('engine/daemon-observe-cli', () => {
+  it('renders present build-review dashboard metrics with skipped coverage explicitly not called pass, and omits absent metrics safely', () => {
+    const base = { generatedAt: '2026-08-14T00:00:00.000Z', daemons: [], worktrees: [], halted: [], inProgress: [], pending: [], parked: [], processed: [], gated: [], waiting: [], eligible: [], ownerGate: { enabled: false, summary: 'off' } } as any;
+    expect(renderDashboard({ ...base, buildReviewMetrics: { lapsToPass: 2, skipped: 1, cacheHits: 3, infrastructureFailures: 0 } }))
+      .toContain('BUILD REVIEW: laps-to-pass=2; reduced coverage (skipped, not pass)=1; cache-hits=3; infrastructure-failures=0');
+    expect(renderDashboard(base)).not.toContain('BUILD REVIEW:');
+  });
   let root: string;
 
   beforeEach(async () => {
