@@ -81,7 +81,7 @@ describe('build-review Tautology preflight', () => {
   });
 
   it('reuses an exact cached completed result without another checkout or scoped command', async () => {
-    const cached = { classification: 'red', cacheable: true, changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'], revertedProductionPatch: [{ path: 'src/a.ts', mergeBaseContent: 'BASE' }], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, output: { stdout: '', stderr: '' } } as const;
+    const cached = { classification: 'red', cacheable: true, cacheProvenance: 'miss', changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'], revertedProductionPatch: [{ path: 'src/a.ts', mergeBaseContent: 'BASE' }], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, output: { stdout: '', stderr: '' } } as const;
     const createCheckout = vi.fn(async () => {});
     const runScoped = vi.fn(async () => ({ exitCode: 1, stdout: '', stderr: '' }));
     const result = await materializeTautologyPreflight({
@@ -92,5 +92,60 @@ describe('build-review Tautology preflight', () => {
     expect(result).toMatchObject({ classification: 'red', cacheProvenance: 'hit' });
     expect(createCheckout).not.toHaveBeenCalled();
     expect(runScoped).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing scoped configuration', async () => ({ scopedWorkingDirectory: '  ' }), 'missing-scoped-configuration'],
+    ['launch error', async () => ({ runScoped: async () => ({ kind: 'launch-error' as const, stdout: '', stderr: 'spawn failed' }) }), 'scoped-run-launch-failed'],
+    ['timeout', async () => ({ runScoped: async () => ({ kind: 'timeout' as const, stdout: '', stderr: '' }) }), 'scoped-run-timeout'],
+    ['signal termination', async () => ({ runScoped: async () => ({ kind: 'signal' as const, signal: 'SIGTERM', stdout: '', stderr: '' }) }), 'scoped-run-signaled'],
+  ])('fails closed for %s without producing RED evidence', async (_name, overrides, reason) => {
+    const removeCheckout = vi.fn(async () => {});
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ exitCode: 1, stdout: 'would be red', stderr: '' }), removeCheckout,
+      ...await overrides(),
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason });
+    expect(result.classification).not.toBe('red');
+    if (reason === 'missing-scoped-configuration') expect(removeCheckout).not.toHaveBeenCalled();
+    else expect(removeCheckout).toHaveBeenCalledOnce();
+  });
+
+  it('cleans up after an aborted scoped run and leaves live bytes unchanged', async () => {
+    const controller = new AbortController();
+    const liveBytes = JSON.stringify({ 'src/a.ts': 'HEAD production', 'test/a.test.ts': 'HEAD test' });
+    const removeCheckout = vi.fn(async () => {});
+    const runScoped = vi.fn(async (_cwd: string, _selectors: readonly string[], signal: AbortSignal) => {
+      controller.abort();
+      expect(signal.aborted).toBe(true);
+      return { exitCode: 1, stdout: 'would be red', stderr: '' };
+    });
+
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped, removeCheckout, abortSignal: controller.signal,
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'aborted' });
+    expect(removeCheckout).toHaveBeenCalledOnce();
+    expect(JSON.stringify({ 'src/a.ts': 'HEAD production', 'test/a.test.ts': 'HEAD test' })).toBe(liveBytes);
+  });
+
+  it('returns cleanup failure even when the underlying scoped run is RED', async () => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }),
+      removeCheckout: async () => { throw new Error('cleanup failed'); },
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'cleanup-failed' });
   });
 });
