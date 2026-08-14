@@ -4,10 +4,9 @@
 // Dedup key: source + NUL + sourceRef — so cross-repo same number is distinct,
 // and a re-filed idea under a new reference is also distinct.
 
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { createHash, randomBytes } from 'node:crypto';
+import { readFile, writeFile, mkdir, rename, readdir } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import {
   createConductStateLease,
   type ConductStateLease,
@@ -184,22 +183,47 @@ export async function loadStore(path: string): Promise<LedgerLoadResult> {
   }
 }
 
+async function quarantineCorruptBytes(path: string, bytes: Buffer): Promise<void> {
+  const directory = dirname(path);
+  const prefix = `${basename(path)}.corrupt-`;
+  const existing = await readdir(directory);
+  for (const name of existing) {
+    if (!name.startsWith(prefix)) continue;
+    try {
+      if ((await readFile(join(directory, name))).equals(bytes)) return;
+    } catch {
+      // A stale or unreadable sibling cannot safely be reused.
+    }
+  }
+
+  let timestamp = Date.now();
+  while (true) {
+    const quarantinePath = `${path}.corrupt-${timestamp}`;
+    try {
+      await writeFile(quarantinePath, bytes, { flag: 'wx' });
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if ((await readFile(quarantinePath)).equals(bytes)) return;
+      } catch {
+        // A colliding, unreadable file is preserved; choose another timestamp.
+      }
+      timestamp += 1;
+    }
+  }
+}
+
 async function readStore(path: string): Promise<LedgerStore> {
   const result = await loadStore(path);
   if (result.kind === 'absent') return {};
   if (result.kind === 'corrupt') {
     let quarantineFailure: string | undefined;
     if (result.bytes !== undefined) {
-      const digest = createHash('sha256').update(result.bytes).digest('hex');
-      const quarantinePath = `${path}.corrupt-${digest}`;
-      if (!existsSync(quarantinePath)) {
-        try {
-          await writeFile(quarantinePath, result.bytes, { flag: 'wx' });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-            quarantineFailure = error instanceof Error ? error.message : String(error);
-          }
-        }
+      try {
+        await quarantineCorruptBytes(path, result.bytes);
+      } catch (error) {
+        quarantineFailure = error instanceof Error ? error.message : String(error);
       }
     }
     const reason = quarantineFailure === undefined

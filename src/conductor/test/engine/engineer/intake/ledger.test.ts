@@ -45,7 +45,13 @@ describe('loadStore()', () => {
     const corruptBytes = Buffer.from([0xff, 0xfe, 0x00, 0x7b]);
     await writeFile(ledgerPath, corruptBytes);
 
-    await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-13T12:00:00.000Z'));
+      await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+    } finally {
+      vi.useRealTimers();
+    }
 
     const sibling = (await readdir(dir)).find((name) => name.startsWith('ledger.json.corrupt-'));
     expect({
@@ -53,7 +59,7 @@ describe('loadStore()', () => {
       original: await readFile(ledgerPath),
       quarantine: sibling === undefined ? undefined : await readFile(join(dir, sibling)),
     }).toEqual({
-      sibling: expect.stringMatching(/^ledger\.json\.corrupt-/),
+      sibling: 'ledger.json.corrupt-1786622400000',
       original: corruptBytes,
       quarantine: corruptBytes,
     });
@@ -87,11 +93,16 @@ describe('loadStore()', () => {
     const quarantines = (await readdir(dir))
       .filter((name) => name.startsWith('ledger.json.corrupt-'))
       .sort();
-    expect(quarantines).toHaveLength(2);
-    await expect(Promise.all(quarantines.map((name) => readFile(join(dir, name))))).resolves.toEqual(expect.arrayContaining([
-      firstCorruption,
-      secondCorruption,
-    ]));
+    expect({
+      quarantines,
+      bytes: await Promise.all(quarantines.map((name) => readFile(join(dir, name)))),
+    }).toEqual({
+      quarantines: [
+        'ledger.json.corrupt-1786622400000',
+        'ledger.json.corrupt-1786622403000',
+      ],
+      bytes: [firstCorruption, secondCorruption],
+    });
   });
 
   it('reports a failed quarantine alongside corruption without changing the ledger bytes', async () => {
