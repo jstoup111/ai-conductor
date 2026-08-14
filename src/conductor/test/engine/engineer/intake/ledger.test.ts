@@ -305,6 +305,82 @@ describe('lease-bracketed ledger access', () => {
       leaseEvents: ['acquire', 'release'],
     });
   });
+
+  it('leaves no temporary residue after every refused mutation and permits each repaired retry', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const source = 'github-issues';
+    const sourceRef = 'o/a#1';
+    const key = `${source}\u0000${sourceRef}`;
+    const entry = (status: 'pending' | 'done' | 'claimed') => ({
+      [key]: { source, sourceRef, status, attempts: 0 },
+    });
+    const mutations = [
+      ['record', {}, (ledger: ReturnType<typeof createLedger>) => ledger.record({ source, sourceRef })],
+      ['transition', entry('pending'), (ledger: ReturnType<typeof createLedger>) => ledger.transition(source, sourceRef, 'done')],
+      ['forget', entry('pending'), (ledger: ReturnType<typeof createLedger>) => ledger.forget(source, sourceRef)],
+      ['reopen', entry('done'), (ledger: ReturnType<typeof createLedger>) => ledger.reopen(source, sourceRef)],
+      ['requeueClaimed', entry('claimed'), (ledger: ReturnType<typeof createLedger>) => ledger.requeueClaimed(source, sourceRef)],
+    ] as const;
+    const results: Array<{
+      method: string;
+      refused: boolean;
+      retrySucceeded: boolean;
+      semanticState: { status: string; attempts: number } | undefined;
+      tempFiles: string[][];
+    }> = [];
+
+    for (const [method, repairedStore, mutate] of mutations) {
+      const corruptBytes = Buffer.from('{ not valid json');
+      await writeFile(ledgerPath, corruptBytes);
+      const ledger = createLedger(ledgerPath);
+      const refused = await mutate(ledger).then(
+        () => false,
+        (error: unknown) => error instanceof CorruptLedgerError,
+      );
+      const tempFilesAfterRefusal = (await readdir(dir)).filter((name) => name.startsWith('ledger.json.tmp.'));
+
+      await writeFile(ledgerPath, JSON.stringify(repairedStore), 'utf8');
+      const retrySucceeded = await mutate(ledger).then(
+        () => true,
+        () => false,
+      );
+      const retriedEntry = await ledger.get(source, sourceRef);
+      const tempFilesAfterRetry = (await readdir(dir)).filter((name) => name.startsWith('ledger.json.tmp.'));
+
+      results.push({
+        method,
+        refused,
+        retrySucceeded,
+        semanticState: retriedEntry === undefined
+          ? undefined
+          : { status: retriedEntry.status, attempts: retriedEntry.attempts },
+        tempFiles: [tempFilesAfterRefusal, tempFilesAfterRetry],
+      });
+    }
+
+    expect(results).toEqual([
+      {
+        method: 'record', refused: true, retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 0 }, tempFiles: [[], []],
+      },
+      {
+        method: 'transition', refused: true, retrySucceeded: true,
+        semanticState: { status: 'done', attempts: 0 }, tempFiles: [[], []],
+      },
+      {
+        method: 'forget', refused: true, retrySucceeded: true,
+        semanticState: undefined, tempFiles: [[], []],
+      },
+      {
+        method: 'reopen', refused: true, retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 1 }, tempFiles: [[], []],
+      },
+      {
+        method: 'requeueClaimed', refused: true, retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 1 }, tempFiles: [[], []],
+      },
+    ]);
+  });
 });
 
 describe('transition() writebackPending marker (#290)', () => {
