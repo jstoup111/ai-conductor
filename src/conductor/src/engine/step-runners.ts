@@ -34,6 +34,8 @@ import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import {
   assembleBuildReviewInputs,
+  type BuildReviewFrozenInputs,
+  type BuildReviewInputOptions,
   type BuildReviewRepairProvenance,
 } from './build-review-inputs.js';
 import {
@@ -317,6 +319,16 @@ export interface StepRunnerOptions {
    */
   gitRunner?: GitRunner;
   planPath?: string;
+  /** Process-free test-suite-proof seam retained by the public build_review step. */
+  buildReviewInputOptions?: BuildReviewInputOptions;
+  /**
+   * Engine-owned rubric fan-out seam. It receives the single frozen snapshot
+   * and resolved policy, and returns only after every branch has settled.
+   */
+  buildReviewCoordinator?: (
+    inputs: BuildReviewFrozenInputs,
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ) => Promise<StepRunResult>;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
@@ -390,6 +402,8 @@ export class DefaultStepRunner implements StepRunner {
   private modelAvailability: ModelAvailability;
   private gitRunner: GitRunner;
   private planPathOverride?: string;
+  private buildReviewInputOptions?: BuildReviewInputOptions;
+  private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
   private providerKey: string;
@@ -437,6 +451,8 @@ export class DefaultStepRunner implements StepRunner {
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
     this.planPathOverride = options?.planPath;
+    this.buildReviewInputOptions = options?.buildReviewInputOptions;
+    this.buildReviewCoordinator = options?.buildReviewCoordinator;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerKey = options?.providerKey ?? 'claude';
@@ -1724,7 +1740,7 @@ export class DefaultStepRunner implements StepRunner {
     let inputs;
     try {
       inputs = {
-        ...await assembleBuildReviewInputs(this.gitRunner, planPath),
+        ...await assembleBuildReviewInputs(this.gitRunner, planPath, this.buildReviewInputOptions),
         acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
       };
     } catch (err) {
@@ -1758,6 +1774,14 @@ export class DefaultStepRunner implements StepRunner {
       const withFreshness = baseFreshness ? { ...r, baseFreshness } : r;
       return repairProvenance ? { ...withFreshness, repairProvenance } : withFreshness;
     };
+
+    // The lifecycle still exposes one public build_review step. Its new
+    // coordinator owns the bounded auxiliary fan-out and receives the one
+    // frozen snapshot; the legacy scalar path remains only while branch
+    // artifact/aggregate compatibility is introduced by later tasks.
+    if (this.buildReviewCoordinator) {
+      return withBaseFreshness(await this.buildReviewCoordinator(inputs, buildReviewConfig));
+    }
 
     // Per-task "work happened at all" floor (#781): purely additive,
     // non-blocking telemetry computed alongside the grader dispatch. It

@@ -3128,6 +3128,26 @@ TIER: M`,
       expect(provider.invokeInteractive).not.toHaveBeenCalled();
     });
 
+    it('retains one public build_review step while delegating fan-out orchestration without a legacy provider call', async () => {
+      const provider = createMockProvider();
+      const coordinate = vi.fn(async () => ({ success: true, output: 'five rubric branches settled' }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath,
+        buildReviewCoordinator: coordinate,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true, output: 'five rubric branches settled',
+      });
+      expect(coordinate).toHaveBeenCalledOnce();
+      expect(provider.invoke).not.toHaveBeenCalled();
+    });
+
     it.each([
       {
         name: 'complete five-flag PASS',
