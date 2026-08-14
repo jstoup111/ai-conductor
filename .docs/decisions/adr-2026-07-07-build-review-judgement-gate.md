@@ -1,7 +1,8 @@
 # ADR 2026-07-07: build_review — input-starved judgement gate at the build → manual_test seam
 
 **Date:** 2026-07-07
-**Status:** APPROVED — operator-approved 2026-07-07 (interactive engineer session; decisions 1–7 presented and confirmed)
+**Status:** SUPERSEDED by adr-2026-08-13-engine-managed-build-review-rubric-branches
+**Previously approved:** Operator-approved 2026-07-07 (interactive engineer session; decisions 1–7 presented and confirmed)
 **Deciders:** James (solo dev) + harness architecture-review
 **Feature:** jstoup111/ai-conductor#324 — judgement gate at the build → manual_test seam
 **Related:** #325 (CLOSED — fresh session per step, merged PR #365), #384 / ADR
