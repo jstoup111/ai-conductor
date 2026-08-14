@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
+import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
 
 // ── Structural input-isolation test (build_review) ───────────────────────
 //
@@ -35,6 +36,10 @@ const BROAD_FALLBACK_TRIGGERS = [
 ] as const;
 
 const execFileAsync = promisify(execFile);
+const CURRENT_PROOF = {
+  status: 'CURRENT',
+  evidence: { provenanceHeadSha: 'isolation-head', outcome: 'PASS' },
+} as FullSuiteInspectionResult;
 
 describe('build_review input isolation', () => {
   let dir: string;
@@ -105,7 +110,9 @@ describe('build_review input isolation', () => {
   });
 
   it('never leaks task status, transcript, or maker-summary content into assembled inputs or the grader prompt', async () => {
-    const inputs = await assembleBuildReviewInputs(realGit(), planPath);
+    const inputs = await assembleBuildReviewInputs(realGit(), planPath, {
+      inspectTestSuite: async () => CURRENT_PROOF,
+    });
     const prompt = buildGraderPrompt(inputs);
 
     // Sanity check: the sentinel-bearing files are real, on disk, in the
@@ -125,7 +132,7 @@ describe('build_review input isolation', () => {
     }
   });
 
-  it('admits only (git, planPath) / (inputs) at the type level — no state parameter exists', () => {
+  it('admits only git, plan, and proof inspection / inputs at the type level — no state parameter exists', () => {
     // Compile-level check: these assignments only type-check if the
     // functions' parameter lists are exactly as narrow as documented. If a
     // future maintainer adds a `state`/`summary` parameter, this file fails
@@ -133,7 +140,7 @@ describe('build_review input isolation', () => {
     type AssembleParams = Parameters<typeof assembleBuildReviewInputs>;
     type PromptParams = Parameters<typeof buildGraderPrompt>;
 
-    const assembleArity: AssembleParams extends [unknown, unknown] ? true : false = true;
+    const assembleArity: AssembleParams extends [unknown, unknown, unknown?] ? true : false = true;
     const promptArity: PromptParams extends [unknown] ? true : false = true;
 
     expect(assembleArity).toBe(true);

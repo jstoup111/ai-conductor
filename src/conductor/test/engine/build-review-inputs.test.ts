@@ -6,15 +6,33 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import {
-  assembleBuildReviewInputs,
+  assembleBuildReviewInputs as assembleInputs,
   MACHINERY_AUTHORED_PATHS,
   MergeBaseError,
+  TestSuiteProofError,
 } from '../../src/engine/build-review-inputs.js';
-import type { BuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import type { BuildReviewFrozenInputs, BuildReviewInputOptions } from '../../src/engine/build-review-inputs.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
+import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+
+const CURRENT_PROOF = {
+  status: 'CURRENT',
+  evidence: { provenanceHeadSha: 'head123', outcome: 'PASS' },
+} as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>;
+
+function assembleBuildReviewInputs(
+  git: GitRunner,
+  planPath: string,
+  options: BuildReviewInputOptions = {},
+): Promise<BuildReviewFrozenInputs> {
+  return assembleInputs(git, planPath, {
+    inspectTestSuite: async () => CURRENT_PROOF,
+    ...options,
+  });
+}
 
 // A scripted GitRunner: matches argv prefixes to canned results (same pattern
 // as test/engine/rebase.test.ts's fakeGit).
@@ -63,6 +81,38 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       { match: ['rev-parse', 'refs/remotes/origin/main'], result: { exitCode: 0, stdout: 'abc1234\n' } },
       { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 0, stdout: 'abc1234\trefs/heads/main\n' } },
     ];
+
+    it('freezes one source snapshot and admits only an injected CURRENT test-suite proof', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
+      ]);
+      const inspectTestSuite = vi.fn(async () => CURRENT_PROOF);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath, { inspectTestSuite });
+
+      expect(inspectTestSuite).toHaveBeenCalledOnce();
+      expect(inputs.testSuiteProof).toBe(CURRENT_PROOF.evidence);
+      expect(inputs.sourceSnapshot).toMatchObject({
+        mergeBase: 'base123', headSha: 'head123', diff: inputs.diff, planBody: inputs.planBody,
+      });
+      expect(inputs.sourceSnapshot.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(JSON.stringify(inputs)).not.toMatch(/makerNarrative/i);
+      expect(inputs).not.toHaveProperty('acceptedDispositions');
+    });
+
+    it.each([
+      { status: 'FAILED', reason: 'nonzero_exit', message: 'suite failed' },
+      { status: 'STALE', reason: 'source_changed' },
+    ] as const)('refuses a non-current test-suite proof before reading git ($status)', async (inspection) => {
+      const { git, calls } = fakeGit([]);
+
+      await expect(assembleBuildReviewInputs(git, planPath, {
+        inspectTestSuite: async () => inspection,
+      })).rejects.toBeInstanceOf(TestSuiteProofError);
+      expect(calls).toEqual([]);
+    });
 
     it('merge-base failure raises a typed MergeBaseError', async () => {
       const { git } = fakeGit([

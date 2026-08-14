@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import {
@@ -9,6 +10,8 @@ import {
 import type { AcceptedScopeWidening } from './per-task-commit-floor.js';
 import { deriveBuildReviewRemovals, type BuildReviewRemovalContext } from './build-review-removals.js';
 import { readOperatorReseals, type OperatorReseal } from './protected-artifact-seal.js';
+import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
+import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -62,6 +65,37 @@ export interface BuildReviewInputs {
    * absent only when classification itself failed.
    */
   repairProvenance?: BuildReviewRepairProvenance;
+  /** The process-free, current green proof build_review is bound to. */
+  testSuiteProof?: FullSuitePassEvidence;
+  /** Immutable identity of every source value shared by the rubric fan-out. */
+  sourceSnapshot?: BuildReviewSourceSnapshot;
+}
+
+/** Inputs returned after the proof gate has frozen a source snapshot. */
+export interface BuildReviewFrozenInputs extends BuildReviewInputs {
+  readonly testSuiteProof: FullSuitePassEvidence;
+  readonly sourceSnapshot: BuildReviewSourceSnapshot;
+}
+
+/** One frozen source view. Rubric branches receive projections of this value, never live reads. */
+export interface BuildReviewSourceSnapshot {
+  readonly digest: string;
+  readonly baseRef: string;
+  readonly mergeBase: string;
+  readonly headSha: string;
+  readonly diff: string;
+  readonly planBody: string;
+  readonly repairContext: readonly TestSuiteRemediationRecord[];
+  readonly removalContext: {
+    readonly deletedFiles: readonly string[];
+    readonly removedDeclarations: readonly string[];
+    readonly removedMembers: readonly { readonly declaration: string; readonly member: string }[];
+  };
+}
+
+/** Process-free proof inspection seam; it must never launch the aggregate suite. */
+export interface BuildReviewInputOptions {
+  readonly inspectTestSuite?: () => Promise<FullSuiteInspectionResult>;
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -93,6 +127,24 @@ export class MergeBaseError extends Error {
   }
 }
 
+/** A missing, failed, or stale aggregate proof blocks review before source reads or dispatch. */
+export class TestSuiteProofError extends Error {
+  constructor(readonly inspection: Exclude<FullSuiteInspectionResult, { status: 'CURRENT' }>) {
+    super(`build_review requires CURRENT test_suite proof (got ${inspection.status})`);
+    this.name = 'TestSuiteProofError';
+  }
+}
+
+function projectRootForPlan(planPath: string): string {
+  return basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs'
+    ? dirname(dirname(dirname(planPath)))
+    : dirname(planPath);
+}
+
+function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest'>): string {
+  return `sha256:${createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}`;
+}
+
 /**
  * Assemble the build_review grader's inputs: the diff since the merge-base
  * of a freshly-resolved base ref and HEAD, plus the plan body. Inputs are
@@ -108,7 +160,13 @@ export class MergeBaseError extends Error {
 export async function assembleBuildReviewInputs(
   git: GitRunner,
   planPath: string,
-): Promise<BuildReviewInputs> {
+  options: BuildReviewInputOptions = {},
+): Promise<BuildReviewFrozenInputs> {
+  const inspection = await (
+    options.inspectTestSuite?.() ?? new FullSuiteVerifier({ projectRoot: projectRootForPlan(planPath) }).inspect()
+  );
+  if (inspection.status !== 'CURRENT') throw new TestSuiteProofError(inspection);
+
   const resolution = await resolveFreshBase(git);
 
   if (resolution.kind === 'local') {
@@ -169,6 +227,25 @@ export async function assembleBuildReviewInputs(
     repairProvenance = undefined;
   }
 
+  const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
+  const snapshotWithoutDigest = {
+    baseRef,
+    mergeBase: mergeBaseSha,
+    headSha: inspection.evidence.provenanceHeadSha,
+    diff: diffResult.stdout,
+    planBody,
+    repairContext: Object.freeze([...repairContext]),
+    removalContext: Object.freeze({
+      deletedFiles: Object.freeze([...removalContext.deletedFiles]),
+      removedDeclarations: Object.freeze([...removalContext.removedDeclarations]),
+      removedMembers: Object.freeze([...removalContext.removedMembers]),
+    }),
+  } satisfies Omit<BuildReviewSourceSnapshot, 'digest'>;
+  const sourceSnapshot = Object.freeze({
+    ...snapshotWithoutDigest,
+    digest: snapshotDigest(snapshotWithoutDigest),
+  });
+
   return {
     diff: diffResult.stdout,
     planBody,
@@ -178,9 +255,11 @@ export async function assembleBuildReviewInputs(
     trackingRefSha: resolution.trackingRefSha,
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
-    removalContext: deriveBuildReviewRemovals(diffResult.stdout),
+    removalContext,
     repairContext,
     operatorReseals,
     repairProvenance,
+    testSuiteProof: inspection.evidence,
+    sourceSnapshot,
   };
 }
