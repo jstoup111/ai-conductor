@@ -816,7 +816,7 @@ export async function dispatchEngineer(
           } catch (err: unknown) {
             // Best-effort: intake must never block the interactive loop.
             if (err instanceof CorruptLedgerError) {
-              reportCorruptLedger(err);
+              return reportCorruptLedger(err);
             } else {
               printErr(
                 `engineer: intake pre-poll failed (${err instanceof Error ? err.message : String(err)}) — continuing.`,
@@ -1056,7 +1056,7 @@ export async function dispatchEngineer(
             }
           } catch (e: unknown) {
             if (e instanceof CorruptLedgerError) {
-              reportCorruptLedger(e);
+              throw e;
             } else {
               printErr(
                 `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
@@ -1082,7 +1082,6 @@ export async function dispatchEngineer(
       }
 
       if (handoffResult.kind === 'pr-opened') {
-        print(JSON.stringify({ kind: 'pr-opened', url: handoffResult.url }));
         // Intake write-back (FR-36): a real spec PR was opened — comment its URL,
         // apply `engineer:handled`, and advance the ledger to `done`. Advisory —
         // a gh failure never reverts a delivered PR. Only on a PR (not local-commit,
@@ -1096,6 +1095,7 @@ export async function dispatchEngineer(
             branch,
           );
         }
+        print(JSON.stringify({ kind: 'pr-opened', url: handoffResult.url }));
       } else {
         // pr-skipped — record authored key manually (openSpecPr already records on skip).
         // Task 9: Also record branch evidence in the ledger if sourceRef is present.
@@ -1112,7 +1112,7 @@ export async function dispatchEngineer(
             }
           } catch (e: unknown) {
             if (e instanceof CorruptLedgerError) {
-              reportCorruptLedger(e);
+              throw e;
             } else {
               printErr(
                 `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,

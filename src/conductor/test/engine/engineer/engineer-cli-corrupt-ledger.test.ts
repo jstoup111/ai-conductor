@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
+import { CorruptLedgerError } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 
 let workDir: string;
@@ -19,6 +20,34 @@ afterEach(async () => {
 });
 
 describe('engineer claim: corrupt intake ledger', () => {
+  it('stops launch before opening an interactive session when pre-poll finds a corrupt ledger', async () => {
+    const ledgerPath = join(workDir, 'engineer', 'ledger.json');
+    const quarantinePath = `${ledgerPath}.corrupt-1`;
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let launches = 0;
+
+    const exitCode = await dispatchEngineer(
+      { kind: 'launch' },
+      {
+        print: (line) => stdout.push(line),
+        printErr: (line) => stderr.push(line),
+        prePoll: async () => {
+          throw new CorruptLedgerError(ledgerPath, 'invalid JSON', quarantinePath);
+        },
+        launchInteractive: async () => {
+          launches += 1;
+          return 0;
+        },
+        confirmAnother: () => false,
+      },
+    );
+
+    expect({ exitCode, launches, stdout }).toEqual({ exitCode: 1, launches: 0, stdout: [] });
+    expect(stderr.join('\n')).toContain(ledgerPath);
+    expect(stderr.join('\n')).toContain(quarantinePath);
+  });
+
   it('reports the ledger and its quarantine path to stderr without a claim payload or ledger content', async () => {
     const engineerDir = join(workDir, 'engineer');
     const ledgerPath = join(engineerDir, 'ledger.json');
