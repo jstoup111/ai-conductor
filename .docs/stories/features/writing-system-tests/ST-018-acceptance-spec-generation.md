@@ -16,6 +16,13 @@ so that the RED phase of TDD starts with real, story-driven test cases.
   (e.g., `spec/integration/` or `tests/integration/`)
 - Given a full-stack project, when specs are generated, then they are system/e2e specs
   (e.g., `spec/system/` or `tests/e2e/`)
+
+> **Amended 2026-08-13 by #1552:** The three assertions above are superseded as a universal mapping.
+> Every criterion receives one concrete coverage disposition: existing sufficient behavioral
+> coverage, a lower-layer behavioral test, or a generated acceptance/system spec. A new
+> acceptance/system spec is generated only for a distinct multi-step externally observable flow
+> that cannot be proven sufficiently below; framework directory names do not determine the layer.
+
 - Given the specs are written, when the test suite runs, then all new specs FAIL (they are
   the RED phase — no implementation exists yet)
 - Given the specs are committed, when the build phase begins, then implementation drives
@@ -32,6 +39,11 @@ so that the RED phase of TDD starts with real, story-driven test cases.
 ### Done When
 - [ ] One failing test per acceptance criterion (happy + negative)
 - [ ] Correct test type for project type (integration for API, system for full-stack)
+
+> **Amended 2026-08-13 by #1552:** The two Done-When items above are superseded by one explicit
+> lowest-sufficient coverage disposition per criterion. Every acceptance/system spec that is
+> generated still must establish genuine RED evidence before implementation.
+
 - [ ] All generated specs fail when run (RED phase)
 - [ ] Specs committed before implementation begins
 - [ ] Skipped for Small tier (request specs in TDD suffice)
