@@ -166,6 +166,7 @@ export interface EngineerSessionSummary {
 
 const CONFIRM_WORDS = new Set(['y', 'yes']);
 const DECLINE_WORDS = new Set(['n', 'no']);
+const reportedCorruptionEpisodes = new Set<string>();
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
@@ -248,6 +249,7 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
   // — no error, no idle hang. Processing failure releases the claim for re-delivery.
   if (deps.sources?.length && deps.queue) {
     const queue = deps.queue;
+    let intakeLedgerIsCorrupt = false;
     for (const source of deps.sources) {
       let envs: Envelope[] = [];
       try {
@@ -260,11 +262,19 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
           // record() is idempotent — guarantees a ledger entry for later routed/done
           // transitions even when a source did not itself record (record is a no-op
           // when the entry already exists, so the github adapter's own record is safe).
-          if (deps.ledger) await deps.ledger.record({ source: e.source, sourceRef: e.sourceRef });
+          if (deps.ledger) {
+            await deps.ledger.record({ source: e.source, sourceRef: e.sourceRef });
+            reportedCorruptionEpisodes.clear();
+          }
           await queue.enqueue(e);
         } catch (err: unknown) {
           if (err instanceof CorruptLedgerError) {
-            io.print(`Intake ledger corruption: ${err.message}`);
+            intakeLedgerIsCorrupt = true;
+            const episodeKey = `${err.ledgerPath}\0${err.reason}`;
+            if (!reportedCorruptionEpisodes.has(episodeKey)) {
+              reportedCorruptionEpisodes.add(episodeKey);
+              io.print(`Intake ledger corruption: ${err.message}`);
+            }
             break;
           }
           // A single malformed envelope must not abort the whole intake phase.
@@ -272,7 +282,7 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
       }
     }
 
-    const claimed = await queue.claim();
+    const claimed = intakeLedgerIsCorrupt ? undefined : await queue.claim();
     if (claimed) {
       try {
         await processIdea(

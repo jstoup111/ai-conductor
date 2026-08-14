@@ -1298,3 +1298,78 @@ describe('Task 17: intake capture preserves ledger durability', () => {
     expect(successfullyEnqueued).toEqual(['org/repo#1', 'org/repo#3']);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 18: A corrupt ledger pauses intake dispatch until it is repaired, without
+// repeating the warning for the same corruption episode.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Task 18: intake corruption episode handling', () => {
+  it('warns once and holds dispatch per corruption episode, then rearms after repair', async () => {
+    await writeRegistry([]);
+
+    const { createLedger } = await import('../../../src/engine/engineer/intake/ledger.js');
+    const { runEngineerMode } = await loadLoop();
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    const ledger = createLedger(ledgerPath);
+    const output: string[] = [];
+    const claimed: string[] = [];
+    let pollNumber = 0;
+    const queue = {
+      enqueue: async () => undefined,
+      claim: async () => {
+        claimed.push(`claim-${pollNumber}`);
+        return undefined;
+      },
+      ack: async () => undefined,
+      release: async () => undefined,
+    };
+    const runCycle = async () => {
+      pollNumber += 1;
+      await runEngineerMode({
+        route: noopProvider,
+        io: { prompt: async () => null, print: (line: string) => output.push(line) },
+        registryPath,
+        engineerDir,
+        sources: [{
+          poll: async () => [{
+            id: `issue-${pollNumber}`,
+            source: 'github-issues',
+            sourceRef: `org/repo#${pollNumber}`,
+            text: 'intake idea',
+            status: 'pending' as const,
+            receivedAt: '2026-08-14T00:00:00.000Z',
+          }],
+        }],
+        ledger,
+        queue,
+      });
+    };
+
+    await writeFile(ledgerPath, '{broken-first', 'utf8');
+    await runCycle();
+    await runCycle();
+    const firstQuarantines = (await readdir(engineerDir))
+      .filter((name) => name.startsWith('ledger.json.corrupt-'));
+
+    await writeFile(ledgerPath, '{}', 'utf8');
+    await runCycle();
+
+    await writeFile(ledgerPath, '{broken-second', 'utf8');
+    await runCycle();
+    const quarantines = (await readdir(engineerDir))
+      .filter((name) => name.startsWith('ledger.json.corrupt-'));
+
+    expect({
+      corruptionWarnings: output.filter((line) => /intake ledger corruption/i.test(line)).length,
+      firstQuarantineCount: firstQuarantines.length,
+      quarantineCount: quarantines.length,
+      claimed,
+    }).toEqual({
+      corruptionWarnings: 2,
+      firstQuarantineCount: 1,
+      quarantineCount: 2,
+      claimed: ['claim-3'],
+    });
+  });
+});
