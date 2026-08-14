@@ -11,7 +11,10 @@ import {
   createLedger,
   loadStore,
 } from '../../../../src/engine/engineer/intake/ledger.js';
-import type { ConductStateLease } from '../../../../src/engine/conduct-state-lease.js';
+import {
+  createConductStateLease,
+  type ConductStateLease,
+} from '../../../../src/engine/conduct-state-lease.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -192,6 +195,46 @@ describe('loadStore()', () => {
 });
 
 describe('lease-bracketed ledger access', () => {
+  it('recovers a dead default intake-ledger lease before recording a mutation', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const staleLeasePath = `${ledgerPath}.lease`;
+    await mkdir(staleLeasePath);
+    await writeFile(join(staleLeasePath, 'owner.json'), `${JSON.stringify({
+      version: 1,
+      pid: 999_999_999,
+      token: 'dead-owner',
+      acquiredAt: '2026-08-13T12:00:00.000Z',
+    })}\n`, 'utf8');
+
+    const ledger = createLedger(ledgerPath);
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    expect({
+      entries: await ledger.list(),
+      leaseArtifacts: (await readdir(dir)).filter((name) => name.startsWith('ledger.json.lease')).sort(),
+    }).toEqual({
+      entries: [expect.objectContaining({ source: 'github-issues', sourceRef: 'o/a#1' })],
+      leaseArtifacts: [],
+    });
+  });
+
+  it('surfaces the live owner PID when a real intake-ledger lease times out', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const held = await createConductStateLease(ledgerPath, { pid: process.pid }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    try {
+      const ledger = createLedger(ledgerPath, {
+        lease: createConductStateLease(ledgerPath, { pid: process.pid, waitTimeoutMs: 0 }),
+      });
+
+      await expect(ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }))
+        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+    } finally {
+      await held.handle.release();
+    }
+  });
+
   it('fails closed with an intake-ledger lease error before mutations or reads access the ledger', async () => {
     const ledgerPath = join(dir, 'ledger.json');
     const originalBytes = Buffer.from('{"preserved":true}');
