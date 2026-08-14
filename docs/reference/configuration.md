@@ -444,7 +444,7 @@ error.
 
 | Key | Type | Allowed | Written by |
 | --- | --- | --- | --- |
-| `conductor.update_channel` | string | `tagged` or `main` only; anything else is a hard error (`config.ts:1146-1153`) | `bin/install` and the update flow |
+| `conductor.update_channel` | string | `stable`, `tagged`, or `main` only; anything else is a hard error (`config.ts:1146-1153`) | `bin/install` and the update flow |
 | `conductor.auto_check` | boolean | — | `bin/install` and the update flow |
 | `conductor.current_version` | string | — | `bin/install` and the update flow (machine state) |
 | `conductor.last_checked_at` | string | ISO-8601 UTC | `bin/install` and the update flow (machine state) |
@@ -465,6 +465,10 @@ over by legacy JSON on a later run. Without this split, an unseedable `~/.claude
 update check outright even with a perfectly readable `config.yml` — most visibly mid-update, where a
 `conduct-ts` build old enough to predate `config set` failed the seed's write while `config read`
 still worked.
+
+Fresh installs default to `stable`, whose branch advances only after release CI publishes the matching
+semver tag and GitHub Release. `tagged` retains semver tag checkout behavior, and `main` follows every
+merge. Existing configured channels and version pins are preserved by installer updates.
 
 > **Known limitation.** `src/conductor/src/types/config.ts:198-201` states "Project configs should not
 > override this block — it's per-user, not per-repo," but nothing enforces it. Unlike `spec_owner`, a

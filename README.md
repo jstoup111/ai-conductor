@@ -19,11 +19,24 @@ Markdown skills directly.
 ## Install
 
 ```bash
-git clone git@github.com:jstoup111/ai-conductor.git
+git clone --branch stable --single-branch git@github.com:jstoup111/ai-conductor.git
 cd ai-conductor
 ./bin/install
 export PATH="$HOME/.local/bin:$PATH"   # the installer warns; it never edits your profile
 ./bin/install --check                  # 0 clean · 1 drift · 2 build-auth
+```
+
+`stable` advances only after release CI has published the matching semver tag and GitHub Release, so
+the default install path never checks out in-flight work from `main`. Existing tag-pinned checkouts
+remain pinned unless their owner explicitly changes channel or version.
+
+To move an existing branch-based installation to this channel deliberately:
+
+```bash
+git fetch origin stable:refs/remotes/origin/stable
+git switch --track origin/stable
+bin/update --set-channel stable
+bin/migrate
 ```
 
 This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and `~/.agents/skills/`
