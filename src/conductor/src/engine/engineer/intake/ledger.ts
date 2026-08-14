@@ -8,6 +8,10 @@ import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import {
+  createConductStateLease,
+  type ConductStateLease,
+} from '../../conduct-state-lease.js';
 
 // ─── LedgerStatus ─────────────────────────────────────────────────────────────
 
@@ -96,6 +100,10 @@ export interface Ledger {
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 type LedgerStore = Record<string, LedgerEntry>;
+
+interface CreateLedgerOptions {
+  lease?: ConductStateLease;
+}
 
 export type LedgerLoadResult =
   | { kind: 'absent' }
@@ -210,6 +218,16 @@ async function saveStore(path: string, store: LedgerStore): Promise<void> {
   await rename(tmp, path);
 }
 
+async function withLedgerLease<T>(lease: ConductStateLease, body: () => Promise<T>): Promise<T> {
+  const acquired = await lease.acquire();
+  if (!acquired.ok) throw new Error(acquired.message);
+  try {
+    return await body();
+  } finally {
+    await acquired.handle.release();
+  }
+}
+
 // ─── createLedger ─────────────────────────────────────────────────────────────
 
 /**
@@ -220,7 +238,9 @@ async function saveStore(path: string, store: LedgerStore): Promise<void> {
  * - Writes are atomic: tmp-write + rename.
  * - Dedup key is source\0sourceRef; cross-repo same-number issues are distinct.
  */
-export function createLedger(path: string): Ledger {
+export function createLedger(path: string, options: CreateLedgerOptions = {}): Ledger {
+  const lease = options.lease ?? createConductStateLease(path, { label: 'intake ledger' });
+
   return {
     async known(source: string, sourceRef: string): Promise<boolean> {
       const store = await readStore(path);
@@ -228,20 +248,22 @@ export function createLedger(path: string): Ledger {
     },
 
     async record({ source, sourceRef }: { source: string; sourceRef: string }): Promise<void> {
-      const store = await readStore(path);
-      const key = makeKey(source, sourceRef);
-      if (!(key in store)) {
-        const now = new Date().toISOString();
-        store[key] = {
-          source,
-          sourceRef,
-          status: 'pending',
-          attempts: 0,
-          capturedAt: now,
-          lastSeenAt: now,
-        };
-        await saveStore(path, store);
-      }
+      await withLedgerLease(lease, async () => {
+        const store = await readStore(path);
+        const key = makeKey(source, sourceRef);
+        if (!(key in store)) {
+          const now = new Date().toISOString();
+          store[key] = {
+            source,
+            sourceRef,
+            status: 'pending',
+            attempts: 0,
+            capturedAt: now,
+            lastSeenAt: now,
+          };
+          await saveStore(path, store);
+        }
+      });
     },
 
     async transition(

@@ -11,6 +11,7 @@ import {
   createLedger,
   loadStore,
 } from '../../../../src/engine/engineer/intake/ledger.js';
+import type { ConductStateLease } from '../../../../src/engine/conduct-state-lease.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -169,6 +170,57 @@ describe('loadStore()', () => {
     );
 
     expect(results.map((result) => result.kind)).toEqual(['corrupt', 'corrupt', 'corrupt', 'corrupt', 'corrupt']);
+  });
+});
+
+describe('lease-bracketed ledger access', () => {
+  it('acquires before record loads, releases after save, and releases when record throws', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const events: string[] = [];
+    let acquireCount = 0;
+    let savedPreAcquireEntry = false;
+    let releaseAfterSave = false;
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        acquireCount += 1;
+        events.push(`acquire-${acquireCount}`);
+        if (acquireCount === 1) await writeFile(ledgerPath, '{}', 'utf8');
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              events.push(`release-${acquireCount}`);
+              if (acquireCount === 1) {
+                const saved = await readFile(ledgerPath, 'utf8');
+                savedPreAcquireEntry = saved.includes('o/a#old');
+                releaseAfterSave = saved.includes('o/a#new');
+              }
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    await writeFile(ledgerPath, JSON.stringify({
+      'github-issues\u0000o/a#old': {
+        source: 'github-issues', sourceRef: 'o/a#old', status: 'pending', attempts: 0,
+      },
+    }), 'utf8');
+    const ledger = createLedger(ledgerPath, { lease });
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#new' });
+    await writeFile(ledgerPath, 'not valid json', 'utf8');
+    const rejected = await ledger.record({ source: 'github-issues', sourceRef: 'o/a#broken' }).then(
+      () => false,
+      () => true,
+    );
+
+    expect({ events, savedPreAcquireEntry, releaseAfterSave, rejected }).toEqual({
+      events: ['acquire-1', 'release-1', 'acquire-2', 'release-2'],
+      savedPreAcquireEntry: false,
+      releaseAfterSave: true,
+      rejected: true,
+    });
   });
 });
 
