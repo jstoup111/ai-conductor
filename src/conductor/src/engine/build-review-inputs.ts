@@ -8,6 +8,7 @@ import {
 } from './test-suite-remediation.js';
 import type { AcceptedScopeWidening } from './per-task-commit-floor.js';
 import { deriveBuildReviewRemovals, type BuildReviewRemovalContext } from './build-review-removals.js';
+import { readOperatorReseals, type OperatorReseal } from './protected-artifact-seal.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -51,6 +52,8 @@ export interface BuildReviewInputs {
   acceptedWidenings?: AcceptedScopeWidening[];
   /** Diff-derived removal evidence for the grader, never an exemption. */
   removalContext?: BuildReviewRemovalContext;
+  /** Operator-authorized protected-artifact reseals from the feature seal. */
+  operatorReseals?: OperatorReseal[];
   /**
    * Grading provenance: which of the three repair-context cases this grading
    * ran under. Returned rather than emitted here so assembly stays strictly
@@ -151,6 +154,9 @@ export async function assembleBuildReviewInputs(
   const repairContext = planIsInFeatureRoot
     ? await readTestSuiteRemediations(featureRoot)
     : [];
+  const operatorReseals = planIsInFeatureRoot
+    ? await readOperatorReseals(featureRoot)
+    : [];
 
   // Provenance is advisory: a failure to classify never fails input assembly,
   // it just leaves the grading unattributed.
@@ -176,6 +182,7 @@ export async function assembleBuildReviewInputs(
     fresh: resolution.fresh,
     removalContext: deriveBuildReviewRemovals(diffResult.stdout),
     repairContext,
+    operatorReseals,
     repairProvenance,
   };
 }
