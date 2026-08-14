@@ -157,4 +157,87 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     );
     expect(remediationContext).not.toContain('Active plan:');
   });
+
+  it('keeps the validation-group remediation dispatch context unchanged', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'validation-group-remediate-dispatch-'));
+    const statePath = join(dir, '.pipeline', 'state.json');
+    const state: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const step of ALL_STEPS) {
+      state[step.name] = [
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ].includes(step.name)
+        ? 'pending'
+        : 'done';
+    }
+    state.build_review = 'skipped';
+    await writeState(statePath, state as ConductState);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+    );
+
+    let remediationContext: string | undefined;
+    const runner: StepRunner = {
+      run: async (step: StepName, _state, options): Promise<StepRunResult> => {
+        if (step === 'manual_test') {
+          await writeFile(
+            join(dir!, '.pipeline', 'manual-test-results.md'),
+            '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n',
+          );
+        }
+        if (step === 'prd_audit') {
+          await writeFile(
+            join(dir!, '.pipeline', 'prd-audit.md'),
+            '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
+              '| FR-1 | GAP | missing | evidence.ts:1 | no |\n',
+          );
+        }
+        if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(dir!, '.pipeline', 'architecture-review-as-built.md'),
+            '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+          );
+        }
+        if (step === 'remediate') {
+          remediationContext = options?.retryReason;
+          await writeFile(
+            join(dir!, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'FR-1',
+                  disposition: 'halt',
+                  category: 'architectural-clarity',
+                  rationale: 'Stop after capturing the validation-group dispatch context.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true };
+      },
+    };
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'manual_test',
+      verifyArtifacts: true,
+      mode: 'auto',
+      daemon: true,
+    });
+
+    await conductor.run();
+
+    expect(remediationContext).toBe(
+      'Blocking validation-group gaps at .pipeline/prd-audit.md. ' +
+        'Plan remediation per the /remediate skill and write .pipeline/remediation.json.',
+    );
+  });
 });

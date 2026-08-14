@@ -16,6 +16,7 @@ const CONTRACT_SURFACES = [
   ['remediate skill', 'skills/remediate/SKILL.md'],
   ['remediation planner', 'agents/remediation-planner.md'],
 ] as const;
+const DECIDE_ENTRY_POLICY = 'src/conductor/src/engine/decide-entry-policy.ts';
 
 const HALT_CATEGORIES_BY_SURFACE = {
   'skills/remediate/SKILL.md': [
@@ -116,4 +117,18 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect([...new Set(haltCategories)].sort()).toEqual([...expectedHaltCategories].sort());
     expect(text).toMatch(/low confidence[\s\S]{0,160}HALT/i);
   });
+
+  it('routes an in-scope planning omission to plan without re-plan wording', async () => {
+    const text = await contract();
+
+    expect(text).toMatch(/in-scope planning omission[\s\S]{0,120}routes to `plan`/i);
+    expect(text).not.toMatch(/\(?re-plan\)?, then build/i);
+    expect(text).not.toMatch(/so re-plan it/i);
+  });
+});
+
+it('keeps the ungrantable autonomous DECIDE target bound to plan', async () => {
+  const policy = await readFile(join(REPO_ROOT, DECIDE_ENTRY_POLICY), 'utf8');
+
+  expect(policy).toMatch(/const UNGRANTABLE_STEP:\s*StepName\s*=\s*'plan';/);
 });
