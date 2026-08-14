@@ -96,6 +96,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs.testSuiteProof).toBe(CURRENT_PROOF.evidence);
       expect(inputs.sourceSnapshot).toMatchObject({
         mergeBase: 'base123', headSha: 'head123', diff: inputs.diff, planBody: inputs.planBody,
+        operatorReseals: inputs.operatorReseals,
       });
       expect(inputs.sourceSnapshot.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(JSON.stringify(inputs)).not.toMatch(/makerNarrative/i);
@@ -351,6 +352,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           toCommit: 'after',
           paths: ['.docs/stories/fixture.md'],
           reason: 'Operator approved the amendment.',
+        }, {
+          trigger: 'proactive-rebase', fromCommit: 'after', toCommit: 'rotation', paths: ['.docs/stories/fixture.md'],
+        }, {
+          trigger: 'future-machinery-trigger', fromCommit: 'rotation', toCommit: 'future', paths: ['.docs/stories/fixture.md'],
         }],
       }));
 
@@ -371,6 +376,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         }],
         loose: [],
       });
+      expect(featureInputs.sourceSnapshot.operatorReseals).toEqual(featureInputs.operatorReseals);
+
+      await writeFile(join(dir, '.pipeline/protected-artifact-seal.json'), '{ unusable');
+      expect((await assembleBuildReviewInputs(realGit(), scopedPlanPath)).sourceSnapshot.operatorReseals).toEqual([]);
     });
 
     it('renders a #1502 sealed-artifact amendment only when its operator reseal is persisted', async () => {

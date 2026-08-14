@@ -53,6 +53,7 @@ export interface ScopeProjection extends CommonProjection<'scope'> {
   readonly planBody: string;
   readonly repairContext: readonly BuildReviewProjectionJson[];
   readonly acceptedWidenings: readonly BuildReviewProjectionJson[];
+  readonly operatorReseals: readonly NonNullable<BuildReviewFrozenInputs['sourceSnapshot']['operatorReseals']>[number][];
 }
 
 export interface RootCauseProjection extends CommonProjection<'rootCause'> {
@@ -147,6 +148,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     ...common(source, 'scope'), planBody: inputs.sourceSnapshot.planBody,
     repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
     acceptedWidenings: canonicalArray((inputs.acceptedWidenings ?? []) as unknown as readonly BuildReviewProjectionJson[]),
+    operatorReseals: inputs.sourceSnapshot.operatorReseals ?? [],
   }) as ScopeProjection;
   const rootCause = seal({
     ...common(source, 'rootCause'), planBody: inputs.sourceSnapshot.planBody,
@@ -167,7 +169,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
 
 const KEYS: Record<BuildReviewRubricId, readonly string[]> = {
   tautology: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'changedTestSelectors', 'testSuiteProof', 'revertedProductionPatch', 'preflightEvidence'],
-  scope: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext', 'acceptedWidenings'],
+  scope: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext', 'acceptedWidenings', 'operatorReseals'],
   rootCause: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext'],
   completeness: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody'],
   wiring: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'entryPoints', 'removalContext', 'relocationEvidence', 'scaffoldingDeclarations'],
@@ -184,6 +186,20 @@ export function parseBuildReviewRubricProjection(value: unknown): BuildReviewRub
   if (candidate.contractVersion !== 'v1' || candidate.projectionVersion !== 'v1' ||
     typeof candidate.lapId !== 'string' || typeof candidate.snapshotDigest !== 'string' || typeof candidate.diff !== 'string' ||
     typeof candidate.digest !== 'string') return undefined;
+  if (rubric === 'scope' && !isOperatorReseals(candidate.operatorReseals)) return undefined;
   const projection = candidate as unknown as BuildReviewRubricProjection;
   return projection.digest === projectionDigest(projection) ? projection : undefined;
+}
+
+function isOperatorReseals(value: unknown): boolean {
+  return Array.isArray(value) && value.every((reseal) => {
+    if (typeof reseal !== 'object' || reseal === null || Array.isArray(reseal)) return false;
+    const candidate = reseal as Record<string, unknown>;
+    return Object.keys(candidate).length === 4 &&
+      ['fromCommit', 'toCommit', 'paths', 'reason'].every((key) => key in candidate) &&
+      typeof candidate.fromCommit === 'string' &&
+      typeof candidate.toCommit === 'string' &&
+      typeof candidate.reason === 'string' &&
+      Array.isArray(candidate.paths) && candidate.paths.every((path: unknown) => typeof path === 'string');
+  });
 }

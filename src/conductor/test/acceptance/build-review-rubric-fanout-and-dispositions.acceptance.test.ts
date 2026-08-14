@@ -31,7 +31,7 @@ async function git(dir: string, ...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-async function fixtureRepo(): Promise<{ dir: string; planPath: string }> {
+async function fixtureRepo(): Promise<{ dir: string; planPath: string; head: string }> {
   const dir = await mkdtemp(join(tmpdir(), 'build-review-rubric-acceptance-'));
   dirs.push(dir);
   await git(dir, 'init', '-q', '-b', 'main');
@@ -50,7 +50,7 @@ async function fixtureRepo(): Promise<{ dir: string; planPath: string }> {
   await writeFile(join(dir, 'src', 'feature.ts'), 'export const reviewed = true;\n');
   await git(dir, 'add', 'src/feature.ts');
   await git(dir, 'commit', '-qm', 'implement reviewed behavior');
-  return { dir, planPath };
+  return { dir, planPath, head: await git(dir, 'rev-parse', 'HEAD') };
 }
 
 afterEach(async () => {
@@ -111,5 +111,47 @@ describe('acceptance: independent build_review rubric execution', () => {
     expect(help).toMatch(/lap/i);
     expect(help).toMatch(/finding/i);
     expect(help).toMatch(/rationale/i);
+  });
+
+  it('fans operator reseal evidence into Scope alone while retaining the legacy scalar prompt contract', async () => {
+    const { dir, planPath, head } = await fixtureRepo();
+    const rationale = 'Operator approved the protected story amendment after review.';
+    await writeFile(join(dir, '.pipeline', 'protected-artifact-seal.json'), `${JSON.stringify({
+      version: 2,
+      baselineCommit: head,
+      protectedArtifacts: [],
+      rebaselines: [{
+        trigger: 'operator-reseal',
+        paths: ['.docs/stories/resealed-story.md'],
+        reason: rationale,
+        fromCommit: 'reseal-base',
+        toCommit: head,
+      }],
+    })}\n`);
+    const prompts: string[] = [];
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        prompts.push(options.prompt);
+        return { success: false, output: 'stop after fan-out observation', exitCode: 1 };
+      }),
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
+      config: { build_review: { enabled: true, perTaskFloor: false } } as HarnessConfig,
+      planPath,
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' },
+        } as never),
+      },
+    });
+
+    await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'reseal-fanout', track: 'product' });
+
+    const scopePrompt = prompts.find((prompt) => prompt.includes('Scope'))!;
+    expect(scopePrompt).toContain(rationale);
+    expect(scopePrompt).toContain('.docs/stories/resealed-story.md');
+    expect(prompts.filter((prompt) => prompt.includes(rationale))).toEqual([scopePrompt]);
   });
 });

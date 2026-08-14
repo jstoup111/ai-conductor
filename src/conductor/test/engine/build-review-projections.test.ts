@@ -21,10 +21,22 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       acceptedWidenings: [{ path: 'src/b.ts', rationale: 'b', taskId: '2', sha: 'b' }, { path: 'src/a.ts', rationale: 'a', taskId: '1', sha: 'a' }],
       entryPoints: ['bin/b', 'bin/a'],
       testSuiteProof: { provenanceHeadSha: 'head', outcome: 'PASS' },
+      operatorReseals: [{
+        paths: ['.docs/stories/resealed-story.md'],
+        reason: 'Operator approved this exact protected-artifact amendment.',
+        fromCommit: 'reseal-base',
+        toCommit: 'reseal-head',
+      }],
       sourceSnapshot: {
         digest: 'sha256:snapshot', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head',
         diff: 'diff --git a/src/a.ts b/src/a.ts\n+change\n', planBody: '# Approved plan\n', repairContext: [],
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
+        operatorReseals: [{
+          paths: ['.docs/stories/resealed-story.md'],
+          reason: 'Operator approved this exact protected-artifact amendment.',
+          fromCommit: 'reseal-base',
+          toCommit: 'reseal-head',
+        }],
       },
     } as unknown as BuildReviewProjectionSource['inputs'],
     tautology: {
@@ -50,7 +62,7 @@ describe('build-review rubric projections', () => {
       'projectionVersion', 'revertedProductionPatch', 'rubric', 'snapshotDigest', 'testSuiteProof',
     ]);
     expect(Object.keys(projections.scope).sort()).toEqual([
-      'acceptedWidenings', 'contractVersion', 'diff', 'digest', 'lapId', 'planBody', 'projectionVersion',
+      'acceptedWidenings', 'contractVersion', 'diff', 'digest', 'lapId', 'operatorReseals', 'planBody', 'projectionVersion',
       'repairContext', 'rubric', 'snapshotDigest',
     ]);
     expect(Object.keys(projections.rootCause).sort()).toEqual([
@@ -70,10 +82,20 @@ describe('build-review rubric projections', () => {
       diff: expect.any(String), changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
       revertedProductionPatch: 'revert patch', preflightEvidence: expect.any(Object),
     });
-    expect(projections.scope).toMatchObject({ planBody: '# Approved plan\n', repairContext: expect.any(Array), acceptedWidenings: expect.any(Array) });
+    expect(projections.scope).toMatchObject({
+      planBody: '# Approved plan\n', repairContext: expect.any(Array), acceptedWidenings: expect.any(Array),
+      operatorReseals: [{
+        paths: ['.docs/stories/resealed-story.md'],
+        reason: 'Operator approved this exact protected-artifact amendment.',
+        fromCommit: 'reseal-base', toCommit: 'reseal-head',
+      }],
+    });
     expect(projections.rootCause).toMatchObject({ planBody: '# Approved plan\n', repairContext: expect.any(Array) });
     expect(projections.completeness).toMatchObject({ planBody: '# Approved plan\n', diff: expect.any(String) });
     expect(projections.wiring).toMatchObject({ entryPoints: expect.any(Array), removalContext: expect.any(Object), relocationEvidence: expect.any(Array), scaffoldingDeclarations: expect.any(Array) });
+    for (const projection of [projections.tautology, projections.rootCause, projections.completeness, projections.wiring]) {
+      expect(projection).not.toHaveProperty('operatorReseals');
+    }
     for (const projection of Object.values(projections)) {
       expect(projection.contractVersion).toBe('v1');
       expect(projection.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
@@ -112,5 +134,50 @@ describe('build-review rubric projections', () => {
     const projection = deriveBuildReviewRubricProjections(source()).scope;
     expect(parseBuildReviewRubricProjection(projection)).toEqual(projection);
     expect(parseBuildReviewRubricProjection({ ...projection, makerNarrative: 'trust me' })).toBeUndefined();
+  });
+
+  it.each([
+    ['rationale', { reason: 'Operator approved revised protected-artifact scope.' }],
+    ['named path', { paths: ['.docs/plans/also-resealed.md'] }],
+    ['from commit', { fromCommit: 'reseal-base-2' }],
+    ['to commit', { toCommit: 'reseal-head-2' }],
+  ])('invalidates only Scope when a reseal %s changes', (_field, mutation) => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const original = source();
+    const changed = source({
+      inputs: {
+        ...original.inputs,
+        sourceSnapshot: {
+          ...original.inputs.sourceSnapshot,
+          operatorReseals: [{
+            ...original.inputs.sourceSnapshot.operatorReseals![0],
+            ...mutation,
+          }],
+        },
+      },
+    });
+    const second = deriveBuildReviewRubricProjections(changed);
+
+    expect(second.scope.digest).not.toBe(first.scope.digest);
+    expect(second.tautology.digest).toBe(first.tautology.digest);
+    expect(second.rootCause.digest).toBe(first.rootCause.digest);
+    expect(second.completeness.digest).toBe(first.completeness.digest);
+    expect(second.wiring.digest).toBe(first.wiring.digest);
+  });
+
+  it('parses an explicit empty reseal channel but rejects malformed Scope reseal evidence', () => {
+    const empty = deriveBuildReviewRubricProjections(source({
+      inputs: {
+        ...source().inputs,
+        sourceSnapshot: { ...source().inputs.sourceSnapshot, operatorReseals: [] },
+      },
+    })).scope;
+    expect(parseBuildReviewRubricProjection(empty)).toEqual(empty);
+
+    const malformed = {
+      ...empty,
+      operatorReseals: [{ paths: ['.docs/stories/resealed-story.md'], reason: '', fromCommit: 'base' }],
+    };
+    expect(parseBuildReviewRubricProjection({ ...malformed, digest: projectionDigest(malformed as never) })).toBeUndefined();
   });
 });

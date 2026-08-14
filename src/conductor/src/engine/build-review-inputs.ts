@@ -86,11 +86,21 @@ export interface BuildReviewSourceSnapshot {
   readonly diff: string;
   readonly planBody: string;
   readonly repairContext: readonly TestSuiteRemediationRecord[];
+  /** Operator-authorized reseals frozen with the source read for Scope alone. */
+  readonly operatorReseals?: readonly BuildReviewOperatorResealSnapshot[];
   readonly removalContext: {
     readonly deletedFiles: readonly string[];
     readonly removedDeclarations: readonly string[];
     readonly removedMembers: readonly { readonly declaration: string; readonly member: string }[];
   };
+}
+
+/** Immutable operator reseal record captured in a source snapshot. */
+export interface BuildReviewOperatorResealSnapshot {
+  readonly fromCommit: string;
+  readonly toCommit: string;
+  readonly paths: readonly string[];
+  readonly reason: string;
 }
 
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
@@ -235,6 +245,12 @@ export async function assembleBuildReviewInputs(
     diff: diffResult.stdout,
     planBody,
     repairContext: Object.freeze([...repairContext]),
+    operatorReseals: Object.freeze(operatorReseals.map((reseal) => Object.freeze({
+      fromCommit: reseal.fromCommit,
+      toCommit: reseal.toCommit,
+      paths: Object.freeze([...reseal.paths]),
+      reason: reseal.reason,
+    }))),
     removalContext: Object.freeze({
       deletedFiles: Object.freeze([...removalContext.deletedFiles]),
       removedDeclarations: Object.freeze([...removalContext.removedDeclarations]),

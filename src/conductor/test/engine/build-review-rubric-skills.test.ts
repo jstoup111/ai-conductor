@@ -53,7 +53,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).not.toMatch(/spawn subagents?|delegate (?:to )?(?:an )?agent/i);
   });
 
-  it('defines the versioned Scope judgement contract over plan and widening context only', async () => {
+  it('defines the versioned Scope judgement contract over plan, widening, and operator-reseal context', async () => {
     const skill = await readFile(scopeSkillPath, 'utf8');
 
     expect(skill).toMatch(/^---\nname: build-review-scope\n/m);
@@ -68,6 +68,13 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/approved plan/i);
     expect(skill).toMatch(/repair context/i);
     expect(skill).toMatch(/accepted scope widenings/i);
+    expect(skill).toMatch(/operator-reseal/i);
+    expect(skill).toMatch(/verbatim rationale/i);
+    expect(skill).toMatch(/named paths/i);
+    expect(skill).toMatch(/commit range/i);
+    expect(skill).toMatch(/judge.*rationale/i);
+    expect(skill).toMatch(/unmatched paths?.*normally/i);
+    expect(skill).toMatch(/does not.*exempt/i);
 
     expect(skill).toMatch(/contract version.*`v1`/i);
     expect(skill).toMatch(/out-of-plan path or surface/i);

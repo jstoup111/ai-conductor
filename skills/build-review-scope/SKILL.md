@@ -19,7 +19,8 @@ Use only the supplied projection version `v1`. Its closed input contains:
 - the changed diff;
 - the approved plan;
 - repair context; and
-- accepted scope widenings.
+- accepted scope widenings; and
+- operator-reseal evidence: named paths, a verbatim rationale, and its commit range.
 
 Do not infer authority from a maker transcript, task-status narrative, prior review, or any state
 not present in this projection.
@@ -30,6 +31,10 @@ Compare every changed path or production surface with the approved plan. Treat a
 only when the approved plan, repair context, or accepted scope widenings directly authorize it.
 Identify the specific plan relation that makes each out-of-scope change a concern. Do not collapse
 several unrelated paths or surfaces into one finding merely because they were changed together.
+
+For each operator reseal, judge whether its rationale justifies the named protected-artifact
+amendment in its commit range. Assess unmatched paths normally under this Scope contract; a reseal
+does not exempt them. Reseal evidence does not weaken another rubric.
 
 ## Result contract (v1)
 
