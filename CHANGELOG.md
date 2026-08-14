@@ -51,6 +51,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Fix build reviews that repeatedly halt after a clean pass because rubric booleans are inverted. ([implementation PR #1562](https://github.com/jstoup111/ai-conductor/pull/1562)).
 - PRD audit now resolves date-prefixed PRD filenames for the active feature. ([implementation PR #1566](https://github.com/jstoup111/ai-conductor/pull/1566)).
 - Spec and implementation PRs no longer fail the release-metadata check when their issue-linking trailer follows a trailing Migration section. ([implementation PR #1569](https://github.com/jstoup111/ai-conductor/pull/1569)).
+- Fresh installs and updates now follow a stable branch that advances only after a release is fully published. ([implementation PR #1561](https://github.com/jstoup111/ai-conductor/pull/1561)).
 
 ## Migration
 
@@ -67,6 +68,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 # .ai-conductor/config.yml keeps its existing shape and is now consumed by
 # the build_review wiring rubric prompt instead of the retired import-graph
 # probe.
+```
+
+```bash migration
+"$HARNESS_DIR/bin/install" --update
 ```
 
 ## [0.101.1] - 2026-08-10
