@@ -3,7 +3,7 @@
 // and existing {branch, prUrl} meta behavior remains unchanged.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -91,6 +91,36 @@ describe('loadStore()', () => {
       firstCorruption,
       secondCorruption,
     ]));
+  });
+
+  it('reports a failed quarantine alongside corruption without changing the ledger bytes', async () => {
+    const lockedDir = join(dir, 'locked');
+    const ledgerPath = join(lockedDir, 'ledger.json');
+    const corruptBytes = Buffer.from('not valid json');
+    await mkdir(lockedDir);
+    await writeFile(ledgerPath, corruptBytes);
+    await chmod(lockedDir, 0o555);
+
+    try {
+      const result = await createLedger(ledgerPath).list().then(
+        () => ({ error: undefined, errorIsTyped: false, original: undefined }),
+        async (error: unknown) => ({
+          error,
+          errorIsTyped: error instanceof CorruptLedgerError,
+          original: await readFile(ledgerPath),
+        }),
+      );
+
+      expect(result).toEqual({
+        error: expect.objectContaining({
+          message: expect.stringMatching(/corrupt:.*Unexpected.*quarantine.*EACCES/i),
+        }),
+        errorIsTyped: true,
+        original: corruptBytes,
+      });
+    } finally {
+      await chmod(lockedDir, 0o755);
+    }
   });
 
   it('distinguishes a missing ledger from a valid empty ledger without warning or quarantine', async () => {

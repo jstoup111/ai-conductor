@@ -180,6 +180,7 @@ async function readStore(path: string): Promise<LedgerStore> {
   const result = await loadStore(path);
   if (result.kind === 'absent') return {};
   if (result.kind === 'corrupt') {
+    let quarantineFailure: string | undefined;
     if (result.bytes !== undefined) {
       const digest = createHash('sha256').update(result.bytes).digest('hex');
       const quarantinePath = `${path}.corrupt-${digest}`;
@@ -187,11 +188,16 @@ async function readStore(path: string): Promise<LedgerStore> {
         try {
           await writeFile(quarantinePath, result.bytes, { flag: 'wx' });
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+            quarantineFailure = error instanceof Error ? error.message : String(error);
+          }
         }
       }
     }
-    throw new CorruptLedgerError(path, result.reason);
+    const reason = quarantineFailure === undefined
+      ? result.reason
+      : `${result.reason}; failed to quarantine corrupt ledger: ${quarantineFailure}`;
+    throw new CorruptLedgerError(path, reason);
   }
   return result.store;
 }
