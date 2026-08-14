@@ -178,6 +178,7 @@ jobs:
                 branch: 'automation/release-pr',
                 base: 'main',
                 appLogin: '${{ steps.app-token.outputs.app-slug }}[bot]',
+                stableBranch: 'stable',
               },
               event: { branch: context.ref.replace('refs/heads/', ''), commit },
               git: {
@@ -209,6 +210,20 @@ jobs:
                     owner, repo, tag, message, object: target, type: 'commit',
                   });
                   await github.rest.git.createRef({ owner, repo, ref: `refs/tags/${tag}`, sha: annotated.sha });
+                },
+                async updateStableBranch({ branch, commit: target }) {
+                  let current;
+                  try {
+                    const { data: ref } = await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+                    current = ref.object.sha;
+                  } catch (error) {
+                    if (!missing(error)) throw error;
+                    await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: target });
+                    return;
+                  }
+                  if (current !== target) {
+                    await github.rest.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: target, force: false });
+                  }
                 },
               },
               github: {

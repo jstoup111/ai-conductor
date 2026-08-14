@@ -41,4 +41,21 @@ describe('structural: release workflow', () => {
     expect(String(publish.if)).not.toMatch(/failure\(\)|cancelled\(\)|always\(\)/);
     expect(source).toContain('runReleasePublisherAction');
   });
+
+  it('wires the stable branch through a create-or-fast-forward GitHub ref adapter', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'release workflow');
+    const jobs = job(workflow.jobs, 'release workflow jobs');
+    const publish = job(jobs.publish, 'publish job');
+    const publishAction = (publish.steps as Array<Record<string, unknown>>)
+      .map((step) => {
+        const inputs = step.with as Record<string, unknown> | undefined;
+        return [step.run, inputs?.script].map((value) => String(value ?? '')).join('\n');
+      })
+      .find((script) => script.includes('runReleasePublisherAction')) ?? '';
+
+    expect(publishAction).toMatch(
+      /(?=[\s\S]*stableBranch:\s*['"]stable['"])(?=[\s\S]*updateStableBranch\s*(?::|\())(?=[\s\S]*\.git\.createRef\s*\()(?=[\s\S]*\.git\.updateRef\s*\()(?=[\s\S]*refs\/heads\/\$\{branch\})(?=[\s\S]*sha:\s*(?:commit|target))(?=[\s\S]*force:\s*false)/,
+    );
+  });
 });
