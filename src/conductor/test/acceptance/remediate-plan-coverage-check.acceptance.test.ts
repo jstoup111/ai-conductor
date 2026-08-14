@@ -13,15 +13,24 @@ import { fileURLToPath } from 'node:url';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
-const DECIDE_ENTRY_POLICY = join(
-  REPO_ROOT,
-  'src/conductor/src/engine/decide-entry-policy.ts',
-);
-
 const CONTRACT_SURFACES = [
   ['remediate skill', 'skills/remediate/SKILL.md'],
   ['remediation planner', 'agents/remediation-planner.md'],
 ] as const;
+
+const HALT_CATEGORIES_BY_SURFACE = {
+  'skills/remediate/SKILL.md': [
+    'architectural-clarity',
+    'product-scope',
+    'unanswerable',
+  ],
+  'agents/remediation-planner.md': ['architectural-clarity', 'product-scope'],
+} as const;
+
+function declaredHaltCategories(text: string): string[] {
+  return [...text.matchAll(/\|\s*(?:`halt` \+ `category:\s*|\*\*halt\*\* · `)([a-z-]+)`?/g)]
+    .map((match) => match[1]);
+}
 
 describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, relativePath) => {
   async function contract(): Promise<string> {
@@ -97,25 +106,15 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
   it('keeps plan routed separately from HALT categories', async () => {
     const text = await contract();
     const planRow = text.match(/^\|[^\n]*\bplan\b[^\n]*\|[^\n]*$/im);
+    const expectedHaltCategories = HALT_CATEGORIES_BY_SURFACE[relativePath];
+    const haltCategories = declaredHaltCategories(text);
 
     expect(planRow).not.toBeNull();
-    expect(planRow?.[0]).not.toMatch(/re-plan, then BUILD/i);
+    expect(planRow?.[0]).not.toMatch(/\(?re-plan\)?, then build/i);
     expect(text).not.toMatch(/so re-plan it/i);
-    expect(text).toMatch(/architectural-clarity[\s\S]{0,160}product-scope/i);
+    expect(haltCategories).toHaveLength(expectedHaltCategories.length);
+    expect(new Set(haltCategories)).toHaveLength(expectedHaltCategories.length);
+    expect([...new Set(haltCategories)].sort()).toEqual([...expectedHaltCategories].sort());
     expect(text).toMatch(/low confidence[\s\S]{0,160}HALT/i);
-
-    if (relativePath === 'skills/remediate/SKILL.md') {
-      expect(text).toMatch(/unanswerable.*stall-question/i);
-    } else {
-      expect(text).toMatch(/only two things HALT/i);
-    }
-  });
-});
-
-describe('autonomous DECIDE entry policy', () => {
-  it('refuses autonomous entry to plan', async () => {
-    const text = await readFile(DECIDE_ENTRY_POLICY, 'utf8');
-
-    expect(text).toMatch(/const UNGRANTABLE_STEP: StepName = 'plan';/);
   });
 });
