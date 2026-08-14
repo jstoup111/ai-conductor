@@ -342,6 +342,32 @@ function validatePublicationSnapshot(
 export type PublicationTransition = FinishPublicationTransition;
 
 /**
+ * The snapshot dimension each publication transition is responsible for
+ * advancing. `establish_pr` owns the PR identity and push evidence together:
+ * a pull request without its branch, or a pushed branch without its PR, is
+ * not an established publication.
+ */
+export type PublicationTransitionDimensions = Record<
+  PublicationTransition,
+  | 'pr.identity + branchPushed'
+  | 'releaseReadiness'
+  | 'pr.prose'
+  | 'shippedRecord'
+  | 'pr.ready'
+  | 'outcomeRecord'
+>;
+
+export const PUBLICATION_TRANSITION_DIMENSIONS: PublicationTransitionDimensions = {
+  establish_pr: 'pr.identity + branchPushed',
+  verify_release_readiness: 'releaseReadiness',
+  author_pr_prose: 'pr.prose',
+  judge_pr_prose: 'pr.prose',
+  write_shipped_record: 'shippedRecord',
+  ready_pr: 'pr.ready',
+  record_outcome: 'outcomeRecord',
+};
+
+/**
  * A FINISH execution may observe every transition twice before a non-converging
  * publication state requires operator review.
  */
