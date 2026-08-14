@@ -118,3 +118,14 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect(text).toMatch(/low confidence[\s\S]{0,160}HALT/i);
   });
 });
+
+describe('autonomous DECIDE entry policy', () => {
+  it('keeps plan permanently ungrantable', async () => {
+    const policy = await readFile(
+      join(CONDUCTOR_ROOT, 'src', 'engine', 'decide-entry-policy.ts'),
+      'utf8',
+    );
+
+    expect(policy).toContain("const UNGRANTABLE_STEP: StepName = 'plan';");
+  });
+});
