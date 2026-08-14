@@ -25,7 +25,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -216,20 +216,24 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
   const gc = (args: string[]) =>
     execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
 
-  // A repo whose ONLY conflict is on a .md (docs) file.
+  // A repo whose ONLY conflict is on a documentation path. It lives under
+  // `docs/` rather than at the root: harness markdown outside the four
+  // enumerated documentation exclusions classifies as source (Task 9), so a
+  // root-level `notes.md` is code/test and would no longer be docs-only.
   beforeEach(async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-resolution-docs-'));
     await initTestRepo(repo);
-    await writeFile(join(repo, 'notes.md'), 'base\n');
+    await mkdir(join(repo, 'docs'), { recursive: true });
+    await writeFile(join(repo, 'docs/notes.md'), 'base\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'init']);
 
     await g(['checkout', '-q', '-b', 'feat']);
-    await writeFile(join(repo, 'notes.md'), 'feature notes\n');
+    await writeFile(join(repo, 'docs/notes.md'), 'feature notes\n');
     await g(['commit', '-q', '-am', 'feat: notes']);
 
     await g(['checkout', '-q', 'main']);
-    await writeFile(join(repo, 'notes.md'), 'main notes\n');
+    await writeFile(join(repo, 'docs/notes.md'), 'main notes\n');
     await g(['commit', '-q', '-am', 'main: notes']);
 
     await g(['checkout', '-q', 'feat']);
@@ -239,25 +243,151 @@ describe('engine/rebase — resolution reclassification: docs-only → noop', ()
     await rm(repo, { recursive: true, force: true });
   });
 
-  it('FR-2/FR-5: a docs-only resolution reclassifies as noop (no downstream re-verify)', async () => {
+  it('FR-2/FR-5: docs/notes.md resolves as noop, while a root notes.md conflict resolves as changed', async () => {
     const git = makeGitRunner(repo);
     const pre = await performRebase(git, repo, 'main');
     expect(pre.kind).toBe('conflict_halt');
 
     const resolver = async (): Promise<ResolutionAttempt> => {
-      await writeFile(join(repo, 'notes.md'), 'merged notes\n');
-      await g(['add', 'notes.md']);
+      await writeFile(join(repo, 'docs/notes.md'), 'merged notes\n');
+      await g(['add', 'docs/notes.md']);
       await gc(['rebase', '--continue']);
       return { resolved: true };
     };
 
     const outcome = await resolveRebaseConflicts(git, repo, pre, resolver, 3);
 
-    // notes.md is a docs path → noop (FR-5: docs never invalidate build/manual_test),
+    // docs/notes.md is a docs path → noop (FR-5: docs never invalidate build/manual_test),
     // even though the rebase completed and the branch is now current.
     expect(outcome.kind).toBe('noop');
+    if (outcome.kind === 'noop') expect(outcome.allChangedPaths).toEqual(['docs/notes.md']);
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
     expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).toContain('feat: notes');
+
+    const rootRepo = await mkdtemp(join(tmpdir(), 'rebase-resolution-root-contrast-'));
+    const rootGit = (args: string[]) => execFile('git', args, { cwd: rootRepo });
+    const rootGc = (args: string[]) => execFile('git', ['-c', 'core.editor=true', ...args], { cwd: rootRepo });
+    try {
+      await initTestRepo(rootRepo);
+      await writeFile(join(rootRepo, 'notes.md'), 'base\n');
+      await rootGit(['add', '.']);
+      await rootGit(['commit', '-q', '-m', 'init']);
+      await rootGit(['checkout', '-q', '-b', 'feat']);
+      await writeFile(join(rootRepo, 'notes.md'), 'feature notes\n');
+      await rootGit(['commit', '-q', '-am', 'feat: notes']);
+      await rootGit(['checkout', '-q', 'main']);
+      await writeFile(join(rootRepo, 'notes.md'), 'main notes\n');
+      await rootGit(['commit', '-q', '-am', 'main: notes']);
+      await rootGit(['checkout', '-q', 'feat']);
+      const rootRunner = makeGitRunner(rootRepo);
+      const rootPre = await performRebase(rootRunner, rootRepo, 'main');
+      expect(rootPre.kind).toBe('conflict_halt');
+      const rootOutcome = await resolveRebaseConflicts(rootRunner, rootRepo, rootPre, async () => {
+        await writeFile(join(rootRepo, 'notes.md'), 'merged notes\n');
+        await rootGit(['add', 'notes.md']);
+        await rootGc(['rebase', '--continue']);
+        return { resolved: true };
+      }, 3);
+      expect(rootOutcome).toMatchObject({ kind: 'changed', changedCodePaths: ['notes.md'], allChangedPaths: ['notes.md'] });
+      expect((await rootGit(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+    } finally {
+      await rm(rootRepo, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves without a new halt when the optional complete base-advance base cannot be computed', async () => {
+    const onto = (await g(['rev-parse', 'main'])).stdout.trim();
+    const preSha = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    const realGit = makeGitRunner(repo);
+    const pre = await performRebase(realGit, repo, 'main');
+    expect(pre.kind).toBe('conflict_halt');
+
+    const git = async (args: string[], opts?: Parameters<typeof realGit>[1]) => {
+      if (
+        args[0] === 'merge-base' &&
+        args[1] === 'ORIG_HEAD' &&
+        args[2] === onto
+      ) {
+        return { exitCode: 1, stdout: '', stderr: 'simulated base-advance merge-base failure' };
+      }
+      return realGit(args, opts);
+    };
+    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
+      await writeFile(join(repo, 'docs/notes.md'), 'merged notes\n');
+      await g(['add', 'docs/notes.md']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3);
+
+    expect(outcome).toMatchObject({ kind: 'noop' });
+    if (outcome.kind === 'changed' || outcome.kind === 'noop') {
+      expect(outcome.allChangedPaths).toBeUndefined();
+    }
+
+    // Contrast: the same resolution with a derivable pre-advance base carries
+    // the complete delta — the undefined above is attribution degrading
+    // gracefully, not a field the resolver never populates.
+    await g(['reset', '-q', '--hard', preSha]);
+    const rePre = await performRebase(realGit, repo, 'main');
+    expect(rePre.kind).toBe('conflict_halt');
+    const attributed = await resolveRebaseConflicts(realGit, repo, rePre, async () => {
+      await writeFile(join(repo, 'docs/notes.md'), 'merged notes again\n');
+      await g(['add', 'docs/notes.md']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3);
+    expect(attributed).toMatchObject({ kind: 'noop', allChangedPaths: ['docs/notes.md'] });
+  });
+
+  it('keeps replayed paths for invalidation while carrying the complete base advance separately', async () => {
+    const deltaRepo = await mkdtemp(join(tmpdir(), 'rebase-resolution-complete-delta-'));
+    const deltaGit = (args: string[]) => execFile('git', args, { cwd: deltaRepo });
+    const deltaGc = (args: string[]) =>
+      execFile('git', ['-c', 'core.editor=true', ...args], { cwd: deltaRepo });
+    try {
+      await initTestRepo(deltaRepo);
+      await writeFile(join(deltaRepo, 'conflict.ts'), 'base\n');
+      await writeFile(join(deltaRepo, 'base-only.ts'), 'base\n');
+      await deltaGit(['add', '.']);
+      await deltaGit(['commit', '-q', '-m', 'init']);
+
+      await deltaGit(['checkout', '-q', '-b', 'feat']);
+      await writeFile(join(deltaRepo, 'conflict.ts'), 'feature\n');
+      await writeFile(join(deltaRepo, 'feature-only.ts'), 'feature\n');
+      await deltaGit(['add', '.']);
+      await deltaGit(['commit', '-q', '-m', 'feat: conflict and feature-only']);
+
+      await deltaGit(['checkout', '-q', 'main']);
+      await writeFile(join(deltaRepo, 'conflict.ts'), 'main\n');
+      await writeFile(join(deltaRepo, 'base-only.ts'), 'main-only\n');
+      await deltaGit(['add', '.']);
+      await deltaGit(['commit', '-q', '-m', 'main: conflict and base-only']);
+      await deltaGit(['checkout', '-q', 'feat']);
+
+      const git = makeGitRunner(deltaRepo);
+      const pre = await performRebase(git, deltaRepo, 'main');
+      expect(pre.kind).toBe('conflict_halt');
+      const outcome = await resolveRebaseConflicts(git, deltaRepo, pre, async () => {
+        await writeFile(join(deltaRepo, 'conflict.ts'), 'resolved\n');
+        await deltaGit(['add', 'conflict.ts']);
+        await deltaGc(['rebase', '--continue']);
+        return { resolved: true };
+      }, 3);
+
+      expect(outcome).toMatchObject({
+        kind: 'changed',
+        changedCodePaths: ['conflict.ts', 'feature-only.ts'],
+        allChangedPaths: ['base-only.ts', 'conflict.ts'],
+      });
+      if (outcome.kind === 'changed') {
+        expect(outcome.changedCodePaths).not.toContain('base-only.ts');
+      }
+      if (outcome.kind === 'changed' || outcome.kind === 'noop') {
+        expect(outcome.allChangedPaths).not.toContain('feature-only.ts');
+      }
+    } finally {
+      await rm(deltaRepo, { recursive: true, force: true });
+    }
   });
 });
 

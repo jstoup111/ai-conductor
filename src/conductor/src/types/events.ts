@@ -351,6 +351,17 @@ export type ConductorEvent =
       mergeBase: string;
       regradeCount: number;
     }
+  | ({
+      /**
+       * Durable provenance for a build_review grading's engine-recorded
+       * rebase-repair context. This records the closed reason the context was
+       * present or absent without changing the grading outcome.
+       */
+      type: 'build_review_repair_context';
+    } & (
+      | { disposition: 'context_available'; repairCount: number }
+      | { disposition: 'none_warranted' | 'no_join'; repairCount?: never }
+    ))
   | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
   | {
       type: 'build_stall';
@@ -565,6 +576,8 @@ export type ConductorEvent =
       /** A clean rebase changed code/test paths → downstream re-verification. */
       type: 'rebase_changed';
       changedPaths: string[];
+      /** Complete unfiltered delta, distinct from the gate-invalidation path set. */
+      allChangedPaths?: string[];
     }
   | {
       /** A gate was re-verified post-rebase in gate-first mode. */

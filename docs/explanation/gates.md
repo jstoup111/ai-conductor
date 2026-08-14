@@ -301,13 +301,24 @@ The graded diff excludes paths the **engine** authors rather than the builder �
 `.pipeline/`. No plan task can describe harness machinery output, so grading it guarantees a scope
 finding the builder cannot legitimately act on.
 
-When `test_suite` exposes a repair needed only after a base advance, the engine accumulates the
-sanitized failure in `.pipeline/build-review-rebase-repairs.json`. The ledger is outside rewritten
-Git history, so repeated rebases retain earlier entries without treating commit trailers as
-authority. `build_review` receives the ledger as judgement context: it decides whether an
-out-of-plan hunk directly repairs a recorded failure and, only when it does, omits that hunk from
-Scope and applies the stale-base-state test check instead of the ordinary mutation check. Unmatched
-work remains fully subject to Scope and Tautology; the ledger is evidence, never an exemption.
+When a deterministic BUILD verification gate — `test_suite` or any other gate in that group —
+fails, the engine accumulates the sanitized failure in `.pipeline/build-review-rebase-repairs.json`.
+The ledger is outside rewritten Git history, so repeated rebases retain earlier entries without
+treating commit trailers as authority. A failure is attributed to a base advance by joining it
+against `rebase_changed` events on `.pipeline/events.jsonl` — the durable, append-only event
+spine — requiring both that the failure was observed after the advance and that its diagnostic
+overlaps a path the advance changed. A bare time-window match is not enough: overlap is required
+so a genuinely unplanned deletion is never laundered as a repair. This join replaces an earlier,
+transient signal (a `kickback` field on the gate's own verdict file) that a later run of the same
+gate silently overwrote.
+
+`build_review` receives the ledger as judgement context: it decides whether an out-of-plan hunk
+directly repairs a recorded failure and, only when it does, omits that hunk from Scope and applies
+the stale-base-state test check instead of the ordinary mutation check. Unmatched work remains
+fully subject to Scope and Tautology; the ledger is evidence, never an exemption. The conductor also
+emits a `build_review_repair_context` telemetry event recording whether that grading ran with
+repair context available, with recorded advances that never joined a failure, or with no base
+advance at all — pure provenance that never changes the grading outcome.
 
 Two paths fail open to `build`, preserving the older behavior exactly: a FAIL carrying neither a
 completeness nor a scope signal, and a remediation plan with no usable dispositions. Kickback counting is untouched — a

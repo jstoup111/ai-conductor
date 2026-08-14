@@ -11,7 +11,7 @@ import {
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import {
-  recordTestSuiteRemediation,
+  recordGateRepair,
 } from './test-suite-remediation.js';
 import { dirname, relative, join, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -23,6 +23,7 @@ import {
   writeHaltMarker,
 } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
+import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import type {
   AuthenticationReadiness,
   CodexProbeFailure,
@@ -598,6 +599,14 @@ export interface StepRunResult {
     remoteHeadSha: string | null;
     fresh: boolean;
   };
+  /**
+   * Task 24 (rebase-invalidated-test-failures-never-reach-build): which of the
+   * three repair-context cases this build_review graded under, from
+   * `assembleBuildReviewInputs`. Pure telemetry — the conductor emits a
+   * `build_review_repair_context` event from it and never lets it affect the
+   * step outcome.
+   */
+  repairProvenance?: BuildReviewRepairProvenance;
 }
 
 export interface SpotAuditDispatchResult {
@@ -2400,11 +2409,11 @@ export class Conductor {
     }
   }
 
-  private async recordTestSuiteRebaseRepair(
+  private async recordDeterministicGateRepair(
+    gate: string,
     failure: { reason: string; message: string },
-  ): Promise<Awaited<ReturnType<typeof recordTestSuiteRemediation>>> {
-    const buildReviewVerdict = await readVerdict(this.projectRoot, 'build_review');
-    return recordTestSuiteRemediation(this.projectRoot, failure, buildReviewVerdict);
+  ): Promise<Awaited<ReturnType<typeof recordGateRepair>>> {
+    return recordGateRepair(this.projectRoot, gate, { ...failure, observedAt: Date.now() });
   }
 
   /**
@@ -4702,12 +4711,17 @@ export class Conductor {
                       'deterministic BUILD verification gate unsatisfied'),
                 });
               }
-              const testSuiteFailure = deterministicFailures.find(
-                (failure) => failure.member.name === 'test_suite',
-              );
-              const remediationRecord = testSuiteFailure && fullSuiteFailure?.status === 'FAILED'
-                ? await this.recordTestSuiteRebaseRepair(fullSuiteFailure)
-                : undefined;
+              const remediationRecords = await Promise.all(deterministicFailures.map((failure) =>
+                this.recordDeterministicGateRepair(failure.member.name, {
+                  reason: failure.member.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED'
+                    ? fullSuiteFailure.reason
+                    : 'deterministic_gate_unsatisfied',
+                  message: failure.member.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED'
+                    ? fullSuiteFailure.message
+                    : failure.evidence,
+                }),
+              ));
+              const remediationRecord = remediationRecords.find(Boolean);
               const kickbacks = [] as Awaited<ReturnType<typeof consumeKickbackBudget>>[];
               for (const failure of deterministicFailures) {
                 kickbacks.push(
@@ -5861,6 +5875,21 @@ export class Conductor {
                 trackingRefSha: result.baseFreshness.trackingRefSha,
                 remoteHeadSha: result.baseFreshness.remoteHeadSha,
                 fresh: result.baseFreshness.fresh,
+              });
+            } catch {
+              // Never block/fail build_review over telemetry emission.
+            }
+          }
+
+          // Task 24 (rebase-invalidated-test-failures-never-reach-build):
+          // grading-provenance telemetry, emitted once per build_review that
+          // successfully assembled grader inputs. Same fire-and-forget
+          // contract as `build_review_base` above.
+          if (step.name === 'build_review' && result.repairProvenance) {
+            try {
+              await emitTracked({
+                type: 'build_review_repair_context',
+                ...result.repairProvenance,
               });
             } catch {
               // Never block/fail build_review over telemetry emission.
@@ -7207,7 +7236,10 @@ export class Conductor {
               const evidence =
                 `full-suite verification failed (${fullSuiteFailure.reason}): ` +
                 `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
-              const remediationRecord = await this.recordTestSuiteRebaseRepair(fullSuiteFailure);
+              const remediationRecord = await this.recordDeterministicGateRepair(
+                'test_suite',
+                fullSuiteFailure,
+              );
               const kickback = await consumeKickbackBudget('test_suite', evidence);
               const count = kickback.entry.count;
               if (!kickback.exhausted) {

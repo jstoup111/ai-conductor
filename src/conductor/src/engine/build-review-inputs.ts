@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import {
+  readBaseAdvanceHistory,
   readTestSuiteRemediations,
   type TestSuiteRemediationRecord,
 } from './test-suite-remediation.js';
@@ -50,7 +51,23 @@ export interface BuildReviewInputs {
   acceptedWidenings?: AcceptedScopeWidening[];
   /** Diff-derived removal evidence for the grader, never an exemption. */
   removalContext?: BuildReviewRemovalContext;
+  /**
+   * Grading provenance: which of the three repair-context cases this grading
+   * ran under. Returned rather than emitted here so assembly stays strictly
+   * `(git, planPath)` — the conductor turns it into one
+   * `build_review_repair_context` event, exactly as it does for
+   * `baseFreshness`/`build_review_base`. A plan outside a feature root has
+   * no ledgers to join, so it classifies as `none_warranted`; the field is
+   * absent only when classification itself failed.
+   */
+  repairProvenance?: BuildReviewRepairProvenance;
 }
+
+/** The three distinguishable grading-provenance cases (Task 24). */
+export type BuildReviewRepairProvenance =
+  | { disposition: 'context_available'; repairCount: number }
+  | { disposition: 'no_join' }
+  | { disposition: 'none_warranted' };
 
 /**
  * Repo-relative prefixes the ENGINE authors, never the build agent: the
@@ -131,6 +148,23 @@ export async function assembleBuildReviewInputs(
   const planIsInFeatureRoot =
     basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs';
 
+  const repairContext = planIsInFeatureRoot
+    ? await readTestSuiteRemediations(featureRoot)
+    : [];
+
+  // Provenance is advisory: a failure to classify never fails input assembly,
+  // it just leaves the grading unattributed.
+  let repairProvenance: BuildReviewRepairProvenance | undefined;
+  try {
+    repairProvenance = repairContext.length > 0
+      ? { disposition: 'context_available', repairCount: repairContext.length }
+      : planIsInFeatureRoot && (await readBaseAdvanceHistory(featureRoot)).length > 0
+        ? { disposition: 'no_join' }
+        : { disposition: 'none_warranted' };
+  } catch {
+    repairProvenance = undefined;
+  }
+
   return {
     diff: diffResult.stdout,
     planBody,
@@ -141,9 +175,7 @@ export async function assembleBuildReviewInputs(
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
     removalContext: deriveBuildReviewRemovals(diffResult.stdout),
-    repairContext:
-      planIsInFeatureRoot
-        ? await readTestSuiteRemediations(featureRoot)
-        : [],
+    repairContext,
+    repairProvenance,
   };
 }

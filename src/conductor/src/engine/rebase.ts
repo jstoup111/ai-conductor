@@ -382,7 +382,6 @@ export function isCodeOrTestPath(path: string): boolean {
   if (p.startsWith('.docs/')) return false;
   if (p.startsWith('docs/')) return false;
   if (/(^|\/)README(\.[A-Za-z]+)?$/i.test(p)) return false;
-  if (/\.(md|mdx|txt|rst)$/i.test(p)) return false;
   // Everything else (src/**, test/**, lib/**, config, etc.) is code/test.
   return true;
 }
@@ -484,7 +483,11 @@ export async function writeSealHalt(projectRoot: string, reason: string): Promis
 // ── Outcome model ────────────────────────────────────────────────────────────
 
 export type RebaseOutcome =
-  | { kind: 'noop' }
+  | {
+      kind: 'noop';
+      /** Complete rebase delta when the base advanced without touching code/test paths. */
+      allChangedPaths?: string[];
+    }
   | {
       kind: 'mergeable_skip';
       /** The ref the skip decision was taken against, e.g. `origin/main`. */
@@ -494,7 +497,13 @@ export type RebaseOutcome =
       /** Whether that ref came from origin or from a local branch. */
       baseKind: 'remote' | 'local';
     }
-  | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
+  | {
+      kind: 'changed';
+      changedCodePaths: string[];
+      /** Complete pre-filter rebase delta; absent when the delta is uncomputable. */
+      allChangedPaths?: string[];
+      featureSurface?: string[];
+    }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
 
 /** A protected-artifact refusal raised before git starts a rebase. */
@@ -771,7 +780,9 @@ async function classifyClean(
     dUncomputable = true;
   }
   const codePaths = filterCodeOrTestPaths(changed);
-  if (!dUncomputable && codePaths.length === 0) return { kind: 'noop' };
+  if (!dUncomputable && codePaths.length === 0) {
+    return { kind: 'noop', allChangedPaths: changed };
+  }
   // F: the feature's own claimed surface — files the feature's commits
   // touched, before the rebase (mergeBase..preTree). Threaded onto the
   // outcome for the delta-aware gate-invalidation classifier (Task 6+);
@@ -791,7 +802,12 @@ async function classifyClean(
       featureSurface = undefined;
     }
   }
-  return { kind: 'changed', changedCodePaths: codePaths, featureSurface };
+  return {
+    kind: 'changed',
+    changedCodePaths: codePaths,
+    ...(dUncomputable ? {} : { allChangedPaths: changed }),
+    featureSurface,
+  };
 }
 
 
@@ -1029,6 +1045,16 @@ export async function resolveRebaseConflicts(
     return conflictOutcome;
   }
 
+  // The rebase state retains ORIG_HEAD while paused: it is the feature tip
+  // before replay began. Its merge-base with `onto` is the base before the
+  // advance. That range is supplementary attribution only: gate
+  // invalidation retains its established `onto..HEAD` replayed-path contract.
+  const preAdvanceBaseResult = await git(['merge-base', 'ORIG_HEAD', onto]);
+  const preAdvanceBase =
+    preAdvanceBaseResult.exitCode === 0 && preAdvanceBaseResult.stdout.trim()
+      ? preAdvanceBaseResult.stdout.trim()
+      : undefined;
+
   // Feature commit subjects that must survive: all commits in <onto>..ORIG_HEAD.
   // ORIG_HEAD is the pre-rebase feature tip (set by git before it starts replaying).
   const subjR = await git(['log', '--format=%s', `${onto}..ORIG_HEAD`]);
@@ -1090,11 +1116,46 @@ export async function resolveRebaseConflicts(
       };
     }
 
-    // Both guards pass — reclassify by whether code/test paths changed.
-    const changed = filterCodeOrTestPaths(await changedPathsBetween(git, onto, 'HEAD'));
-    return changed.length > 0
-      ? { kind: 'changed', changedCodePaths: changed }
-      : { kind: 'noop' };
+    // Both guards pass. `onto..HEAD` is the established invalidation set for
+    // a resolved rebase. Preserve it even when complete base-advance
+    // attribution is unavailable.
+    let changedCodePaths: string[];
+    try {
+      const replayed = await git(['diff', '--name-only', onto, 'HEAD']);
+      if (replayed.exitCode !== 0) {
+        return { kind: 'changed', changedCodePaths: [] };
+      }
+      changedCodePaths = filterCodeOrTestPaths(
+        replayed.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+      );
+    } catch {
+      return { kind: 'changed', changedCodePaths: [] };
+    }
+
+    // The complete pre-advance-base..onto delta is optional metadata. It
+    // describes all base changes for readers that need attribution, but must
+    // never alter the established changedCodePaths invalidation contract or
+    // turn a successfully resolved rebase into a conflict halt.
+    let allChangedPaths: string[] | undefined;
+    if (preAdvanceBase !== undefined) {
+      try {
+        const delta = await git(['diff', '--name-only', preAdvanceBase, onto]);
+        if (delta.exitCode === 0) {
+          allChangedPaths = delta.stdout
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+        }
+      } catch {
+        // Complete-delta attribution is optional after resolution succeeds.
+      }
+    }
+    return changedCodePaths.length > 0
+      ? { kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
+      : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
   }
 
   // All cap attempts consumed without the rebase completing.
@@ -1428,7 +1489,15 @@ export async function emitRebaseEvent(
   try {
     switch (outcome.kind) {
       case 'noop':
-        await events.emit({ type: 'rebase_noop' });
+        await events.emit(
+          outcome.allChangedPaths === undefined
+            ? { type: 'rebase_noop' }
+            : {
+                type: 'rebase_changed',
+                changedPaths: [],
+                allChangedPaths: outcome.allChangedPaths,
+              },
+        );
         break;
       case 'mergeable_skip':
         await events.emit({
@@ -1442,6 +1511,9 @@ export async function emitRebaseEvent(
         await events.emit({
           type: 'rebase_changed',
           changedPaths: outcome.changedCodePaths,
+          ...(outcome.allChangedPaths === undefined
+            ? {}
+            : { allChangedPaths: outcome.allChangedPaths }),
         });
         break;
       case 'conflict_halt':

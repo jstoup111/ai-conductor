@@ -88,6 +88,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   verdict_freshness: 'friction-mapped',
   build_review_base: 'not-audited-by-design',
   build_review_stale_mirage_regrade: 'not-audited-by-design',
+  build_review_repair_context: 'not-audited-by-design',
   mode_skip: 'not-audited-by-design', // skipped steps must have zero records
   build_stall: 'not-audited-by-design',
   build_progress: 'not-audited-by-design',
@@ -259,6 +260,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     mergeBase: 'abc123',
     regradeCount: 1,
   },
+  build_review_repair_context: {
+    type: 'build_review_repair_context',
+    disposition: 'context_available',
+    repairCount: 1,
+  },
   mode_skip: { type: 'mode_skip', step: 'bootstrap', mode: 'fresh', reason: 'already bootstrapped' },
   build_stall: {
     type: 'build_stall',
@@ -301,7 +307,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   loop_converged: { type: 'loop_converged' },
   rebase_noop: { type: 'rebase_noop' },
   rebase_mergeable_skip: { type: 'rebase_mergeable_skip' },
-  rebase_changed: { type: 'rebase_changed', changedPaths: ['a.ts'] },
+  rebase_changed: {
+    type: 'rebase_changed',
+    changedPaths: ['a.ts'],
+    allChangedPaths: ['a.ts', 'docs/guide.md'],
+  },
   rebase_gate_reverified: { type: 'rebase_gate_reverified', step: 'build_review', skippedDispatch: false },
   rebase_gate_preserved: {
     type: 'rebase_gate_preserved',
@@ -529,6 +539,12 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
         ).toBe(before);
       }
     }
+
+    // The grading-provenance event is classified not-audited-by-design above,
+    // which is only coherent because the spine persists it instead — assert
+    // that runtime classification here so the pairing cannot drift apart.
+    const { persistedEventTypes } = await import('../../src/engine/event-sinks.js');
+    expect(persistedEventTypes()).toContain('build_review_repair_context');
   });
 
   it('a UI-only event with no writer mapping produces no record and no error (allowlist, not a catch-all)', async () => {

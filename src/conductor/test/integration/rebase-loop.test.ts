@@ -166,9 +166,10 @@ describe('integration/rebase-loop', () => {
 
   // Advance BASE with a NON-conflicting commit (a brand-new file). Leaves the
   // checkout back on the feature branch.
-  async function advanceBaseNonConflicting(): Promise<string> {
+  async function advanceBaseNonConflicting(path = 'SIBLING.md'): Promise<string> {
     await git('checkout', BASE);
-    await writeFile(join(dir, 'SIBLING.md'), '# merged sibling PR\n');
+    await mkdir(join(dir, path, '..'), { recursive: true });
+    await writeFile(join(dir, path), '# merged sibling PR\n');
     await git('add', '.');
     await git('commit', '-m', 'sibling PR merged to base');
     const sha = await git('rev-parse', 'HEAD');
@@ -300,7 +301,7 @@ describe('integration/rebase-loop', () => {
     };
   }
 
-  it('keeps a clean-mergeable feature unchanged before finish (FR-1/FR-2/FR-5)', async () => {
+  it('rebases a clean-mergeable feature before finish when the base advance is root source (FR-1/FR-2/FR-5)', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
@@ -320,9 +321,7 @@ describe('integration/rebase-loop', () => {
 
     expect(completed).toBe(true);
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
-    // A normal finish checks mergeability before rewriting history, so the
-    // feature deliberately remains behind its base.
-    expect(await branchContains(baseSha)).toBe(false);
+    expect(await branchContains(baseSha)).toBe(true);
   });
 
   // ── Task 14 (RED, #535): both real call sites exercise translateAfterRebase ──
@@ -338,7 +337,7 @@ describe('integration/rebase-loop', () => {
   // site does this yet, so `translateAfterRebase` below is genuinely never
   // called today (RED).
   describe('Task 14: translateAfterRebase capability at both call sites', () => {
-    it('runRebaseStep (finish-time, via Conductor.run) does not translate a mergeable skip', async () => {
+    it('runRebaseStep (finish-time, via Conductor.run) translates a root-source rebase', async () => {
       await initRepoOnFeatureBranch({
         path: 'src/feature.ts',
         content: 'export const foo = 1;\n',
@@ -360,7 +359,7 @@ describe('integration/rebase-loop', () => {
 
       await conductorWith(runner).run();
 
-      expect(translateAfterRebase).not.toHaveBeenCalled();
+      expect(translateAfterRebase).toHaveBeenCalledTimes(1);
     });
 
     it('resumeRebaseFirst (daemon re-kick, play-forward) invokes translateAfterRebase identically on a changed rebase', async () => {
@@ -451,7 +450,7 @@ describe('integration/rebase-loop', () => {
     expect(await rebaseInProgress()).toBe(true);
   });
 
-  it('checks the local base without a remote and skips a clean mergeable branch (FR-3)', async () => {
+  it('checks the local base without a remote and rebases a root-source advance (FR-3)', async () => {
     // No `origin` remote at all. Advance the LOCAL base non-conflicting.
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
@@ -474,12 +473,10 @@ describe('integration/rebase-loop', () => {
 
     expect(completed).toBe(true);
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
-    // The local base is still the mergeability target, but clean mergeability
-    // no longer rewrites this branch onto it.
-    expect(await branchContains(baseSha)).toBe(false);
+    expect(await branchContains(baseSha)).toBe(true);
   });
 
-  it('returns mergeable_skip against an advanced local base without contacting a remote', async () => {
+  it('returns changed against an advanced root-source local base without contacting a remote', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
@@ -492,18 +489,63 @@ describe('integration/rebase-loop', () => {
       finishMergeabilityCheck: true,
     });
 
-    expect(outcome).toEqual({
-      kind: 'mergeable_skip',
-      baseRef: BASE,
-      baseSha,
-      baseKind: 'local',
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      changedCodePaths: ['SIBLING.md'],
+      allChangedPaths: ['SIBLING.md'],
     });
-    expect(await branchContains(baseSha)).toBe(false);
+    expect(await branchContains(baseSha)).toBe(true);
     const gitArgv = gitCommandSpy.mock.calls
       .filter(([command]) => command === 'git')
       .map(([, args]) => args as string[]);
     expect(gitArgv.flat()).not.toContain('fetch');
     expect(gitArgv.flat()).not.toContain('ls-remote');
+  });
+
+  it('rebases a source-classified root SIBLING.md base advance instead of taking the docs-only skip', async () => {
+    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    const baseSha = await advanceBaseNonConflicting('SIBLING.md');
+
+    const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, {
+      finishMergeabilityCheck: true,
+    });
+
+    expect(outcome.kind).toBe('changed');
+    expect(await branchContains(baseSha)).toBe(true);
+  });
+
+  it('persists an excluded docs/SIBLING.md all-path delta while routing the root SIBLING.md contrast through the production loop', async () => {
+    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    await advanceBaseNonConflicting('docs/SIBLING.md');
+    const docsEvents: Array<{ changedPaths?: string[]; allChangedPaths?: string[] }> = [];
+    events.on('rebase_changed', (event) => {
+      if (event.type === 'rebase_changed') docsEvents.push(event);
+    });
+    const docsOutcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE);
+    await (await import('../../src/engine/rebase.js')).emitRebaseEvent(events, docsOutcome);
+    expect(docsEvents).toContainEqual(expect.objectContaining({
+      changedPaths: [], allChangedPaths: ['docs/SIBLING.md'],
+    }));
+
+    await rm(dir, { recursive: true, force: true });
+    dir = await mkdtemp(join(tmpdir(), 'rebase-loop-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    const baseSha = await advanceBaseNonConflicting('SIBLING.md');
+    await writeState(statePath, { ...FRONT_DONE });
+    const rebaseEvents: Array<{ changedPaths?: string[]; allChangedPaths?: string[] }> = [];
+    events.on('rebase_changed', (event) => {
+      if (event.type === 'rebase_changed') rebaseEvents.push(event);
+    });
+
+    const rootOutcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE);
+    await (await import('../../src/engine/rebase.js')).emitRebaseEvent(events, rootOutcome);
+
+    expect(await branchContains(baseSha)).toBe(true);
+    expect(rebaseEvents).toContainEqual(expect.objectContaining({
+      changedPaths: ['SIBLING.md'], allChangedPaths: ['SIBLING.md'],
+    }));
   });
 
   it('uses the same local base for conflict recovery when prospective merge conflicts', async () => {
