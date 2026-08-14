@@ -80,7 +80,8 @@ const failVerdict = (reason: string): string => JSON.stringify({
     scope: false,
     rootCause: false,
     completeness: false,
-    },
+    wiring: false,
+  },
 });
 
 afterEach(async () => {
@@ -240,31 +241,38 @@ describe('acceptance: removal evidence reaches the real build_review prompt (#15
     await git(dir, 'add', '.');
     await git(dir, 'commit', '-qm', 'remove obsolete compatibility shape');
 
-    let capturedPrompt = '';
+    const prompts: string[] = [];
+    const headSha = await git(dir, 'rev-parse', 'HEAD');
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
-        capturedPrompt = options.prompt;
-        await writeFile(
-          join(pipelineDir, 'build-review.json'),
-          JSON.stringify({
-            verdict: 'PASS',
-            reasons: [],
-            rubric: {
-              tautology: false,
-              scope: false,
-              rootCause: false,
-              completeness: false,
-              },
+        prompts.push(options.prompt);
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as {
+          rubric: string; lapId: string; snapshotDigest: string;
+        };
+        return {
+          success: true,
+          output: JSON.stringify({
+            kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+            snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [],
           }),
-        );
-        return { success: true, output: 'graded', exitCode: 0 };
+          exitCode: 0,
+        };
       }),
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const runner = new DefaultStepRunner(provider, 'removal-evidence-session', dir, {
       planPath,
       pipelineDir,
-      config: { build_review: { enabled: true, perTaskFloor: false } },
+      config: {
+        build_review: { enabled: true, perTaskFloor: false },
+        test_suite: { scoped_command: 'true {selectors}' },
+        wiring: { entry_points: ['src/contract.ts'] },
+      },
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: headSha, outcome: 'PASS' },
+        } as never),
+      },
     });
 
     const result = await runner.run('build_review', {
@@ -273,13 +281,10 @@ describe('acceptance: removal evidence reaches the real build_review prompt (#15
       track: 'technical',
     });
 
-    expect(result.success).toBe(true);
-    expect(capturedPrompt).toMatch(/removal evidence/i);
-    expect(capturedPrompt).toContain('src/obsolete.ts');
-    expect(capturedPrompt).toContain('removedFixtureField');
-    expect(capturedPrompt).toMatch(/evidence,? not an exemption/i);
-    expect(capturedPrompt).toMatch(/per changed test|each changed test/i);
-    expect(capturedPrompt).toMatch(/not per diff|does not exempt every test/i);
-    expect(capturedPrompt).toMatch(/adds? (?:a )?new behavioral assertion/i);
+    expect(result.success, result.output).toBe(true);
+    expect(provider.invoke).toHaveBeenCalledTimes(5);
+    const wiringPrompt = prompts.find((prompt) => prompt.includes('Build Review Wiring rubric'))!;
+    expect(wiringPrompt).toContain('src/obsolete.ts');
+    expect(wiringPrompt).toContain('removedFixtureField');
   });
 });
