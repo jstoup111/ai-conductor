@@ -7,9 +7,15 @@ import {
   detectInline,
   renderFullHelp,
   renderDaemonHelp,
+  detectBuildReviewFindingsCommand,
 } from '../../src/cli.js';
 
 describe('CLI', () => {
+  it('detects only the explicit read-only build-review findings grammar', () => {
+    expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings', '--feature', 'review-rubrics', '--json']))
+      .toEqual({ kind: 'findings', feature: 'review-rubrics', format: 'json' });
+    expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings'])).toBeNull();
+  });
   it('parses feature description as positional arg', () => {
     const opts = parseArgs(['node', 'conduct', 'URL shortener']);
     expect(opts.featureDesc).toBe('URL shortener');

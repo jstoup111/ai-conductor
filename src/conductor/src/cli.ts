@@ -137,6 +137,23 @@ export interface UserConfigSetDispatch {
   value: string;
 }
 
+export type BuildReviewFindingsDispatch = {
+  readonly kind: 'findings';
+  readonly feature: string;
+  readonly format: 'human' | 'json';
+};
+
+/** Detect the read-only `build-review findings --feature <slug> [--json]` command. */
+export function detectBuildReviewFindingsCommand(argv: string[]): BuildReviewFindingsDispatch | null {
+  if (argv[2] !== 'build-review' || argv[3] !== 'findings') return null;
+  const args = argv.slice(4);
+  const featureIndex = args.indexOf('--feature');
+  const feature = featureIndex >= 0 ? args[featureIndex + 1] : undefined;
+  const recognized = args.length === 3 && featureIndex >= 0 && args.includes('--json') || args.length === 2 && featureIndex >= 0;
+  if (!feature || !recognized || !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
+  return { kind: 'findings', feature, format: args.includes('--json') ? 'json' : 'human' };
+}
+
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
 export function detectUserConfigReadCommand(argv: string[]): UserConfigReadDispatch | null {
   if (argv[2] !== 'config' || argv[3] !== 'read' || !argv[4]) return null;
@@ -536,6 +553,14 @@ export function createProgram(): Command {
   program
     .command('build-tail [worktree]')
     .description('Render a deterministic build task/remediation/closeout timing rollup');
+
+  program
+    .command('build-review')
+    .description('Inspect current build-review results without starting a pipeline')
+    .command('findings')
+    .description('Render current findings for a feature worktree')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--json', 'Render machine-readable JSON');
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
