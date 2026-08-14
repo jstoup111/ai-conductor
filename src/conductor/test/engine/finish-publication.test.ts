@@ -82,6 +82,27 @@ async function nonRetryablePublicationReason(reason: string) {
 type ObservationState = 'present' | 'missing' | 'stale' | 'malformed' | 'unavailable';
 type PushObservationState = 'pushed' | 'unpushed' | 'stale' | 'malformed' | 'unavailable';
 type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
+type PublicationTransition = import('../../src/engine/finish-publication.js').PublicationTransition;
+type PublicationTransitionDimensions =
+  import('../../src/engine/finish-publication.js').PublicationTransitionDimensions;
+
+type Assert<T extends true> = T;
+type PublicationTransitionDimensionsAreTotal = Assert<
+  PublicationTransitionDimensions extends Record<PublicationTransition, unknown> ? true : false
+>;
+
+void (undefined as unknown as PublicationTransitionDimensionsAreTotal);
+
+async function publicationTransitionDimension(transition: PublicationTransition): Promise<unknown> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const dimensions = mod.PUBLICATION_TRANSITION_DIMENSIONS;
+  if (dimensions === null || typeof dimensions !== 'object') {
+    throw new Error(
+      'expected export "PUBLICATION_TRANSITION_DIMENSIONS" to resolve every publication transition (not yet implemented)',
+    );
+  }
+  return Reflect.get(dimensions, transition);
+}
 
 type PublicationCondition =
   | {
@@ -420,6 +441,21 @@ describe('FINISH human-required halt marker', () => {
 });
 
 describe('finish-publication domain types', () => {
+  it.each([
+    'establish_pr',
+    'verify_release_readiness',
+    'author_pr_prose',
+    'judge_pr_prose',
+    'write_shipped_record',
+    'ready_pr',
+    'record_outcome',
+  ] as const satisfies readonly PublicationTransition[])(
+    'resolves an owned dimension for %s',
+    async (transition) => {
+      await expect(publicationTransitionDimension(transition)).resolves.toBeDefined();
+    },
+  );
+
   it('exports the semantic unions for the publication lifecycle', async () => {
     type PublicationIntent = import('../../src/engine/finish-publication.js').PublicationIntent;
     type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
