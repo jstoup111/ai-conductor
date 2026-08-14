@@ -97,6 +97,11 @@ export class ProvisionedHome implements LLMProvider {
 
 type LiveProviderPreflight = (homeDir: string, providerKey?: string) => Promise<void>;
 
+export interface LiveE2ERunBodyDependencies {
+  readonly binaryAvailable?: (binaryName: string) => boolean;
+  readonly provisionProviderHome?: typeof provisionLiveProviderHome;
+}
+
 export async function dispatchAfterLivePreflight(
   home: Pick<ProviderHome, 'homeDir'>,
   dispatch: () => Promise<void>,
@@ -132,13 +137,26 @@ export function assertSuccessfulCredentialedRun(
 const fixturePlanPath = fileURLToPath(new URL('./daemon-e2e/plan.md', import.meta.url));
 const fixtureStoriesPath = fileURLToPath(new URL('./daemon-e2e/stories.md', import.meta.url));
 
-export function liveProviderAvailable(descriptor: LiveE2EProviderDescriptor): boolean {
+export function providerBinaryAvailable(binaryName: string): boolean {
   try {
-    execFileSync('which', [descriptor.binaryName], { stdio: 'pipe' });
-    return !!process.env[descriptor.credentialEnvVar];
+    execFileSync('which', [binaryName], { stdio: 'pipe' });
+    return true;
   } catch {
     return false;
   }
+}
+
+export function liveProviderAvailable(descriptor: LiveE2EProviderDescriptor): boolean {
+  return providerBinaryAvailable(descriptor.binaryName) && !!process.env[descriptor.credentialEnvVar];
+}
+
+export function assertLiveProviderBinary(
+  descriptor: LiveE2EProviderDescriptor,
+  binaryAvailable: (binaryName: string) => boolean = providerBinaryAvailable,
+): void {
+  if (binaryAvailable(descriptor.binaryName)) return;
+
+  throw new Error(`Unmet toolchain requirement: ${descriptor.binaryName} binary is unavailable.`);
 }
 
 /**
@@ -202,7 +220,9 @@ async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Pr
 export async function runLiveE2ERunBody(
   descriptor: LiveE2EProviderDescriptor,
   tokenCap: number,
+  dependencies: LiveE2ERunBodyDependencies = {},
 ): Promise<void> {
+  assertLiveProviderBinary(descriptor, dependencies.binaryAvailable);
   const credential = process.env[descriptor.credentialEnvVar];
   assertLiveProviderCredential(descriptor, credential);
   const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
@@ -229,7 +249,7 @@ export async function runLiveE2ERunBody(
     await mkdir(join(worktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
     await copyFile(fixturePlanPath, planPath);
     await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
-    providerHome = await provisionLiveProviderHome(
+    providerHome = await (dependencies.provisionProviderHome ?? provisionLiveProviderHome)(
       fileURLToPath(new URL('../../../../', import.meta.url)),
       process.env[descriptor.credentialEnvVar],
     );

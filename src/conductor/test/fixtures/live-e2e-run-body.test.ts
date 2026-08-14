@@ -5,15 +5,44 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { LiveE2EProviderDescriptor } from './live-e2e-providers.js';
+import type { LiveE2ERunBodyDependencies } from './live-e2e-run-body.js';
 
 vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 
 describe('runLiveE2ERunBody authentication source', () => {
+  it('reports an absent Codex binary as an unmet toolchain requirement before provisioning a home', async () => {
+    const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
+      runLiveE2ERunBody: (
+        descriptor: LiveE2EProviderDescriptor,
+        tokenCap: number,
+        dependencies?: LiveE2ERunBodyDependencies,
+      ) => Promise<void>;
+    };
+    const provisionProviderHome = vi.fn(async (): Promise<never> => {
+      throw new Error('a missing binary must not provision a home');
+    });
+    const descriptor = {
+      id: 'codex',
+      binaryName: 'codex',
+      credentialEnvVar: 'CODEX_API_KEY',
+    } as unknown as LiveE2EProviderDescriptor;
+
+    await expect(runLiveE2ERunBody(descriptor, 1, {
+      binaryAvailable: () => false,
+      provisionProviderHome,
+    })).rejects.toThrow('Unmet toolchain requirement: codex binary is unavailable.');
+    expect(provisionProviderHome).not.toHaveBeenCalled();
+  });
+
   it('fails a credential-less Codex leg before any provider dispatch, naming the missing credential and cached-login path searched', async () => {
     const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
-      runLiveE2ERunBody: (descriptor: LiveE2EProviderDescriptor, tokenCap: number) => Promise<void>;
+      runLiveE2ERunBody: (
+        descriptor: LiveE2EProviderDescriptor,
+        tokenCap: number,
+        dependencies?: LiveE2ERunBodyDependencies,
+      ) => Promise<void>;
     };
     const codexHome = await mkdtemp(`${tmpdir()}/live-e2e-empty-codex-home-`);
     const priorKey = process.env.CODEX_API_KEY;
@@ -31,6 +60,7 @@ describe('runLiveE2ERunBody authentication source', () => {
     }));
     const descriptor = {
       id: 'codex',
+      binaryName: 'codex',
       credentialEnvVar: 'CODEX_API_KEY',
       createProvider,
     } as unknown as LiveE2EProviderDescriptor;
@@ -39,7 +69,7 @@ describe('runLiveE2ERunBody authentication source', () => {
       delete process.env.CODEX_API_KEY;
       process.env.CODEX_HOME = codexHome;
 
-      await expect(runLiveE2ERunBody(descriptor, 1)).rejects.toThrow(
+      await expect(runLiveE2ERunBody(descriptor, 1, { binaryAvailable: () => true })).rejects.toThrow(
         `Missing Codex credential: set CODEX_API_KEY or sign in at ${codexHome}/auth.json`,
       );
       expect({ providerConstructions: createProvider.mock.calls.length, dispatches }).toEqual({
