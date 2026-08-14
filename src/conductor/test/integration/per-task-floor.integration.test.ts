@@ -73,8 +73,7 @@ function passingProvider(
     scope: false,
     rootCause: false,
     completeness: false,
-    wiring: false,
-  },
+    },
 ): { provider: LLMProvider; invokeCalls: InvokeOptions[] } {
   const invokeCalls: InvokeOptions[] = [];
   const provider: LLMProvider = {
@@ -322,7 +321,6 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
       tautology: false,
       scope: false,
       rootCause: false,
-      completeness: false,
     });
     const { runner, invokeCalls } = makeRunner(slug, undefined, legacyProvider);
 
@@ -330,7 +328,7 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
       runner.run('build_review', { feature_desc: slug } as ConductState),
     ).resolves.toMatchObject({
       success: false,
-      output: expect.stringMatching(/rubric\.wiring/i),
+      output: expect.stringMatching(/rubric\.completeness/i),
     });
     expect(invokeCalls).toHaveLength(1);
   });

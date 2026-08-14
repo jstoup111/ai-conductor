@@ -39,30 +39,19 @@ describe('buildGraderPrompt', () => {
     );
   });
 
-  it('renders every configured wiring entry point verbatim', () => {
+  it('ignores entry points a stale caller still supplies', () => {
     const entryPoints = [
       'src/conductor/src/index.ts',
       'src/conductor/src/daemon-cli.ts',
       'src/conductor/src/engine/engineer-cli.ts',
     ];
+
     const prompt = buildGraderPrompt({
       ...inputs,
       entryPoints,
     } as BuildReviewInputs & { entryPoints: string[] });
 
-    expect(entryPoints.every((entryPoint) => prompt.includes(entryPoint))).toBe(true);
-  });
-
-  it('marks wiring as not-judged when entry points are absent or empty', () => {
-    const prompts = [
-      buildGraderPrompt(inputs),
-      buildGraderPrompt({
-        ...inputs,
-        entryPoints: [],
-      } as BuildReviewInputs & { entryPoints: string[] }),
-    ];
-
-    expect(prompts.every((prompt) => /wiring[\s\S]*not-judged/i.test(prompt))).toBe(true);
+    expect(entryPoints.some((entryPoint) => prompt.includes(entryPoint))).toBe(false);
   });
 
   it('treats approved DECIDE artifacts as plan-governed Scope changes', () => {
@@ -94,39 +83,24 @@ describe('buildGraderPrompt', () => {
   it('states the all-or-FAIL rule', () => {
     const prompt = buildGraderPrompt(inputs);
 
-    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
+    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
   });
 
-  it('lists five rubric items and applies all-or-FAIL across all five', () => {
-    const prompt = buildGraderPrompt({
-      ...inputs,
-      entryPoints: ['src/conductor/src/index.ts'],
-    });
+  it('lists four rubric items and applies all-or-FAIL across all four', () => {
+    const prompt = buildGraderPrompt(inputs);
 
-    expect(prompt).toMatch(/Score the diff against exactly these five rubric items/i);
-    expect(prompt).toMatch(/5\. Wiring:/);
-    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
+    expect(prompt).toMatch(/Score the diff against exactly these four rubric items/i);
+    expect(prompt).toMatch(/4\. Completeness:/);
+    expect(prompt).not.toMatch(/5\./);
+    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
   });
 
-  it('judges wiring as static reachability while reserving runtime behavior for manual_test', () => {
-    const prompt = buildGraderPrompt({
-      ...inputs,
-      entryPoints: ['src/conductor/src/index.ts'],
-    });
+  it('never asks the grader to judge entry-point reachability', () => {
+    const prompt = buildGraderPrompt(inputs);
 
-    expect(prompt).toMatch(/Wiring:.*static.*diff/is);
-    expect(prompt).toMatch(/path.*reaches.*configured production entry point/is);
-    expect(prompt).toContain("not evaluating\nruntime behavior (that is manual_test's mandate)");
-  });
-
-  it('honors only an explicit Steps statement as intentional non-wiring', () => {
-    const prompt = buildGraderPrompt({
-      ...inputs,
-      entryPoints: ['src/conductor/src/index.ts'],
-    });
-
-    expect(prompt).toContain("A plan task's\nown Steps may declare intentional non-wiring only when they explicitly state\nthat it ships scaffolding for a later task or feature");
-    expect(prompt).toContain('Silence is never an implicit waiver.');
+    expect(prompt.toLowerCase()).not.toContain('wiring');
+    expect(prompt).toMatch(/Do not judge reachability from production entry points/i);
+    expect(prompt).toMatch(/refactoring legitimately moves call paths/i);
   });
 
   it('uses an explicit failed-rubric list instead of inverted rubric booleans', () => {
@@ -134,21 +108,19 @@ describe('buildGraderPrompt', () => {
 
     expect(prompt).toContain('.pipeline/build-review.json');
     expect(prompt).toContain(
-      "{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] } }",
+      "{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] } }",
     );
     expect(prompt).toMatch(/The engine derives PASS when `failedRubrics` is empty and FAIL otherwise/i);
     expect(prompt).not.toContain("verdict: 'PASS' | 'FAIL'");
     expect(prompt).not.toContain('tautology: boolean');
   });
 
-  it('includes wiring in the JSON verdict schema', () => {
-    const prompt = buildGraderPrompt({
-      ...inputs,
-      entryPoints: ['src/conductor/src/index.ts'],
-    });
+  it('omits wiring from the JSON verdict schema', () => {
+    const prompt = buildGraderPrompt(inputs);
 
-    expect(prompt).toContain('wiring?: string[]');
-    expect(prompt).toContain("'wiring')[]");
+    expect(prompt).not.toContain('wiring?: string[]');
+    expect(prompt).not.toContain("'wiring')[]");
+    expect(prompt).toContain("'completeness')[]");
   });
 
   it('requires every independent failed-rubric finding in a structured list', () => {
@@ -186,7 +158,7 @@ describe('buildGraderPrompt', () => {
       /(do not|must not|never).*(per-task|SHA|reachability|corroboration)/i,
     );
     expect(prompt).toMatch(/findings\.completeness/);
-    expect(prompt).toMatch(/PASS only if all five rubric items pass/i);
+    expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
   });
 
   it('includes the diff and plan body', () => {
@@ -319,7 +291,7 @@ describe('buildGraderPrompt', () => {
     const fromCommit = 'reseal-from-abc123';
     const toCommit = 'reseal-to-def456';
     const rubricItems = (prompt: string) =>
-      [...prompt.matchAll(/^\d\. (?:Tautology|Scope|Root cause|Completeness|Wiring): [\s\S]*?(?=\n\d\. |\n\nFor Wiring)/gm)]
+      [...prompt.matchAll(/^\d\. (?:Tautology|Scope|Root cause|Completeness): [\s\S]*?(?=\n\d\. |\n\nDo not judge)/gm)]
         .map(([item]) => item);
     const resealSection = (prompt: string) => prompt.match(
       /## Operator-authorized protected-artifact reseals\n\n([\s\S]*?)\n\n## Engine-derived removal evidence/,
@@ -339,7 +311,6 @@ describe('buildGraderPrompt', () => {
       '2. Scope: diff scoped to the plan, no unrelated files. `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, and `.docs/stories/` are already-approved DECIDE artifacts; modification of one passes Scope only when the approved plan justifies it, otherwise it is a Scope failure.',
       '3. Root cause: the change addresses the stated defect, not a symptom.',
       "4. Completeness: every planned task's work is present in the diff.",
-      '5. Wiring: a static property of the diff — every new or changed production\nsurface is called from a path that reaches a configured production entry point.\nThis is code reachability as written, not runtime behavior; runtime behavior\nremains manual_test\'s mandate.',
     ];
 
     expect({
@@ -469,7 +440,7 @@ diff --git a/src/classify.ts b/src/classify.ts
   it('requires a relocation audit in reasons before the reviewer-output schema', () => {
     const prompt = buildGraderPrompt(inputs);
     const auditContract = 'For every changed test evaluated under the fixture relocation exception, append exactly one `[relocation-audit]` entry to `reasons` on PASS or FAIL: `[relocation-audit] (EXEMPTED|MEASURED): old path → new path; production hunk(s) (do|do not) force the move`. These audit-only entries are evidence, not failing-rubric summaries, and are permitted in addition to one-line summaries for failed rubric items. A PASS with one or more evaluated relocations requires the corresponding audit entries; a PASS with no evaluated relocations may leave `reasons` empty. `findings` remains failure-only and must be omitted or empty on PASS.';
-    const schema = "{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] } }";
+    const schema = "{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] } }";
     const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     expect(prompt).toMatch(new RegExp(`${escapeRegex(auditContract)}[\\s\\S]*${escapeRegex(schema)}`));
@@ -483,14 +454,13 @@ diff --git a/src/classify.ts b/src/classify.ts
         removedMembers: [{ declaration: 'Contract', member: 'removedMember' }],
       },
     });
-    const rubric = prompt.match(/Score the diff against exactly these (\w+) rubric items:\n([\s\S]*?)\n\nFor Wiring/)?.[2] ?? '';
+    const rubric = prompt.match(/Score the diff against exactly these (\w+) rubric items:\n([\s\S]*?)\n\nDo not judge/)?.[2] ?? '';
     const items = [...rubric.matchAll(/^\d+\. ([^:]+): ([\s\S]*?)(?=\n\d+\.|$)/gm)];
     const nonTautology = items.filter(([, name]) => name !== 'Tautology').map(([, name, text]) => `${name}: ${text}`);
     expect(nonTautology).toEqual(expect.arrayContaining([
       expect.stringContaining('Scope: diff scoped to the plan, no unrelated files.'),
       expect.stringContaining('Root cause: the change addresses the stated defect, not a symptom.'),
       expect.stringContaining("Completeness: every planned task's work is present in the diff."),
-      expect.stringContaining('Wiring: a static property of the diff'),
     ]));
     const rubricCount = prompt.match(/exactly these (\w+) rubric items/)?.[1];
     expect(rubricCount).toBeTruthy();

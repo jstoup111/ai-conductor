@@ -274,7 +274,7 @@ export type BuildReviewFailRoute = 'build' | 'remediate' | 'none';
  */
 export function buildReviewFailRoute(verdict: {
   verdict: string;
-  rubric?: { tautology?: boolean; scope?: boolean; rootCause?: boolean; completeness?: boolean; wiring?: boolean };
+  rubric?: { tautology?: boolean; scope?: boolean; rootCause?: boolean; completeness?: boolean };
   findings?: { completeness?: string[]; scope?: string[] };
 }): BuildReviewFailRoute {
   if (verdict.verdict !== 'FAIL') return 'none';

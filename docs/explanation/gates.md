@@ -121,7 +121,7 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `plan` | a plan that does not cover the feature's stories, scoped to this feature's plan and stories |
 | `build` | tasks reported complete without work — task rows are re-seeded and re-derived from the plan each evaluation, so a forged row fails |
 | `acceptance_specs` | acceptance specs that never ran — proof is required that this feature's specs executed *and failed*, so a collection error or a skipped spec cannot pass for RED |
-| `build_review` | an incomplete or unreachable build — a fresh PASS verdict against its all-or-FAIL rubric, including static wiring reachability, judged from the diff rather than from self-reports |
+| `build_review` | an incomplete build — a fresh PASS verdict against its four-item all-or-FAIL rubric (tautology, scope, root cause, completeness), judged from the diff rather than from self-reports |
 | `wiring_check` | no active check — a deprecated compatibility step retained so existing state, config, and prerequisites continue to resolve |
 | `test_suite` | a stale green — the fingerprint is re-inspected every time, so the evidence file's existence can never satisfy it |
 | `manual_test` | a whitewashed retest — after a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
@@ -138,7 +138,9 @@ Each predicate's exact file, format, and failure text is in [artifacts](../refer
 ### BUILD-verification round authority
 
 `wiring_check` and `test_suite` remain the BUILD-verification group for topology compatibility.
-`wiring_check` is a deprecated no-op; only `test_suite` performs an active verification. After BUILD
+`wiring_check` is a deprecated no-op; only `test_suite` performs an active verification. Static
+reachability is no longer judged in BUILD at all — see
+[ADR: The build_review wiring rubric is retired](../../.docs/decisions/adr-2026-08-14-retire-build-review-wiring-rubric.md). After BUILD
 is repaired, the next round re-dispatches every non-skipped member; a satisfied gate verdict on disk
 never skips a member by itself. The group's current join is the sole authority that marks a member
 satisfied for that round.

@@ -1,9 +1,10 @@
 # ADR: Wiring reachability becomes a build_review rubric item
 
 **Date:** 2026-08-11
-**Status:** APPROVED — PARTIALLY SUPERSEDED by
+**Status:** SUPERSEDED by `adr-2026-08-14-retire-build-review-wiring-rubric` — the Wiring rubric
+item is retired and `build_review` scores four items. Previously PARTIALLY SUPERSEDED by
 `adr-2026-08-13-engine-managed-build-review-rubric-branches` for single-dispatch topology and the
-no-new-dispatch cost claim; Wiring meaning remains approved
+no-new-dispatch cost claim
 **Deciders:** James Stoup (operator), architecture-review for #1496
 
 ## Context

@@ -43,8 +43,6 @@ export interface BuildReviewInputs {
    * head, no fetch needed) — `false` on both "fetched a stale ref" and the
    * no-remote/probe-failure fallback. */
   fresh: boolean;
-  /** Configured production entry points for the static wiring rubric. */
-  entryPoints?: string[];
   /** Engine-recorded aggregate failures exposed after base advances. The
    * grader judges whether diff hunks implement them; they are not exemptions. */
   repairContext?: TestSuiteRemediationRecord[];

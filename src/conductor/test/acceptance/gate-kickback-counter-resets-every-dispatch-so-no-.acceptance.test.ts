@@ -174,7 +174,7 @@ function frontDone(): ConductState {
 const FAIL_VERDICT = (message: string): string =>
   JSON.stringify({
     verdict: 'FAIL',
-    rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+    rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
     findings: { tautology: [message] },
   });
 
@@ -230,7 +230,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
         join(dir, '.pipeline/build-review.json'),
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
         }),
       );
     } else if (step === 'manual_test') {
@@ -766,7 +766,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'FAIL',
-                rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+                rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
                 findings: { tautology: ['assertion restates the implementation'] },
               }),
             );

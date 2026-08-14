@@ -86,7 +86,7 @@ describe('BUILD repair re-dispatches every verification member without stranding
                 tautology: false,
                 scope: false,
                 rootCause: false,
-                completeness: false, wiring: false },
+                completeness: false },
             }),
           );
           return { success: true };

@@ -60,7 +60,7 @@ describe('cumulative build-review kickback bound', () => {
           if (step === 'build_review') {
             await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
               verdict: 'FAIL',
-              rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+              rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
               findings: { tautology: ['semantic failure remains'] },
             }));
           }

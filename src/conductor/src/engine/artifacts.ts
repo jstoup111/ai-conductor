@@ -1461,8 +1461,6 @@ export interface BuildReviewRubric {
   rootCause: boolean;
   /** Implementation addresses only part of the task's declared scope. */
   completeness: boolean;
-  /** Configured entry points do not reach the delivered behavior. */
-  wiring: boolean;
 }
 
 /**
@@ -1497,7 +1495,6 @@ const BUILD_REVIEW_RUBRIC_NAMES = [
   'scope',
   'rootCause',
   'completeness',
-  'wiring',
 ] as const;
 
 /**
@@ -1507,7 +1504,7 @@ const BUILD_REVIEW_RUBRIC_NAMES = [
  */
 export function buildReviewFailureDetails(verdict: Pick<BuildReviewVerdict, 'reasons' | 'findings'>): string[] {
   const details = [...(verdict.reasons ?? [])];
-  for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
+  for (const rubric of BUILD_REVIEW_RUBRIC_NAMES) {
     for (const finding of verdict.findings?.[rubric] ?? []) {
       details.push(`[${rubric}] ${finding}`);
     }
@@ -1555,7 +1552,7 @@ export function validateBuildReviewVerdict(
   }
   const rubricSrc = e.rubric as Record<string, unknown>;
   const rubric = {} as BuildReviewRubric;
-  for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
+  for (const rubricName of BUILD_REVIEW_RUBRIC_NAMES) {
     if (typeof rubricSrc[rubricName] !== 'boolean') {
       return {
         ok: false,
@@ -1572,7 +1569,7 @@ export function validateBuildReviewVerdict(
     }
     const source = e.findings as Record<string, unknown>;
     findings = {};
-    for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
+    for (const rubricName of BUILD_REVIEW_RUBRIC_NAMES) {
       const candidate = source[rubricName];
       if (candidate === undefined) continue;
       if (!Array.isArray(candidate) || candidate.some((finding) => typeof finding !== 'string')) {
@@ -1585,8 +1582,8 @@ export function validateBuildReviewVerdict(
     }
   }
 
-  const failedRubrics = ['tautology', 'scope', 'rootCause', 'completeness', 'wiring']
-    .filter((name) => rubric[name as keyof BuildReviewRubric] === true);
+  const failedRubrics = BUILD_REVIEW_RUBRIC_NAMES
+    .filter((name) => rubric[name] === true);
   if (e.verdict === 'PASS' && failedRubrics.length > 0) {
     return {
       ok: false,
@@ -1597,13 +1594,6 @@ export function validateBuildReviewVerdict(
     return {
       ok: false,
       reason: `${BUILD_REVIEW_VERDICT} "verdict" FAIL requires at least one rubric flag to be true`,
-    };
-  }
-
-  if (rubric.wiring === true && (findings?.wiring?.length ?? 0) === 0) {
-    return {
-      ok: false,
-      reason: `${BUILD_REVIEW_VERDICT} "findings.wiring" must be a non-empty string array when rubric.wiring is true`,
     };
   }
 

@@ -80,8 +80,7 @@ const failVerdict = (reason: string): string => JSON.stringify({
     scope: false,
     rootCause: false,
     completeness: false,
-    wiring: false,
-  },
+    },
 });
 
 afterEach(async () => {
@@ -255,8 +254,7 @@ describe('acceptance: removal evidence reaches the real build_review prompt (#15
               scope: false,
               rootCause: false,
               completeness: false,
-              wiring: false,
-            },
+              },
           }),
         );
         return { success: true, output: 'graded', exitCode: 0 };

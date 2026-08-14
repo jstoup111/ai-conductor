@@ -99,7 +99,7 @@ function makeRunner(dir: string): { runner: StepRunner; calls: StepName[] } {
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ["task 2's planned work is absent from the diff"],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
             }),
           );
         } else {
@@ -110,7 +110,7 @@ function makeRunner(dir: string): { runner: StepRunner; calls: StepName[] } {
             JSON.stringify({
               verdict: 'PASS',
               reasons: [],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
             }),
           );
         }
@@ -216,7 +216,7 @@ describe('acceptance: build_review completeness gates a missing planned task end
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ["task 2's planned work is still absent from the diff"],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
             }),
           );
         }
@@ -251,11 +251,10 @@ describe('acceptance: build_review completeness gates a missing planned task end
   });
 
   it.each([
-    ['tautology', { scope: false, rootCause: false, completeness: false, wiring: false }],
-    ['scope', { tautology: false, rootCause: false, completeness: false, wiring: false }],
-    ['rootCause', { tautology: false, scope: false, completeness: false, wiring: false }],
-    ['completeness', { tautology: false, scope: false, rootCause: false, wiring: false }],
-    ['wiring', { tautology: false, scope: false, rootCause: false, completeness: false }],
+    ['tautology', { scope: false, rootCause: false, completeness: false }],
+    ['scope', { tautology: false, rootCause: false, completeness: false }],
+    ['rootCause', { tautology: false, scope: false, completeness: false }],
+    ['completeness', { tautology: false, scope: false, rootCause: false }],
   ] as const)('rejects a PASS whose %s rubric judgement is absent', async (_member, incompleteRubric) => {
     dir = await mkdtemp(join(tmpdir(), 'build-review-incomplete-pass-'));
     const statePath = join(dir, 'conduct-state.json');
@@ -291,13 +290,13 @@ describe('acceptance: build_review completeness gates a missing planned task end
     expect(result.ok && result.value.build_review).not.toBe('done');
   });
 
-  it.each(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const)(
+  it.each(['tautology', 'scope', 'rootCause', 'completeness'] as const)(
     'rejects a PASS whose %s rubric judgement reports a finding',
     async (member) => {
       dir = await mkdtemp(join(tmpdir(), 'build-review-contradictory-pass-'));
       const statePath = join(dir, 'conduct-state.json');
       await seedToBuildReview(statePath, dir);
-      const rubric = { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false };
+      const rubric = { tautology: false, scope: false, rootCause: false, completeness: false };
       rubric[member] = true;
 
       const conductor = new Conductor({

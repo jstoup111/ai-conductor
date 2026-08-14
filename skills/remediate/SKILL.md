@@ -82,7 +82,7 @@ gap must be turned into concrete work:
 
 | Disposition | When | Daemon effect |
 |---|---|---|
-| `build` | impl / test / wiring bug with clear evidence (the fix is obvious from the gap); **implementation/test/documentation drift that preserves the approved architecture**; OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
+| `build` | impl / test bug with clear evidence (the fix is obvious from the gap); **implementation/test/documentation drift that preserves the approved architecture**; OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
 | `acceptance_specs` | the gap exists because acceptance coverage is missing or too weak to pin the behavior | kick to **acceptance_specs** (regenerate failing specs), then build |
 | `architecture_review` | changing or clarifying **approved architecture** is required before the gap can be closed | kick to **architecture_review** |
 | `plan` | functionality that **is in scope** but the plan simply omitted or missed (a planning omission, not an architecture or design decision) | In a daemon run, a `plan` disposition is a terminal needs-human HALT and never re-plans. |

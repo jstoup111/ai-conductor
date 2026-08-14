@@ -369,7 +369,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `attribution-verdict.json` | `{ schema?, anchor?: { head?, residue?[] }, results? }` | `attribution-verdict.ts` |
 | `audit-trail/` | Per-task `review.json`, `rework-N.json`, `commit.txt`, `summary.json`, plus `events.jsonl` and a `WRITE-FAILED` marker | `audit-trail.ts`, `pipeline` skill |
 | `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
-| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness, wiring }, codeStamp? }`. `rubric.wiring: true` means wiring failed and requires a non-empty `findings.wiring`; `rubric.wiring: false` means wiring passed and needs no wiring finding. A missing or malformed item fails closed. | `build_review` step |
+| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness }, codeStamp? }`. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as the retired `wiring`) is ignored, so a verdict written before the rubric changed still parses. | `build_review` step |
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |

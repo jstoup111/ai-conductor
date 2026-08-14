@@ -19,7 +19,6 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
     planBody,
     repairContext = [],
     acceptedWidenings = [],
-    entryPoints = [],
     removalContext,
     operatorReseals,
   } = inputs;
@@ -34,9 +33,6 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
           `- Removed member: ${escapeEvidence(declaration)}.${escapeEvidence(member)}`),
       ].join('\n')
     : '(none)';
-  const renderedEntryPoints = entryPoints.length > 0
-    ? entryPoints.map((entryPoint) => `- ${entryPoint}`).join('\n')
-    : '(not-judged: config.wiring.entry_points is absent or empty; do not infer entry points)';
   const renderedRepairContext = repairContext.length > 0
     ? repairContext.map((repair) =>
         `- ${repair.id} [${repair.reason}]: ${repair.diagnostic}`,
@@ -65,27 +61,16 @@ that was submitted actually does what it claims. You are not evaluating
 runtime behavior (that is manual_test's mandate) or product alignment (that
 is prd_audit's mandate).
 
-Score the diff against exactly these five rubric items:
+Score the diff against exactly these four rubric items:
 
 1. Tautology: every new/changed test would fail without the diff.
 2. Scope: diff scoped to the plan, no unrelated files. \`.docs/architecture/\`, \`.docs/plans/\`, \`.docs/specs/\`, and \`.docs/stories/\` are already-approved DECIDE artifacts; modification of one passes Scope only when the approved plan justifies it, otherwise it is a Scope failure.
 3. Root cause: the change addresses the stated defect, not a symptom.
 4. Completeness: every planned task's work is present in the diff.
-5. Wiring: a static property of the diff — every new or changed production
-surface is called from a path that reaches a configured production entry point.
-This is code reachability as written, not runtime behavior; runtime behavior
-remains manual_test's mandate.
 
-For Wiring, use only these configured production entry points, rendered
-verbatim below:
-
-${renderedEntryPoints}
-
-When entry points are not configured, report Wiring as not-judged and do not
-infer entry points or fail the item on that undefined premise. A plan task's
-own Steps may declare intentional non-wiring only when they explicitly state
-that it ships scaffolding for a later task or feature; honor that declared
-intent for those symbols. Silence is never an implicit waiver.
+Do not judge reachability from production entry points. Whether a changed
+surface is called from a configured entry point is not a rubric item and is
+never a reason to fail this review; refactoring legitimately moves call paths.
 
 The engine supplies cumulative aggregate-failure context recorded after base
 advances. It survives repeated rebases without relying on rewritten commit
@@ -138,8 +123,8 @@ each plan task to a specific commit. That per-task SHA/reachability/
 corroboration style of reasoning is explicitly forbidden for this rubric
 item; it is the failure mode this gate exists to avoid reintroducing.
 
-All-or-FAIL rule: PASS only if all five rubric items pass. If any one of the
-five rubric items fails, the overall verdict is FAIL.
+All-or-FAIL rule: PASS only if all four rubric items pass. If any one of the
+four rubric items fails, the overall verdict is FAIL.
 
 Before judging, run only the scoped tests exercised by this diff (the changed
 test files) through \`conduct-ts scoped-run\` — observe their output firsthand.
@@ -147,7 +132,7 @@ test files) through \`conduct-ts scoped-run\` — observe their output firsthand
 When you are done, write your verdict to \`.pipeline/build-review.json\` using
 exactly this reviewer-output JSON schema:
 
-{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[], wiring?: string[] } }
+{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] } }
 
 The engine derives PASS when \`failedRubrics\` is empty and FAIL otherwise.
 It also derives the public rubric booleans from this list; do not write a
@@ -155,9 +140,8 @@ It also derives the public rubric booleans from this list; do not write a
 the matching \`findings.<rubric>\` list for each one.
 \`reasons\` remains a backward-compatible one-line summary for each failing
 rubric item, plus any required relocation-audit evidence stated above. When
-Completeness fails, populate \`findings.completeness\`; when Wiring fails, populate
-\`findings.wiring\`; use the matching \`findings.<rubric>\` key for the
-other rubric items. Each findings list contains **every independent finding**
+Completeness fails, populate \`findings.completeness\`; use the matching
+\`findings.<rubric>\` key for the other rubric items. Each findings list contains **every independent finding**
 you observed for that item. Use one finding per array entry — do not compress multiple actionable
 gaps into one summary. The list must be exhaustive for the diff and plan you
 were given. For a PASS verdict, omit \`findings\` or leave it empty.

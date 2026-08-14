@@ -128,8 +128,7 @@ describe('#1336 disputed wiring kickback build outcome', () => {
           scope: false,
           rootCause: false,
           completeness: false,
-          wiring: false,
-        },
+          },
         findings: { tautology: ['productionEntry is unreachable'] },
       }),
     );

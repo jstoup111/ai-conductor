@@ -619,19 +619,6 @@ export interface HarnessConfig {
    */
   ci_watch?: CiWatchConfig;
   /** Entry points supplied to the build_review wiring rubric. */
-  wiring?: WiringConfig;
-}
-
-/**
- * Build-review wiring rubric configuration.
- */
-export interface WiringConfig {
-  /**
-   * Repo-relative production entry points (e.g. CLI/bin scripts, package
-   * `main`/`index.ts`) that the build-review grader uses when judging static
-   * wiring reachability. Absent or empty means the wiring item is not judged.
-   */
-  entry_points?: string[];
 }
 
 /**

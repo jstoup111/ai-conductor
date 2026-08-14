@@ -175,7 +175,7 @@ async function writeBuildReviewVerdict(
   const path = join(repo, '.pipeline/build-review.json');
   const body: Record<string, unknown> = {
     verdict,
-    rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+    rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
   };
   if (codeStamp) body.codeStamp = codeStamp;
   await writeFile(path, JSON.stringify(body, null, 2));

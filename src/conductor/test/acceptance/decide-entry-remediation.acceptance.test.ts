@@ -57,8 +57,8 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
               verdict: 'FAIL',
               reasons: ['the approved plan lacks the tested remediation path'],
               rubric: options.legacyBuildReviewVerdict
-                ? { tautology: false, scope: false, rootCause: false, completeness: true }
-                : { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+                ? { tautology: false, scope: false, rootCause: false }
+                : { tautology: false, scope: false, rootCause: false, completeness: true },
             }),
             'utf8',
           );
@@ -143,7 +143,7 @@ describe('acceptance: remediation rewind observes the DECIDE-entry policy', () =
     expect(result.calls).toContain('build_review');
     expect(result.calls).not.toContain('remediate');
     expect(result.calls).not.toContain('plan');
-    expect(result.halt).toMatch(/rubric\.wiring/);
+    expect(result.halt).toMatch(/rubric\.completeness/);
   });
 
   it('a matching grant still refuses entry when remediation reopens a satisfied DECIDE artifact', async () => {

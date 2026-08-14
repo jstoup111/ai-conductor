@@ -1,5 +1,6 @@
 /**
- * Acceptance coverage for ST-1496-1 and ST-1496-3 in
+ * Acceptance coverage for build_review's retired wiring rubric and for
+ * ST-1496-3 in
  * `.docs/stories/per-task-wired-into-contracts-cost-build-cycles-th.md`.
  *
  * These specs drive the real production boundaries. The first crosses config
@@ -50,9 +51,9 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () => {
-  it('runs the named build_review-to-build kickback for a wiring-only grader FAIL', async () => {
-    const dir = await initRepo('build-review-wiring-');
+describe('acceptance: build_review no longer judges wiring', () => {
+  it('passes a production surface that no configured entry point reaches', async () => {
+    const dir = await initRepo('build-review-no-wiring-');
     const planPath = join(dir, '.docs', 'plans', 'fixture.md');
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -70,7 +71,7 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
     await writeFile(join(dir, 'src', 'entry.ts'), 'export function main(): void {}\n');
     await git(dir, 'add', '.');
     await git(dir, 'commit', '-qm', 'base');
-    await git(dir, 'checkout', '-qb', 'feature/wiring-review');
+    await git(dir, 'checkout', '-qb', 'feature/no-wiring-review');
     await writeFile(
       join(dir, 'src', 'orphan.ts'),
       'export function orphanedProductionSurface(): string { return "unreached"; }\n',
@@ -84,14 +85,9 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
       await writeFile(
         join(dir, '.pipeline', 'build-review.json'),
         JSON.stringify({
-          verdict: 'FAIL',
-          reasons: ['wiring: orphanedProductionSurface is not production-reachable'],
-          findings: {
-            wiring: [
-              'orphanedProductionSurface is unreached; searched paths: src/entry.ts, src/orphan.ts',
-            ],
-          },
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
+          verdict: 'PASS',
+          reasons: [],
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
         }),
       );
       return { success: true, output: 'graded', exitCode: 0 };
@@ -100,71 +96,23 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
       invoke,
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
-    const config: HarnessConfig = {
-      wiring: { entry_points: ['src/entry.ts'] },
-    };
+    // A stale consumer config still carrying the retired key must neither fail
+    // validation nor reach the grader.
+    const config = { wiring: { entry_points: ['src/entry.ts'] } } as unknown as HarnessConfig;
     const buildReviewRunner = new DefaultStepRunner(provider, 'maker-session', dir, {
       config,
       planPath,
     });
 
-    const state: Record<string, unknown> = {};
-    for (const step of ALL_STEPS) {
-      if (step.name === 'build_review') break;
-      state[step.name] = 'done';
-    }
-    state.build_review = 'pending';
-    state.complexity_tier = 'S';
-    state.feature_desc = 'wiring-review-fixture';
-    state.track = 'technical';
-    const stateFilePath = join(dir, 'conduct-state.json');
-    await writeState(stateFilePath, state as ConductState);
+    const result = await buildReviewRunner.run('build_review', { complexity_tier: 'S' });
 
-    const calls: StepName[] = [];
-    let buildStateAtDispatch: ConductState['build'];
-    const runner: StepRunner = {
-      run: async (step) => {
-        calls.push(step);
-        if (step === 'build_review') {
-          return buildReviewRunner.run(step, { complexity_tier: 'S' });
-        }
-        // The assertion target is the named-route transition. A bounded
-        // unsuccessful build dispatch stops subsequent retries after the
-        // conductor has returned the failed review to BUILD.
-        if (step === 'build') {
-          const persisted = await readState(stateFilePath);
-          if (!persisted.ok) throw new Error(persisted.error.message);
-          buildStateAtDispatch = persisted.value.build;
-          return { success: false, output: 'stop after named-route observation' };
-        }
-        return { success: true };
-      },
-    };
-    const conductor = new Conductor({
-      stateFilePath,
-      stepRunner: runner,
-      events: new ConductorEventEmitter(),
-      projectRoot: dir,
-      mode: 'auto',
-      daemon: true,
-      verifyArtifacts: true,
-      config,
-      maxRetries: 1,
-    } as never);
+    expect(result.success).toBe(true);
+    expect(capturedPrompt.toLowerCase()).not.toContain('wiring');
+    expect(capturedPrompt).not.toContain('src/entry.ts');
+    expect(capturedPrompt).toMatch(/exactly these four rubric items/i);
 
-    await conductor.run();
-
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(capturedPrompt).toContain('src/entry.ts');
-    expect(capturedPrompt).toMatch(/exactly these five rubric items/i);
-    expect(capturedPrompt).toMatch(/wiring/i);
-    expect(calls).toContain('build_review');
-    expect(calls).toContain('build');
-    expect(buildStateAtDispatch).toBe('in_progress');
     const completion = await checkStepCompletion(dir, 'build_review', { config });
-    expect(completion.done).toBe(false);
-    expect(completion.routeClass).toBe('named-route');
-    expect(completion.reason).toContain('orphanedProductionSurface');
+    expect(completion.done).toBe(true);
   });
 });
 
