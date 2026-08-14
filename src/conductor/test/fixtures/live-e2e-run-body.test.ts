@@ -8,6 +8,45 @@ vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
 }));
 
 describe('runLiveE2ERunBody authentication source', () => {
+  it('installs the live Codex API key before construction, rather than repairing a cached-login provider afterward', async () => {
+    const { createLiveProvider } = await import('./live-e2e-run-body.js') as {
+      createLiveProvider: (descriptor: LiveE2EProviderDescriptor, credential: string | undefined) => LLMProvider;
+    };
+    const priorKey = process.env.CODEX_API_KEY;
+    const createProvider = vi.fn(() => ({
+      source: process.env.CODEX_API_KEY ? 'api-key' : 'cached-login',
+      invoke: vi.fn(),
+      invokeInteractive: vi.fn(),
+    }));
+    const descriptor = {
+      credentialEnvVar: 'CODEX_API_KEY',
+      createProvider,
+    } as unknown as LiveE2EProviderDescriptor;
+
+    try {
+      delete process.env.CODEX_API_KEY;
+      const constructedFirst = descriptor.createProvider() as LLMProvider & { source: string };
+
+      const constructedWithCredential = createLiveProvider(
+        descriptor,
+        'live-codex-key',
+      ) as LLMProvider & { source: string };
+
+      expect({
+        constructedFirst: constructedFirst.source,
+        constructedWithCredential: constructedWithCredential.source,
+        constructorCalls: createProvider.mock.calls.length,
+      }).toEqual({
+        constructedFirst: 'cached-login',
+        constructedWithCredential: 'api-key',
+        constructorCalls: 2,
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
   it('rejects a descriptor authentication-source mismatch naming the expected and resolved sources', async () => {
     const { assertDescriptorAuthenticationSource } = await import('./live-e2e-run-body.js') as {
       assertDescriptorAuthenticationSource: (

@@ -141,6 +141,19 @@ export function liveProviderAvailable(descriptor: LiveE2EProviderDescriptor): bo
   }
 }
 
+/**
+ * Providers select their authentication source during construction.  Keep the
+ * credential snapshot explicit so a live leg cannot construct Codex as a
+ * cached-login provider and attempt to add its API key afterward.
+ */
+export function createLiveProvider(
+  descriptor: LiveE2EProviderDescriptor,
+  credential: string | undefined,
+): LLMProvider {
+  if (credential) process.env[descriptor.credentialEnvVar] = credential;
+  return descriptor.createProvider();
+}
+
 export function defineLiveE2EProviderSmoke(descriptor: LiveE2EProviderDescriptor): void {
   const tokenCap = Number(process.env.DAEMON_E2E_LIVE_TOKEN_CAP ?? '100000');
   const shouldRun = liveProviderAvailable(descriptor);
@@ -177,7 +190,10 @@ export async function runLiveE2ERunBody(
   const pipelineDir = join(worktreeDir, '.pipeline');
   const statePath = join(pipelineDir, 'conduct-state.json');
   const planPath = join(worktreeDir, `.docs/plans/${slug}.md`);
-  const provider = descriptor.createProvider();
+  const provider = createLiveProvider(
+    descriptor,
+    process.env[descriptor.credentialEnvVar],
+  );
   await assertDescriptorAuthenticationSource(descriptor, provider);
   let meter = new TokenMeter(provider);
   let providerHome: ProviderHome | undefined;
