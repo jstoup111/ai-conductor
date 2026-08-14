@@ -109,7 +109,10 @@ type AdvancedPublicationTransition = (
   transition: PublicationTransition,
   before: PublicationSnapshot,
   after: PublicationSnapshot,
-) => Promise<{ kind: 'advanced'; transition: PublicationTransition }>;
+) => Promise<
+  | { kind: 'advanced'; transition: PublicationTransition }
+  | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
+>;
 
 async function advancedPublicationTransition(
   transition: PublicationTransition,
@@ -1136,6 +1139,95 @@ describe('advancedPublicationTransition', () => {
       });
     },
   );
+
+  it('retries when the post-effect owned dimension is indeterminate', async () => {
+    await expect(
+      advancedPublicationTransition(
+        'judge_pr_prose',
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
+        }),
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: false },
+        }),
+      ),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'judge_pr_prose',
+      reason: 'publication_transition_indeterminate',
+    });
+  });
+
+  it('advances when a previously indeterminate owned dimension becomes determinate', async () => {
+    await expect(
+      advancedPublicationTransition(
+        'judge_pr_prose',
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: false },
+        }),
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+        }),
+      ),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+  });
+
+  it('exhausts the existing FINISH retry budget for repeated indeterminate post-effect observations', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'finish-publication-indeterminate-'));
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    const state: Record<string, unknown> = {
+      complexity_tier: 'S',
+      feature_desc: 'finish-publication-indeterminate',
+    };
+    for (const step of [
+      'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
+      'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+      'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+      'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+      'architecture_review_as_built', 'retro', 'rebase',
+    ] satisfies StepName[]) {
+      state[step] = 'done';
+    }
+    await writeState(stateFilePath, state as ConductState);
+
+    const advance = vi.fn(async () => {
+      const result = await advancedPublicationTransition(
+        'judge_pr_prose',
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
+        }),
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: false },
+        }),
+      );
+      return result?.kind === 'publication_retry'
+        ? result
+        : { kind: 'human_required' as const, reason: 'ambiguous_pr_identity' as const };
+    });
+
+    try {
+      await new Conductor({
+        stateFilePath,
+        stepRunner: { run: vi.fn(async () => ({ success: true })) },
+        finishPublication: { advance },
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        fromStep: 'finish',
+        mode: 'auto',
+        maxRetries: 3,
+        git: async () => ({ stdout: '' }),
+        gh: async () => ({ stdout: '' }),
+        runGh: async () => ({ stdout: '' }),
+      }).run();
+
+      expect(advance).toHaveBeenCalledTimes(3);
+      await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        'FINISH publication retry exhausted: publication_transition_indeterminate',
+      );
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('advanceFinishPublication unmoved transition dimensions', () => {
