@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,193 +5,28 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { describe, expect, it, vi } from 'vitest';
-import { ClaudeProvider } from '../../src/execution/claude-provider.js';
-import type {
-  InvokeOptions,
-  InvokeResult,
-  LLMProvider,
-} from '../../src/execution/llm-provider.js';
-import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
-import { Conductor } from '../../src/engine/conductor.js';
+import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { runDaemon } from '../../src/engine/daemon.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
-import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { StepName } from '../../src/types/steps.js';
 import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
-import { initTestRepo } from '../fixtures/git-repo.js';
-import { dispatchableStepCommands } from '../fixtures/step-command-preflight.js';
-import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
+import {
+  assertSuccessfulCredentialedRun,
+  assertTokenCap,
+  dispatchAfterLivePreflight,
+  liveProviderAvailable,
+  ProvisionedHome,
+  runLiveE2ERunBody,
+  TokenMeter,
+} from '../fixtures/live-e2e-run-body.js';
+import { LIVE_E2E_PROVIDERS } from '../fixtures/live-e2e-providers.js';
 
 const smokeCapability = 'credentialed';
 
-// TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
-//
-// Both the meter and the cap predicate are deliberately file-local and
-// UNEXPORTED. This live smoke is their only consumer, so exporting them from a
-// shared test fixture module would add a new exported surface that no
-// production code reaches — exactly what the wiring-reachability gate's orphan
-// backstop reports as a gap. Their contract is covered by the ungated
-// self-check below, which the `daemon-e2e-live-agent-tier` acceptance test runs
-// in the ordinary suite by invoking this file directly.
-
-/** Test-local provider decorator that records the tokens used by this live smoke. */
-class TokenMeter implements LLMProvider {
-  readonly supportsSessionResume: boolean | undefined;
-  readonly lifecycleCapability: LLMProvider['lifecycleCapability'];
-  readonly readiness: LLMProvider['readiness'];
-  readonly prepareSelfHostAuth: LLMProvider['prepareSelfHostAuth'];
-  readonly resolveSelfHostExecutable: LLMProvider['resolveSelfHostExecutable'];
-  totalTokens = 0;
-  totalTurns = 0;
-  unmetered = 0;
-  /**
-   * Step attribution for every unmetered dispatch. A dispatch that reports no
-   * token usage is only acceptable past the PR-creation boundary — see
-   * assertSuccessfulCredentialedRun.
-   */
-  readonly unmeteredSteps: (StepName | 'unattributed')[] = [];
-
-  constructor(
-    private readonly provider: LLMProvider,
-    private readonly currentStep: () => StepName | undefined = () => undefined,
-  ) {
-    this.supportsSessionResume = provider.supportsSessionResume;
-    this.lifecycleCapability = provider.lifecycleCapability;
-    this.readiness = provider.readiness?.bind(provider);
-    this.prepareSelfHostAuth = provider.prepareSelfHostAuth?.bind(provider);
-    this.resolveSelfHostExecutable = provider.resolveSelfHostExecutable?.bind(provider);
-  }
-
-  async invoke(options: InvokeOptions): Promise<InvokeResult> {
-    const result = await this.provider.invoke(options);
-    this.record(result);
-    return result;
-  }
-
-  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
-    const result = await this.provider.invokeInteractive(options);
-    if (result) this.record(result);
-    return result;
-  }
-
-  private record(result: InvokeResult): void {
-    if (!result.tokenUsage) {
-      this.unmetered += 1;
-      this.unmeteredSteps.push(this.currentStep() ?? 'unattributed');
-      return;
-    }
-    this.totalTokens += result.tokenUsage.input + result.tokenUsage.output;
-    this.totalTurns += result.tokenUsage.numTurns ?? 0;
-  }
-}
-
-/** Test-local provider decorator that supplies the isolated home to every dispatch. */
-class ProvisionedHome implements LLMProvider {
-  readonly supportsSessionResume: boolean | undefined;
-  readonly lifecycleCapability: LLMProvider['lifecycleCapability'];
-  readonly readiness: LLMProvider['readiness'];
-  readonly prepareSelfHostAuth: LLMProvider['prepareSelfHostAuth'];
-  readonly resolveSelfHostExecutable: LLMProvider['resolveSelfHostExecutable'];
-  dispatches = 0;
-
-  constructor(
-    private readonly provider: LLMProvider,
-    private readonly selfHost: NonNullable<InvokeOptions['selfHost']>,
-  ) {
-    this.supportsSessionResume = provider.supportsSessionResume;
-    this.lifecycleCapability = provider.lifecycleCapability;
-    this.readiness = provider.readiness?.bind(provider);
-    this.prepareSelfHostAuth = provider.prepareSelfHostAuth?.bind(provider);
-    this.resolveSelfHostExecutable = provider.resolveSelfHostExecutable?.bind(provider);
-  }
-
-  invoke(options: InvokeOptions): Promise<InvokeResult> {
-    this.dispatches += 1;
-    return this.provider.invoke({ ...options, selfHost: this.selfHost });
-  }
-
-  invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
-    this.dispatches += 1;
-    return this.provider.invokeInteractive({ ...options, selfHost: this.selfHost });
-  }
-}
-
-type LiveProviderPreflight = (homeDir: string, providerKey?: string) => Promise<void>;
-
-/** Run the dispatch continuation only after every live-smoke command resolves. */
-async function dispatchAfterLivePreflight(
-  home: Pick<ProviderHome, 'homeDir'>,
-  dispatch: () => Promise<void>,
-  preflight: LiveProviderPreflight = dispatchableStepCommands.assertResolves,
-): Promise<void> {
-  await preflight(home.homeDir, 'claude');
-  await dispatch();
-}
-
-function assertTokenCap(totalTokens: number, unmetered: number, cap: number): void {
-  if (totalTokens > cap) {
-    throw new Error(
-      `Token cap ${cap} exceeded: observed ${totalTokens}; unmetered results: ${unmetered}`,
-    );
-  }
-}
-
-/**
- * Steps allowed to contribute an unmetered dispatch.
- *
- * The fixture worktree has no git remote, so publication cannot create a real
- * PR. `finish`'s bounded PR-prose judgment therefore has nothing to inspect and
- * comes back without token usage (observed as `{"kind":"provider_unavailable"}`,
- * `finish-publication.ts:987`). Operator decision, 2026-08-07: driving the
- * pipeline *up to* PR creation is the success criterion for this smoke; PR
- * creation itself failing in the fixture is expected, not a regression.
- *
- * This is deliberately an allow-list of one rather than a relaxed count. Every
- * step before the publication boundary must still report usage — an unmetered
- * `build` or `build_review` is the metering defect the assertion exists to
- * catch, and it stays caught.
- */
-const STEPS_ALLOWED_UNMETERED: readonly StepName[] = ['finish'];
-
-function assertSuccessfulCredentialedRun(
-  provisioned: Pick<ProvisionedHome, 'dispatches'> | undefined,
-  meter: Pick<TokenMeter, 'totalTurns' | 'totalTokens' | 'unmetered' | 'unmeteredSteps'>,
-): void {
-  expect(provisioned?.dispatches ?? 0).toBeGreaterThan(0);
-  expect(meter.totalTurns).toBeGreaterThan(0);
-  expect(meter.totalTokens).toBeGreaterThan(0);
-
-  // Named so a failure says which step went unmetered instead of "expected 1 to be 0".
-  const disallowed = meter.unmeteredSteps.filter(
-    (step) => !STEPS_ALLOWED_UNMETERED.includes(step as StepName),
-  );
-  expect(disallowed).toEqual([]);
-  // Attribution must be real: an unmetered dispatch we cannot attribute to a
-  // step is itself a failure, so the allow-list can never be satisfied by a
-  // missing step_started event.
-  expect(meter.unmeteredSteps.length).toBe(meter.unmetered);
-}
-
-const fixturePlanPath = fileURLToPath(
-  new URL('../fixtures/daemon-e2e/plan.md', import.meta.url),
-);
-const fixtureStoriesPath = fileURLToPath(
-  new URL('../fixtures/daemon-e2e/stories.md', import.meta.url),
-);
 /**
  * The documented default keeps this manually-dispatched smoke bounded while
  * allowing operators to lower it with DAEMON_E2E_LIVE_TOKEN_CAP.
  */
 const tokenCap = Number(process.env.DAEMON_E2E_LIVE_TOKEN_CAP ?? '100000');
-
-function claudeBinaryAvailable(): boolean {
-  try {
-    execFileSync('which', ['claude'], { stdio: 'pipe' });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
   return existsSync(join(worktreeDir, '.pipeline/DONE')) &&
@@ -200,8 +34,8 @@ async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Pr
     !existsSync(join(worktreeDir, `.daemon/parked/${slug}`));
 }
 
-const hostToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-const shouldRun = claudeBinaryAvailable() && !!hostToken;
+const claude = LIVE_E2E_PROVIDERS[0];
+const shouldRun = liveProviderAvailable(claude);
 const advisoryProbe = process.env.DAEMON_E2E_LIVE_ADVISORY_PROBE === '1';
 
 describe('daemon E2E live terminal guard', () => {
@@ -426,7 +260,7 @@ describe('daemon E2E live terminal guard', () => {
       await provisioned.invoke({ prompt: 'must not be dispatched' } as InvokeOptions);
     });
     const preflightFailure = await dispatchAfterLivePreflight(
-      { homeDir: '/tmp/home' }, dispatch, preflight,
+      { homeDir: '/tmp/home' }, dispatch, 'claude', preflight,
     )
       .then(() => undefined, (error: unknown) => error);
 
@@ -471,7 +305,7 @@ describe('daemon E2E live terminal guard', () => {
       await dispatchAfterLivePreflight(
         { homeDir: '/tmp/provisioned-home' },
         async () => { result = await provisioned.invoke({ prompt: '/pipeline' } as InvokeOptions); },
-        preflight,
+        'claude', preflight,
       );
       await dumpPipelineDiagnostics(worktreeDir);
 
@@ -530,197 +364,6 @@ describe('daemon E2E live terminal guard', () => {
 
 describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
   it('finishes a seeded daemon fixture with a trailered task commit', async () => {
-    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
-    const slug = 'daemon-e2e-live';
-    const pipelineDir = join(worktreeDir, '.pipeline');
-    const statePath = join(pipelineDir, 'conduct-state.json');
-    const planPath = join(worktreeDir, `.docs/plans/${slug}.md`);
-    const provider = new ClaudeProvider();
-    let meter = new TokenMeter(provider);
-    let providerHome: ProviderHome | undefined;
-    let provisioned: ProvisionedHome | undefined;
-    let baselineSha: string | undefined;
-
-    try {
-      // test/setup.ts enables this guard for the ordinary suite. This opt-in
-      // smoke is the explicit exception immediately before real dispatch.
-      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-      expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeUndefined();
-
-      await initTestRepo(worktreeDir);
-      await mkdir(join(worktreeDir, '.docs/plans'), { recursive: true });
-      await mkdir(join(worktreeDir, '.docs/stories'), { recursive: true });
-      await mkdir(join(worktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
-      await copyFile(fixturePlanPath, planPath);
-      await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
-      // Task 1's deliverable is deliberately NOT seeded. Seeding it made the
-      // baseline commit already satisfy the plan, so a live agent correctly
-      // declined to redo finished work and the run ended with no task commit
-      // at all — a fixture bug that read as a product failure.
-      const { provisionLiveProviderHome } = await import('../fixtures/live-provider-home.js');
-      providerHome = await provisionLiveProviderHome(
-        fileURLToPath(new URL('../../../../', import.meta.url)),
-        hostToken,
-      );
-      provisioned = new ProvisionedHome(provider, {
-        executable: 'claude',
-        env: providerHome.childEnv(),
-        args: providerHome.childArgs(),
-        teardown: () => providerHome?.teardown() ?? Promise.resolve(),
-      });
-      // Tracks the running step so the meter can attribute an unmetered
-      // dispatch. Populated from the conductor's own step_started events.
-      const stepTracker: { current: StepName | undefined } = { current: undefined };
-      meter = new TokenMeter(provisioned, () => stepTracker.current);
-      await dispatchAfterLivePreflight(providerHome, async () => {
-      // The harness repo gitignores its runtime dirs; without this the
-      // review-era .pipeline writes (rubric caches, verdicts) surface as
-      // uncommitted paths and the completion gate halts the fixture dirty
-      // (0.103.0 release-gate failure — "17 uncommitted paths:
-      // .pipeline/build-review.json …", visible via the embedded diagnostics).
-      // Mirror the harness repo's full runtime-dir ignore set — each missing
-      // entry is a future dirty-tree halt as another pipeline step writes its
-      // runtime state (0.103.0 gate: .pipeline caches; 0.102.0 retry gate:
-      // .memory notes).
-      await writeFile(
-        join(worktreeDir, '.gitignore'),
-        ['.pipeline/', '.daemon/', '.memory/', '.memory*.bak/', '.worktrees/', '.claude/'].join('\n') + '\n',
-      );
-      await execa('git', ['add', '-A'], { cwd: worktreeDir });
-      await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], {
-        cwd: worktreeDir,
-      });
-      const { stdout: seededBaselineSha } = await execa('git', ['rev-parse', 'HEAD'], {
-        cwd: worktreeDir,
-      });
-      baselineSha = seededBaselineSha;
-      // Fails here rather than 5 minutes and one live dispatch later if the
-      // baseline ever ships Task 1's deliverable again.
-      const { stdout: seededFiles } = await execa(
-        'git', ['ls-tree', '--name-only', '-r', 'HEAD'], { cwd: worktreeDir },
-      );
-      expect(seededFiles.split('\n')).not.toContain('test/fixtures/daemon-e2e/touched.txt');
-      await execa('git', ['checkout', '-b', `feature/${slug}`], { cwd: worktreeDir });
-
-      await mkdir(pipelineDir, { recursive: true });
-      await writeFile(
-        statePath,
-        JSON.stringify({
-          worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-          complexity_tier: 'S', track: 'technical', stories: 'done', conflict_check: 'done',
-          plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
-          architecture_review: 'done', acceptance_specs: 'done',
-        }),
-      );
-
-      const runner = new DefaultStepRunner(meter, 'daemon-e2e-live-session', worktreeDir, {
-        featureDesc: slug,
-        pipelineDir,
-        planPath,
-        providerKey: 'claude',
-        mode: 'auto',
-        // Parity with the scripted fixture (daemon-e2e-fixture.test.ts): this
-        // fixture has no runnable scoped-test command in its isolated
-        // temporary repository, so the tautology preflight (#1618) fails
-        // instantly with missing-scoped-configuration and the infrastructure
-        // failure blocks the effective verdict — the walk then never writes
-        // DONE (release-gate failure on the 0.102.0 merge, both attempts).
-        // Disable only the tautology branch; the other three fan-out branches
-        // still run against the live provider.
-        config: { build_review: { maxParallel: 4, rubrics: { tautology: { enabled: false } } } },
-        buildReviewInputOptions: {
-          inspectTestSuite: async () => ({
-            status: 'CURRENT',
-            evidence: {
-              provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(),
-            },
-          } as never),
-        },
-        // Parity with the scripted fixture's resolver stub: the disposition
-        // resolver derives the feature identity from the linked-worktree
-        // layout (`<main>/.worktrees/<slug>`), which this standalone temp
-        // repository does not have — resolveBuildReviewFeatureIdentity()
-        // returns undefined, resolveEffectiveBuildReviewVerdict() fails with
-        // "feature identity is unavailable", and the step FAILs every attempt
-        // even though all enabled rubrics judged clean (0.102.0 release gate,
-        // #1667 merge). Derive the effective verdict from the aggregate alone;
-        // there are no operator dispositions in a freshly seeded fixture.
-        buildReviewEffectiveResolver: async (_root: string, aggregate: unknown) => {
-          const effective = deriveEffectiveBuildReviewVerdict(aggregate);
-          return effective
-            ? {
-                ok: true as const,
-                feature: { version: 'v1' as const, repository: worktreeDir, feature: slug },
-                effective,
-              }
-            : { ok: false as const, reason: 'fixture aggregate is invalid' };
-        },
-      });
-      await runDaemon(
-        {
-          discoverBacklog: async () => [{ slug, tier: 'S', track: 'technical' }],
-          runFeature: async (item) => {
-            const events = new ConductorEventEmitter();
-            events.on('step_started', (event) => {
-              if (event.type === 'step_started') stepTracker.current = event.step;
-            });
-            const conductor = new Conductor({
-              stateFilePath: statePath,
-              stepRunner: runner,
-              events,
-              projectRoot: worktreeDir,
-              fromStep: 'build',
-              mode: 'auto',
-              daemon: true,
-              verifyArtifacts: false,
-              fullSuiteVerifier: {
-                ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
-                inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
-              },
-              escalateBuildFailure: async () => ({}),
-            });
-            await conductor.run();
-            return { slug: item.slug, status: 'done' };
-          },
-        },
-        { concurrency: 1, once: true },
-      );
-      });
-
-      const { stdout: commitSha } = await execa('git', ['rev-parse', 'HEAD'], {
-        cwd: worktreeDir,
-      });
-      const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
-        cwd: worktreeDir,
-      });
-      const { stdout: changedFiles } = await execa(
-        'git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], { cwd: worktreeDir },
-      );
-
-      assertSuccessfulCredentialedRun(provisioned, meter);
-
-      expect({
-        terminal: await hasSuccessfulTerminalState(worktreeDir, slug),
-        madeCommit: commitSha.trim() !== baselineSha?.trim(),
-        touchedFixture: changedFiles.split('\n').includes('test/fixtures/daemon-e2e/touched.txt'),
-        taskTrailer: /(?:^|\n)Task:\s*1\s*$/m.test(commitBody),
-      }).toEqual({ terminal: true, madeCommit: true, touchedFixture: true, taskTrailer: true });
-    } catch (error) {
-      const dump = await dumpPipelineDiagnostics(worktreeDir);
-      // Embed the dump in the failure itself: CI's smoke reporter keeps
-      // failureMessages but drops console output.
-      if (error instanceof Error) {
-        error.message += `\n\n--- pipeline diagnostics ---\n${dump}`;
-      }
-      throw error;
-    } finally {
-      console.info(
-        `daemon E2E live smoke total tokens: ${meter.totalTokens}; ` +
-        `dispatches: ${provisioned?.dispatches ?? 0}; cap: ${tokenCap}`,
-      );
-      assertTokenCap(meter.totalTokens, meter.unmetered, tokenCap);
-      await providerHome?.teardown();
-      await rm(worktreeDir, { recursive: true, force: true });
-    }
+    await runLiveE2ERunBody(claude, tokenCap);
   }, 20 * 60_000);
 });
