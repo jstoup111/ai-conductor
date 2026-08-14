@@ -6,7 +6,7 @@
 
 import { readFile, writeFile, mkdir, rename, readdir, mkdtemp, link, unlink, rmdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   createConductStateLease,
@@ -52,6 +52,8 @@ export class CorruptLedgerError extends Error {
     public readonly quarantinePath?: string,
     /** Defined when corrupt bytes could not be quarantined. */
     public readonly quarantineDiagnostic?: string,
+    /** SHA-256 identity of corrupt bytes, retained even when quarantine fails. */
+    public readonly corruptBytesDigest?: string,
   ) {
     super(`Intake ledger at ${ledgerPath} is corrupt: ${reason}`);
     this.name = 'CorruptLedgerError';
@@ -244,6 +246,10 @@ async function quarantineCorruptBytes(path: string, bytes: Buffer): Promise<stri
   }
 }
 
+function corruptBytesDigest(bytes: Buffer | undefined): string | undefined {
+  return bytes === undefined ? undefined : createHash('sha256').update(bytes).digest('hex');
+}
+
 async function readStore(path: string): Promise<LedgerStore> {
   const result = await loadStore(path);
   if (result.kind === 'absent') return {};
@@ -260,7 +266,13 @@ async function readStore(path: string): Promise<LedgerStore> {
     const reason = quarantineDiagnostic === undefined
       ? result.reason
       : `${result.reason}; ${quarantineDiagnostic}`;
-    throw new CorruptLedgerError(path, reason, quarantinePath, quarantineDiagnostic);
+    throw new CorruptLedgerError(
+      path,
+      reason,
+      quarantinePath,
+      quarantineDiagnostic,
+      corruptBytesDigest(result.bytes),
+    );
   }
   return result.store;
 }

@@ -20,6 +20,18 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import type { Envelope } from '../../../../src/engine/engineer/intake/port.js';
 
+const quarantineFailure = vi.hoisted(() => ({ active: false }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readdir: async (...args: Parameters<typeof actual.readdir>) => {
+      if (quarantineFailure.active) throw new Error('quarantine unavailable');
+      return actual.readdir(...args);
+    },
+  };
+});
+
 const here = dirname(fileURLToPath(import.meta.url));
 const INTAKE_LOOP_SRC = join(here, '..', '..', '..', '..', 'src', 'engine', 'engineer', 'intake', 'intake-loop.ts');
 
@@ -562,6 +574,75 @@ describe('runIntakeLoop', () => {
       expect(corruptionLogs.join('\n')).not.toContain(firstCorruptBytes);
       expect(corruptionLogs.join('\n')).not.toContain(secondCorruptBytes);
     } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('reports distinct corrupt byte states when quarantine creation fails, while suppressing repeats', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const { createLedger } = await import('../../../../src/engine/engineer/intake/ledger.js');
+    const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
+    const directory = await mkdtemp(join(tmpdir(), 'intake-loop-quarantine-failure-'));
+    const ledgerPath = join(directory, 'ledger.json');
+    const firstCorruptBytes = '[]';
+    const secondCorruptBytes = 'null';
+    const ledger = createLedger(ledgerPath);
+    const logs = vi.fn((_msg: string) => {});
+    const STOP = { __stop: true };
+    let pollCalls = 0;
+    let sleepCalls = 0;
+
+    try {
+      await writeFile(ledgerPath, firstCorruptBytes, 'utf8');
+      quarantineFailure.active = true;
+      const poll = vi.fn(async () => {
+        pollCalls += 1;
+        if (pollCalls === 3) {
+          await writeFile(ledgerPath, secondCorruptBytes, 'utf8');
+        }
+        return ledger.list() as Promise<any[]>;
+      });
+      const sleep = vi.fn(async (_ms: number) => {
+        sleepCalls += 1;
+        if (sleepCalls === 4) throw STOP;
+      });
+
+      await runIntakeLoop(
+        {
+          poll,
+          enqueue: async (_envelope: unknown) => {},
+          notify: async (_ideas: unknown[]) => {},
+          sleep,
+          now: () => new Date(),
+          log: logs,
+        },
+        { intervalMs: 1 },
+      ).catch((error: unknown) => {
+        if (error !== STOP) throw error;
+      });
+
+      quarantineFailure.active = false;
+      const corruptionLogs = logs.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.startsWith('intake loop: corrupt ledger'));
+      expect({
+        pollCalls,
+        corruptionLogs,
+        quarantineFiles: (await readdir(directory)).filter((name) => name.startsWith('ledger.json.corrupt-')),
+      }).toEqual({
+        pollCalls: 4,
+        corruptionLogs: [
+          expect.stringContaining('quarantine=failed to quarantine corrupt ledger:'),
+          expect.stringContaining('quarantine=failed to quarantine corrupt ledger:'),
+        ],
+        quarantineFiles: [],
+      });
+      expect(corruptionLogs.join('\n')).not.toContain(firstCorruptBytes);
+      expect(corruptionLogs.join('\n')).not.toContain(secondCorruptBytes);
+    } finally {
+      quarantineFailure.active = false;
       await rm(directory, { recursive: true, force: true });
     }
   });

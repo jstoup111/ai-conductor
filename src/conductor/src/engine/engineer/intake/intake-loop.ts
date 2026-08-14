@@ -65,7 +65,7 @@ function corruptionEpisodeKey(error: CorruptLedgerError): string {
   // reuses a matching sibling for identical bytes and allocates a new one for
   // different bytes. Include that stable byte-state witness so two malformed
   // states that share a parser/shape reason are separate episodes.
-  return `${error.ledgerPath}\u0000${error.quarantinePath ?? error.reason}`;
+  return `${error.ledgerPath}\u0000${error.corruptBytesDigest ?? error.quarantinePath ?? error.reason}`;
 }
 
 function corruptLedgerDiagnostic(error: CorruptLedgerError): string {
