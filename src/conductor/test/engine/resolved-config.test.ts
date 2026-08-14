@@ -143,6 +143,99 @@ describe('engine/resolved-config', () => {
       const resolved = resolveBuildReviewConfig(config);
       expect(resolved.perTaskFloor).toBe(true);
     });
+
+    it('resolves a closed rubric policy map by inheriting the outer policy, applying independent overrides, and clamping fan-out', () => {
+      const config = {
+        llm_provider: ['claude', 'codex'],
+        model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+        defaults: { model: 'haiku', effort: 'low', max_retries: 1, escalate: false },
+        phases: { BUILD: { effort: 'medium', max_retries: 2, escalate: false } },
+        steps: {
+          build_review: { model: 'opus', effort: 'high', max_retries: 4, escalate: true },
+        },
+        build_review: {
+          maxParallel: 99,
+          rubrics: {
+            tautology: { enabled: false },
+            scope: {
+              llm_provider: ['codex', 'claude'],
+              model: 'gpt-5.6-sol',
+              effort: 'max',
+              model_fallback_ladder: ['gpt-5.6-terra'],
+              max_retries: 2,
+              escalate: false,
+            },
+            rootCause: { effort: 'medium' },
+          },
+        },
+      } as HarnessConfig;
+      const resolved = resolveBuildReviewConfig(config) as ReturnType<typeof resolveBuildReviewConfig> & {
+        maxParallel: number;
+        rubrics: Record<string, {
+          enabled: boolean;
+          llm_provider: string[];
+          model: string;
+          effort: string;
+          model_fallback_ladder: string[];
+          max_retries: number;
+          escalate: boolean;
+        }>;
+      };
+
+      expect({
+        maxParallel: resolved.maxParallel,
+        rubrics: resolved.rubrics,
+      }).toEqual({
+        maxParallel: 4,
+        rubrics: {
+          tautology: {
+            enabled: false,
+            llm_provider: ['claude', 'codex'],
+            model: 'opus',
+            effort: 'high',
+            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+            max_retries: 4,
+            escalate: true,
+          },
+          scope: {
+            enabled: true,
+            llm_provider: ['codex', 'claude'],
+            model: 'gpt-5.6-sol',
+            effort: 'max',
+            model_fallback_ladder: ['gpt-5.6-terra'],
+            max_retries: 2,
+            escalate: false,
+          },
+          rootCause: {
+            enabled: true,
+            llm_provider: ['claude', 'codex'],
+            model: 'opus',
+            effort: 'medium',
+            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+            max_retries: 4,
+            escalate: true,
+          },
+          completeness: {
+            enabled: true,
+            llm_provider: ['claude', 'codex'],
+            model: 'opus',
+            effort: 'high',
+            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+            max_retries: 4,
+            escalate: true,
+          },
+          wiring: {
+            enabled: true,
+            llm_provider: ['claude', 'codex'],
+            model: 'opus',
+            effort: 'high',
+            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+            max_retries: 4,
+            escalate: true,
+          },
+        },
+      });
+    });
   });
 
   describe('Claude policy and provider-neutral defaults', () => {

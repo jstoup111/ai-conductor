@@ -1,8 +1,10 @@
 import { homedir } from 'os';
 import type { StepName, Phase, ComplexityTier } from '../types/index.js';
 import type {
+  BuildReviewRubricId,
   HarnessConfig,
   EffortLevel,
+  ProviderSelection,
   ReviewMode,
   StepConfig,
   PhaseConfig,
@@ -696,12 +698,33 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
 const DEFAULT_BUILD_REVIEW_ENABLED = true;
 const DEFAULT_PER_TASK_FLOOR_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
+const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 5;
+const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = [
+  'tautology',
+  'scope',
+  'rootCause',
+  'completeness',
+  'wiring',
+];
+
+/** Concrete execution policy for one independently-dispatched review rubric. */
+export interface ResolvedBuildReviewRubricPolicy {
+  enabled: boolean;
+  llm_provider: ProviderSelection;
+  model: string;
+  effort: EffortLevel;
+  model_fallback_ladder: readonly string[];
+  max_retries: number;
+  escalate: boolean;
+}
 
 /** Fully-resolved build_review settings (no optional fields). */
 export interface ResolvedBuildReviewConfig {
   enabled: boolean;
   perTaskFloor: boolean;
   scopeContainmentEnforced: boolean;
+  maxParallel: number;
+  rubrics: Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
 }
 
 /**
@@ -713,8 +736,43 @@ export interface ResolvedBuildReviewConfig {
  * malformed input happens in `validateConfig`; this resolver assumes a
  * validated (or absent) block and only applies the default.
  */
-export function resolveBuildReviewConfig(config?: HarnessConfig): ResolvedBuildReviewConfig {
+export function resolveBuildReviewConfig(
+  config?: HarnessConfig,
+  policy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
+  options: ResolveOptions = {},
+): ResolvedBuildReviewConfig {
   const block = config?.build_review;
+  const outerStepConfig = config?.steps?.build_review;
+  const inheritedProvider = outerStepConfig?.llm_provider ?? config?.llm_provider ?? 'claude';
+  const inheritedFallbackLadder = config?.model_fallback_ladder ?? policy.modelFallbackLadder;
+  const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => {
+    const rubric = block?.rubrics?.[rubricId];
+    const rubricConfig: HarnessConfig = {
+      ...config,
+      steps: {
+        ...config?.steps,
+        build_review: {
+          ...outerStepConfig,
+          ...(rubric?.model === undefined ? {} : { model: rubric.model }),
+          ...(rubric?.effort === undefined ? {} : { effort: rubric.effort }),
+          ...(rubric?.max_retries === undefined ? {} : { max_retries: rubric.max_retries }),
+          ...(rubric?.escalate === undefined ? {} : { escalate: rubric.escalate }),
+        },
+      },
+    };
+    const resolvedStep = resolveStepConfig('build_review', 'BUILD', policy, rubricConfig, options);
+    return [rubricId, {
+      enabled: rubric?.enabled ?? true,
+      llm_provider: rubric?.llm_provider ?? inheritedProvider,
+      model: resolvedStep.model,
+      effort: resolvedStep.effort,
+      model_fallback_ladder: rubric?.model_fallback_ladder ?? inheritedFallbackLadder,
+      max_retries: resolvedStep.max_retries,
+      escalate: resolvedStep.escalate,
+    } satisfies ResolvedBuildReviewRubricPolicy];
+  })) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
+  const enabledRubricCount = Object.values(rubrics).filter((rubric) => rubric.enabled).length;
+
   return {
     enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
     perTaskFloor:
@@ -725,5 +783,10 @@ export function resolveBuildReviewConfig(config?: HarnessConfig): ResolvedBuildR
       typeof block?.scopeContainmentEnforced === 'boolean'
         ? block.scopeContainmentEnforced
         : DEFAULT_SCOPE_CONTAINMENT_ENFORCED,
+    maxParallel: Math.min(
+      block?.maxParallel ?? DEFAULT_BUILD_REVIEW_MAX_PARALLEL,
+      enabledRubricCount,
+    ),
+    rubrics,
   };
 }
