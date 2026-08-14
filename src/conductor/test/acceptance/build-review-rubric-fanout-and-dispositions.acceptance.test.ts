@@ -12,14 +12,20 @@
  */
 
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderFullHelp } from '../../src/cli.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { computeBuildReviewMetrics } from '../../src/engine/build-tail-rollup.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -32,21 +38,24 @@ async function git(dir: string, ...args: string[]): Promise<string> {
 }
 
 async function fixtureRepo(): Promise<{ dir: string; planPath: string; head: string }> {
-  const dir = await mkdtemp(join(tmpdir(), 'build-review-rubric-acceptance-'));
-  dirs.push(dir);
-  await git(dir, 'init', '-q', '-b', 'main');
-  await git(dir, 'config', 'user.email', 'acceptance@example.com');
-  await git(dir, 'config', 'user.name', 'Acceptance Test');
-  await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+  const root = await mkdtemp(join(tmpdir(), 'build-review-rubric-acceptance-'));
+  dirs.push(root);
+  await git(root, 'init', '-q', '-b', 'main');
+  await git(root, 'config', 'user.email', 'acceptance@example.com');
+  await git(root, 'config', 'user.name', 'Acceptance Test');
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(root, '.pipeline'), { recursive: true });
+  await mkdir(join(root, 'src'), { recursive: true });
+  const rootPlanPath = join(root, '.docs', 'plans', 'fixture.md');
+  await writeFile(rootPlanPath, '# Plan\n\n### Task 1: add reviewed behavior\n');
+  await writeFile(join(root, '.gitignore'), '.pipeline/\n.worktrees/\n');
+  await writeFile(join(root, 'src', 'feature.ts'), 'export const reviewed = false;\n');
+  await git(root, 'add', '.');
+  await git(root, 'commit', '-qm', 'base');
+  const dir = join(root, '.worktrees', 'rubric-fanout');
+  await git(root, 'worktree', 'add', '-qb', 'feature/rubric-fanout', dir, 'main');
   await mkdir(join(dir, '.pipeline'), { recursive: true });
-  await mkdir(join(dir, 'src'), { recursive: true });
   const planPath = join(dir, '.docs', 'plans', 'fixture.md');
-  await writeFile(planPath, '# Plan\n\n### Task 1: add reviewed behavior\n');
-  await writeFile(join(dir, '.gitignore'), '.pipeline/\n');
-  await writeFile(join(dir, 'src', 'feature.ts'), 'export const reviewed = false;\n');
-  await git(dir, 'add', '.');
-  await git(dir, 'commit', '-qm', 'base');
-  await git(dir, 'checkout', '-qb', 'feature/rubric-fanout');
   await writeFile(join(dir, 'src', 'feature.ts'), 'export const reviewed = true;\n');
   await git(dir, 'add', 'src/feature.ts');
   await git(dir, 'commit', '-qm', 'implement reviewed behavior');
@@ -153,6 +162,96 @@ describe('acceptance: independent build_review rubric execution', () => {
     await runner.run('build_review', state);
 
     expect(provider.invoke).toHaveBeenCalledTimes(5);
+  });
+
+  it('converges a current Scope finding to completion after the operator accepts its exact recomputed identity', async () => {
+    const { dir, planPath } = await fixtureRepo();
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        providerCalls += 1;
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        const findings = projection.rubric === 'scope'
+          ? [{ concernKind: 'outside approved plan', anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'outside-plan' } }]
+          : [];
+        return {
+          success: true,
+          output: JSON.stringify({
+            kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+            snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings,
+            verdict: findings.length === 0 ? 'PASS' : 'FAIL',
+          }),
+          exitCode: 0,
+        };
+      }),
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
+      config: { build_review: { enabled: true, perTaskFloor: false }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+      planPath,
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
+    });
+    const state = { complexity_tier: 'L', feature_desc: 'accepted-finding-recomputation', track: 'product' } as const;
+
+    const first = await runner.run('build_review', state);
+    const aggregate = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8'));
+    const scope = aggregate.results.scope;
+    const finding = scope.kind === 'judged' ? scope.findings[0] : undefined;
+    const identity = finding && canonicalizeBuildReviewFindingIdentity({
+      rubric: 'scope', contractVersion: scope.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
+    });
+    const accepted = identity && await new BuildReviewDispositionStore(dir).append({
+      feature: { version: 'v1', repository: await realpath(join(dir, '..', '..')), feature: 'rubric-fanout' },
+      finding: identity,
+      sourceLapId: aggregate.lapId,
+      summary: finding.concernKind,
+      rationale: 'The operator accepts this explicitly bounded finding.',
+      operator: 'acceptance-operator',
+    });
+    const second = await runner.run('build_review', state);
+    const completion = await checkStepCompletion(dir, 'build_review', { sessionStartedAt: Date.now() - 1_000 });
+
+    expect({ first: first.success, accepted, second: second.success, completion: completion.done, calls: providerCalls }).toMatchObject({
+      first: false,
+      accepted: { ok: true },
+      second: true,
+      completion: true,
+      calls: 5,
+    });
+  });
+
+  it('records neutral skips and current rubric metrics without spending providers on skipped branches', async () => {
+    const { dir, planPath } = await fixtureRepo();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        providerCalls += 1;
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
+      }),
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
+      config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: false } } } } as HarnessConfig,
+      planPath, pipelineDir: join(dir, '.pipeline'), events,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) },
+    });
+    const result = await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'neutral-skips', track: 'product' });
+    persister.stop();
+    const ledger = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    const aggregate = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8'));
+
+    expect({ success: result.success, calls: providerCalls, coverage: aggregate.coverage, metrics: computeBuildReviewMetrics(ledger) }).toMatchObject({
+      success: true, calls: 3, coverage: { tautology: 'skipped', wiring: 'skipped' }, metrics: { skipped: 2, cacheHits: 0 },
+    });
   });
 
   it('fans operator reseal evidence into Scope alone while retaining the legacy scalar prompt contract', async () => {

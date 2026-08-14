@@ -15,6 +15,8 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
+
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 let fixtureRoot: string;
@@ -88,5 +90,20 @@ describe('Story 7: npm scripts preserve scoped test selection', () => {
 
     expect(result.exitCode).toBe(7);
     expect(result.stdout).not.toContain('AGGREGATE_TEST_SUITE_PASS');
+  });
+
+  it('keeps a fresh legacy scalar PASS verdict compatible with the build-review completion predicate', async () => {
+    const verdictPath = join(fixtureRoot, '.pipeline', 'build-review.json');
+    await mkdir(join(fixtureRoot, '.pipeline'), { recursive: true });
+    await writeFile(verdictPath, JSON.stringify({
+      verdict: 'PASS',
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+    }));
+
+    const completion = await checkStepCompletion(fixtureRoot, 'build_review', {
+      sessionStartedAt: Date.now() - 1_000,
+    });
+
+    expect(completion.done).toBe(true);
   });
 });
