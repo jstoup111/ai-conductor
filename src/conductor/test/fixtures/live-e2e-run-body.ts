@@ -107,6 +107,21 @@ export interface LiveE2ERunBodyDependencies {
   readonly provisionProviderHome?: typeof provisionLiveProviderHome;
 }
 
+export const DEFAULT_LIVE_E2E_TOKEN_CAP = 100000;
+
+/** Every descriptor enters through this shared cap policy. */
+export function resolveLiveE2ETokenCap(environment: NodeJS.ProcessEnv = process.env): number {
+  return Number(environment.DAEMON_E2E_LIVE_TOKEN_CAP ?? DEFAULT_LIVE_E2E_TOKEN_CAP);
+}
+
+export function reportLiveE2ESpend(
+  metrics: { totalTokens: number; dispatches: number },
+  cap: number,
+  report: (message: string) => void = console.info,
+): void {
+  report(`daemon E2E live smoke observed total: ${metrics.totalTokens}; dispatch count: ${metrics.dispatches}; cap: ${cap}`);
+}
+
 /**
  * Keep the throwaway provider home alive for exactly one live-fixture run.
  * The fixture's checkout is deliberately outside this lifecycle: provider
@@ -215,12 +230,11 @@ export function assertLiveProviderCredential(
 }
 
 export function defineLiveE2EProviderSmoke(descriptor: LiveE2EProviderDescriptor): void {
-  const tokenCap = Number(process.env.DAEMON_E2E_LIVE_TOKEN_CAP ?? '100000');
   const shouldRun = liveProviderAvailable(descriptor);
 
   describe.skipIf(!shouldRun)(`daemon E2E with real ${descriptor.id} provider`, () => {
     it('finishes a seeded daemon fixture with a trailered task commit', async () => {
-      await runLiveE2ERunBody(descriptor, tokenCap);
+      await runLiveE2ERunBody(descriptor);
     }, 20 * 60_000);
   });
 }
@@ -260,7 +274,7 @@ async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Pr
 
 export async function runLiveE2ERunBody(
   descriptor: LiveE2EProviderDescriptor,
-  tokenCap: number,
+  tokenCap = resolveLiveE2ETokenCap(),
   dependencies: LiveE2ERunBodyDependencies = {},
 ): Promise<void> {
   assertLiveProviderBinary(descriptor, dependencies.binaryAvailable);
@@ -394,7 +408,10 @@ export async function runLiveE2ERunBody(
     await dumpPipelineDiagnostics(worktreeDir);
     throw error;
   } finally {
-    console.info(`daemon E2E live smoke total tokens: ${meter.totalTokens}; dispatches: ${provisioned?.dispatches ?? 0}; cap: ${tokenCap}`);
+    reportLiveE2ESpend({
+      totalTokens: meter.totalTokens,
+      dispatches: provisioned?.dispatches ?? 0,
+    }, tokenCap);
     assertTokenCap(meter.totalTokens, meter.unmetered, tokenCap);
     await rm(worktreeDir, { recursive: true, force: true });
   }
