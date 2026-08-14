@@ -269,6 +269,42 @@ describe('lease-bracketed ledger access', () => {
       failedBodyIsCorrupt: true,
     });
   });
+
+  it.each([
+    ['record', (ledger: ReturnType<typeof createLedger>) => ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' })],
+    ['transition', (ledger: ReturnType<typeof createLedger>) => ledger.transition('github-issues', 'o/a#1', 'done')],
+    ['forget', (ledger: ReturnType<typeof createLedger>) => ledger.forget('github-issues', 'o/a#1')],
+    ['reopen', (ledger: ReturnType<typeof createLedger>) => ledger.reopen('github-issues', 'o/a#1')],
+    ['requeueClaimed', (ledger: ReturnType<typeof createLedger>) => ledger.requeueClaimed('github-issues', 'o/a#1')],
+  ])('refuses a corrupt ledger without changing its bytes through %s', async (_method, mutate) => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const corruptBytes = Buffer.from('{ not valid json');
+    const leaseEvents: string[] = [];
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        leaseEvents.push('acquire');
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              leaseEvents.push('release');
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    await writeFile(ledgerPath, corruptBytes);
+
+    await expect(mutate(createLedger(ledgerPath, { lease }))).rejects.toBeInstanceOf(CorruptLedgerError);
+    await expect({
+      bytes: await readFile(ledgerPath),
+      leaseEvents,
+    }).toEqual({
+      bytes: corruptBytes,
+      leaseEvents: ['acquire', 'release'],
+    });
+  });
 });
 
 describe('transition() writebackPending marker (#290)', () => {

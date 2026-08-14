@@ -300,28 +300,30 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
       status: LedgerStatus,
       meta?: { branch?: string; prUrl?: string; writebackPending?: boolean },
     ): Promise<void> {
-      const store = await readStore(path);
-      const key = makeKey(source, sourceRef);
-      const entry = store[key];
-      if (!entry) {
-        throw new Error(
-          `Ledger: no entry for (source="${source}", sourceRef="${sourceRef}") — call record() first`,
-        );
-      }
-      const updated: LedgerEntry = {
-        ...entry,
-        status,
-        lastSeenAt: new Date().toISOString(),
-        ...(meta?.branch !== undefined ? { branch: meta.branch } : {}),
-        ...(meta?.prUrl !== undefined ? { prUrl: meta.prUrl } : {}),
-      };
-      if (meta?.writebackPending === true) {
-        updated.writebackPending = true;
-      } else if (meta?.writebackPending === false) {
-        delete updated.writebackPending;
-      }
-      store[key] = updated;
-      await saveStore(path, store);
+      await withLedgerLease(lease, async () => {
+        const store = await readStore(path);
+        const key = makeKey(source, sourceRef);
+        const entry = store[key];
+        if (!entry) {
+          throw new Error(
+            `Ledger: no entry for (source="${source}", sourceRef="${sourceRef}") — call record() first`,
+          );
+        }
+        const updated: LedgerEntry = {
+          ...entry,
+          status,
+          lastSeenAt: new Date().toISOString(),
+          ...(meta?.branch !== undefined ? { branch: meta.branch } : {}),
+          ...(meta?.prUrl !== undefined ? { prUrl: meta.prUrl } : {}),
+        };
+        if (meta?.writebackPending === true) {
+          updated.writebackPending = true;
+        } else if (meta?.writebackPending === false) {
+          delete updated.writebackPending;
+        }
+        store[key] = updated;
+        await saveStore(path, store);
+      });
     },
 
     async get(source: string, sourceRef: string): Promise<LedgerEntry | undefined> {
@@ -330,12 +332,14 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
     },
 
     async forget(source: string, sourceRef: string): Promise<void> {
-      const store = await readStore(path);
-      const key = makeKey(source, sourceRef);
-      if (key in store) {
-        delete store[key];
-        await saveStore(path, store);
-      }
+      await withLedgerLease(lease, async () => {
+        const store = await readStore(path);
+        const key = makeKey(source, sourceRef);
+        if (key in store) {
+          delete store[key];
+          await saveStore(path, store);
+        }
+      });
     },
 
     async list(): Promise<LedgerEntry[]> {
@@ -344,32 +348,36 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
     },
 
     async reopen(source: string, sourceRef: string): Promise<void> {
-      const store = await readStore(path);
-      const key = makeKey(source, sourceRef);
-      const entry = store[key];
-      if (!entry) return; // nothing to reopen — no-op.
-      store[key] = {
-        ...entry,
-        status: 'pending',
-        attempts: (entry.attempts ?? 0) + 1,
-        lastSeenAt: new Date().toISOString(),
-      };
-      await saveStore(path, store);
+      await withLedgerLease(lease, async () => {
+        const store = await readStore(path);
+        const key = makeKey(source, sourceRef);
+        const entry = store[key];
+        if (!entry) return; // nothing to reopen — no-op.
+        store[key] = {
+          ...entry,
+          status: 'pending',
+          attempts: (entry.attempts ?? 0) + 1,
+          lastSeenAt: new Date().toISOString(),
+        };
+        await saveStore(path, store);
+      });
     },
 
     async requeueClaimed(source: string, sourceRef: string): Promise<{ acted: boolean }> {
-      const store = await readStore(path);
-      const key = makeKey(source, sourceRef);
-      const entry = store[key];
-      if (!entry || entry.status !== 'claimed') return { acted: false }; // no-op — refuse on absent/non-claimed (ADR-2).
-      store[key] = {
-        ...entry,
-        status: 'pending',
-        attempts: (entry.attempts ?? 0) + 1,
-        lastSeenAt: new Date().toISOString(),
-      };
-      await saveStore(path, store);
-      return { acted: true };
+      return withLedgerLease(lease, async () => {
+        const store = await readStore(path);
+        const key = makeKey(source, sourceRef);
+        const entry = store[key];
+        if (!entry || entry.status !== 'claimed') return { acted: false }; // no-op — refuse on absent/non-claimed (ADR-2).
+        store[key] = {
+          ...entry,
+          status: 'pending',
+          attempts: (entry.attempts ?? 0) + 1,
+          lastSeenAt: new Date().toISOString(),
+        };
+        await saveStore(path, store);
+        return { acted: true };
+      });
     },
   };
 }
