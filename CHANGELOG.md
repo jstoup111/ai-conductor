@@ -49,6 +49,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host daemon runs now sweep and reclaim leaked provider scratch homes left behind by abruptly interrupted attempts, instead of leaving them to accumulate. ([implementation PR #1495](https://github.com/jstoup111/ai-conductor/pull/1495)).
 - Build reviews now give actionable retry feedback when a PASS verdict contradicts its rubric flags. ([implementation PR #1560](https://github.com/jstoup111/ai-conductor/pull/1560)).
 - Fix build reviews that repeatedly halt after a clean pass because rubric booleans are inverted. ([implementation PR #1562](https://github.com/jstoup111/ai-conductor/pull/1562)).
+- PRD audit now resolves date-prefixed PRD filenames for the active feature. ([implementation PR #1566](https://github.com/jstoup111/ai-conductor/pull/1566)).
 
 ## Migration
 
