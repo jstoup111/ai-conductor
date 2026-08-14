@@ -15,6 +15,7 @@ import {
   createConductStateLease,
   type ConductStateLease,
 } from '../../../../src/engine/conduct-state-lease.js';
+import { resolveEngineerDir } from '../../../../src/engine/engineer-store.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -761,5 +762,98 @@ describe('requeueClaimed() — claimed to pending recovery (FR-1, FR-4, FR-11)',
     const after = await l.get('github-issues', 'o/a#does-not-exist');
     expect(after).toBeUndefined();
     expect(result).toEqual({ acted: false });
+  });
+});
+
+describe('engineer-directory ledger artifacts', () => {
+  it('creates lease and quarantine artifacts in an initially absent AI_CONDUCTOR_ENGINEER_DIR', async () => {
+    const customEngineerDir = join(dir, 'custom-engineer');
+    const defaultEngineerDir = join(dir, 'home', '.ai-conductor', 'engineer');
+    const resolvedEngineerDir = resolveEngineerDir({
+      home: join(dir, 'home'),
+      env: { AI_CONDUCTOR_ENGINEER_DIR: customEngineerDir },
+    });
+    const ledgerPath = join(resolvedEngineerDir, 'ledger.json');
+
+    const held = await createConductStateLease(ledgerPath, { pid: process.pid }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    try {
+      await expect(createLedger(ledgerPath).record({ source: 'github-issues', sourceRef: 'o/a#1' }))
+        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+
+      expect({
+        customArtifacts: (await readdir(customEngineerDir)).sort(),
+        defaultExists: await readdir(defaultEngineerDir).then(() => true, () => false),
+      }).toEqual({
+        customArtifacts: ['ledger.json.lease'],
+        defaultExists: false,
+      });
+    } finally {
+      await held.handle.release();
+    }
+
+    await createLedger(ledgerPath).record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await writeFile(ledgerPath, '{broken', 'utf8');
+    await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+
+    expect({
+      resolvedEngineerDir,
+      customArtifacts: (await readdir(customEngineerDir)).sort(),
+      defaultExists: await readdir(defaultEngineerDir).then(() => true, () => false),
+    }).toEqual({
+      resolvedEngineerDir: customEngineerDir,
+      customArtifacts: [
+        'ledger.json',
+        expect.stringMatching(/^ledger\.json\.corrupt-\d+$/),
+      ],
+      defaultExists: false,
+    });
+  });
+
+  it.each([
+    ['absent', {}],
+    ['empty', { AI_CONDUCTOR_ENGINEER_DIR: '' }],
+    ['whitespace', { AI_CONDUCTOR_ENGINEER_DIR: ' \t ' }],
+  ])('uses the default engineer directory when AI_CONDUCTOR_ENGINEER_DIR is %s', async (_kind, env) => {
+    const home = join(dir, `home-${_kind}`);
+    const engineerDir = resolveEngineerDir({ home, env });
+    const ledgerPath = join(engineerDir, 'ledger.json');
+
+    await createLedger(ledgerPath).record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await writeFile(ledgerPath, '{broken', 'utf8');
+    await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+
+    expect({
+      engineerDir,
+      artifacts: (await readdir(engineerDir)).sort(),
+    }).toEqual({
+      engineerDir: join(home, '.ai-conductor', 'engineer'),
+      artifacts: ['ledger.json', expect.stringMatching(/^ledger\.json\.corrupt-\d+$/)],
+    });
+  });
+
+  it('does not contend when separate engineer directories have separate ledger paths', async () => {
+    const firstLedgerPath = join(dir, 'first-engineer', 'ledger.json');
+    const secondLedgerPath = join(dir, 'second-engineer', 'ledger.json');
+    const held = await createConductStateLease(firstLedgerPath, { pid: process.pid }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    try {
+      const firstLedger = createLedger(firstLedgerPath, {
+        lease: createConductStateLease(firstLedgerPath, { pid: process.pid, waitTimeoutMs: 0 }),
+      });
+      const secondLedger = createLedger(secondLedgerPath);
+
+      await expect(firstLedger.record({ source: 'github-issues', sourceRef: 'o/a#1' }))
+        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+      await secondLedger.record({ source: 'github-issues', sourceRef: 'o/a#2' });
+
+      expect(await secondLedger.list()).toEqual([
+        expect.objectContaining({ source: 'github-issues', sourceRef: 'o/a#2' }),
+      ]);
+    } finally {
+      await held.handle.release();
+    }
   });
 });
