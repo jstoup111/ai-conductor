@@ -52,6 +52,19 @@ export interface BuildReviewCacheHit {
   };
 }
 
+export type BuildReviewCacheMissReason =
+  | "missing"
+  | "invalid-entry"
+  | "rubric-mismatch"
+  | "contract-version-mismatch"
+  | "projection-version-mismatch"
+  | "projection-digest-mismatch"
+  | "policy-fingerprint-mismatch";
+
+export type BuildReviewCacheLookupResolution =
+  | { kind: "hit"; hit: BuildReviewCacheHit }
+  | { kind: "miss"; reason: BuildReviewCacheMissReason };
+
 export function cacheEntryPath(projectRoot: string, rubric: BuildReviewRubricId): string {
   return join(projectRoot, CACHE_DIRECTORY, `${rubric}.json`);
 }
@@ -114,6 +127,50 @@ export async function readBuildReviewCacheEntry(
 }
 
 /**
+ * Classifies the cache boundary exhaustively. Invalid values are never
+ * normalized or rewritten: callers receive a miss and must run a fresh
+ * judgement before replacing the bounded entry.
+ */
+export function classifyBuildReviewCacheLookup(
+  candidate: unknown,
+  lookup: BuildReviewCacheLookup,
+): BuildReviewCacheLookupResolution {
+  if (candidate === undefined) return { kind: "miss", reason: "missing" };
+  const entry = parseBuildReviewCacheEntry(candidate);
+  if (!entry) return { kind: "miss", reason: "invalid-entry" };
+  if (entry.rubric !== lookup.rubric) return { kind: "miss", reason: "rubric-mismatch" };
+  if (entry.contractVersion !== lookup.contractVersion) {
+    return { kind: "miss", reason: "contract-version-mismatch" };
+  }
+  if (entry.projectionVersion !== lookup.projectionVersion) {
+    return { kind: "miss", reason: "projection-version-mismatch" };
+  }
+  if (entry.projectionDigest !== lookup.projectionDigest) {
+    return { kind: "miss", reason: "projection-digest-mismatch" };
+  }
+  if (entry.policyFingerprint !== lookup.policyFingerprint) {
+    return { kind: "miss", reason: "policy-fingerprint-mismatch" };
+  }
+  return {
+    kind: "hit",
+    hit: {
+      result: {
+        ...entry.result,
+        lapId: lookup.lapId,
+        snapshotDigest: lookup.snapshotDigest,
+      },
+      provenance: {
+        kind: "cache-hit",
+        cachedLapId: entry.result.lapId,
+        cachedSnapshotDigest: entry.result.snapshotDigest,
+        projectionDigest: entry.projectionDigest,
+        policyFingerprint: entry.policyFingerprint,
+      },
+    },
+  };
+}
+
+/**
  * Returns a fresh current-lap semantic result only when every cache identity
  * field matches. Branch and aggregate artifacts never cross this boundary;
  * only the validated judgement payload and explicit provenance do.
@@ -122,27 +179,8 @@ export function resolveBuildReviewCacheHit(
   entry: BuildReviewCacheEntry | undefined,
   lookup: BuildReviewCacheLookup,
 ): BuildReviewCacheHit | undefined {
-  if (!entry || entry.rubric !== lookup.rubric ||
-    entry.contractVersion !== lookup.contractVersion ||
-    entry.projectionVersion !== lookup.projectionVersion ||
-    entry.projectionDigest !== lookup.projectionDigest ||
-    entry.policyFingerprint !== lookup.policyFingerprint) {
-    return undefined;
-  }
-  return {
-    result: {
-      ...entry.result,
-      lapId: lookup.lapId,
-      snapshotDigest: lookup.snapshotDigest,
-    },
-    provenance: {
-      kind: "cache-hit",
-      cachedLapId: entry.result.lapId,
-      cachedSnapshotDigest: entry.result.snapshotDigest,
-      projectionDigest: entry.projectionDigest,
-      policyFingerprint: entry.policyFingerprint,
-    },
-  };
+  const resolution = classifyBuildReviewCacheLookup(entry, lookup);
+  return resolution.kind === "hit" ? resolution.hit : undefined;
 }
 
 /** Atomically replaces the rubric's single bounded entry after validating it. */

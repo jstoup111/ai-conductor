@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   cacheEntryPath,
+  classifyBuildReviewCacheLookup,
   readBuildReviewCacheEntry,
   resolveBuildReviewCacheHit,
   writeBuildReviewCacheEntry,
@@ -155,5 +156,43 @@ describe("build-review semantic cache", () => {
       changedPolicy: undefined,
       changedProjection: undefined,
     });
+  });
+
+  it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {
+    const request = {
+      rubric: "scope" as const,
+      contractVersion: "v1" as const,
+      projectionVersion: "v1" as const,
+      projectionDigest: "sha256:projection-a",
+      policyFingerprint: "sha256:policy-a",
+      lapId: "lap-current" as never,
+      snapshotDigest: "snapshot-current",
+    };
+    const unsafeInfrastructure = {
+      ...entry(),
+      result: { kind: "infrastructure-failure", rubric: "scope", reason: "retry-exhausted", detail: "provider exhausted" },
+    } as never;
+
+    expect([
+      classifyBuildReviewCacheLookup(undefined, request),
+      classifyBuildReviewCacheLookup({
+        ...entry(),
+        rubric: "wiring",
+        result: { ...entry().result, rubric: "wiring" },
+      }, request),
+      classifyBuildReviewCacheLookup({ ...entry(), contractVersion: "v2" } as never, request),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v2" } as never, request),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionDigest: "sha256:changed-input" }, request),
+      classifyBuildReviewCacheLookup({ ...entry(), policyFingerprint: "sha256:changed-provider-model-effort-fallback-retry" }, request),
+      classifyBuildReviewCacheLookup(unsafeInfrastructure, request),
+    ]).toEqual([
+      { kind: "miss", reason: "missing" },
+      { kind: "miss", reason: "rubric-mismatch" },
+      { kind: "miss", reason: "invalid-entry" },
+      { kind: "miss", reason: "invalid-entry" },
+      { kind: "miss", reason: "projection-digest-mismatch" },
+      { kind: "miss", reason: "policy-fingerprint-mismatch" },
+      { kind: "miss", reason: "invalid-entry" },
+    ]);
   });
 });
