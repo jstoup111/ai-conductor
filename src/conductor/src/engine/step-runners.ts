@@ -52,6 +52,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
+import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import { parseBuildReviewLapId, parseBuildReviewJudgedResult, type BuildReviewRubricResult } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
 import { classifyTautologyPaths, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
@@ -339,6 +340,8 @@ export interface StepRunnerOptions {
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
   ) => Promise<StepRunResult>;
+  /** Shared raw-aggregate/disposition join. Tests inject a bounded fake store. */
+  buildReviewEffectiveResolver?: typeof resolveEffectiveBuildReviewVerdict;
   /** Shared event spine for engine-owned build-review occurrences. */
   events?: ConductorEventEmitter;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
@@ -416,6 +419,7 @@ export class DefaultStepRunner implements StepRunner {
   private planPathOverride?: string;
   private buildReviewInputOptions?: BuildReviewInputOptions;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
+  private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
   private events?: ConductorEventEmitter;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
@@ -466,6 +470,7 @@ export class DefaultStepRunner implements StepRunner {
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
+    this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
     this.events = options?.events;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
@@ -1798,14 +1803,18 @@ export class DefaultStepRunner implements StepRunner {
     const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     await mkdir(effectivePipelineDir, { recursive: true });
     await writeFile(join(effectivePipelineDir, 'build-review.json'), JSON.stringify(aggregate, null, 2), 'utf-8');
+    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate);
     await this.events?.emit({
       type: 'build_review_outer_verdict',
       lapId,
       rawVerdict: aggregate.verdict,
-      effectiveVerdict: aggregate.verdict,
+      effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
     });
-    if (aggregate.verdict === 'PASS') await this.stampBuildReviewVerdict();
-    return { success: aggregate.verdict === 'PASS', output: JSON.stringify(aggregate) };
+    if (!effective.ok) {
+      return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
+    }
+    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
+    return { success: effective.effective.verdict === 'PASS', output: JSON.stringify(aggregate) };
   }
 
   private async dispatchBuildReviewRubric(

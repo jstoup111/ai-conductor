@@ -3149,6 +3149,33 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
+    it('writes the raw aggregate but returns and emits the shared effective verdict', async () => {
+      const provider = createMockProvider();
+      const events = { emit: vi.fn(async () => undefined) } as any;
+      let rawAggregate: unknown;
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath, events,
+        buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
+          rawAggregate = aggregate;
+          return {
+            ok: true as const,
+            feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+            effective: {
+              rawVerdict: 'FAIL' as const, verdict: 'PASS' as const, acceptedFindingIds: ['accepted'], unresolvedFindingIds: [],
+              skippedRubrics: [], infrastructureFailureRubrics: [],
+            },
+          };
+        }),
+        ...currentBuildReviewProof(),
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject(rawAggregate as object);
+      expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
+      }));
+    });
+
     it.each([
       {
         name: 'build_review is absent and defaults to enabled',
