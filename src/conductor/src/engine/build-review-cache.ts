@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { BuildReviewRubricId } from "../types/config.js";
 import {
   parseBuildReviewJudgedResult,
+  type BuildReviewLapId,
   type BuildReviewJudgedResult,
 } from "./build-review-domain.js";
 
@@ -26,6 +27,29 @@ export interface BuildReviewCacheFilesystem {
   mkdir(path: string): Promise<void>;
   writeFile(path: string, contents: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+}
+
+/** The complete identity that must match before a semantic cache entry is reusable. */
+export interface BuildReviewCacheLookup {
+  rubric: BuildReviewRubricId;
+  contractVersion: "v1";
+  projectionVersion: "v1";
+  projectionDigest: string;
+  policyFingerprint: string;
+  lapId: BuildReviewLapId;
+  snapshotDigest: string;
+}
+
+/** Explicit cache provenance accompanies a newly materialized current-lap result. */
+export interface BuildReviewCacheHit {
+  result: BuildReviewJudgedResult;
+  provenance: {
+    kind: "cache-hit";
+    cachedLapId: BuildReviewLapId;
+    cachedSnapshotDigest: string;
+    projectionDigest: string;
+    policyFingerprint: string;
+  };
 }
 
 export function cacheEntryPath(projectRoot: string, rubric: BuildReviewRubricId): string {
@@ -87,6 +111,38 @@ export async function readBuildReviewCacheEntry(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Returns a fresh current-lap semantic result only when every cache identity
+ * field matches. Branch and aggregate artifacts never cross this boundary;
+ * only the validated judgement payload and explicit provenance do.
+ */
+export function resolveBuildReviewCacheHit(
+  entry: BuildReviewCacheEntry | undefined,
+  lookup: BuildReviewCacheLookup,
+): BuildReviewCacheHit | undefined {
+  if (!entry || entry.rubric !== lookup.rubric ||
+    entry.contractVersion !== lookup.contractVersion ||
+    entry.projectionVersion !== lookup.projectionVersion ||
+    entry.projectionDigest !== lookup.projectionDigest ||
+    entry.policyFingerprint !== lookup.policyFingerprint) {
+    return undefined;
+  }
+  return {
+    result: {
+      ...entry.result,
+      lapId: lookup.lapId,
+      snapshotDigest: lookup.snapshotDigest,
+    },
+    provenance: {
+      kind: "cache-hit",
+      cachedLapId: entry.result.lapId,
+      cachedSnapshotDigest: entry.result.snapshotDigest,
+      projectionDigest: entry.projectionDigest,
+      policyFingerprint: entry.policyFingerprint,
+    },
+  };
 }
 
 /** Atomically replaces the rubric's single bounded entry after validating it. */
