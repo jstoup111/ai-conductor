@@ -1155,6 +1155,30 @@ describe('advanceFinishPublication unmoved transition dimensions', () => {
     ).resolves.toMatchObject({ kind: 'human_required' });
   });
 
+  it('renders an unmoved judge_pr_prose halt with its stuck pr.prose value and next action', async () => {
+    const disposition = await advanceFinishPublication({
+      observe: async () => readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          ready: false,
+        },
+      }),
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    });
+
+    expect(disposition).toMatchObject({ kind: 'human_required' });
+    const route = await routeFinishPublicationDisposition(disposition);
+    if (route.kind !== 'halt') throw new Error('expected a human-required halt');
+
+    expect(route.reason).toContain('judge_pr_prose');
+    expect(route.reason).toContain('pr.prose');
+    expect(route.reason).toContain('halt');
+    expect(route.reason).toMatch(/next action:/i);
+    expect(route.reason).not.toContain('authoring_required_after_judgment');
+  });
+
   it('halts human-required when foreign shipped-record movement masks unchanged PR prose', async () => {
     const observe = vi
       .fn<() => Promise<PublicationSnapshot>>()
