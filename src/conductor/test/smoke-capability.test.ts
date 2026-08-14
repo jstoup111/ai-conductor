@@ -25,6 +25,29 @@ describe('smoke capability declarations', () => {
     })).toEqual({ outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' });
   });
 
+  it('resolves each credentialed provider against its own advisory credential variable', () => {
+    const dependencies = {
+      hasCommand: () => true,
+      environment: { CLAUDE_CODE_OAUTH_TOKEN: 'token' },
+    };
+
+    expect({
+      claude: resolveAdvisorySmokeFile(
+        'test/engine/daemon-e2e-live-claude.smoke.test.ts',
+        'credentialed:claude',
+        dependencies,
+      ),
+      codex: resolveAdvisorySmokeFile(
+        'test/engine/daemon-e2e-live-codex.smoke.test.ts',
+        'credentialed:codex',
+        dependencies,
+      ),
+    }).toEqual({
+      claude: { outcome: 'ran' },
+      codex: { outcome: 'skipped', unmet: 'CODEX_API_KEY' },
+    });
+  });
+
   it('fails rather than skipping or succeeding when a gate-mode credential is absent', () => {
     const resolution = resolveGateSmokeFile('test/example.smoke.test.ts', 'credentialed:claude', {
       hasCommand: () => true,

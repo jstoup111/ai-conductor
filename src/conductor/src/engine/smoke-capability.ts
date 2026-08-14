@@ -40,6 +40,12 @@ export type GateSmokeCapabilityResolution =
   | { outcome: 'ran' }
   | { outcome: 'failed'; unmet: string };
 
+/** The live-provider descriptors that own credentialed smoke capabilities. */
+const LIVE_SMOKE_PROVIDER_DESCRIPTORS = [
+  { capability: 'credentialed:claude', credentialEnvVar: 'CLAUDE_CODE_OAUTH_TOKEN' },
+  { capability: 'credentialed:codex', credentialEnvVar: 'CODEX_API_KEY' },
+] as const;
+
 /** The executable required by each smoke file that needs the toolchain capability. */
 const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
   'test/backlog-priority.smoke.test.ts': 'gh',
@@ -87,6 +93,20 @@ function forceSkipsFile(
 function resolveAdvisorySmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, AdvisorySmokeCapabilityResolution> {
+  const credentialedCapabilities = Object.fromEntries(
+    LIVE_SMOKE_PROVIDER_DESCRIPTORS.map(({ capability, credentialEnvVar }) => [
+      capability,
+      forceSkipsCapability(environment, capability)
+        ? { outcome: 'skipped', unmet: 'operator override' }
+        : environment[credentialEnvVar]
+        ? { outcome: 'ran' }
+        : { outcome: 'skipped', unmet: credentialEnvVar },
+    ]),
+  ) as Record<
+    (typeof LIVE_SMOKE_PROVIDER_DESCRIPTORS)[number]['capability'],
+    AdvisorySmokeCapabilityResolution
+  >;
+
   return {
     hermetic: forceSkipsCapability(environment, 'hermetic')
       ? { outcome: 'skipped', unmet: 'operator override' }
@@ -96,16 +116,7 @@ function resolveAdvisorySmokeCapabilities(
       : hasCommand('toolchain')
       ? { outcome: 'ran' }
       : { outcome: 'skipped', unmet: 'toolchain' },
-    'credentialed:claude': forceSkipsCapability(environment, 'credentialed:claude')
-      ? { outcome: 'skipped', unmet: 'operator override' }
-      : environment.CLAUDE_CODE_OAUTH_TOKEN
-      ? { outcome: 'ran' }
-      : { outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
-    'credentialed:codex': forceSkipsCapability(environment, 'credentialed:codex')
-      ? { outcome: 'skipped', unmet: 'operator override' }
-      : environment.CLAUDE_CODE_OAUTH_TOKEN
-      ? { outcome: 'ran' }
-      : { outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    ...credentialedCapabilities,
   };
 }
 
