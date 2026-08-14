@@ -19,6 +19,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Add a `conduct-ts build-tail` rollup command and pipeline closeout-event telemetry that decompose build-step timing into task execution, remediation, and closeout, surfaced in the terminal UI and OTel export. ([implementation PR #1395](https://github.com/jstoup111/ai-conductor/pull/1395)).
 - Operators can now run `conduct-ts reseal` from an interactive terminal to re-fingerprint approved, amended protected DECIDE artifacts, with every reseal and refusal recorded in the audit trail. ([implementation PR #1454](https://github.com/jstoup111/ai-conductor/pull/1454)).
 - conflict-check and coherence-check now detect and block contradictions between approved ADRs and stories before they reach BUILD, with the ADR corpus scoped by the new `conflict_check.adr_corpus` config key (default `change_set`, or `repo_wide` to compare against every approved decision). ([implementation PR #1453](https://github.com/jstoup111/ai-conductor/pull/1453)).
+- build_review's grader now sees and judges operator-authorized protected-artifact reseal rationale instead of grading the diff blind to it. ([implementation PR #1556](https://github.com/jstoup111/ai-conductor/pull/1556)).
 
 ### Changed
 
