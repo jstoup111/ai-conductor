@@ -9,6 +9,9 @@ const tautologySkillPath = fileURLToPath(
 const scopeSkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-scope/SKILL.md', import.meta.url),
 );
+const rootCauseSkillPath = fileURLToPath(
+  new URL('../../../../skills/build-review-root-cause/SKILL.md', import.meta.url),
+);
 
 describe('engine/build-review rubric skill contracts', () => {
   it('defines the versioned Tautology judgement contract over its closed projection', async () => {
@@ -69,6 +72,35 @@ describe('engine/build-review rubric skill contracts', () => {
 
     expect(skill).toMatch(/does not.*(?:read|write|apply|decide).*disposition/i);
     expect(skill).not.toMatch(/\b(?:claim|bypass)\b/i);
+    expect(skill).not.toMatch(/run (?:the )?tests?/i);
+    expect(skill).not.toMatch(/spawn subagents?|delegate (?:to )?(?:an )?agent/i);
+  });
+
+  it('defines the versioned Root Cause judgement contract over the stated defect and implementation', async () => {
+    const skill = await readFile(rootCauseSkillPath, 'utf8');
+
+    expect(skill).toMatch(/^---\nname: build-review-root-cause\n/m);
+    expect(skill).toMatch(/^description: ".+"$/m);
+    expect(skill).toMatch(/^enforcement: gating$/m);
+    expect(skill).toMatch(/^phase: build$/m);
+
+    expect(skill).toMatch(/projection version.*`v1`/i);
+    expect(skill).toMatch(/lap (?:ID|identity)/i);
+    expect(skill).toMatch(/snapshot digest/i);
+    expect(skill).toMatch(/changed diff/i);
+    expect(skill).toMatch(/approved plan/i);
+    expect(skill).toMatch(/repair context/i);
+
+    expect(skill).toMatch(/stated defect\/outcome/i);
+    expect(skill).toMatch(/symptom-only/i);
+    expect(skill).toMatch(/implementation mechanism or locus/i);
+    expect(skill).toMatch(/typed logical anchors/i);
+    expect(skill).toMatch(/concrete evidence locations/i);
+    expect(skill).toMatch(/every independent finding/i);
+    expect(skill).toMatch(/empty array.*PASS/i);
+
+    expect(skill).toMatch(/does not.*(?:read|write|apply|decide).*disposition/i);
+    expect(skill).not.toMatch(/\bruntime\b|\bmanual[_ -]?test\b/i);
     expect(skill).not.toMatch(/run (?:the )?tests?/i);
     expect(skill).not.toMatch(/spawn subagents?|delegate (?:to )?(?:an )?agent/i);
   });
