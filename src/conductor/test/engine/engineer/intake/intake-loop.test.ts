@@ -14,9 +14,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 import type { Envelope } from '../../../../src/engine/engineer/intake/port.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -482,6 +483,79 @@ describe('runIntakeLoop', () => {
     expect(log.mock.calls.some((call: unknown[]) => String(call[0]).includes('notify: total tick failure'))).toBe(
       true,
     );
+  });
+
+  it('reports a corrupt-ledger episode once, resumes after repair, and reports a later distinct corruption', async () => {
+    const mod = (await import(
+      '../../../../src/engine/engineer/intake/intake-loop.js'
+    )) as Record<string, any>;
+    const { createLedger } = await import('../../../../src/engine/engineer/intake/ledger.js');
+    const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
+    const directory = await mkdtemp(join(tmpdir(), 'intake-loop-corruption-'));
+    const ledgerPath = join(directory, 'ledger.json');
+    const ledger = createLedger(ledgerPath);
+    const logs = vi.fn((_msg: string) => {});
+    const secretLedgerContent = 'SECRET_LEDGER_ENTRY_MUST_NOT_REACH_THE_OPERATOR';
+    const STOP = { __stop: true };
+    let pollCalls = 0;
+    let sleepCalls = 0;
+
+    try {
+      await writeFile(ledgerPath, secretLedgerContent, 'utf8');
+      const poll = vi.fn(async () => {
+        pollCalls += 1;
+        if (pollCalls === 3) {
+          await writeFile(ledgerPath, '{}', 'utf8');
+        }
+        if (pollCalls === 4) {
+          await writeFile(ledgerPath, '{second broken ledger', 'utf8');
+        }
+        return ledger.list() as Promise<any[]>;
+      });
+      const enqueue = vi.fn(async (_envelope: unknown) => {});
+      const notify = vi.fn(async (_ideas: unknown[]) => {});
+      const sleep = vi.fn(async (_ms: number) => {
+        sleepCalls += 1;
+        if (sleepCalls === 4) throw STOP;
+      });
+
+      await runIntakeLoop(
+        { poll, enqueue, notify, sleep, now: () => new Date(), log: logs },
+        { intervalMs: 1 },
+      ).catch((error: unknown) => {
+        if (error !== STOP) throw error;
+      });
+
+      const quarantines = (await readdir(directory)).filter((name) => name.startsWith('ledger.json.corrupt-'));
+      const corruptionLogs = logs.mock.calls
+        .map(([message]) => String(message))
+        .filter((message) => message.startsWith('intake loop: corrupt ledger'));
+
+      expect({
+        pollCalls,
+        enqueueCalls: enqueue.mock.calls.length,
+        notifyCalls: notify.mock.calls.length,
+        quarantineCount: quarantines.length,
+        corruptionLogs,
+      }).toEqual({
+        pollCalls: 4,
+        enqueueCalls: 0,
+        notifyCalls: 0,
+        quarantineCount: 2,
+        corruptionLogs: [
+          expect.stringContaining(`ledger=${ledgerPath}`),
+          expect.stringContaining(`ledger=${ledgerPath}`),
+        ],
+      });
+      expect(
+        corruptionLogs.every((message) =>
+          quarantines.some((name) => message.includes(`quarantine=${join(directory, name)}`)),
+        ),
+      ).toBe(true);
+      expect(corruptionLogs.join('\n')).not.toContain(secretLedgerContent);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

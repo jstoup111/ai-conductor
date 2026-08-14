@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Envelope } from './port.js';
+import { CorruptLedgerError } from './ledger.js';
 
 /** Effects injected into the intake loop's tick/scheduler. */
 export interface IntakeLoopDeps {
@@ -52,6 +53,22 @@ export interface IntakeLoopOptions {
 export interface IntakeTickSummary {
   /** Number of envelopes captured (polled and enqueued) this tick. */
   captured: number;
+}
+
+/** Mutable state retained by the continuous scheduler for one corruption episode. */
+interface CorruptionEpisode {
+  reportedKey?: string;
+}
+
+function corruptionEpisodeKey(error: CorruptLedgerError): string {
+  return `${error.ledgerPath}\u0000${error.reason}`;
+}
+
+function corruptLedgerDiagnostic(error: CorruptLedgerError): string {
+  const quarantinePath = error.quarantinePath
+    ?? error.quarantineDiagnostic
+    ?? 'unavailable (quarantine creation failed)';
+  return `intake loop: corrupt ledger ledger=${error.ledgerPath} quarantine=${quarantinePath}; intake paused until the ledger is repaired`;
 }
 
 /**
@@ -99,17 +116,32 @@ function enrichOrigin(envelope: Envelope, log: (msg: string) => void): Envelope 
  * summary `{ captured: <count> }`. Pure orchestration over injected effects:
  * no real I/O, no claude/provider capability.
  */
-export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummary> {
+export async function intakeTick(
+  deps: IntakeLoopDeps,
+  corruptionEpisode?: CorruptionEpisode,
+): Promise<IntakeTickSummary> {
   let envelopes: Envelope[];
   try {
     envelopes = await deps.poll();
   } catch (err) {
+    if (err instanceof CorruptLedgerError) {
+      const key = corruptionEpisodeKey(err);
+      if (corruptionEpisode?.reportedKey !== key) {
+        deps.log(corruptLedgerDiagnostic(err));
+        if (corruptionEpisode) corruptionEpisode.reportedKey = key;
+      }
+      return { captured: 0 };
+    }
     // The adapter already isolates per-repo failures (FR-27/ADR-012); this
     // catch is a defensive backstop so an unexpected poll() rejection never
     // crashes the tick or the loop. Log and treat this tick as zero-capture.
     deps.log(`intake tick: poll() failed: ${err instanceof Error ? err.message : String(err)}`);
     return { captured: 0 };
   }
+  // A poll that completes proves the ledger was repaired (or that this was a
+  // different, non-corruption failure episode), so a later corruption merits
+  // a fresh operator warning.
+  if (corruptionEpisode) corruptionEpisode.reportedKey = undefined;
   // Tick-level dedup safety gate (FR-2): if a single poll() returns multiple
   // envelopes sharing the same sourceRef, only the first is enqueued. The
   // adapter is expected to dedupe upstream, but this backstop ensures a
@@ -211,9 +243,10 @@ function resolveIntervalMs(intervalMs: number, log: (msg: string) => void): numb
  */
 export async function runIntakeLoop(deps: IntakeLoopDeps, opts: IntakeLoopOptions): Promise<void> {
   const intervalMs = resolveIntervalMs(opts.intervalMs, deps.log);
+  const corruptionEpisode: CorruptionEpisode = {};
   for (;;) {
     try {
-      await intakeTick(deps);
+      await intakeTick(deps, corruptionEpisode);
     } catch (err) {
       // Whole-tick failure backstop (Task 6): intakeTick() already isolates
       // per-repo poll/enqueue failures internally, but an unexpected failure

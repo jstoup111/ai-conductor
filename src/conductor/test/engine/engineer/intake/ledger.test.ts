@@ -109,6 +109,39 @@ describe('loadStore()', () => {
     });
   });
 
+  it('reports the collision-resolved quarantine path for corrupt bytes', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const corruptBytes = Buffer.from('not valid json');
+    const collidingBytes = Buffer.from('a different corrupt ledger');
+    await writeFile(ledgerPath, corruptBytes);
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-13T12:00:00.000Z'));
+      await writeFile(`${ledgerPath}.corrupt-1786622400000`, collidingBytes);
+      const error = await createLedger(ledgerPath).list().then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toMatchObject({
+        ledgerPath,
+        reason: expect.stringContaining('Unexpected token'),
+        quarantinePath: `${ledgerPath}.corrupt-1786622400001`,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await expect({
+      collision: await readFile(`${ledgerPath}.corrupt-1786622400000`),
+      resolved: await readFile(`${ledgerPath}.corrupt-1786622400001`),
+    }).toEqual({
+      collision: collidingBytes,
+      resolved: corruptBytes,
+    });
+  });
+
   it('reports a failed quarantine alongside corruption without changing the ledger bytes', async () => {
     const lockedDir = join(dir, 'locked');
     const ledgerPath = join(lockedDir, 'ledger.json');
@@ -137,6 +170,8 @@ describe('loadStore()', () => {
       expect(result).toEqual({
         error: expect.objectContaining({
           message: expect.stringMatching(/corrupt:.*Unexpected.*quarantine.*EACCES/i),
+          quarantinePath: undefined,
+          quarantineDiagnostic: expect.stringMatching(/^failed to quarantine corrupt ledger:.*EACCES/i),
         }),
         errorIsTyped: true,
         original: corruptBytes,

@@ -4,7 +4,7 @@
 // Dedup key: source + NUL + sourceRef — so cross-repo same number is distinct,
 // and a re-filed idea under a new reference is also distinct.
 
-import { readFile, writeFile, mkdir, rename, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, readdir, mkdtemp, link, unlink, rmdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -48,6 +48,10 @@ export class CorruptLedgerError extends Error {
   constructor(
     public readonly ledgerPath: string,
     public readonly reason: string,
+    /** Exact sibling path preserving the corrupt bytes, when quarantine succeeded. */
+    public readonly quarantinePath?: string,
+    /** Defined when corrupt bytes could not be quarantined. */
+    public readonly quarantineDiagnostic?: string,
   ) {
     super(`Intake ledger at ${ledgerPath} is corrupt: ${reason}`);
     this.name = 'CorruptLedgerError';
@@ -197,14 +201,15 @@ export async function loadStore(path: string): Promise<LedgerLoadResult> {
   }
 }
 
-async function quarantineCorruptBytes(path: string, bytes: Buffer): Promise<void> {
+async function quarantineCorruptBytes(path: string, bytes: Buffer): Promise<string> {
   const directory = dirname(path);
   const prefix = `${basename(path)}.corrupt-`;
   const existing = await readdir(directory);
   for (const name of existing) {
     if (!name.startsWith(prefix)) continue;
+    const quarantinePath = join(directory, name);
     try {
-      if ((await readFile(join(directory, name))).equals(bytes)) return;
+      if ((await readFile(quarantinePath)).equals(bytes)) return quarantinePath;
     } catch {
       // A stale or unreadable sibling cannot safely be reused.
     }
@@ -214,12 +219,23 @@ async function quarantineCorruptBytes(path: string, bytes: Buffer): Promise<void
   while (true) {
     const quarantinePath = `${path}.corrupt-${timestamp}`;
     try {
-      await writeFile(quarantinePath, bytes, { flag: 'wx' });
-      return;
+      // link() publishes the prepared bytes with O_EXCL semantics without using
+      // the daemon-lock boundary's guarded `wx` create flag. The source lives in
+      // the same directory, so this is an atomic, collision-safe publication.
+      const temporaryDirectory = await mkdtemp(join(directory, `.${prefix}`));
+      const temporaryPath = join(temporaryDirectory, 'bytes');
+      try {
+        await writeFile(temporaryPath, bytes);
+        await link(temporaryPath, quarantinePath);
+        return quarantinePath;
+      } finally {
+        await unlink(temporaryPath).catch(() => undefined);
+        await rmdir(temporaryDirectory).catch(() => undefined);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       try {
-        if ((await readFile(quarantinePath)).equals(bytes)) return;
+        if ((await readFile(quarantinePath)).equals(bytes)) return quarantinePath;
       } catch {
         // A colliding, unreadable file is preserved; choose another timestamp.
       }
@@ -232,18 +248,19 @@ async function readStore(path: string): Promise<LedgerStore> {
   const result = await loadStore(path);
   if (result.kind === 'absent') return {};
   if (result.kind === 'corrupt') {
-    let quarantineFailure: string | undefined;
+    let quarantinePath: string | undefined;
+    let quarantineDiagnostic: string | undefined;
     if (result.bytes !== undefined) {
       try {
-        await quarantineCorruptBytes(path, result.bytes);
+        quarantinePath = await quarantineCorruptBytes(path, result.bytes);
       } catch (error) {
-        quarantineFailure = error instanceof Error ? error.message : String(error);
+        quarantineDiagnostic = `failed to quarantine corrupt ledger: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
-    const reason = quarantineFailure === undefined
+    const reason = quarantineDiagnostic === undefined
       ? result.reason
-      : `${result.reason}; failed to quarantine corrupt ledger: ${quarantineFailure}`;
-    throw new CorruptLedgerError(path, reason);
+      : `${result.reason}; ${quarantineDiagnostic}`;
+    throw new CorruptLedgerError(path, reason, quarantinePath, quarantineDiagnostic);
   }
   return result.store;
 }

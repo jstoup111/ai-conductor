@@ -1222,21 +1222,20 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe('Task 17: intake capture preserves ledger durability', () => {
-  it('reports a corrupt ledger and never enqueues envelopes whose record failed', async () => {
+  it('does not enqueue an envelope whose ledger record fails, while later envelopes complete capture', async () => {
     await writeRegistry([]);
 
-    const { CorruptLedgerError } = await import('../../../src/engine/engineer/intake/ledger.js');
     const { runEngineerMode } = await loadLoop();
-    const { io, text } = scriptedIo(['exit']);
+    const { io } = scriptedIo(['exit']);
     const envelopes = [
       { source: 'github-issues', sourceRef: 'org/repo#1', text: 'first' },
       { source: 'github-issues', sourceRef: 'org/repo#2', text: 'second' },
       { source: 'github-issues', sourceRef: 'org/repo#3', text: 'third' },
     ];
-    const record = vi.fn(async () => {
-      throw new CorruptLedgerError(join(engineerDir, 'ledger.json'), 'invalid JSON');
+    const record = vi.fn(async ({ sourceRef }: { sourceRef: string }) => {
+      if (sourceRef === 'org/repo#2') throw new Error('ledger write failed');
     });
-    const enqueue = vi.fn(async () => undefined);
+    const enqueue = vi.fn(async (_envelope: (typeof envelopes)[number]) => undefined);
 
     await runEngineerMode({
       route: noopProvider,
@@ -1253,8 +1252,13 @@ describe('Task 17: intake capture preserves ledger durability', () => {
       },
     });
 
-    expect(text()).toMatch(/intake ledger.*corrupt/i);
-    expect(enqueue).not.toHaveBeenCalled();
+    expect({
+      recorded: record.mock.calls.map(([entry]) => entry.sourceRef),
+      enqueued: enqueue.mock.calls.map(([envelope]) => envelope.sourceRef),
+    }).toEqual({
+      recorded: ['org/repo#1', 'org/repo#2', 'org/repo#3'],
+      enqueued: ['org/repo#1', 'org/repo#3'],
+    });
   });
 
   it('continues recording and enqueuing healthy envelopes when one enqueue fails', async () => {
@@ -1296,120 +1300,5 @@ describe('Task 17: intake capture preserves ledger durability', () => {
       'org/repo#3',
     ]);
     expect(successfullyEnqueued).toEqual(['org/repo#1', 'org/repo#3']);
-  });
-});
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Task 18: A corrupt ledger pauses intake dispatch until it is repaired, without
-// repeating the warning for the same corruption episode.
-// ═════════════════════════════════════════════════════════════════════════════
-
-describe('Task 18: intake corruption episode handling', () => {
-  it('reports poll corruption and holds an already-queued claim without dispatching it', async () => {
-    await writeRegistry([]);
-
-    const { CorruptLedgerError } = await import('../../../src/engine/engineer/intake/ledger.js');
-    const { runEngineerMode } = await loadLoop();
-    const { io, text } = scriptedIo(['exit']);
-    const queuedEnvelope = {
-      id: 'queued-issue',
-      source: 'github-issues',
-      sourceRef: 'org/repo#queued',
-      text: 'already queued intake idea',
-      status: 'pending' as const,
-      receivedAt: '2026-08-14T00:00:00.000Z',
-    };
-    const claim = vi.fn(async () => queuedEnvelope);
-    const route = vi.fn(noopProvider.invoke);
-
-    await runEngineerMode({
-      route: { invoke: route },
-      io,
-      registryPath,
-      engineerDir,
-      sources: [{
-        poll: async () => {
-          throw new CorruptLedgerError(join(engineerDir, 'ledger.json'), 'invalid JSON');
-        },
-      }],
-      queue: {
-        enqueue: async () => undefined,
-        claim,
-        ack: async () => undefined,
-        release: async () => undefined,
-      },
-    });
-
-    expect(text()).toMatch(/intake ledger corruption.*invalid JSON/i);
-    expect(claim).not.toHaveBeenCalled();
-    expect(route).not.toHaveBeenCalled();
-  });
-
-  it('warns in each fresh session and rearms after repair', async () => {
-    await writeRegistry([]);
-
-    const { createLedger } = await import('../../../src/engine/engineer/intake/ledger.js');
-    const { runEngineerMode } = await loadLoop();
-    const ledgerPath = join(engineerDir, 'ledger.json');
-    const ledger = createLedger(ledgerPath);
-    const output: string[] = [];
-    const claimed: string[] = [];
-    let pollNumber = 0;
-    const queue = {
-      enqueue: async () => undefined,
-      claim: async () => {
-        claimed.push(`claim-${pollNumber}`);
-        return undefined;
-      },
-      ack: async () => undefined,
-      release: async () => undefined,
-    };
-    const runCycle = async () => {
-      pollNumber += 1;
-      await runEngineerMode({
-        route: noopProvider,
-        io: { prompt: async () => null, print: (line: string) => output.push(line) },
-        registryPath,
-        engineerDir,
-        sources: [{
-          poll: async () => [{
-            id: `issue-${pollNumber}`,
-            source: 'github-issues',
-            sourceRef: `org/repo#${pollNumber}`,
-            text: 'intake idea',
-            status: 'pending' as const,
-            receivedAt: '2026-08-14T00:00:00.000Z',
-          }],
-        }],
-        ledger,
-        queue,
-      });
-    };
-
-    await writeFile(ledgerPath, '{broken-first', 'utf8');
-    await runCycle();
-    await runCycle();
-    const firstQuarantines = (await readdir(engineerDir))
-      .filter((name) => name.startsWith('ledger.json.corrupt-'));
-
-    await writeFile(ledgerPath, '{}', 'utf8');
-    await runCycle();
-
-    await writeFile(ledgerPath, '{broken-second', 'utf8');
-    await runCycle();
-    const quarantines = (await readdir(engineerDir))
-      .filter((name) => name.startsWith('ledger.json.corrupt-'));
-
-    expect({
-      corruptionWarnings: output.filter((line) => /intake ledger corruption/i.test(line)).length,
-      firstQuarantineCount: firstQuarantines.length,
-      quarantineCount: quarantines.length,
-      claimed,
-    }).toEqual({
-      corruptionWarnings: 3,
-      firstQuarantineCount: 1,
-      quarantineCount: 2,
-      claimed: ['claim-3'],
-    });
   });
 });

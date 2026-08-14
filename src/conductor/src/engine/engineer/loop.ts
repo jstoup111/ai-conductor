@@ -33,7 +33,7 @@ import { basename } from 'node:path';
 import type { Envelope, IntakePort } from './intake/port.js';
 import type { IntakeSource } from './intake/source.js';
 import type { IntakeQueue } from './intake/queue.js';
-import { CorruptLedgerError, type Ledger } from './intake/ledger.js';
+import { type Ledger } from './intake/ledger.js';
 import { reportRouted, reportDone } from './intake/writeback.js';
 import type { RoutingProvider } from './routing.js';
 import { createRegistryReader } from '../registry.js';
@@ -240,15 +240,6 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
     authored: [],
     buildsRun: 0,
   };
-  const reportedCorruptionEpisodes = new Set<string>();
-  const reportLedgerCorruption = (err: CorruptLedgerError): void => {
-    const episodeKey = `${err.ledgerPath}\0${err.reason}`;
-    if (!reportedCorruptionEpisodes.has(episodeKey)) {
-      reportedCorruptionEpisodes.add(episodeKey);
-      io.print(`Intake ledger corruption: ${err.message}`);
-    }
-  };
-
   // ── 5.5 Intake: poll-on-launch → enqueue → process the oldest (FR-31) ───────
   // Polls every injected source once, buffers what they surface (adapters dedup
   // via the ledger), then claims and processes EXACTLY ONE envelope (the oldest).
@@ -256,17 +247,11 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
   // — no error, no idle hang. Processing failure releases the claim for re-delivery.
   if (deps.sources?.length && deps.queue) {
     const queue = deps.queue;
-    let intakeLedgerIsCorrupt = false;
     for (const source of deps.sources) {
       let envs: Envelope[] = [];
       try {
         envs = await source.poll();
       } catch (err: unknown) {
-        if (err instanceof CorruptLedgerError) {
-          intakeLedgerIsCorrupt = true;
-          reportLedgerCorruption(err);
-          continue;
-        }
         io.print(`Intake poll failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       for (const e of envs) {
@@ -276,21 +261,15 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
           // when the entry already exists, so the github adapter's own record is safe).
           if (deps.ledger) {
             await deps.ledger.record({ source: e.source, sourceRef: e.sourceRef });
-            reportedCorruptionEpisodes.clear();
           }
           await queue.enqueue(e);
         } catch (err: unknown) {
-          if (err instanceof CorruptLedgerError) {
-            intakeLedgerIsCorrupt = true;
-            reportLedgerCorruption(err);
-            break;
-          }
           // A single malformed envelope must not abort the whole intake phase.
         }
       }
     }
 
-    const claimed = intakeLedgerIsCorrupt ? undefined : await queue.claim();
+    const claimed = await queue.claim();
     if (claimed) {
       try {
         await processIdea(

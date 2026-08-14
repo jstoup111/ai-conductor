@@ -82,10 +82,6 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // Atomic state replacement creates a unique same-directory temporary
       // file before rename; it is unrelated to the daemon pidfile.
       'engine/filesystem-conduct-state-store.ts',
-      // Intake-ledger corruption quarantine uses create-only writes solely to
-      // preserve an existing quarantine when timestamped names collide. It
-      // neither references daemon.pid nor coordinates daemon ownership.
-      'engine/engineer/intake/ledger.ts',
     ];
 
     for (const file of allTs) {

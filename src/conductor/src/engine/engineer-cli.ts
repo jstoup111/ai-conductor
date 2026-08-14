@@ -743,7 +743,17 @@ export async function dispatchEngineer(
   const registryPath = opts.registryPath;
   const engineerDir = opts.engineerDir;
 
-  switch (dispatch.kind) {
+  const reportCorruptLedger = (error: CorruptLedgerError): number => {
+    const quarantineLocation = error.quarantinePath ?? error.quarantineDiagnostic ?? 'unavailable';
+    printErr(
+      `engineer ${dispatch.kind}: intake ledger is corrupt at ${error.ledgerPath}; ` +
+        `quarantine path: ${quarantineLocation}; ledger was not modified.`,
+    );
+    return 1;
+  };
+
+  try {
+    switch (dispatch.kind) {
     // ── launch ──────────────────────────────────────────────────────────────────
     // Bare `conduct-ts engineer`: drop the operator into the interactive /engineer loop.
     case 'launch': {
@@ -805,9 +815,13 @@ export async function dispatchEngineer(
             if (n > 0) print(`Intake: ${n} issue(s) queued.`);
           } catch (err: unknown) {
             // Best-effort: intake must never block the interactive loop.
-            printErr(
-              `engineer: intake pre-poll failed (${err instanceof Error ? err.message : String(err)}) — continuing.`,
-            );
+            if (err instanceof CorruptLedgerError) {
+              reportCorruptLedger(err);
+            } else {
+              printErr(
+                `engineer: intake pre-poll failed (${err instanceof Error ? err.message : String(err)}) — continuing.`,
+              );
+            }
           }
         }
         try {
@@ -1041,9 +1055,13 @@ export async function dispatchEngineer(
               });
             }
           } catch (e: unknown) {
-            printErr(
-              `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
-            );
+            if (e instanceof CorruptLedgerError) {
+              reportCorruptLedger(e);
+            } else {
+              printErr(
+                `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            }
             // Continue — handoff still succeeds
           }
         }
@@ -1093,9 +1111,13 @@ export async function dispatchEngineer(
               });
             }
           } catch (e: unknown) {
-            printErr(
-              `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
-            );
+            if (e instanceof CorruptLedgerError) {
+              reportCorruptLedger(e);
+            } else {
+              printErr(
+                `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            }
             // Continue — handoff still succeeds
           }
         }
@@ -1158,7 +1180,6 @@ export async function dispatchEngineer(
     // The file queue is wrapped with createDeliveryGuardedQueue (Task 8, TR-1) to detect
     // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
     case 'claim': {
-      try {
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
 
@@ -1242,16 +1263,6 @@ export async function dispatchEngineer(
         }),
       );
       return 0;
-      } catch (error: unknown) {
-        if (error instanceof CorruptLedgerError) {
-          printErr(
-            `engineer claim: intake ledger is corrupt at ${error.ledgerPath}; ` +
-              `quarantine path: ${error.ledgerPath}.corrupt-*; ledger was not modified.`,
-          );
-          return 1;
-        }
-        throw error;
-      }
     }
 
     // ── forget ──────────────────────────────────────────────────────────────────
@@ -1540,5 +1551,9 @@ export async function dispatchEngineer(
       print(`migrate-issue-deps: ${created} link(s) created, ${alreadyPresent} already present.`);
       return 0;
     }
+    }
+  } catch (error: unknown) {
+    if (error instanceof CorruptLedgerError) return reportCorruptLedger(error);
+    throw error;
   }
 }

@@ -1,7 +1,7 @@
 // Task 16: a corrupt intake ledger is a CLI failure, not a success-shaped claim.
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -50,11 +50,16 @@ describe('engineer claim: corrupt intake ledger', () => {
     );
 
     const diagnostic = stderr.join('\n');
+    const quarantineNames = (await readdir(engineerDir))
+      .filter((name) => name.startsWith('ledger.json.corrupt-'));
+    expect(quarantineNames).toHaveLength(1);
+    const quarantinePath = join(engineerDir, quarantineNames[0]);
     expect({
       ...observed,
       stdout,
       namesLedger: diagnostic.includes(ledgerPath),
-      namesQuarantine: diagnostic.includes(`${ledgerPath}.corrupt-`),
+      namesQuarantine: diagnostic.includes(quarantinePath),
+      usesWildcard: diagnostic.includes(`${ledgerPath}.corrupt-*`),
       leaksLedgerContent: diagnostic.includes(corruptLedgerContent),
     }).toEqual({
       exitCode: 1,
@@ -62,7 +67,39 @@ describe('engineer claim: corrupt intake ledger', () => {
       stdout: [],
       namesLedger: true,
       namesQuarantine: true,
+      usesWildcard: false,
       leaksLedgerContent: false,
     });
+  });
+
+  it('uses the same concrete quarantine diagnostic for another ledger-mutating verb', async () => {
+    const engineerDir = join(workDir, 'engineer-forget');
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    const corruptLedgerContent = 'SECRET_LEDGER_ENTRY_MUST_NOT_REACH_THE_OPERATOR';
+    await mkdir(engineerDir, { recursive: true });
+    await writeFile(ledgerPath, corruptLedgerContent, 'utf8');
+
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const exitCode = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'owner/repo#1' },
+      {
+        engineerDir,
+        print: (line) => stdout.push(line),
+        printErr: (line) => stderr.push(line),
+        gh: async () => ({ stdout: '[]' }),
+      },
+    );
+
+    const quarantineNames = (await readdir(engineerDir))
+      .filter((name) => name.startsWith('ledger.json.corrupt-'));
+    const diagnostic = stderr.join('\n');
+    expect(quarantineNames).toHaveLength(1);
+    const [quarantineName] = quarantineNames;
+    if (!quarantineName) throw new Error('expected corrupt ledger quarantine');
+    expect({ exitCode, stdout }).toEqual({ exitCode: 1, stdout: [] });
+    expect(diagnostic).toContain(ledgerPath);
+    expect(diagnostic).toContain(join(engineerDir, quarantineName));
+    expect(diagnostic).not.toContain(corruptLedgerContent);
   });
 });
