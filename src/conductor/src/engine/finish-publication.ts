@@ -1380,6 +1380,15 @@ function publicationPrReady(snapshot: PublicationSnapshot): PublicationPullReque
 export async function advanceFinishPublication(
   input: AdvanceFinishPublicationInput,
 ): Promise<AdvanceFinishPublicationResult> {
+  const result = await advanceFinishPublicationUnreconciled(input);
+  return result.kind === 'publication_retry' && 'transition' in result
+    ? reconcileSelectablePublicationRetry(result, input.observe)
+    : result;
+}
+
+async function advanceFinishPublicationUnreconciled(
+  input: AdvanceFinishPublicationInput,
+): Promise<AdvanceFinishPublicationResult> {
   const snapshot = await input.observe();
   const preflight = preflightFinishPublication(snapshot);
   if (preflight.kind === 'blocked') {
@@ -1415,6 +1424,13 @@ export async function advanceFinishPublication(
       });
 
       const draftPr = await openShipDraftPr(input.effects.establishPr);
+      if (draftPr.outcome !== 'published') {
+        return {
+          kind: 'publication_retry',
+          transition: 'establish_pr',
+          reason: `draft_pr_${draftPr.outcome}`,
+        };
+      }
       if (draftPr.outcome === 'published' && input.effects.persistEstablishedPrUrl) {
         try {
           await input.effects.persistEstablishedPrUrl(draftPr.prUrl);
@@ -1447,10 +1463,7 @@ export async function advanceFinishPublication(
       return {
         kind: 'publication_retry',
         transition: 'establish_pr',
-        reason:
-          draftPr.outcome === 'published'
-            ? 'pr_identity_not_verified_after_establish'
-            : `draft_pr_${draftPr.outcome}`,
+        reason: 'pr_identity_not_verified_after_establish',
       };
     });
   }
@@ -1501,11 +1514,11 @@ export async function advanceFinishPublication(
             observedAfterAuthoring,
           );
         }
-        return reconcileSelectablePublicationRetry({
+        return {
           kind: 'publication_retry',
           transition: 'author_pr_prose',
           reason: 'authoring_dispatch_failed',
-        }, input.observe);
+        };
       }
 
       const transition = await advancedPublicationTransition(
@@ -1550,15 +1563,15 @@ export async function advanceFinishPublication(
         // The dispatcher can lose its response after the provider has returned.
         // A fresh observation determines whether judgment is still the stage
         // that can run before this attempt is allowed to retry it.
-        return reconcileSelectablePublicationRetry({
+        return {
           kind: 'publication_retry',
           transition: 'judge_pr_prose',
           reason: 'judgment_dispatch_failed',
-        }, input.observe);
+        };
       }
 
       if (result.kind === 'publication_retry' && 'transition' in result) {
-        return reconcileSelectablePublicationRetry(result, input.observe);
+        return result;
       }
       if (result.kind !== 'advanced') return result;
 
@@ -1606,6 +1619,19 @@ export async function advanceFinishPublication(
       }
 
       const observedAfterWrite = await input.observe();
+      if (writeFailure) {
+        if (observedAfterWrite.shippedRecord === 'valid') {
+          return { kind: 'advanced', transition: 'write_shipped_record' };
+        }
+        if (observedAfterWrite.shippedRecord === 'invalid') {
+          return { kind: 'human_required', reason: 'invalid_shipped_record' };
+        }
+        return {
+          kind: 'publication_retry',
+          transition: 'write_shipped_record',
+          reason: 'shipped_record_write_failed',
+        };
+      }
       const transition = await advancedPublicationTransition(
         input.emit,
         'write_shipped_record',
@@ -1622,9 +1648,7 @@ export async function advanceFinishPublication(
       return {
         kind: 'publication_retry',
         transition: 'write_shipped_record',
-        reason: writeFailure
-          ? 'shipped_record_write_failed'
-          : 'shipped_record_not_verified_after_write',
+        reason: 'shipped_record_not_verified_after_write',
       };
     });
   }
@@ -1725,11 +1749,18 @@ export async function advanceFinishPublication(
       }
 
       const observedAfterRecord = await input.observe();
+      if (writeFailure) {
+        if (observedAfterRecord.outcomeRecord === 'valid') return { kind: 'complete' };
+        return {
+          kind: 'publication_retry',
+          transition: 'record_outcome',
+          reason: 'outcome_record_write_failed',
+        };
+      }
       const observedPreflight = preflightFinishPublication(observedAfterRecord);
       if (
         observedPreflight.kind === 'ready_for_judgment' &&
-        nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome' &&
-        observedAfterRecord.outcomeRecord === 'valid'
+        nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome'
       ) {
         const advanced = await advancedPublicationTransition(
           input.emit,
@@ -1737,7 +1768,9 @@ export async function advanceFinishPublication(
           snapshot,
           observedAfterRecord,
         );
-        if (advanced) return { kind: 'complete' };
+        if (advanced.kind === 'human_required') return advanced;
+        if (advanced.kind === 'advanced') return { kind: 'complete' };
+        return advanced;
       }
 
       return {

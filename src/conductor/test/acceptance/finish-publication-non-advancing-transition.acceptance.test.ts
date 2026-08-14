@@ -450,7 +450,7 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
   });
 
   it('leaves ordinary authored prose with no halt signal on the normal publication path', async () => {
-    const { result, dispatchJudgment } = await runProductionObservation({
+    const { result, dispatchJudgment, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
       body: 'Reader-facing summary and validation evidence.',
@@ -460,10 +460,13 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
 
     expect(result).toEqual({ kind: 'publication_progress', transition: 'ready_pr' });
     expect(dispatchJudgment).not.toHaveBeenCalled();
+    expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
+      expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
+    );
   });
 
   it('does not treat an empty label list as a halt signal', async () => {
-    const { result, dispatchJudgment } = await runProductionObservation({
+    const { result, dispatchJudgment, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
       body: 'Reader-facing summary and validation evidence.',
@@ -473,10 +476,13 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
 
     expect(result).not.toEqual(expect.objectContaining({ kind: 'human_required' }));
     expect(dispatchJudgment).not.toHaveBeenCalled();
+    expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
+      expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
+    );
   });
 
   it('takes the degraded-observation path when gh pr view fails without claiming halt state', async () => {
-    const { result, dispatchJudgment, completedTransitions } = await runProductionObservation({
+    const { result, dispatchJudgment, completedTransitions, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
       body: 'Reader-facing summary and validation evidence.',
@@ -487,5 +493,8 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
     expect(result).not.toEqual(expect.objectContaining({ kind: 'human_required' }));
     expect(dispatchJudgment).not.toHaveBeenCalled();
     expect(completedTransitions).toEqual([]);
+    expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
+      expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
+    );
   });
 });

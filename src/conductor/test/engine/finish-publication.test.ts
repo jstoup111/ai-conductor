@@ -1551,9 +1551,9 @@ describe('advanceFinishPublication PR identity', () => {
     await expect(
       advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
     ).resolves.toEqual({
-      kind: 'human_required',
-      reason: 'publication_transition_unmoved',
-      detail: 'The establish_pr transition left pr.identity + branchPushed unchanged at false.',
+      kind: 'publication_retry',
+      transition: 'establish_pr',
+      reason: 'draft_pr_failed',
     });
 
     expect(observe).toHaveBeenCalledTimes(2);
@@ -1644,14 +1644,14 @@ describe('advanceFinishPublication durable shipped evidence', () => {
         effects: { dispatchJudgment, createShippedRecord },
       }),
     ).resolves.toEqual({
-      kind: 'human_required',
-      reason: 'publication_transition_unmoved',
-      detail: 'The write_shipped_record transition left shippedRecord unchanged at missing.',
+      kind: 'publication_retry',
+      transition: 'write_shipped_record',
+      reason: 'shipped_record_write_failed',
     });
 
     expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
       writes: 1,
-      observations: 2,
+      observations: 3,
     });
     expect(dispatchJudgment).not.toHaveBeenCalled();
   });
@@ -2189,7 +2189,7 @@ describe('advanceFinishPublication final outcome commit point', () => {
 
     expect(writes).toEqual(['state-write']);
     expect(recordOutcome).toHaveBeenCalledTimes(1);
-    expect(observe).toHaveBeenCalledTimes(2);
+    expect(observe).toHaveBeenCalledTimes(3);
   });
 });
 

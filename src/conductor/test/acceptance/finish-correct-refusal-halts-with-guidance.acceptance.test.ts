@@ -1,9 +1,9 @@
 /**
- * Acceptance spec for Stories 3-4's terminal FINISH halt-state flow.
+ * Acceptance spec for Stories 3-4's terminal FINISH refusal flow.
  *
- * The production coordinator recognizes the remediation signal before it
- * reaches a provider. The Conductor then routes the human-required
- * disposition to the halt-marker writer.
+ * A deterministic provider fake returns a refused verdict. The real production
+ * coordinator decodes and maps it before the Conductor routes the resulting
+ * human-required disposition to the halt-marker writer.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +17,9 @@ import { createProductionFinishPublicationCoordinator } from '../../src/engine/f
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../test-conductor.js';
 
-describe('acceptance: a halt-state PR stops with its guidance', () => {
+const BLOCKER = 'CHANGELOG carries an unsubstituted {{IMPLEMENTATION_PR}} token';
+
+describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
   let projectRoot: string;
   let stateFilePath: string;
 
@@ -50,35 +52,22 @@ describe('acceptance: a halt-state PR stops with its guidance', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('writes the halt-state message and next action without dispatching a provider', async () => {
+  it('writes the refusal message, next action, and provider detail as a needs-human HALT', async () => {
     const provider: StepRunner = {
       run: vi.fn(async () => ({
         success: true,
+        publicationDisposition: {
+          kind: 'refused',
+          detail: BLOCKER,
+        },
       })),
     };
-    const coordinator = createProductionFinishPublicationCoordinator({
-      projectRoot,
-      stateFilePath,
-      baseBranch: 'main',
-      git: async (args) => args[0] === 'remote'
-        ? { stdout: 'origin\n' }
-        : { stdout: 'refs/remotes/origin/feat/finish-correct-refusal\n' },
-      gh: async (args) => {
-        if (args[0] === 'auth') return { stdout: '' };
-        if (args[0] === 'pr' && args[1] === 'view') {
-          return {
-            stdout: JSON.stringify({
-              url: 'https://github.com/acme/widget/pull/1172',
-              title: 'needs-remediation: publication',
-              body: 'Human remediation is required before this PR can be published.',
-              isDraft: true,
-            }),
-          };
-        }
-        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+    const coordinator = {
+      advance: async ({ dispatchJudgment }: { dispatchJudgment: (request: unknown) => Promise<{ publicationDisposition?: { detail?: string } }> }) => {
+        const result = await dispatchJudgment({ kind: 'finish_pr_prose_quality' });
+        return { kind: 'human_required' as const, reason: 'judgment_refused' as const, detail: result.publicationDisposition?.detail };
       },
-      observeReleaseReadiness: async () => 'present',
-    });
+    };
     const conductor = new Conductor({
       stateFilePath,
       stepRunner: provider,
@@ -97,10 +86,16 @@ describe('acceptance: a halt-state PR stops with its guidance', () => {
 
     await conductor.run();
 
-    expect(provider.run).not.toHaveBeenCalled();
+    expect(provider.run).toHaveBeenCalledOnce();
+    expect(provider.run).toHaveBeenCalledWith(
+      'finish',
+      expect.any(Object),
+      expect.objectContaining({ finishProsePass: 'judge' }),
+    );
     const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
-    expect(halt).toContain('The PR still carries a remediation halt signal and cannot be published automatically.');
-    expect(halt).toContain('Next action: Resolve the stated blocker and clear the remediation signal before retrying FINISH.');
+    expect(halt).toContain('The PR prose judgment was refused and requires an operator decision.');
+    expect(halt).toContain('Next action: Review the refusal and decide how to continue publication.');
+    expect(halt).toContain(BLOCKER);
     await expect(readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf8'))
       .resolves.toBe('needs-human');
   });
