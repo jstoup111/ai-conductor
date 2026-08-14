@@ -157,6 +157,23 @@ export function assertTokenCap(totalTokens: number, unmetered: number, cap: numb
   }
 }
 
+/**
+ * Keep the spend limit outside the live leg so it is asserted after either a
+ * successful return or an earlier failure from the provider/fixture.
+ */
+export async function enforceLiveE2ETokenCap<T>(
+  run: () => Promise<T>,
+  metrics: () => Pick<TokenMeter, 'totalTokens' | 'unmetered'>,
+  cap: number,
+): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    const observed = metrics();
+    assertTokenCap(observed.totalTokens, observed.unmetered, cap);
+  }
+}
+
 const STEPS_ALLOWED_UNMETERED: readonly StepName[] = ['finish'];
 
 export function assertSuccessfulCredentialedRun(
@@ -295,7 +312,8 @@ export async function runLiveE2ERunBody(
   let provisioned: ProvisionedHome | undefined;
   let baselineSha: string | undefined;
 
-  try {
+  return enforceLiveE2ETokenCap(async () => {
+    try {
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeUndefined();
     await initTestRepo(worktreeDir);
@@ -404,15 +422,15 @@ export async function runLiveE2ERunBody(
         }).toEqual({ terminal: true, madeCommit: true, touchedFixture: true, taskTrailer: true });
       },
     );
-  } catch (error) {
-    await dumpPipelineDiagnostics(worktreeDir);
-    throw error;
-  } finally {
-    reportLiveE2ESpend({
-      totalTokens: meter.totalTokens,
-      dispatches: provisioned?.dispatches ?? 0,
-    }, tokenCap);
-    assertTokenCap(meter.totalTokens, meter.unmetered, tokenCap);
-    await rm(worktreeDir, { recursive: true, force: true });
-  }
+    } catch (error) {
+      await dumpPipelineDiagnostics(worktreeDir);
+      throw error;
+    } finally {
+      reportLiveE2ESpend({
+        totalTokens: meter.totalTokens,
+        dispatches: provisioned?.dispatches ?? 0,
+      }, tokenCap);
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
+  }, () => meter, tokenCap);
 }

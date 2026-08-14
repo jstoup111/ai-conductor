@@ -350,4 +350,26 @@ describe('live E2E shared spend policy', () => {
       },
     });
   });
+
+  it.each([
+    ['successful', undefined],
+    ['failed', new Error('the live leg failed first')],
+  ] as const)('rejects an over-cap %s leg with cap, observed total, and unmetered count', async (_branch, runError) => {
+    const { enforceLiveE2ETokenCap } = await import('./live-e2e-run-body.js') as {
+      enforceLiveE2ETokenCap: <T>(
+        run: () => Promise<T>,
+        metrics: () => { totalTokens: number; unmetered: number },
+        cap: number,
+      ) => Promise<T>;
+    };
+
+    await expect(enforceLiveE2ETokenCap(
+      async () => {
+        if (runError) throw runError;
+        return 'completed';
+      },
+      () => ({ totalTokens: 322, unmetered: 7 }),
+      321,
+    )).rejects.toThrow('Token cap 321 exceeded: observed 322; unmetered results: 7');
+  });
 });
