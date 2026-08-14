@@ -1138,6 +1138,81 @@ describe('advancedPublicationTransition', () => {
   );
 });
 
+describe('advanceFinishPublication unmoved transition dimensions', () => {
+  it('halts human-required when judgment completes but PR prose remains halt', async () => {
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'halt',
+            ready: false,
+          },
+        }),
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      }),
+    ).resolves.toMatchObject({ kind: 'human_required' });
+  });
+
+  it('halts human-required when foreign shipped-record movement masks unchanged PR prose', async () => {
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          ready: false,
+        },
+        shippedRecord: 'missing',
+      }))
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          ready: false,
+        },
+        shippedRecord: 'valid',
+      }));
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      }),
+    ).resolves.toMatchObject({ kind: 'human_required' });
+  });
+
+  it('halts human-required when establishing a PR moves identity without a pushed branch', async () => {
+    const draft = draftPrFakes((args) => {
+      if (args[1] === 'view') return new Error('no pull requests found');
+      if (args[1] === 'create') return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+      return { stdout: '' };
+    });
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }))
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'stale',
+          ready: false,
+        },
+        branchPushed: 'missing',
+      }));
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), establishPr: draft.deps },
+      }),
+    ).resolves.toMatchObject({ kind: 'human_required' });
+  });
+});
+
 describe('resolveUnattendedPublicationIntent', () => {
   it.each([
     [
