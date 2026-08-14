@@ -30,6 +30,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Deprecates the per-task Wired-into contract layer in favor of the build_review wiring rubric while retaining compatibility for existing plan annotations and wiring_check state. ([implementation PR #1517](https://github.com/jstoup111/ai-conductor/pull/1517)).
 
+### Removed
+
+- build_review no longer judges wiring reachability. The gate scores four rubric items (tautology, scope, root cause, completeness); the retired `wiring` verdict and config keys are ignored rather than rejected, so in-flight verdicts and existing consumer configs keep working. ([implementation PR #1577](https://github.com/jstoup111/ai-conductor/pull/1577)).
+
 ### Fixed
 
 - Spec PRs opened into a repository that requires a release disposition now always declare one, so its required release-metadata check no longer fails on every landed spec. ([implementation PR #1448](https://github.com/jstoup111/ai-conductor/pull/1448)).
