@@ -152,6 +152,7 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     featureDesc: string,
     config?: HarnessConfig,
     providerFixture = passingProvider(),
+    useBuildReviewCoordinator = false,
   ) {
     const { provider, invokeCalls } = providerFixture;
     const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -159,6 +160,14 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
       gitRunner: realGit(),
       modelOverride: 'fable',
       config: (config ?? { model_fallback_ladder: ['fable'] }) as HarnessConfig,
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
+      ...(useBuildReviewCoordinator
+        ? { buildReviewCoordinator: async () => ({ success: true, output: 'PASS' }) }
+        : {}),
     });
     return { runner, invokeCalls };
   }
@@ -347,7 +356,7 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     const { runner } = makeRunner(slug, {
       model_fallback_ladder: ['fable'],
       build_review: { perTaskFloor: false },
-    } as HarnessConfig);
+    } as HarnessConfig, passingProvider(), true);
     const result = await runner.run('build_review', { feature_desc: slug } as ConductState);
 
     expect(result.success).toBe(true);

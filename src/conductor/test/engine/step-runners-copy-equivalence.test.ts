@@ -58,7 +58,18 @@ describe('build_review copy equivalence', () => {
       if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
       return { exitCode: 1, stdout: '', stderr: '' };
     };
-    return { invoke: providerInvoke, runner: new DefaultStepRunner(provider, 'session', projectDir, { planPath, gitRunner }) };
+    return {
+      invoke: providerInvoke,
+      runner: new DefaultStepRunner(provider, 'session', projectDir, {
+        planPath,
+        gitRunner,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+          } as never),
+        },
+      }),
+    };
   }
 
   it('fails build_review when a resolved declaration does not match its derived target', async () => {

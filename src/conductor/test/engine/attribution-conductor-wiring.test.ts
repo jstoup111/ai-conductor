@@ -314,6 +314,11 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         },
         gitRunner,
         planPath,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+          } as never),
+        },
         sessionStore: sessions,
         providerRuntimes: runtimes,
         configuredProviders: ['claude', 'codex'],

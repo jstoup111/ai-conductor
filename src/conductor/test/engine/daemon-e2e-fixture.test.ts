@@ -327,6 +327,11 @@ describe('daemon E2E fixture', () => {
           pipelineDir,
           planPath,
           providerKey: 'codex',
+          buildReviewInputOptions: {
+            inspectTestSuite: async () => ({
+              status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+            } as never),
+          },
         },
       );
       let claimed = false;

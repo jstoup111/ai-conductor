@@ -272,7 +272,11 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
         observedAt: observedAt + 1,
       });
 
-      const inputs = await assembleBuildReviewInputs(buildReviewGit(), planPath);
+      const inputs = await assembleBuildReviewInputs(buildReviewGit(), planPath, {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      });
       const prompt = buildGraderPrompt(inputs);
 
       expect(inputs.repairContext).toHaveLength(2);

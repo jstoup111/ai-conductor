@@ -570,6 +570,11 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
           const inputs = await assembleBuildReviewInputs(
             makeGitRunner(repo),
             join(repo, '.docs/plans/feat.md'),
+            {
+              inspectTestSuite: async () => ({
+                status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+              } as never),
+            },
           );
           expect(inputs.baseKind).toBe('local');
           expect(inputs.fresh).toBe(false);

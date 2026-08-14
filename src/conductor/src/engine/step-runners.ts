@@ -1928,21 +1928,6 @@ export class DefaultStepRunner implements StepRunner {
       return repairProvenance ? { ...withFreshness, repairProvenance } : withFreshness;
     };
 
-    // The lifecycle still exposes one public build_review step. Its new
-    // coordinator owns the bounded auxiliary fan-out and receives the one
-    // frozen snapshot; the legacy scalar path remains only while branch
-    // artifact/aggregate compatibility is introduced by later tasks.
-    if (this.buildReviewCoordinator) {
-      return withBaseFreshness(await this.buildReviewCoordinator(inputs, buildReviewConfig));
-    }
-
-    // The public gate owns the rubric fan-out in production too.  The
-    // injectable coordinator above remains a narrow test seam; it is never
-    // the condition for using the five independent rubric sessions.
-    if (this.config?.build_review !== undefined) {
-      return withBaseFreshness(await this.runRubricBuildReview(inputs, buildReviewConfig));
-    }
-
     // Per-task "work happened at all" floor (#781): purely additive,
     // non-blocking telemetry computed alongside the grader dispatch. It
     // NEVER feeds buildGraderPrompt/inputs, never changes `success`, and
@@ -2032,6 +2017,25 @@ export class DefaultStepRunner implements StepRunner {
         async (path) => readFile(join(this.projectDir, path), 'utf-8'),
       );
       if (!equivalence.success) return withBaseFreshness(equivalence);
+    }
+
+    // The lifecycle still exposes one public build_review step. Its new
+    // coordinator owns the bounded auxiliary fan-out and receives the one
+    // frozen snapshot; the legacy scalar path remains only while branch
+    // artifact/aggregate compatibility is introduced by later tasks.
+    //
+    // The deterministic floor and declared-copy checks deliberately precede
+    // this dispatch: they are gate-owned preconditions, and must remain
+    // observable even when configuration activates the rubric fan-out.
+    if (this.buildReviewCoordinator) {
+      return withBaseFreshness(await this.buildReviewCoordinator(inputs, buildReviewConfig));
+    }
+
+    // The public gate owns the rubric fan-out in production too. The
+    // injectable coordinator above remains a narrow test seam; it is never
+    // the condition for using the five independent rubric sessions.
+    if (this.config?.build_review !== undefined) {
+      return withBaseFreshness(await this.runRubricBuildReview(inputs, buildReviewConfig));
     }
 
     const prompt = buildGraderPrompt(inputs);

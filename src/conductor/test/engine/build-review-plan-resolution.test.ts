@@ -25,6 +25,12 @@ const execFileAsync = promisify(execFile);
 const PLAN_FEATURE_SENTINEL = 'PLAN_BODY_FOR_BUILD_PROGRESS_DISPLAY';
 const PLAN_DECOY_SENTINEL = 'PLAN_BODY_FOR_WRITING_SYSTEM_TESTS';
 
+const currentBuildReviewProof = {
+  inspectTestSuite: async () => ({
+    status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+  } as never),
+};
+
 /** Provider that records the prompt of every invoke() and returns a canned success. */
 function capturingProvider() {
   const invokeCalls: InvokeOptions[] = [];
@@ -102,6 +108,7 @@ describe('build_review resolves the feature-scoped plan, not the alphabetically-
       gitRunner: realGit(),
       modelOverride: 'fable',
       config: { model_fallback_ladder: ['fable'] } as HarnessConfig,
+      buildReviewInputOptions: currentBuildReviewProof,
     });
 
     await runner.run('build_review', { feature_desc: 'build-progress-1-based-display' } as ConductState);
@@ -120,6 +127,7 @@ describe('build_review resolves the feature-scoped plan, not the alphabetically-
       gitRunner: realGit(),
       modelOverride: 'fable',
       config: { model_fallback_ladder: ['fable'] } as HarnessConfig,
+      buildReviewInputOptions: currentBuildReviewProof,
     });
 
     const result = await runner.run('build_review', {

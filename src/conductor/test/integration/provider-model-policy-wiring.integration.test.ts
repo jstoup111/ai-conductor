@@ -1132,6 +1132,12 @@ it('binds every production step-resolution call to the policy owned by its execu
           'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
+        file: 'engine/resolved-config.ts',
+        scope: 'resolveBuildReviewConfig',
+        argumentCount: 5,
+        policyProvenance: 'parameter:policy:ProviderModelPolicy',
+      },
+      {
         file: 'engine/step-runners.ts',
         scope: 'resolvedConfigFor',
         argumentCount: 5,

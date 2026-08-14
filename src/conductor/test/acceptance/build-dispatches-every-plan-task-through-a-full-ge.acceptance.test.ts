@@ -165,6 +165,11 @@ describe('Story 4: build_review blocks a copy that differs beyond the rename map
         model_fallback_ladder: ['fable'],
         build_review: { per_task_floor: false },
       } as HarnessConfig,
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
     });
 
     const result = await runner.run('build_review', {
