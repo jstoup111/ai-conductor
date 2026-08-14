@@ -141,6 +141,16 @@ export function liveProviderAvailable(descriptor: LiveE2EProviderDescriptor): bo
   }
 }
 
+export async function assertDescriptorAuthenticationSource(
+  descriptor: LiveE2EProviderDescriptor,
+  provider: LLMProvider,
+): Promise<void> {
+  const resolvedAuthenticationSource = await descriptor.resolveAuthenticationSource(provider);
+  if (resolvedAuthenticationSource !== descriptor.expectedAuthenticationSource) {
+    throw new Error(`Authentication source mismatch: expected ${descriptor.expectedAuthenticationSource}, resolved ${resolvedAuthenticationSource}`);
+  }
+}
+
 async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
   return existsSync(join(worktreeDir, '.pipeline/DONE')) &&
     !existsSync(join(worktreeDir, '.pipeline/HALT')) &&
@@ -157,6 +167,7 @@ export async function runLiveE2ERunBody(
   const statePath = join(pipelineDir, 'conduct-state.json');
   const planPath = join(worktreeDir, `.docs/plans/${slug}.md`);
   const provider = descriptor.createProvider();
+  await assertDescriptorAuthenticationSource(descriptor, provider);
   let meter = new TokenMeter(provider);
   let providerHome: ProviderHome | undefined;
   let provisioned: ProvisionedHome | undefined;

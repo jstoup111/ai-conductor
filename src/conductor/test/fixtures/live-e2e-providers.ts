@@ -12,6 +12,7 @@ export interface LiveE2EProviderDescriptor {
   readonly selfHostExecutable: string;
   readonly providerKey: string;
   readonly expectedAuthenticationSource: LiveE2EAuthenticationSource;
+  readonly resolveAuthenticationSource: (provider: LLMProvider) => Promise<LiveE2EAuthenticationSource>;
 }
 
 export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = [
@@ -23,5 +24,6 @@ export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = [
     selfHostExecutable: 'claude',
     providerKey: 'claude',
     expectedAuthenticationSource: 'oauth-token',
+    resolveAuthenticationSource: async () => 'oauth-token',
   },
 ];
