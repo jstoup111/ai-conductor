@@ -571,13 +571,14 @@ joins before `build_review`.
 
 ### remediate
 
-> Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
+> Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `remediate` (out-of-band, SHIP, prerequisite `prd_audit`). Engine enforcement is
   `advisory`. Deliberately outside the sequential list so the loop never dispatches it unconditionally.
-- **Inputs** — `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
+- **Inputs** — `.pipeline/build-review.json` (present when a `build_review` FAIL dispatches
+  remediation), `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
   `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`.
 - **Outputs** — `.pipeline/remediation.json`, overwritten each run. The engine then appends each task
   into the feature's plan. No completion glob — the engine reads the JSON directly to route.
