@@ -33,7 +33,7 @@ import { basename } from 'node:path';
 import type { Envelope, IntakePort } from './intake/port.js';
 import type { IntakeSource } from './intake/source.js';
 import type { IntakeQueue } from './intake/queue.js';
-import { type Ledger } from './intake/ledger.js';
+import { CorruptLedgerError, type Ledger } from './intake/ledger.js';
 import { reportRouted, reportDone } from './intake/writeback.js';
 import type { RoutingProvider } from './routing.js';
 import { createRegistryReader } from '../registry.js';
@@ -252,6 +252,7 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
       try {
         envs = await source.poll();
       } catch (err: unknown) {
+        if (err instanceof CorruptLedgerError) throw err;
         io.print(`Intake poll failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       for (const e of envs) {
@@ -264,6 +265,9 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
           }
           await queue.enqueue(e);
         } catch (err: unknown) {
+          // A corrupt ledger is a loss-of-dedup condition, not a malformed
+          // envelope: stop intake before claiming or dispatching any idea.
+          if (err instanceof CorruptLedgerError) throw err;
           // A single malformed envelope must not abort the whole intake phase.
         }
       }

@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { dispatchEngineer } from '../../src/engine/engineer-cli.js';
 import { runEngineerMode } from '../../src/engine/engineer/loop.js';
-import { createLedger } from '../../src/engine/engineer/intake/ledger.js';
+import { CorruptLedgerError, createLedger } from '../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope, type Envelope } from '../../src/engine/engineer/intake/port.js';
 
@@ -150,6 +150,41 @@ describe('Story 5 — corrupt ledger stops the launch-time intake flow', () => {
       thrown instanceof Error ? thrown.message : thrown === undefined ? '' : String(thrown),
     ].join('\n');
     expect(diagnostic).toMatch(/corrupt.*ledger|ledger.*corrupt/i);
+    expect(enqueued).toEqual([]);
+    expect(claimCalls).toBe(0);
+  });
+
+  it('stops before enqueue or claim when a ledger-backed source poll reports corruption', async () => {
+    const root = await freshDir('intake-ledger-poll-');
+    const engineerDir = join(root, 'engineer');
+    const registryPath = join(root, 'registry.json');
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    await mkdir(engineerDir, { recursive: true });
+    await writeFile(registryPath, '[]', 'utf8');
+
+    const enqueued: Envelope[] = [];
+    let claimCalls = 0;
+    await expect(
+      runEngineerMode({
+        route: { invoke: async () => '[]' },
+        io: { prompt: async () => null, print: () => undefined },
+        registryPath,
+        engineerDir,
+        sources: [{ poll: async () => { throw new CorruptLedgerError(ledgerPath, 'invalid JSON'); } }],
+        queue: {
+          enqueue: async (item) => void enqueued.push(item),
+          claim: async () => {
+            claimCalls += 1;
+            return null;
+          },
+          ack: async () => undefined,
+          release: async () => undefined,
+          list: async () => [],
+          remove: async () => undefined,
+        },
+      }),
+    ).rejects.toThrow(/corrupt/i);
+
     expect(enqueued).toEqual([]);
     expect(claimCalls).toBe(0);
   });
