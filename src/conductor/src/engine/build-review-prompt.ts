@@ -21,6 +21,7 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
     acceptedWidenings = [],
     entryPoints = [],
     removalContext,
+    operatorReseals,
   } = inputs;
   const escapeEvidence = (value: string) => value.replaceAll('`', '\\`');
   const renderedRemovalContext = removalContext && (
@@ -46,6 +47,14 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
         `- Path: ${widening.path}\n  Rationale: ${widening.rationale}\n  Task ${widening.taskId}\n  Commit SHA: ${widening.sha}`,
       ).join('\n')
     : '(none)';
+  const renderedOperatorReseals = operatorReseals && operatorReseals.length > 0
+    ? `\n## Operator-authorized protected-artifact reseals\n\n${operatorReseals.map((reseal) => [
+      `Paths: ${reseal.paths.join(', ')}`,
+      `Reason: ${reseal.reason}`,
+      `From commit SHA: ${reseal.fromCommit}`,
+      `To commit SHA: ${reseal.toCommit}`,
+    ].join('\n')).join('\n\n')}`
+    : '';
 
   return `You are reviewing a code diff for build_review — a code-review grade,
 NOT a full architectural review. Judge diff honesty only: whether the diff
@@ -171,6 +180,8 @@ evidence, not exemptions, for the Scope rubric. Judge whether each rationale
 actually justifies the widened path:
 
 ${renderedAcceptedWidenings}
+
+${renderedOperatorReseals}
 
 ## Engine-derived removal evidence
 

@@ -229,6 +229,40 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain('fed987cba654');
   });
 
+  it('renders each operator-authorized reseal with its paths, verbatim rationale, and commit range', () => {
+    const singleReason = 'the only reseal rationale';
+    const firstReason = 'preserve this rationale byte-for-byte';
+    const secondReason = 'a distinct second rationale';
+    const singleResealPrompt = buildGraderPrompt({
+      ...inputs,
+      operatorReseals: [{
+        paths: ['.docs/specs/single.md'],
+        reason: singleReason,
+        fromCommit: 'from-single-abc123',
+        toCommit: 'to-single-def456',
+      }],
+    });
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      operatorReseals: [{
+        paths: ['.docs/plans/one.md'],
+        reason: firstReason,
+        fromCommit: 'from-one-abc123',
+        toCommit: 'to-one-def456',
+      }, {
+        paths: ['.docs/stories/two.md'],
+        reason: secondReason,
+        fromCommit: 'from-two-abc123',
+        toCommit: 'to-two-def456',
+      }],
+    });
+
+    expect([
+      /## Operator-authorized protected-artifact reseals[\s\S]*?\.docs\/specs\/single\.md[\s\S]*?the only reseal rationale[\s\S]*?from-single-abc123[\s\S]*?to-single-def456/.test(singleResealPrompt),
+      /## Operator-authorized protected-artifact reseals[\s\S]*?\.docs\/plans\/one\.md[\s\S]*?preserve this rationale byte-for-byte[\s\S]*?from-one-abc123[\s\S]*?to-one-def456\n\n[\s\S]*?\.docs\/stories\/two\.md[\s\S]*?a distinct second rationale[\s\S]*?from-two-abc123[\s\S]*?to-two-def456/.test(prompt),
+    ].every(Boolean)).toBe(true);
+  });
+
   it('renders populated and empty removal evidence as evidence, escaping backticks', () => {
     const populated = buildGraderPrompt({
       ...inputs,
