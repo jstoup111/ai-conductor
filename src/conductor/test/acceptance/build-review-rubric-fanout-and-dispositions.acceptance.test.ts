@@ -113,6 +113,48 @@ describe('acceptance: independent build_review rubric execution', () => {
     expect(help).toMatch(/rationale/i);
   });
 
+  it('rematerializes a current lap from cached clean rubric judgements without redispatching providers', async () => {
+    const { dir, planPath } = await fixtureRepo();
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        return {
+          success: true,
+          output: JSON.stringify({
+            kind: 'judged',
+            rubric: projection.rubric,
+            lapId: projection.lapId,
+            snapshotDigest: projection.snapshotDigest,
+            contractVersion: 'v1',
+            findings: [],
+            verdict: 'PASS',
+          }),
+          exitCode: 0,
+        };
+      }),
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
+      config: {
+        build_review: { enabled: true, perTaskFloor: false },
+        wiring: { entry_points: ['src/feature.ts'] },
+      } as HarnessConfig,
+      planPath,
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
+    });
+
+    const state = { complexity_tier: 'L', feature_desc: 'cache-rematerialization', track: 'product' } as const;
+    await runner.run('build_review', state);
+    await runner.run('build_review', state);
+
+    expect(provider.invoke).toHaveBeenCalledTimes(5);
+  });
+
   it('fans operator reseal evidence into Scope alone while retaining the legacy scalar prompt contract', async () => {
     const { dir, planPath, head } = await fixtureRepo();
     const rationale = 'Operator approved the protected story amendment after review.';
