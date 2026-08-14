@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -156,5 +157,27 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
       'Check the approved plan’s existing tasks before proposing a plan-level change.',
     );
     expect(remediationContext).not.toContain('Active plan:');
+  });
+
+  it('keeps the validation-group remediation context unchanged', async () => {
+    const source = await readFile(
+      fileURLToPath(new URL('../../src/engine/conductor.ts', import.meta.url)),
+      'utf8',
+    );
+
+    expect(source).toContain(
+      "mtMergeHandled = true;\n" +
+        "                const evidenceFiles: string[] = [];\n" +
+        "                if (gapMemberNamesForMerge.includes('prd_audit' as StepName)) {\n" +
+        "                  evidenceFiles.push('.pipeline/prd-audit.md');\n" +
+        "                }\n" +
+        "                if (gapMemberNamesForMerge.includes('architecture_review_as_built' as StepName)) {\n" +
+        "                  evidenceFiles.push('.pipeline/architecture-review-as-built.md');\n" +
+        "                }\n" +
+        '                const dispatchContext =\n' +
+        "                  `Blocking validation-group gaps at ${evidenceFiles.join(' and ')}. ` +\n" +
+        "                  'Plan remediation per the /remediate skill and write ' +\n" +
+        "                  '.pipeline/remediation.json.';",
+    );
   });
 });
