@@ -47,7 +47,7 @@ export interface OperatorReseal {
   fromCommit: string;
   toCommit: string;
   paths: string[];
-  reason?: string;
+  reason: string;
 }
 
 export interface ProtectedArtifactSeal {
@@ -436,10 +436,19 @@ async function readExistingSeal(path: string): Promise<ProtectedArtifactSeal | u
  * Reads the operator-authorized subset of a feature's durable seal lineage.
  */
 export async function readOperatorReseals(projectRoot: string): Promise<OperatorReseal[]> {
-  const seal = await readExistingSeal(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
-  return (seal?.rebaselines ?? [])
-    .filter(({ trigger }) => trigger === 'operator-reseal')
-    .map(({ fromCommit, toCommit, paths, reason }) => ({ fromCommit, toCommit, paths, reason }));
+  try {
+    const seal = await readExistingSeal(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
+    return (seal?.rebaselines ?? [])
+      .filter(({ trigger }) => trigger === 'operator-reseal')
+      .map(({ fromCommit, toCommit, paths, reason }) => ({
+        fromCommit,
+        toCommit,
+        paths,
+        reason: reason ?? '',
+      }));
+  } catch {
+    return [];
+  }
 }
 
 async function committedProtectedPaths(projectRoot: string, baselineCommit: string): Promise<string[]> {
