@@ -105,6 +105,10 @@ Judgment rules:
   `build`.
 - A gap that is an `impl-gap` in the audit is almost always `build` (or `acceptance_specs` when the
   real miss is coverage).
+- **Baseline-passing test gaps are `build`.** Positive example: a changed test that passes against
+  the baseline and needs strengthening within an existing task's RED/GREEN steps is `build`, not a
+  planning miss. Negative example: do not select `plan` merely because the existing test passed
+  against the baseline.
 - **RED-waiver obligation:** An `acceptance_specs` disposition may waive separate RED proof only
   for a remediation that must atomically repair both the acceptance spec and its implementation.
   The disposition must require a recorded declaration with a non-empty reason and attributable
