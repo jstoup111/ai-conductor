@@ -8,6 +8,7 @@ import {
   renderFullHelp,
   renderDaemonHelp,
   detectBuildReviewFindingsCommand,
+  detectBuildReviewAcceptCommand,
 } from '../../src/cli.js';
 
 describe('CLI', () => {
@@ -15,6 +16,11 @@ describe('CLI', () => {
     expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings', '--feature', 'review-rubrics', '--json']))
       .toEqual({ kind: 'findings', feature: 'review-rubrics', format: 'json' });
     expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings'])).toBeNull();
+  });
+  it('requires exact accept identity inputs and never accepts an operator override', () => {
+    expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'known risk']))
+      .toEqual({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: 'sha256:abc', rationale: 'known risk' });
+    expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'risk', '--operator', 'forged'])).toBeNull();
   });
   it('parses feature description as positional arg', () => {
     const opts = parseArgs(['node', 'conduct', 'URL shortener']);

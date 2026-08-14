@@ -143,6 +143,14 @@ export type BuildReviewFindingsDispatch = {
   readonly format: 'human' | 'json';
 };
 
+export type BuildReviewAcceptDispatch = {
+  readonly kind: 'accept';
+  readonly feature: string;
+  readonly lapId: string;
+  readonly findingId: string;
+  readonly rationale: string;
+};
+
 /** Detect the read-only `build-review findings --feature <slug> [--json]` command. */
 export function detectBuildReviewFindingsCommand(argv: string[]): BuildReviewFindingsDispatch | null {
   if (argv[2] !== 'build-review' || argv[3] !== 'findings') return null;
@@ -152,6 +160,24 @@ export function detectBuildReviewFindingsCommand(argv: string[]): BuildReviewFin
   const recognized = args.length === 3 && featureIndex >= 0 && args.includes('--json') || args.length === 2 && featureIndex >= 0;
   if (!feature || !recognized || !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
   return { kind: 'findings', feature, format: args.includes('--json') ? 'json' : 'human' };
+}
+
+/** Detect only the fully bound, operator-only acceptance grammar. */
+export function detectBuildReviewAcceptCommand(argv: string[]): BuildReviewAcceptDispatch | null {
+  if (argv[2] !== 'build-review' || argv[3] !== 'accept') return null;
+  const args = argv.slice(4);
+  const read = (flag: string): string | undefined => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+  const feature = read('--feature');
+  const lapId = read('--lap');
+  const findingId = read('--finding');
+  const rationale = read('--rationale');
+  const expected = ['--feature', feature, '--lap', lapId, '--finding', findingId, '--rationale', rationale];
+  if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !findingId || !rationale ||
+    !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
+  return { kind: 'accept', feature, lapId, findingId, rationale };
 }
 
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
@@ -554,13 +580,21 @@ export function createProgram(): Command {
     .command('build-tail [worktree]')
     .description('Render a deterministic build task/remediation/closeout timing rollup');
 
-  program
+  const buildReview = program
     .command('build-review')
-    .description('Inspect current build-review results without starting a pipeline')
+    .description('Inspect current build-review results without starting a pipeline');
+  buildReview
     .command('findings')
     .description('Render current findings for a feature worktree')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
     .option('--json', 'Render machine-readable JSON');
+  buildReview
+    .command('accept')
+    .description('Accept one exact current finding from an interactive terminal')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .requiredOption('--lap <lap>', 'Current inspected lap identity')
+    .requiredOption('--finding <id>', 'Exact canonical finding identifier')
+    .requiredOption('--rationale <text>', 'Non-empty operator rationale');
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. Orchestrates the sweep
