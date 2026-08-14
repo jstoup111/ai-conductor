@@ -142,6 +142,25 @@ function sameFeature(left: BuildReviewFeatureIdentity, right: BuildReviewFeature
   return left.version === right.version && left.repository === right.repository && left.feature === right.feature;
 }
 
+/**
+ * Matches a disposition only when its feature and complete recomputed
+ * canonical payload agree. Matching an ID alone would make a theoretical hash
+ * collision or forged in-memory record capable of suppressing a new concern.
+ */
+export function matchesBuildReviewDisposition(
+  feature: BuildReviewFeatureIdentity,
+  finding: BuildReviewFindingIdentity,
+  dispositions: readonly BuildReviewDispositionRecord[],
+): boolean {
+  const canonicalFinding = parseFindingIdentity(finding);
+  if (!canonicalFinding) return false;
+  return dispositions.some((disposition) => {
+    const accepted = parseFindingIdentity(disposition.finding);
+    return sameFeature(disposition.feature, feature) && accepted !== undefined &&
+      accepted.id === canonicalFinding.id && accepted.canonicalJson === canonicalFinding.canonicalJson;
+  });
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

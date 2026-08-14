@@ -5,6 +5,11 @@ import {
   type BuildReviewLapId,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
+import {
+  matchesBuildReviewDisposition,
+  type BuildReviewDispositionRecord,
+  type BuildReviewFeatureIdentity,
+} from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
@@ -205,4 +210,31 @@ export function deriveEffectiveBuildReviewVerdict(
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
   });
+}
+
+/**
+ * Resolves accepted risk only after strict raw join. Dispositions match the
+ * complete canonical payload within their feature; human-facing wording and
+ * evidence locations never participate in this comparison.
+ */
+export function deriveEffectiveBuildReviewVerdictWithDispositions(
+  value: unknown,
+  feature: BuildReviewFeatureIdentity,
+  dispositions: readonly BuildReviewDispositionRecord[],
+): BuildReviewEffectiveVerdict | undefined {
+  const aggregate = parseBuildReviewAggregate(value);
+  if (!aggregate) return undefined;
+  const acceptedIds = new Set<string>();
+  for (const rubric of RUBRICS) {
+    const result = aggregate.results[rubric];
+    if (result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
+      });
+      if (!identity) return undefined;
+      if (matchesBuildReviewDisposition(feature, identity, dispositions)) acceptedIds.add(identity.id);
+    }
+  }
+  return deriveEffectiveBuildReviewVerdict(aggregate, acceptedIds);
 }

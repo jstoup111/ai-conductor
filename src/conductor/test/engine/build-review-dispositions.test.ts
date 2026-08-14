@@ -7,7 +7,9 @@ import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import {
   BuildReviewDispositionStore,
+  matchesBuildReviewDisposition,
   type BuildReviewDispositionFilesystem,
+  type BuildReviewDispositionRecord,
 } from '../../src/engine/build-review-dispositions.js';
 import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
 
@@ -122,5 +124,19 @@ describe('build-review dispositions', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('matches only the complete canonical payload, not a finding ID by itself', () => {
+    const accepted: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!,
+      summary: 'Earlier wording at src/a.ts:8', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+    };
+    const changed = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
+      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'outside-plan' },
+    })!;
+
+    expect(matchesBuildReviewDisposition(feature, finding, [accepted])).toBe(true);
+    expect(matchesBuildReviewDisposition(feature, { ...changed, id: finding.id }, [accepted])).toBe(false);
   });
 });
