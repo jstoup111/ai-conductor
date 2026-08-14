@@ -245,10 +245,14 @@ async function saveStore(path: string, store: LedgerStore): Promise<void> {
 async function withLedgerLease<T>(lease: ConductStateLease, body: () => Promise<T>): Promise<T> {
   const acquired = await lease.acquire();
   if (!acquired.ok) throw new Error(acquired.message);
+  let bodySucceeded = false;
   try {
-    return await body();
+    const result = await body();
+    bodySucceeded = true;
+    return result;
   } finally {
-    await acquired.handle.release();
+    const released = await acquired.handle.release();
+    if (!released.ok && bodySucceeded) throw new Error(released.message);
   }
 }
 

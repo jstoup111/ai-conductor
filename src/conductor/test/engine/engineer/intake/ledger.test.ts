@@ -233,6 +233,42 @@ describe('lease-bracketed ledger access', () => {
       rejected: true,
     });
   });
+
+  it('fails closed when release fails without masking a body failure', async () => {
+    const releaseMessage = 'intake ledger lease release failed';
+    const lease: ConductStateLease = {
+      acquire: async () => ({
+        ok: true,
+        handle: {
+          release: async () => ({ ok: false, message: releaseMessage }),
+        },
+      }),
+    };
+    const successfulBodyLedger = createLedger(join(dir, 'successful-body.json'), { lease });
+    const failedBodyLedger = createLedger(join(dir, 'failed-body.json'), { lease });
+    await writeFile(join(dir, 'failed-body.json'), 'not valid json', 'utf8');
+
+    const successfulBodyError = await successfulBodyLedger.record({
+      source: 'github-issues', sourceRef: 'o/a#1',
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const failedBodyError = await failedBodyLedger.record({
+      source: 'github-issues', sourceRef: 'o/a#2',
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect({
+      successfulBodyMessage: successfulBodyError instanceof Error ? successfulBodyError.message : undefined,
+      failedBodyIsCorrupt: failedBodyError instanceof CorruptLedgerError,
+    }).toEqual({
+      successfulBodyMessage: releaseMessage,
+      failedBodyIsCorrupt: true,
+    });
+  });
 });
 
 describe('transition() writebackPending marker (#290)', () => {
