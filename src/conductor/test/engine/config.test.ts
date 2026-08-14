@@ -1928,11 +1928,13 @@ complexity:
       const result = validateConfig({
         build_review: { enabled: true, perTaskFloor: false },
       });
-      expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual({
+      expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual(expect.objectContaining({
         enabled: true,
         perTaskFloor: false,
         scopeContainmentEnforced: false,
-      });
+        maxParallel: 5,
+        rubrics: expect.objectContaining({ scope: expect.objectContaining({ enabled: true }) }),
+      }));
     });
 
     it('preserves an explicit boolean scope-containment enforcement mode', () => {
