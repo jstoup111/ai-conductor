@@ -3119,6 +3119,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('wiring_check', emptyState);
@@ -3204,7 +3205,7 @@ TIER: M`,
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
         dir,
-        { gitRunner: scriptedGit(), planPath },
+        { gitRunner: scriptedGit(), planPath, ...currentBuildReviewProof() },
       );
 
       const result = await runner.run('build_review', emptyState);
@@ -3224,6 +3225,16 @@ TIER: M`,
         return { exitCode: 1, stdout: '', stderr: '' };
       };
       return git;
+    }
+
+    function currentBuildReviewProof() {
+      return {
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
+      };
     }
 
     async function prepareContainmentRepo(
@@ -3268,6 +3279,7 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
+          ...currentBuildReviewProof(),
         },
       );
 
@@ -3300,6 +3312,7 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           log: (message) => console.warn(message),
+          ...currentBuildReviewProof(),
         },
       );
 
@@ -3349,6 +3362,7 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           log,
+          ...currentBuildReviewProof(),
         },
       );
 
@@ -3386,7 +3400,7 @@ TIER: M`,
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
         dir,
-        { gitRunner: scriptedGit(), planPath },
+        { gitRunner: scriptedGit(), planPath, ...currentBuildReviewProof() },
       );
 
       const result = await runner.run('build_review', emptyState);
@@ -3400,6 +3414,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
@@ -3433,6 +3448,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
@@ -3465,6 +3481,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         featureDesc: 'block-edits-to-docs-spec-artifacts-during-build-an',
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
@@ -3485,6 +3502,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
@@ -3507,6 +3525,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
@@ -3525,6 +3544,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
@@ -3597,6 +3617,7 @@ TIER: M`,
         const runner = new DefaultStepRunner(provider, 'session-1', dir, {
           gitRunner: scriptedGit(),
           planPath,
+          ...currentBuildReviewProof(),
         });
 
         const result = await runner.run('build_review', emptyState);
@@ -3644,6 +3665,7 @@ TIER: M`,
         const runner = new DefaultStepRunner(provider, 'session-1', dir, {
           gitRunner: scriptedGit(),
           planPath,
+          ...currentBuildReviewProof(),
         });
 
         const result = await runner.run('build_review', emptyState);
@@ -3686,6 +3708,7 @@ TIER: M`,
           gitRunner: scriptedGit(),
           planPath,
           config: { gate_code_validity: { enabled: false } } as unknown as HarnessConfig,
+          ...currentBuildReviewProof(),
         });
 
         const result = await runner.run('build_review', emptyState);
