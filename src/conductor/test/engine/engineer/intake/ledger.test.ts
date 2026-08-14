@@ -530,7 +530,7 @@ describe('lease-bracketed ledger access', () => {
     await writeFile(ledgerPath, corruptBytes);
 
     await expect(mutate(createLedger(ledgerPath, { lease }))).rejects.toBeInstanceOf(CorruptLedgerError);
-    await expect({
+    expect({
       bytes: await readFile(ledgerPath),
       leaseEvents,
     }).toEqual({
