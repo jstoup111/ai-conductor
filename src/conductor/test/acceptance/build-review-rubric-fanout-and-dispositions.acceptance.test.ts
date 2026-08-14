@@ -164,6 +164,47 @@ describe('acceptance: independent build_review rubric execution', () => {
     expect(provider.invoke).toHaveBeenCalledTimes(5);
   });
 
+  it('uses each rubric\'s registered skill and resolved mixed model policy through the real runner', async () => {
+    const { dir, planPath } = await fixtureRepo();
+    const calls: Array<{ prompt: string; model: string | undefined }> = [];
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        calls.push({ prompt: options.prompt, model: options.model });
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
+      }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
+      providerKey: 'codex', planPath, pipelineDir: join(dir, '.pipeline'),
+      config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { scope: { model: 'gpt-5.6-sol', model_fallback_ladder: ['gpt-5.6-terra'] }, rootCause: { model: 'gpt-5.6-terra' } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) },
+    });
+    await expect(runner.run('build_review', { complexity_tier: 'L', feature_desc: 'mixed-policy', track: 'product' })).resolves.toMatchObject({ success: true });
+    expect(calls.map(({ prompt, model }) => ({ skill: prompt.match(/^\$(build-review-[\w-]+)/m)?.[1], model }))).toEqual(expect.arrayContaining([
+      { skill: 'build-review-scope', model: 'gpt-5.6-sol' },
+      { skill: 'build-review-root-cause', model: 'gpt-5.6-terra' },
+    ]));
+  });
+
+  it.each([
+    ['an unresolved finding', true],
+    ['an infrastructure failure', false],
+  ])('fails closed in both runner and completion predicate for %s', async (_name, returnFinding) => {
+    const { dir, planPath } = await fixtureRepo();
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        if (projection.rubric === 'scope' && !returnFinding) return { success: false, output: 'fake provider outage', exitCode: 1 };
+        const findings = projection.rubric === 'scope' && returnFinding ? [{ concernKind: 'unresolved surface', anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'outside-plan' } }] : [];
+        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings, verdict: findings.length ? 'FAIL' : 'PASS' }), exitCode: 0 };
+      }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, { planPath, pipelineDir: join(dir, '.pipeline'), config: { build_review: { enabled: true, perTaskFloor: false }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig, buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) } });
+    const result = await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'blocking-branch', track: 'product' });
+    const completion = await checkStepCompletion(dir, 'build_review', { sessionStartedAt: Date.now() - 1_000 });
+    expect({ result: result.success, done: completion.done, route: completion.routeClass }).toEqual({ result: false, done: false, route: 'named-route' });
+  });
+
   it('converges a current Scope finding to completion after the operator accepts its exact recomputed identity', async () => {
     const { dir, planPath } = await fixtureRepo();
     let providerCalls = 0;
