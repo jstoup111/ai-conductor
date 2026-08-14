@@ -3,7 +3,7 @@
 // and existing {branch, prUrl} meta behavior remains unchanged.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -39,6 +39,25 @@ describe('CorruptLedgerError', () => {
 });
 
 describe('loadStore()', () => {
+  it('copies corrupt ledger bytes to a timestamped sibling without changing the ledger', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const corruptBytes = Buffer.from([0xff, 0xfe, 0x00, 0x7b]);
+    await writeFile(ledgerPath, corruptBytes);
+
+    await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+
+    const sibling = (await readdir(dir)).find((name) => name.startsWith('ledger.json.corrupt-'));
+    expect({
+      sibling,
+      original: await readFile(ledgerPath),
+      quarantine: sibling === undefined ? undefined : await readFile(join(dir, sibling)),
+    }).toEqual({
+      sibling: expect.stringMatching(/^ledger\.json\.corrupt-/),
+      original: corruptBytes,
+      quarantine: corruptBytes,
+    });
+  });
+
   it('distinguishes a missing ledger from a valid empty ledger without warning or quarantine', async () => {
     const ledgerPath = join(dir, 'ledger.json');
     const stderr = vi.spyOn(process.stderr, 'write');

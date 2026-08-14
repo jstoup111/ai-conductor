@@ -100,7 +100,7 @@ type LedgerStore = Record<string, LedgerEntry>;
 export type LedgerLoadResult =
   | { kind: 'absent' }
   | { kind: 'ok'; store: LedgerStore }
-  | { kind: 'corrupt'; reason: string; bytes?: string };
+  | { kind: 'corrupt'; reason: string; bytes?: Buffer };
 
 const ledgerStatuses: ReadonlySet<LedgerStatus> = new Set([
   'unseen',
@@ -148,9 +148,9 @@ function makeKey(source: string, sourceRef: string): string {
 
 /** Load ledger from disk, distinguishing a missing file from a failed read. */
 export async function loadStore(path: string): Promise<LedgerLoadResult> {
-  let raw: string;
+  let raw: Buffer;
   try {
-    raw = await readFile(path, 'utf8');
+    raw = await readFile(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return { kind: 'absent' };
@@ -162,7 +162,7 @@ export async function loadStore(path: string): Promise<LedgerLoadResult> {
   }
 
   try {
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw.toString('utf8'));
     if (!isLedgerStore(parsed)) {
       return { kind: 'corrupt', reason: 'ledger content is not a valid ledger store', bytes: raw };
     }
@@ -180,6 +180,9 @@ async function readStore(path: string): Promise<LedgerStore> {
   const result = await loadStore(path);
   if (result.kind === 'absent') return {};
   if (result.kind === 'corrupt') {
+    if (result.bytes !== undefined) {
+      await writeFile(`${path}.corrupt-${new Date().toISOString()}`, result.bytes);
+    }
     throw new CorruptLedgerError(path, result.reason);
   }
   return result.store;
