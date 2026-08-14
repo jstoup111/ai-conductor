@@ -69,6 +69,7 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
   it('halts Cycle A when the retry names an authoring stage the fresh snapshot cannot select', async () => {
     const snapshot = judgmentSnapshot();
     const observe = vi.fn(async () => structuredClone(snapshot));
+    const emitted: FinishPublicationEvent[] = [];
     const dispatchJudgment = vi.fn(async () => ({
       kind: 'revision_required' as const,
       reason: 'placeholder' as const,
@@ -78,6 +79,7 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
     const result = await advanceFinishPublication({
       observe,
       effects: { dispatchJudgment },
+      emit: async (event) => { emitted.push(event); },
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -85,17 +87,22 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
       detail: expect.stringContaining('author_pr_prose'),
     }));
     expect((result as { detail?: string }).detail).toContain('judge_pr_prose');
+    expect(emitted).not.toContainEqual({
+      type: 'finish_publication_transition', phase: 'completed', transition: 'author_pr_prose',
+    });
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
   });
 
   it('halts Cycle B when an accepted verdict leaves the observed prose dimension unchanged', async () => {
     const snapshot = judgmentSnapshot();
     const observe = vi.fn(async () => structuredClone(snapshot));
+    const emitted: FinishPublicationEvent[] = [];
     const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' as const }));
 
     const result = await advanceFinishPublication({
       observe,
       effects: { dispatchJudgment },
+      emit: async (event) => { emitted.push(event); },
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -103,6 +110,12 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
       detail: expect.stringContaining('judge_pr_prose'),
     }));
     expect((result as { detail?: string }).detail).toMatch(/prose/i);
+    // FINISH increments its 14-transition allowance only from a completed
+    // transition event. An unchanged accepted verdict must emit none, rather
+    // than refunding fourteen non-advancing laps through the coordinator.
+    expect(emitted).not.toContainEqual({
+      type: 'finish_publication_transition', phase: 'completed', transition: 'judge_pr_prose',
+    });
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
   });
 });
