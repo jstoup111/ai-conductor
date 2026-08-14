@@ -495,20 +495,26 @@ describe('runIntakeLoop', () => {
     const ledgerPath = join(directory, 'ledger.json');
     const ledger = createLedger(ledgerPath);
     const logs = vi.fn((_msg: string) => {});
-    const secretLedgerContent = 'SECRET_LEDGER_ENTRY_MUST_NOT_REACH_THE_OPERATOR';
+    // Both corrupt states fail the same shape validation, so a key based only
+    // on `reason` incorrectly treats the second byte state as already reported.
+    const firstCorruptBytes = '[]';
+    const secondCorruptBytes = 'null';
     const STOP = { __stop: true };
     let pollCalls = 0;
     let sleepCalls = 0;
 
     try {
-      await writeFile(ledgerPath, secretLedgerContent, 'utf8');
+      await writeFile(ledgerPath, firstCorruptBytes, 'utf8');
       const poll = vi.fn(async () => {
         pollCalls += 1;
         if (pollCalls === 3) {
-          await writeFile(ledgerPath, '{}', 'utf8');
+          await writeFile(ledgerPath, secondCorruptBytes, 'utf8');
         }
         if (pollCalls === 4) {
-          await writeFile(ledgerPath, '{second broken ledger', 'utf8');
+          await writeFile(ledgerPath, '{}', 'utf8');
+        }
+        if (pollCalls === 5) {
+          await writeFile(ledgerPath, firstCorruptBytes, 'utf8');
         }
         return ledger.list() as Promise<any[]>;
       });
@@ -516,7 +522,7 @@ describe('runIntakeLoop', () => {
       const notify = vi.fn(async (_ideas: unknown[]) => {});
       const sleep = vi.fn(async (_ms: number) => {
         sleepCalls += 1;
-        if (sleepCalls === 4) throw STOP;
+        if (sleepCalls === 5) throw STOP;
       });
 
       await runIntakeLoop(
@@ -538,11 +544,12 @@ describe('runIntakeLoop', () => {
         quarantineCount: quarantines.length,
         corruptionLogs,
       }).toEqual({
-        pollCalls: 4,
+        pollCalls: 5,
         enqueueCalls: 0,
         notifyCalls: 0,
         quarantineCount: 2,
         corruptionLogs: [
+          expect.stringContaining(`ledger=${ledgerPath}`),
           expect.stringContaining(`ledger=${ledgerPath}`),
           expect.stringContaining(`ledger=${ledgerPath}`),
         ],
@@ -552,7 +559,8 @@ describe('runIntakeLoop', () => {
           quarantines.some((name) => message.includes(`quarantine=${join(directory, name)}`)),
         ),
       ).toBe(true);
-      expect(corruptionLogs.join('\n')).not.toContain(secretLedgerContent);
+      expect(corruptionLogs.join('\n')).not.toContain(firstCorruptBytes);
+      expect(corruptionLogs.join('\n')).not.toContain(secondCorruptBytes);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
