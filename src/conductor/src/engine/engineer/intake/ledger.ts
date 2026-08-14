@@ -7,7 +7,7 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 // ─── LedgerStatus ─────────────────────────────────────────────────────────────
 
@@ -181,7 +181,15 @@ async function readStore(path: string): Promise<LedgerStore> {
   if (result.kind === 'absent') return {};
   if (result.kind === 'corrupt') {
     if (result.bytes !== undefined) {
-      await writeFile(`${path}.corrupt-${new Date().toISOString()}`, result.bytes);
+      const digest = createHash('sha256').update(result.bytes).digest('hex');
+      const quarantinePath = `${path}.corrupt-${digest}`;
+      if (!existsSync(quarantinePath)) {
+        try {
+          await writeFile(quarantinePath, result.bytes, { flag: 'wx' });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
     }
     throw new CorruptLedgerError(path, result.reason);
   }

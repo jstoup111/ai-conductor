@@ -58,6 +58,41 @@ describe('loadStore()', () => {
     });
   });
 
+  it('reuses a quarantine for unchanged corrupt bytes and creates another for a new corruption', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const firstCorruption = Buffer.from('not valid json');
+    const secondCorruption = Buffer.from('{ still not valid json');
+    const ledger = createLedger(ledgerPath);
+    await writeFile(ledgerPath, firstCorruption);
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-13T12:00:00.000Z'));
+      await expect(ledger.list()).rejects.toBeInstanceOf(CorruptLedgerError);
+      vi.setSystemTime(new Date('2026-08-13T12:00:01.000Z'));
+      await expect(ledger.known('github-issues', 'o/a#1')).rejects.toBeInstanceOf(CorruptLedgerError);
+      vi.setSystemTime(new Date('2026-08-13T12:00:02.000Z'));
+      await expect(ledger.get('github-issues', 'o/a#1')).rejects.toBeInstanceOf(CorruptLedgerError);
+
+      await writeFile(ledgerPath, '{}', 'utf8');
+      await expect(ledger.list()).resolves.toEqual([]);
+      await writeFile(ledgerPath, secondCorruption);
+      vi.setSystemTime(new Date('2026-08-13T12:00:03.000Z'));
+      await expect(ledger.list()).rejects.toBeInstanceOf(CorruptLedgerError);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const quarantines = (await readdir(dir))
+      .filter((name) => name.startsWith('ledger.json.corrupt-'))
+      .sort();
+    expect(quarantines).toHaveLength(2);
+    await expect(Promise.all(quarantines.map((name) => readFile(join(dir, name))))).resolves.toEqual(expect.arrayContaining([
+      firstCorruption,
+      secondCorruption,
+    ]));
+  });
+
   it('distinguishes a missing ledger from a valid empty ledger without warning or quarantine', async () => {
     const ledgerPath = join(dir, 'ledger.json');
     const stderr = vi.spyOn(process.stderr, 'write');
