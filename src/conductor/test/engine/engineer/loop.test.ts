@@ -1215,3 +1215,86 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
     expect(marker).toContain('Owner: dave');
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Task 17: Corrupt-ledger capture failures must be visible, while unrelated
+// per-envelope failures remain isolated.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Task 17: intake capture preserves ledger durability', () => {
+  it('reports a corrupt ledger and never enqueues envelopes whose record failed', async () => {
+    await writeRegistry([]);
+
+    const { CorruptLedgerError } = await import('../../../src/engine/engineer/intake/ledger.js');
+    const { runEngineerMode } = await loadLoop();
+    const { io, text } = scriptedIo(['exit']);
+    const envelopes = [
+      { source: 'github-issues', sourceRef: 'org/repo#1', text: 'first' },
+      { source: 'github-issues', sourceRef: 'org/repo#2', text: 'second' },
+      { source: 'github-issues', sourceRef: 'org/repo#3', text: 'third' },
+    ];
+    const record = vi.fn(async () => {
+      throw new CorruptLedgerError(join(engineerDir, 'ledger.json'), 'invalid JSON');
+    });
+    const enqueue = vi.fn(async () => undefined);
+
+    await runEngineerMode({
+      route: noopProvider,
+      io,
+      registryPath,
+      engineerDir,
+      sources: [{ poll: async () => envelopes }],
+      ledger: { record } as any,
+      queue: {
+        enqueue,
+        claim: async () => undefined,
+        ack: async () => undefined,
+        release: async () => undefined,
+      },
+    });
+
+    expect(text()).toMatch(/intake ledger.*corrupt/i);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('continues recording and enqueuing healthy envelopes when one enqueue fails', async () => {
+    await writeRegistry([]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { io } = scriptedIo(['exit']);
+    const envelopes = [
+      { source: 'github-issues', sourceRef: 'org/repo#1', text: 'first' },
+      { source: 'github-issues', sourceRef: 'org/repo#2', text: 'second' },
+      { source: 'github-issues', sourceRef: 'org/repo#3', text: 'third' },
+    ];
+    const record = vi.fn(async () => undefined);
+    const successfullyEnqueued: string[] = [];
+    const enqueue = vi.fn(async (envelope: (typeof envelopes)[number]) => {
+      if (envelope.sourceRef === 'org/repo#2') throw new Error('malformed envelope');
+      successfullyEnqueued.push(envelope.sourceRef);
+    });
+
+    await runEngineerMode({
+      route: noopProvider,
+      io,
+      registryPath,
+      engineerDir,
+      sources: [{ poll: async () => envelopes }],
+      ledger: { record } as any,
+      queue: {
+        enqueue,
+        claim: async () => undefined,
+        ack: async () => undefined,
+        release: async () => undefined,
+      },
+    });
+
+    expect(record).toHaveBeenCalledTimes(3);
+    expect(enqueue.mock.calls.map(([envelope]) => envelope.sourceRef)).toEqual([
+      'org/repo#1',
+      'org/repo#2',
+      'org/repo#3',
+    ]);
+    expect(successfullyEnqueued).toEqual(['org/repo#1', 'org/repo#3']);
+  });
+});

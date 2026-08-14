@@ -33,7 +33,7 @@ import { basename } from 'node:path';
 import type { Envelope, IntakePort } from './intake/port.js';
 import type { IntakeSource } from './intake/source.js';
 import type { IntakeQueue } from './intake/queue.js';
-import type { Ledger } from './intake/ledger.js';
+import { CorruptLedgerError, type Ledger } from './intake/ledger.js';
 import { reportRouted, reportDone } from './intake/writeback.js';
 import type { RoutingProvider } from './routing.js';
 import { createRegistryReader } from '../registry.js';
@@ -262,7 +262,11 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
           // when the entry already exists, so the github adapter's own record is safe).
           if (deps.ledger) await deps.ledger.record({ source: e.source, sourceRef: e.sourceRef });
           await queue.enqueue(e);
-        } catch {
+        } catch (err: unknown) {
+          if (err instanceof CorruptLedgerError) {
+            io.print(`Intake ledger corruption: ${err.message}`);
+            break;
+          }
           // A single malformed envelope must not abort the whole intake phase.
         }
       }
