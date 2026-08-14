@@ -13,10 +13,12 @@ const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
 const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/backlog-priority.smoke.test.ts': 'toolchain',
-  'test/engine/build-token-auth.smoke.test.ts': 'credentialed',
-  'test/engine/daemon-e2e-live.smoke.test.ts': 'credentialed',
+  'test/engine/build-token-auth.smoke.test.ts': 'credentialed:claude',
+  'test/engine/daemon-e2e-live.smoke.test.ts': 'credentialed:claude',
+  'test/engine/daemon-e2e-live-claude.smoke.test.ts': 'credentialed:claude',
+  'test/engine/daemon-e2e-live-codex.smoke.test.ts': 'credentialed:codex',
   'test/engine/daemon-tmux.smoke.test.ts': 'toolchain',
-  'test/execution/claude-provider.smoke.test.ts': 'credentialed',
+  'test/execution/claude-provider.smoke.test.ts': 'credentialed:claude',
   'test/execution/codex-provider.smoke.test.ts': 'toolchain',
   'test/smoke/finish-record.smoke.test.ts': 'hermetic',
   'test/smoke/publish-interrupted.smoke.test.ts': 'toolchain',
@@ -37,7 +39,7 @@ describe('structural: smoke test entry point', () => {
     expect(outcome).toBe('Smoke discovery found no test files:0');
   });
 
-  it('applies per-file capability decisions, records skips, and requires credentialed execution in gate mode', async () => {
+  it('applies per-file capability decisions, records skips, and requires provider-leg execution in gate mode', async () => {
     const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
     const emit = vi.fn();
 
@@ -45,7 +47,7 @@ describe('structural: smoke test entry point', () => {
       discover: async () => [
         { file: 'test/smoke/finish-record.smoke.test.ts', source: "const smokeCapability = 'hermetic';" },
         { file: 'test/backlog-priority.smoke.test.ts', source: "const smokeCapability = 'toolchain';" },
-        { file: 'test/engine/daemon-e2e-live.smoke.test.ts', source: "const smokeCapability = 'credentialed';" },
+        { file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts', source: "const smokeCapability = 'credentialed:claude';" },
       ],
       runVitest,
       mode: 'advisory',
@@ -58,21 +60,80 @@ describe('structural: smoke test entry point', () => {
     expect(runVitest).toHaveBeenNthCalledWith(1, 'test/smoke/finish-record.smoke.test.ts');
     expect(emit.mock.calls).toEqual(expect.arrayContaining([
       ['smoke ledger: test/backlog-priority.smoke.test.ts [toolchain] skipped (unmet: gh)'],
-      ['smoke ledger: test/engine/daemon-e2e-live.smoke.test.ts [credentialed] skipped (unmet: CLAUDE_CODE_OAUTH_TOKEN)'],
+      ['smoke ledger: test/engine/daemon-e2e-live-claude.smoke.test.ts [credentialed:claude] skipped (unmet: CLAUDE_CODE_OAUTH_TOKEN)'],
       ['smoke ledger: test/smoke/finish-record.smoke.test.ts [hermetic] ran'],
     ]));
 
     await expect(runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => [
         { file: 'test/smoke/finish-record.smoke.test.ts', source: "const smokeCapability = 'hermetic';" },
-        { file: 'test/engine/daemon-e2e-live.smoke.test.ts', source: "const smokeCapability = 'credentialed';" },
+        { file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts', source: "const smokeCapability = 'credentialed:claude';" },
       ],
       runVitest,
       mode: 'gate',
       hasCommand: () => true,
       environment: {},
       emit,
-    })).rejects.toThrow('CLAUDE_CODE_OAUTH_TOKEN');
+    })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
+  });
+
+  it('keeps provider-leg credential and failure outcomes isolated', async () => {
+    const claudeFile = 'test/engine/daemon-e2e-live-claude.smoke.test.ts';
+    const codexFile = 'test/engine/daemon-e2e-live-codex.smoke.test.ts';
+    const providerLegs = [
+      { file: claudeFile, source: "const smokeCapability = 'credentialed:claude';" },
+      { file: codexFile, source: "const smokeCapability = 'credentialed:codex';" },
+    ];
+
+    for (const { environment, executedFile, skippedLine } of [
+      {
+        environment: { CLAUDE_CODE_OAUTH_TOKEN: 'claude-token' },
+        executedFile: claudeFile,
+        skippedLine: `smoke ledger: ${codexFile} [credentialed:codex] skipped (unmet: CODEX_API_KEY)`,
+      },
+      {
+        environment: { CODEX_API_KEY: 'codex-token' },
+        executedFile: codexFile,
+        skippedLine: `smoke ledger: ${claudeFile} [credentialed:claude] skipped (unmet: CLAUDE_CODE_OAUTH_TOKEN)`,
+      },
+    ]) {
+      const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+      const emit = vi.fn();
+
+      await expect(runSmokeCli('vitest.smoke.config.ts', {
+        discover: async () => providerLegs,
+        runVitest,
+        mode: 'gate',
+        hasCommand: () => true,
+        environment,
+        emit,
+      })).resolves.toBeUndefined();
+
+      expect(runVitest).toHaveBeenCalledTimes(1);
+      expect(runVitest).toHaveBeenCalledWith(executedFile);
+      expect(emit).toHaveBeenCalledWith(skippedLine);
+    }
+
+    const runVitest = vi.fn(async (file: string) => {
+      if (file === claudeFile) throw new Error('Claude leg failed');
+      return { executedAssertions: true, output: '' };
+    });
+    const emit = vi.fn();
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => providerLegs,
+      runVitest,
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: { CLAUDE_CODE_OAUTH_TOKEN: 'claude-token', CODEX_API_KEY: 'codex-token' },
+      emit,
+    })).rejects.toThrow('Claude leg failed');
+
+    expect(runVitest).toHaveBeenCalledWith(codexFile);
+    expect(emit.mock.calls).toEqual(expect.arrayContaining([
+      [`smoke ledger: ${claudeFile} [credentialed:claude] failed (evidence: Vitest output for ${claudeFile})`],
+      [`smoke ledger: ${codexFile} [credentialed:codex] ran`],
+    ]));
   });
 
   it(
@@ -136,18 +197,18 @@ describe('structural: smoke test entry point', () => {
   );
 
   it(
-    'ledgers a credentialed child with only skipped assertions as skipped and rejects it in gate mode',
+    'ledgers a provider-leg child with only skipped assertions as skipped and rejects it in gate mode',
     async () => {
       const ledger: string[] = [];
       const fixtureDir = await mkdtemp(join(tmpdir(), 'ai-conductor-skipped-smoke-'));
-      const fixtureFile = join(fixtureDir, 'credentialed.smoke.test.ts');
+      const fixtureFile = join(fixtureDir, 'credentialed-claude.smoke.test.ts');
       const config = join(fixtureDir, 'vitest.config.ts');
       const vitestEntry = join(conductorRoot, 'node_modules/vitest/dist/index.js');
 
       try {
         await writeFile(fixtureFile, [
           `import { it } from ${JSON.stringify(vitestEntry)};`,
-          "const smokeCapability = 'credentialed';",
+          "const smokeCapability = 'credentialed:claude';",
           "it.skip('has no executable assertion', () => {});",
         ].join('\n'));
         await writeFile(config, [
@@ -174,7 +235,7 @@ describe('structural: smoke test entry point', () => {
         })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
 
         expect(ledger, ledger.join('\n')).toContain(
-          `smoke ledger: ${relative(conductorRoot, fixtureFile)} [credentialed] skipped (unmet: no Vitest assertions executed)`,
+          `smoke ledger: ${relative(conductorRoot, fixtureFile)} [credentialed:claude] skipped (unmet: no Vitest assertions executed)`,
         );
       } finally {
         await rm(fixtureDir, { recursive: true, force: true });
@@ -197,6 +258,8 @@ describe('structural: smoke test entry point', () => {
       expect(discovered).toEqual([
         'test/backlog-priority.smoke.test.ts',
         'test/engine/build-token-auth.smoke.test.ts',
+        'test/engine/daemon-e2e-live-claude.smoke.test.ts',
+        'test/engine/daemon-e2e-live-codex.smoke.test.ts',
         'test/engine/daemon-e2e-live.smoke.test.ts',
         'test/engine/daemon-tmux.smoke.test.ts',
         'test/execution/claude-provider.smoke.test.ts',
