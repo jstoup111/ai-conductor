@@ -39,6 +39,17 @@ export interface LedgerEntry {
   writebackPending?: boolean;
 }
 
+/** Raised when the persisted intake ledger cannot be read safely. */
+export class CorruptLedgerError extends Error {
+  constructor(
+    public readonly ledgerPath: string,
+    public readonly reason: string,
+  ) {
+    super(`Intake ledger at ${ledgerPath} is corrupt: ${reason}`);
+    this.name = 'CorruptLedgerError';
+  }
+}
+
 // ─── Ledger ───────────────────────────────────────────────────────────────────
 
 /**

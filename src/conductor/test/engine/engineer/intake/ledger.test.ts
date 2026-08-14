@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
+import { CorruptLedgerError, createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -14,6 +14,24 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+
+describe('CorruptLedgerError', () => {
+  it('identifies a corrupt ledger with its path and reason', () => {
+    const error = new CorruptLedgerError('/tmp/ledger.json', 'invalid JSON');
+
+    expect({
+      errorIsAnError: error instanceof Error,
+      errorIsTyped: error instanceof CorruptLedgerError,
+      ledgerPath: error.ledgerPath,
+      reason: error.reason,
+    }).toEqual({
+      errorIsAnError: true,
+      errorIsTyped: true,
+      ledgerPath: '/tmp/ledger.json',
+      reason: 'invalid JSON',
+    });
+  });
 });
 
 describe('transition() writebackPending marker (#290)', () => {
