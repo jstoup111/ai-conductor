@@ -48,6 +48,10 @@ exception — reserved for two human categories only.
 - **Only two things HALT:** a genuine architectural *decision* (`architectural-clarity`), or genuine
   unplanned product *functionality* (`product-scope`). Everything else routes to a step.
 - **`impl-gap` → `build`** almost always (or `acceptance_specs` when the miss is really coverage).
+- **Baseline-passing test gaps are `build`.** Positive example: a changed test that passes against
+  the baseline and needs strengthening within an existing task's RED/GREEN steps is `build`, not a
+  planning miss. Negative example: do not select `plan` merely because the existing test passed
+  against the baseline.
 - **Approved architecture remains authoritative.** The audit origin or ADR-shaped finding id alone
   does not determine the route: conforming implementation/test/documentation drift that preserves
   approved architecture routes to `build`, including when reported by an as-built architecture audit.

@@ -57,4 +57,14 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect(coverageCheck).not.toBeNull();
     expect(existingTaskRemedy).not.toBeNull();
   });
+
+  it('routes a baseline-passing test that needs strengthening to build', async () => {
+    const text = await contract();
+
+    const baselinePassingTest = text.match(
+      /changed test that passes against\s+the baseline[\s\S]{0,120}needs strengthening within an existing task's RED\/GREEN steps[\s\S]{0,120}is `build`, not a\s+planning miss/i,
+    );
+
+    expect(baselinePassingTest).not.toBeNull();
+  });
 });
