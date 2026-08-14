@@ -459,6 +459,33 @@ export async function runNativeGroupBranch(
 }
 
 /**
+ * Typed execution seam for a branch that belongs to a concurrent group but
+ * is not a lifecycle step. The caller retains ownership of its string member
+ * identity, policy, and domain outcome; this core deliberately never coerces
+ * the member ID to `StepName` or writes it into `ConductState`.
+ *
+ * Auxiliary callers can compose this with `runWithConcurrency` and supply an
+ * executor backed by the same provider/session and rate-limit primitives as
+ * lifecycle branches, while preserving their own closed outcome union.
+ */
+export type AuxiliaryBranchExecutor<MemberId extends string, Policy, Outcome> = (
+  memberId: MemberId,
+  policy: Policy,
+) => Promise<Outcome>;
+
+/**
+ * Runs one typed auxiliary branch without inventing a lifecycle-step identity
+ * or mutable conductor state for it.
+ */
+export async function runAuxiliaryGroupBranch<MemberId extends string, Policy, Outcome>(
+  memberId: MemberId,
+  policy: Policy,
+  execute: AuxiliaryBranchExecutor<MemberId, Policy, Outcome>,
+): Promise<Outcome> {
+  return execute(memberId, policy);
+}
+
+/**
  * Runs a single concurrent-group branch to completion: creates one detached
  * provider-session scope when the runner supports provider routing, otherwise
  * mints the legacy scalar session id. Neither path uses the shared

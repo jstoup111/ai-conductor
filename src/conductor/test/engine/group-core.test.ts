@@ -7,6 +7,7 @@ import {
   runWithConcurrency,
   runGroupBranch,
   runNativeGroupBranch,
+  runAuxiliaryGroupBranch,
   type BranchOutcome,
   type GroupMember,
   type GroupMemberStepEvent,
@@ -15,6 +16,8 @@ import {
 } from "../../src/engine/group-core.js";
 import type { StepRunResult, StepRunOptions } from "../../src/engine/conductor.js";
 import type { StepName, ConductState } from "../../src/types/index.js";
+import type { BuildReviewRubricResult } from "../../src/engine/build-review-domain.js";
+import type { ResolvedBuildReviewRubricPolicy } from "../../src/engine/resolved-config.js";
 import { mkdtemp, writeFile, mkdir, stat, utimes, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -332,6 +335,36 @@ describe("group-core: runNativeGroupBranch", () => {
         { member: "wiring_check", phase: "result", outcome: "no-verdict" },
       ],
     });
+  });
+});
+
+describe("group-core: runAuxiliaryGroupBranch", () => {
+  it("dispatches string member IDs through typed policy and outcome callbacks without lifecycle state", async () => {
+    const policy: ResolvedBuildReviewRubricPolicy = {
+      enabled: true,
+      llm_provider: "claude",
+      model: "sonnet",
+      effort: "medium",
+      model_fallback_ladder: ["sonnet"],
+      max_retries: 2,
+      escalate: false,
+    };
+    const outcome: BuildReviewRubricResult = {
+      kind: "skipped",
+      rubric: "tautology",
+      reason: "disabled",
+    };
+    const execute = vi.fn(async (
+      memberId: "tautology",
+      receivedPolicy: ResolvedBuildReviewRubricPolicy,
+    ): Promise<BuildReviewRubricResult> => {
+      expect(memberId).toBe("tautology");
+      expect(receivedPolicy).toBe(policy);
+      return outcome;
+    });
+
+    await expect(runAuxiliaryGroupBranch("tautology", policy, execute)).resolves.toBe(outcome);
+    expect(execute).toHaveBeenCalledWith("tautology", policy);
   });
 });
 
