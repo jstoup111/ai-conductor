@@ -31,7 +31,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   advanceFinishPublication,
+  advancedPublicationTransition,
+  FINISH_PUBLICATION_PROGRESS_ALLOWANCE,
   type PublicationSnapshot,
+  type PublicationTransition,
 } from '../../src/engine/finish-publication.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import type { ConductState, FinishPublicationEvent } from '../../src/types/index.js';
@@ -117,6 +120,146 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
       type: 'finish_publication_transition', phase: 'completed', transition: 'judge_pr_prose',
     });
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+});
+
+function healthySnapshot(): PublicationSnapshot {
+  return {
+    mode: 'daemon',
+    intent: {
+      outcome: 'pr',
+      authority: { kind: 'unattended_policy', mode: 'daemon' },
+    },
+    implementationEvidence: 'valid',
+    shipEvidence: 'valid',
+    releaseReadiness: 'valid',
+    branchPushed: 'valid',
+    pr: {
+      identity: 'one',
+      url: PR_URL,
+      prose: 'accepted',
+      ready: true,
+    },
+    shippedRecord: 'valid',
+    outcomeRecord: 'missing',
+  };
+}
+
+describe('Story 5 — legitimate publication revisits still advance', () => {
+  it('recognizes every transition moving its own dimension on a legitimate revisit', async () => {
+    const revisitCases: Array<{
+      transition: PublicationTransition;
+      before: PublicationSnapshot;
+      after: PublicationSnapshot;
+    }> = [
+      {
+        transition: 'establish_pr',
+        before: { ...healthySnapshot(), branchPushed: 'missing' },
+        after: healthySnapshot(),
+      },
+      {
+        transition: 'verify_release_readiness',
+        before: { ...healthySnapshot(), releaseReadiness: 'missing' },
+        after: healthySnapshot(),
+      },
+      {
+        transition: 'author_pr_prose',
+        before: { ...healthySnapshot(), pr: { ...healthySnapshot().pr, prose: 'placeholder' } },
+        after: { ...healthySnapshot(), pr: { ...healthySnapshot().pr, prose: 'stale' } },
+      },
+      {
+        transition: 'judge_pr_prose',
+        before: { ...healthySnapshot(), pr: { ...healthySnapshot().pr, prose: 'stale' } },
+        after: healthySnapshot(),
+      },
+      {
+        transition: 'write_shipped_record',
+        before: { ...healthySnapshot(), shippedRecord: 'missing' },
+        after: healthySnapshot(),
+      },
+      {
+        transition: 'ready_pr',
+        before: { ...healthySnapshot(), pr: { ...healthySnapshot().pr, ready: false } },
+        after: healthySnapshot(),
+      },
+      {
+        transition: 'record_outcome',
+        before: healthySnapshot(),
+        after: { ...healthySnapshot(), outcomeRecord: 'valid' },
+      },
+    ];
+
+    await expect(Promise.all(revisitCases.map(({ transition, before, after }) =>
+      advancedPublicationTransition(undefined, transition, before, after),
+    ))).resolves.toEqual(revisitCases.map(({ transition }) => ({ kind: 'advanced', transition })));
+  });
+
+  it('advances establish_pr again after writing the shipped record leaves the branch unpushed', async () => {
+    const afterWrite = {
+      ...healthySnapshot(),
+      branchPushed: 'missing' as const,
+      shippedRecord: 'valid' as const,
+    };
+    const afterReestablish = healthySnapshot();
+
+    await expect(
+      advancedPublicationTransition(undefined, 'establish_pr', afterWrite, afterReestablish),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'establish_pr' });
+  });
+
+  it('completes a healthy publication run without human-required results or exhausting allowance', async () => {
+    let snapshot: PublicationSnapshot = {
+      ...healthySnapshot(),
+      pr: { ...healthySnapshot().pr, prose: 'placeholder', ready: false },
+      shippedRecord: 'missing',
+    };
+    const completedTransitions: PublicationTransition[] = [];
+    const dispositions = [];
+    const observe = async () => structuredClone(snapshot);
+    const effects = {
+      authorProse: async () => {
+        snapshot = { ...snapshot, pr: { ...snapshot.pr, prose: 'stale' } } as PublicationSnapshot;
+      },
+      dispatchJudgment: async () => {
+        snapshot = { ...snapshot, pr: { ...snapshot.pr, prose: 'accepted' } } as PublicationSnapshot;
+        return { kind: 'accepted' as const };
+      },
+      createShippedRecord: async () => {
+        snapshot = { ...snapshot, shippedRecord: 'valid' };
+      },
+      repairPresentation: async () => {
+        snapshot = { ...snapshot, pr: { ...snapshot.pr, ready: true } } as PublicationSnapshot;
+      },
+      recordOutcome: async () => {
+        snapshot = { ...snapshot, outcomeRecord: 'valid' };
+      },
+    };
+
+    for (let attempt = 0; attempt < FINISH_PUBLICATION_PROGRESS_ALLOWANCE; attempt++) {
+      const result = await advanceFinishPublication({
+        observe,
+        effects,
+        emit: async (event) => {
+          if (event.type === 'finish_publication_transition' && event.phase === 'completed') {
+            completedTransitions.push(event.transition);
+          }
+        },
+      });
+      dispositions.push(result);
+      if (result.kind === 'complete') break;
+    }
+
+    expect(dispositions.at(-1)).toEqual({ kind: 'complete' });
+    expect(dispositions).not.toContainEqual(expect.objectContaining({ kind: 'human_required' }));
+    expect(completedTransitions).toEqual([
+      'author_pr_prose',
+      'judge_pr_prose',
+      'write_shipped_record',
+      'ready_pr',
+      'record_outcome',
+    ]);
+    expect(completedTransitions).toHaveLength(5);
+    expect(completedTransitions.length).toBeLessThan(FINISH_PUBLICATION_PROGRESS_ALLOWANCE);
   });
 });
 
