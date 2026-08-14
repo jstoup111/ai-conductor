@@ -28,6 +28,22 @@ describe('report-renderer', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  it('renders raw rubric, cache, and explicit skipped-not-pass metrics', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'build_review_rubric_result', rubric: 'scope', verdict: 'FAIL' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'build_review_rubric_skipped', rubric: 'wiring', reason: 'missing-entry-points' }, ts: '2026-01-01T00:00:01.000Z' },
+      { event: { type: 'build_review_cache_hit', rubric: 'tautology' }, ts: '2026-01-01T00:00:02.000Z' },
+      { event: { type: 'build_review_outer_verdict', lapId: 'lap-1', effectiveVerdict: 'PASS' }, ts: '2026-01-01T00:00:03.000Z' },
+    ]), 'utf8');
+
+    expect(renderReport(eventsPath)).toContain('Effective laps-to-pass: lap-1\nReduced coverage (skipped, not pass): 1\nCache hits: 1\nRaw scope: FAIL');
+  });
+
+  it('renders absent build-review data safely', async () => {
+    await writeFile(eventsPath, '', 'utf8');
+    expect(renderReport(eventsPath)).toContain('## Build Review Metrics\nNo build-review metrics recorded');
+  });
+
   it('ignores persisted kickback lines in report, timing, and cost rollups', async () => {
     const baselineDir = join(tempDir, 'baseline');
     const kickbackDir = join(tempDir, 'with-kickback');
