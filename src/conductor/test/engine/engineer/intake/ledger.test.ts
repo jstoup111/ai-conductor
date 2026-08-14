@@ -73,6 +73,19 @@ describe('loadStore()', () => {
     });
     await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
   });
+
+  it('classifies JSON values other than a ledger store as corrupt', async () => {
+    const values = ['[]', '"text"', '42', 'null', '{ "k": { "no": "entry" } }'];
+    const results = await Promise.all(
+      values.map(async (value, index) => {
+        const ledgerPath = join(dir, `invalid-${index}.json`);
+        await writeFile(ledgerPath, value, 'utf8');
+        return loadStore(ledgerPath);
+      }),
+    );
+
+    expect(results.map((result) => result.kind)).toEqual(['corrupt', 'corrupt', 'corrupt', 'corrupt', 'corrupt']);
+  });
 });
 
 describe('transition() writebackPending marker (#290)', () => {

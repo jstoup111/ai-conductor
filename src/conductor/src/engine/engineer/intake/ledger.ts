@@ -102,6 +102,45 @@ export type LedgerLoadResult =
   | { kind: 'ok'; store: LedgerStore }
   | { kind: 'corrupt'; reason: string; bytes?: string };
 
+const ledgerStatuses: ReadonlySet<LedgerStatus> = new Set([
+  'unseen',
+  'pending',
+  'claimed',
+  'routed',
+  'deciding',
+  'done',
+  'needs-manual',
+]);
+
+function isLedgerEntry(value: unknown): value is LedgerEntry {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.source === 'string' &&
+    typeof entry.sourceRef === 'string' &&
+    typeof entry.status === 'string' &&
+    ledgerStatuses.has(entry.status as LedgerStatus) &&
+    typeof entry.attempts === 'number' &&
+    Number.isInteger(entry.attempts) &&
+    entry.attempts >= 0 &&
+    (entry.branch === undefined || typeof entry.branch === 'string') &&
+    (entry.prUrl === undefined || typeof entry.prUrl === 'string') &&
+    (entry.capturedAt === undefined || typeof entry.capturedAt === 'string') &&
+    (entry.lastSeenAt === undefined || typeof entry.lastSeenAt === 'string') &&
+    (entry.writebackPending === undefined || typeof entry.writebackPending === 'boolean')
+  );
+}
+
+function isLedgerStore(value: unknown): value is LedgerStore {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    Object.values(value).every(isLedgerEntry)
+  );
+}
+
 /** Composite dedup key: NUL-joined so source prefix cannot bleed into sourceRef. */
 function makeKey(source: string, sourceRef: string): string {
   return `${source}\0${sourceRef}`;
@@ -123,7 +162,11 @@ export async function loadStore(path: string): Promise<LedgerLoadResult> {
   }
 
   try {
-    return { kind: 'ok', store: JSON.parse(raw) as LedgerStore };
+    const parsed: unknown = JSON.parse(raw);
+    if (!isLedgerStore(parsed)) {
+      return { kind: 'corrupt', reason: 'ledger content is not a valid ledger store', bytes: raw };
+    }
+    return { kind: 'ok', store: parsed };
   } catch (error) {
     return {
       kind: 'corrupt',
