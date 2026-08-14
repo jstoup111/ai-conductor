@@ -20,7 +20,7 @@ const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
 const LIVE_SMOKE_PATH = join(
   CONDUCTOR_ROOT,
-  'test/engine/daemon-e2e-live.smoke.test.ts',
+  'test/engine/daemon-e2e-live-claude.smoke.test.ts',
 );
 const FIXTURE_PATH = join(
   CONDUCTOR_ROOT,
@@ -46,7 +46,7 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       requiredSource(LIVE_RUN_BODY_PATH),
     ]);
 
-    expect(smoke).toMatch(/runLiveE2ERunBody\s*\(\s*claude\s*,\s*tokenCap\s*\)/);
+    expect(smoke).toMatch(/defineLiveE2EProviderSmoke\(provider\)/);
     expect(source).toMatch(/new\s+DefaultStepRunner\s*\(/);
     expect(source).toMatch(/runDaemon\s*\(/);
     expect(source).toMatch(/class\s+ProvisionedHome\s+implements\s+LLMProvider/);
@@ -72,28 +72,28 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     ]);
 
     expect(runBody).toMatch(/tokenUsage/);
-    expect(smoke).toMatch(/process\.env\.[A-Z0-9_]*TOKEN[A-Z0-9_]*CAP/);
-    expect(runBody).toMatch(/console\.(?:log|info)\([^)]*(?:token|cost)/i);
+    expect(runBody).toMatch(/DAEMON_E2E_LIVE_TOKEN_CAP/);
+    expect(runBody).toMatch(/reportLiveE2ESpend/);
     expect(runBody).toMatch(/(?:cap|limit)[^\n]*(?:observed|total)|(?:observed|total)[^\n]*(?:cap|limit)/i);
     expect(runBody).toMatch(/expect\(meter\.totalTurns\)\.toBeGreaterThan\(0\)/);
     expect(runBody).toMatch(/expect\(meter\.totalTokens\)\.toBeGreaterThan\(0\)/);
-    expect(runBody).toMatch(/assertTokenCap\(meter\.totalTokens,\s*meter\.unmetered,\s*tokenCap\)/);
+    expect(runBody).toMatch(/assertTokenCap\(observed\.totalTokens,\s*observed\.unmetered,\s*cap\)/);
     expect(runBody).toMatch(/const\s+STEPS_ALLOWED_UNMETERED[^=]*=\s*\[\s*['\"]finish['\"]\s*\]/);
     expect(runBody).toMatch(/meter\.unmeteredSteps\.filter\([\s\S]*!STEPS_ALLOWED_UNMETERED\.includes/);
     expect(workflow).toMatch(/timeout-minutes:\s*[1-9][0-9]*/);
   });
 
   it('shares one diagnostics implementation that reports terminal and task-evidence state', async () => {
-    const [fixture, smoke] = await Promise.all([
+    const [fixture, runBody] = await Promise.all([
       requiredSource(FIXTURE_PATH),
-      requiredSource(LIVE_SMOKE_PATH),
+      requiredSource(LIVE_RUN_BODY_PATH),
     ]);
 
     expect(fixture).toMatch(/export\s+async\s+function\s+dumpPipelineDiagnostics/);
     expect(fixture).toContain('task-status.json');
     expect(fixture).toContain('task-evidence.json');
-    expect(smoke).toMatch(/import\s*\{[^}]*dumpPipelineDiagnostics[^}]*\}\s*from/);
-    expect(smoke).not.toMatch(/function\s+dumpPipelineDiagnostics/);
+    expect(runBody).toMatch(/import\s*\{[^}]*dumpPipelineDiagnostics[^}]*\}\s*from/);
+    expect(runBody).not.toMatch(/function\s+dumpPipelineDiagnostics/);
   });
 
   it('keeps the live workflow advisory to merges and fail-closed for reusable gating callers', async () => {
@@ -109,17 +109,17 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(workflow).toMatch(/require_credentials:[\s\S]*?type:\s*boolean[\s\S]*?default:\s*false/);
     expect(workflow).not.toMatch(/^\s*(?:pull_request|schedule)\s*:/m);
     expect(workflow).toMatch(/fail-fast:\s*false/);
-    expect(workflow).toMatch(/provider:\s*\[\s*claude\s*\]/);
+    expect(workflow).toMatch(/include:[\s\S]*provider:\s*claude[\s\S]*provider:\s*codex/);
     expect(workflow).toMatch(/inputs\.require_credentials/);
     expect(workflow).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
-    expect(workflow).toMatch(/npm\s+run\s+smoke/);
-    expect(workflow).toMatch(/SMOKE_MODE:\s*\$\{\{\s*inputs\.require_credentials\s*&&\s*'gate'\s*\|\|\s*'advisory'\s*\}\}/);
+    expect(workflow).toMatch(/CREDENTIAL_ENV:\s*\$\{\{\s*matrix\.credential_env\s*\}\}/);
+    expect(workflow).toMatch(/npx\s+vitest\s+run\s+--config\s+vitest\.smoke\.config\.ts\s+"\$\{\{\s*matrix\.smoke_file\s*\}\}"/);
 
     const ciGate = ci.slice(ci.indexOf('ci-gate:'));
     expect(ciGate).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
 
-    expect(smoke).toMatch(/describe\.skipIf\s*\(/);
-    expect(smoke).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
+    expect(runBody).toMatch(/describe\.skipIf\s*\(/);
+    expect(smoke).toMatch(/credentialed:claude/);
     expect(runBody).toMatch(/delete\s+process\.env\.AI_CONDUCTOR_NO_REAL_EXEC/);
     expect(runBody).toMatch(/expect\(process\.env\.AI_CONDUCTOR_NO_REAL_EXEC\)\.toBeUndefined\(\)/);
   });
@@ -131,7 +131,7 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       requiredSource(join(CONDUCTOR_ROOT, 'vitest.smoke.config.ts')),
     ]);
 
-    expect(workflow).toMatch(/run:\s*npm\s+run\s+smoke/);
+    expect(workflow).toMatch(/run:\s*env\s+"\$CREDENTIAL_ENV=\$LIVE_PROVIDER_CREDENTIAL"\s+npx\s+vitest\s+run\s+--config\s+vitest\.smoke\.config\.ts/);
     expect(JSON.parse(packageJson).scripts.smoke)
       .toBe('node --import tsx scripts/smoke.ts vitest.smoke.config.ts');
     expect(smokeConfig).toMatch(/environment:\s*['"]node['"]/);

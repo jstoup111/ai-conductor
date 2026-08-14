@@ -22,9 +22,9 @@ import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeResult } from '../../src/execution/llm-provider.js';
 
 const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-const LIVE_SMOKE_PATH = join(
+const LIVE_RUN_BODY_PATH = join(
   CONDUCTOR_ROOT,
-  'test/engine/daemon-e2e-live.smoke.test.ts',
+  'test/fixtures/live-e2e-run-body.ts',
 );
 const LIVE_HOME_PATH = join(
   CONDUCTOR_ROOT,
@@ -72,28 +72,27 @@ async function invokeEnvelope(
 
 describe('live daemon E2E command resolution (#1311)', () => {
   it('provisions copied checkout skills inside the selected live case and routes that home into dispatch', async () => {
-    const [home, smoke] = await Promise.all([
+    const [home, runBody] = await Promise.all([
       requiredSource(LIVE_HOME_PATH),
-      requiredSource(LIVE_SMOKE_PATH),
+      requiredSource(LIVE_RUN_BODY_PATH),
     ]);
 
     expect(home).toMatch(/provisionProviderHome/);
     expect(home).toMatch(/export\s+(?:async\s+)?function\s+provisionLiveProviderHome/);
-    expect(home).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
     expect(home).not.toMatch(/symlink\s*\([^)]*worktree|bin\/install|\.claude\.json/);
 
-    const selectedCase = smoke.indexOf("describe.skipIf(!shouldRun)");
-    const provisioning = smoke.indexOf('provisionLiveProviderHome');
+    const selectedCase = runBody.indexOf("describe.skipIf(!shouldRun)");
+    const provisioning = runBody.indexOf('await withProvisionedLiveProviderHome');
     expect(selectedCase).toBeGreaterThanOrEqual(0);
     expect(provisioning).toBeGreaterThan(selectedCase);
-    expect(smoke).toMatch(/selfHost\s*:/);
-    expect(smoke).toMatch(/finally\s*\{[\s\S]*teardown\s*\(/);
+    expect(runBody).toMatch(/selfHost\s*:/);
+    expect(runBody).toMatch(/finally\s*\{[\s\S]*teardown\s*\(/);
   });
 
   it('preflights every registry-rendered command from the provisioned home before provider dispatch', async () => {
-    const [preflight, smoke] = await Promise.all([
+    const [preflight, runBody] = await Promise.all([
       requiredSource(PREFLIGHT_PATH),
-      requiredSource(LIVE_SMOKE_PATH),
+      requiredSource(LIVE_RUN_BODY_PATH),
     ]);
 
     expect(preflight).toMatch(/STEP_SKILL_INVOCATIONS/);
@@ -107,11 +106,10 @@ describe('live daemon E2E command resolution (#1311)', () => {
     expect(preflight).not.toMatch(/['"]pipeline['"]/);
     expect(preflight).not.toMatch(/\.invoke\s*\(|exec(?:File)?\s*\(|fetch\s*\(/);
 
-    const preflightCall = smoke.search(/preflight|assertStepCommandsResolve/);
-    const providerConstruction = smoke.indexOf('new ClaudeProvider');
+    const preflightCall = runBody.search(/dispatchAfterLivePreflight/);
     expect(preflightCall).toBeGreaterThanOrEqual(0);
-    expect(providerConstruction).toBeGreaterThan(preflightCall);
-    expect(smoke).toMatch(/dispatch(?:es|Count)[\s\S]*0|0[\s\S]*dispatch(?:es|Count)/i);
+    expect(runBody).toMatch(/await\s+preflight\([^)]*providerKey\)[\s\S]*await\s+dispatch\(\)/);
+    expect(runBody).toMatch(/dispatches\s*=\s*0/);
   });
 
   it('classifies the observed zero-turn unknown-command envelope as a named failure at the provider boundary', async () => {
@@ -165,18 +163,17 @@ describe('live daemon E2E command resolution (#1311)', () => {
   });
 
   it('routes unresolved commands as zero-retry mechanical failures while preserving outcome-based regression diagnostics', async () => {
-    const [conductor, smoke] = await Promise.all([
+    const [conductor, runBody] = await Promise.all([
       requiredSource(CONDUCTOR_PATH),
-      requiredSource(LIVE_SMOKE_PATH),
+      requiredSource(LIVE_RUN_BODY_PATH),
     ]);
 
     expect(conductor).toMatch(/commandUnresolved/);
     expect(conductor).toMatch(/commandUnresolved[\s\S]{0,1200}mechanical|mechanical[\s\S]{0,1200}commandUnresolved/);
-    expect(smoke).toMatch(/dumpPipelineDiagnostics/);
-    expect(smoke).toMatch(/terminal[\s\S]*madeCommit[\s\S]*touchedFixture[\s\S]*taskTrailer/);
-    expect(smoke).toMatch(/commandUnresolved|unresolved command/i);
+    expect(runBody).toMatch(/dumpPipelineDiagnostics/);
+    expect(runBody).toMatch(/terminal[\s\S]*madeCommit[\s\S]*touchedFixture[\s\S]*taskTrailer/);
 
-    const outcomeAssertion = smoke.match(/expect\s*\(\s*\{[\s\S]*?\}\s*\)\.toEqual\s*\(\s*\{[\s\S]*?\}\s*\)/)?.[0] ?? '';
+    const outcomeAssertion = runBody.match(/expect\s*\(\s*\{[\s\S]*?\}\s*\)\.toEqual\s*\(\s*\{[\s\S]*?\}\s*\)/)?.[0] ?? '';
     expect(outcomeAssertion).not.toMatch(/numTurns|turnCount|dispatchCount|agent wording/i);
   });
 });

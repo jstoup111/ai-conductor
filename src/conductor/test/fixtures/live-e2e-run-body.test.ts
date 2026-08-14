@@ -67,6 +67,10 @@ describe('runLiveE2ERunBody authentication source', () => {
       binaryName: 'codex',
       credentialEnvVar: 'CODEX_API_KEY',
       createProvider,
+      assertCredentialAvailable: (credential: string | undefined) => {
+        if (credential?.trim()) return;
+        throw new Error(`Missing Codex credential: set CODEX_API_KEY or sign in at ${codexHome}/auth.json`);
+      },
     } as unknown as LiveE2EProviderDescriptor;
 
     try {
@@ -140,6 +144,7 @@ describe('runLiveE2ERunBody authentication source', () => {
       binaryName: 'codex',
       credentialEnvVar: 'CODEX_API_KEY',
       createProvider,
+      assertCredentialAvailable: () => {},
       expectedAuthenticationSource: 'api-key',
       resolveAuthenticationSource: async (candidate: LLMProvider) => {
         const result = await candidate.readiness?.();

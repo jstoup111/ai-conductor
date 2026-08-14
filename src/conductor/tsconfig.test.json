@@ -29,6 +29,6 @@
   // one plugin entry point a test imports is checked anyway; globbing the tree
   // would also drag in each plugin's own vitest suite, which resolves its
   // dependencies from a different package root.
-  "include": ["src/**/*", "test/**/*", "vitest.config.ts", "vitest.live-smoke.config.ts"],
+  "include": ["src/**/*", "test/**/*", "vitest.config.ts"],
   "exclude": ["node_modules", "dist"]
 }

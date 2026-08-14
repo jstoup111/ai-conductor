@@ -21,6 +21,7 @@ describe('LIVE_E2E_PROVIDERS', () => {
       expectedAuthenticationSource: 'oauth-token',
     });
     expect(claude?.createProvider()).toBeInstanceOf(ClaudeProvider);
+    expect(claude?.assertCredentialAvailable(undefined)).toBeUndefined();
   });
 
   it('declares the complete Codex live-leg descriptor', () => {
@@ -35,6 +36,7 @@ describe('LIVE_E2E_PROVIDERS', () => {
       expectedAuthenticationSource: 'api-key',
     });
     expect(codex?.createProvider()).toBeInstanceOf(CodexProvider);
+    expect(codex?.assertCredentialAvailable).toBeTypeOf('function');
   });
 });
 

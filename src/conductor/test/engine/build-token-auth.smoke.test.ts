@@ -7,7 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AUTH_FAILURE_RE } from '../../src/execution/claude-provider.js';
-const smokeCapability = 'credentialed';
+const smokeCapability = 'credentialed:claude';
 
 /**
  * Real-binary smoke test for TR-5: prove that `CLAUDE_CODE_OAUTH_TOKEN` auth

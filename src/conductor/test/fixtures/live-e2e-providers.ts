@@ -1,3 +1,7 @@
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import type { AuthenticationSource, LLMProvider } from '../../src/execution/llm-provider.js';
@@ -14,6 +18,7 @@ export interface LiveE2EProviderDescriptor {
   readonly providerKey: string;
   readonly expectedAuthenticationSource: LiveE2EAuthenticationSource;
   readonly resolveAuthenticationSource: (provider: LLMProvider) => Promise<LiveE2EAuthenticationSource>;
+  readonly assertCredentialAvailable: (credential: string | undefined) => void;
 }
 
 export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = [
@@ -26,6 +31,7 @@ export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = [
     providerKey: 'claude',
     expectedAuthenticationSource: 'oauth-token',
     resolveAuthenticationSource: async () => 'oauth-token',
+    assertCredentialAvailable: () => {},
   },
   {
     id: 'codex',
@@ -41,6 +47,16 @@ export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = [
         throw new Error('Codex live descriptor requires Codex readiness');
       }
       return readiness.source;
+    },
+    assertCredentialAvailable: (credential) => {
+      if (credential?.trim()) return;
+
+      const cachedLoginPath = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'auth.json');
+      if (existsSync(cachedLoginPath)) return;
+
+      throw new Error(
+        `Missing Codex credential: set CODEX_API_KEY or sign in at ${cachedLoginPath}`,
+      );
     },
   },
 ];

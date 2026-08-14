@@ -10,23 +10,20 @@ import type { SmokeCapability } from '../../src/engine/smoke-capability.js';
 import { runSmokeCli } from '../../src/engine/smoke-runner.js';
 import { LIVE_E2E_PROVIDERS } from '../fixtures/live-e2e-providers.js';
 
-type StructuralSmokeCapability = SmokeCapability | 'credentialed';
-
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
-const liveProviderSmokeCapabilities: Readonly<Record<string, StructuralSmokeCapability>> = Object.fromEntries(
+const liveProviderSmokeCapabilities: Readonly<Record<string, SmokeCapability>> = Object.fromEntries(
   LIVE_E2E_PROVIDERS.map(({ id }) => [
     `test/engine/daemon-e2e-live-${id}.smoke.test.ts`,
     `credentialed:${id}` as SmokeCapability,
   ]),
 );
-const smokeCapabilities: Readonly<Record<string, StructuralSmokeCapability>> = {
+const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/backlog-priority.smoke.test.ts': 'toolchain',
-  'test/engine/build-token-auth.smoke.test.ts': 'credentialed',
-  'test/engine/daemon-e2e-live.smoke.test.ts': 'credentialed',
+  'test/engine/build-token-auth.smoke.test.ts': 'credentialed:claude',
   ...liveProviderSmokeCapabilities,
   'test/engine/daemon-tmux.smoke.test.ts': 'toolchain',
-  'test/execution/claude-provider.smoke.test.ts': 'credentialed',
+  'test/execution/claude-provider.smoke.test.ts': 'credentialed:claude',
   'test/execution/codex-provider.smoke.test.ts': 'toolchain',
   'test/smoke/finish-record.smoke.test.ts': 'hermetic',
   'test/smoke/publish-interrupted.smoke.test.ts': 'toolchain',
@@ -268,7 +265,6 @@ describe('structural: smoke test entry point', () => {
         'test/engine/build-token-auth.smoke.test.ts',
         'test/engine/daemon-e2e-live-claude.smoke.test.ts',
         'test/engine/daemon-e2e-live-codex.smoke.test.ts',
-        'test/engine/daemon-e2e-live.smoke.test.ts',
         'test/engine/daemon-tmux.smoke.test.ts',
         'test/execution/claude-provider.smoke.test.ts',
         'test/execution/codex-provider.smoke.test.ts',

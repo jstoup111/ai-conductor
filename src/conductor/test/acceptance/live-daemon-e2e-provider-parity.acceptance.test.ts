@@ -96,8 +96,8 @@ describe('live daemon E2E provider parity (#1264)', () => {
     }
 
     expect(sharedBody).toMatch(/runDaemon\s*\(/);
-    expect(sharedBody).toContain('test/fixtures/daemon-e2e/plan.md');
-    expect(sharedBody).toContain('test/fixtures/daemon-e2e/stories.md');
+    expect(sharedBody).toContain("new URL('./daemon-e2e/plan.md', import.meta.url)");
+    expect(sharedBody).toContain("new URL('./daemon-e2e/stories.md', import.meta.url)");
     expect(sharedBody).toMatch(/terminal[\s\S]*madeCommit[\s\S]*touchedFixture[\s\S]*taskTrailer/);
     expect(fixturePlan).toContain('touched.txt');
     expect(fixtureStories).toContain('touched.txt');
@@ -159,7 +159,7 @@ describe('live daemon E2E provider parity (#1264)', () => {
       hasCommand: () => true,
       environment: {},
       emit,
-    })).rejects.toThrow(/no credentialed provider leg executed/i);
+    })).rejects.toThrow(/no credentialed test files/i);
   });
 
   it('shares cost, authentication, teardown, and diagnostics guarantees across provider legs', async () => {
@@ -177,10 +177,11 @@ describe('live daemon E2E provider parity (#1264)', () => {
   it('makes the workflow matrix select and report each provider leg without exposing credentials', async () => {
     const source = await requiredSource(WORKFLOW_PATH);
     const workflow = loadYaml(source) as {
-      jobs?: Record<string, { strategy?: { matrix?: { provider?: string[] } } }>;
+      jobs?: Record<string, { strategy?: { matrix?: { include?: Array<{ provider?: string }> } } }>;
     };
     const providers = Object.values(workflow.jobs ?? {})
-      .flatMap((entry) => entry.strategy?.matrix?.provider ?? []);
+      .flatMap((entry) => entry.strategy?.matrix?.include ?? [])
+      .map(({ provider }) => provider ?? '');
 
     expect(providers.sort()).toEqual(['claude', 'codex']);
     expect(source).toContain(LIVE_FILES.claude);

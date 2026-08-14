@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
@@ -235,21 +235,14 @@ export function createLiveProvider(
 }
 
 /**
- * Codex may authenticate with either an API key or its cached login. Reject
- * an unavailable pair before constructing a provider or reaching dispatch.
+ * Provider descriptors own any provider-specific credential fallback. The
+ * shared body only enforces that validation before construction or dispatch.
  */
 export function assertLiveProviderCredential(
   descriptor: LiveE2EProviderDescriptor,
   credential: string | undefined,
 ): void {
-  if (descriptor.id !== 'codex' || credential?.trim()) return;
-
-  const cachedLoginPath = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'auth.json');
-  if (existsSync(cachedLoginPath)) return;
-
-  throw new Error(
-    `Missing Codex credential: set ${descriptor.credentialEnvVar} or sign in at ${cachedLoginPath}`,
-  );
+  descriptor.assertCredentialAvailable(credential);
 }
 
 export function defineLiveE2EProviderSmoke(descriptor: LiveE2EProviderDescriptor): void {
