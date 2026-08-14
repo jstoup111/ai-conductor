@@ -925,9 +925,12 @@ complexity:
   });
 
   describe('conductor block validation', () => {
-    it('accepts tagged/main update_channel', () => {
-      expect(validateConfig({ conductor: { update_channel: 'tagged' } }).ok).toBe(true);
-      expect(validateConfig({ conductor: { update_channel: 'main' } }).ok).toBe(true);
+    it('accepts tagged/main/stable update_channel', () => {
+      expect(
+        (['tagged', 'stable', 'main'] as const).map((update_channel) => (
+          validateConfig({ conductor: { update_channel } }).ok
+        )),
+      ).toEqual([true, true, true]);
     });
 
     it('rejects other update_channel values', () => {

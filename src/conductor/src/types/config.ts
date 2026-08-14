@@ -200,7 +200,7 @@ export interface DefaultsConfig {
  * should not override this block — it's per-user, not per-repo.
  */
 export interface ConductorConfig {
-  update_channel?: 'tagged' | 'main';
+  update_channel?: 'tagged' | 'stable' | 'main';
   auto_check?: boolean;
   current_version?: string;
   last_checked_at?: string;
