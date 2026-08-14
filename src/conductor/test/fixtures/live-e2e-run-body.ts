@@ -289,6 +289,18 @@ export async function assertLiveProviderReadiness(provider: LLMProvider): Promis
   throw new Error(`Provider readiness is ${readiness.state}: ${readinessRemediation(readiness)}`);
 }
 
+async function withLiveE2EFailureDiagnostics<T>(
+  worktreeDir: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    await dumpPipelineDiagnostics(worktreeDir);
+    throw error;
+  }
+}
+
 async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
   return existsSync(join(worktreeDir, '.pipeline/DONE')) &&
     !existsSync(join(worktreeDir, '.pipeline/HALT')) &&
@@ -312,23 +324,24 @@ export async function runLiveE2ERunBody(
     descriptor,
     credential,
   );
-  await assertDescriptorAuthenticationSource(descriptor, provider);
-  await assertLiveProviderReadiness(provider);
   let meter = new TokenMeter(provider);
   let provisioned: ProvisionedHome | undefined;
   let baselineSha: string | undefined;
 
-  return enforceLiveE2ETokenCap(async () => {
-    try {
-    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeUndefined();
-    await initTestRepo(worktreeDir);
-    await mkdir(join(worktreeDir, '.docs/plans'), { recursive: true });
-    await mkdir(join(worktreeDir, '.docs/stories'), { recursive: true });
-    await mkdir(join(worktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
-    await copyFile(fixturePlanPath, planPath);
-    await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
-    await withProvisionedLiveProviderHome(
+  return withLiveE2EFailureDiagnostics(worktreeDir, async () => {
+    await assertDescriptorAuthenticationSource(descriptor, provider);
+    await assertLiveProviderReadiness(provider);
+    return enforceLiveE2ETokenCap(async () => {
+      try {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeUndefined();
+        await initTestRepo(worktreeDir);
+        await mkdir(join(worktreeDir, '.docs/plans'), { recursive: true });
+        await mkdir(join(worktreeDir, '.docs/stories'), { recursive: true });
+        await mkdir(join(worktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
+        await copyFile(fixturePlanPath, planPath);
+        await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
+        await withProvisionedLiveProviderHome(
       fileURLToPath(new URL('../../../../', import.meta.url)),
       process.env[descriptor.credentialEnvVar],
       dependencies.provisionProviderHome ?? provisionLiveProviderHome,
@@ -427,16 +440,14 @@ export async function runLiveE2ERunBody(
           taskTrailer: /(?:^|\n)Task:\s*1\s*$/m.test(commitBody),
         }).toEqual({ terminal: true, madeCommit: true, touchedFixture: true, taskTrailer: true });
       },
-    );
-    } catch (error) {
-      await dumpPipelineDiagnostics(worktreeDir);
-      throw error;
-    } finally {
-      reportLiveE2ESpend({
-        totalTokens: meter.totalTokens,
-        dispatches: provisioned?.dispatches ?? 0,
-      }, tokenCap);
-      await rm(worktreeDir, { recursive: true, force: true });
-    }
-  }, () => meter, tokenCap);
+        );
+      } finally {
+        reportLiveE2ESpend({
+          totalTokens: meter.totalTokens,
+          dispatches: provisioned?.dispatches ?? 0,
+        }, tokenCap);
+        await rm(worktreeDir, { recursive: true, force: true });
+      }
+    }, () => meter, tokenCap);
+  });
 }

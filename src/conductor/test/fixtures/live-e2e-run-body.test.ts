@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AuthenticationReadiness, InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
+import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
 import { LIVE_E2E_PROVIDERS, type LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import type { LiveE2ERunBodyDependencies } from './live-e2e-run-body.js';
 
@@ -145,11 +146,13 @@ describe('runLiveE2ERunBody authentication source', () => {
 
     try {
       process.env.CODEX_API_KEY = 'live-codex-key';
+      vi.mocked(dumpPipelineDiagnostics).mockClear();
 
       await expect(runLiveE2ERunBody(descriptor, 1, {
         binaryAvailable: () => true,
         provisionProviderHome,
       })).rejects.toThrow(expectedError);
+      expect(dumpPipelineDiagnostics).toHaveBeenCalledTimes(1);
       expect({
         providerConstructions: createProvider.mock.calls.length,
         readinessChecks: readinessCheck.mock.calls.length,
