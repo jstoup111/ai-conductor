@@ -166,7 +166,6 @@ export interface EngineerSessionSummary {
 
 const CONFIRM_WORDS = new Set(['y', 'yes']);
 const DECLINE_WORDS = new Set(['n', 'no']);
-const reportedCorruptionEpisodes = new Set<string>();
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
@@ -241,6 +240,14 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
     authored: [],
     buildsRun: 0,
   };
+  const reportedCorruptionEpisodes = new Set<string>();
+  const reportLedgerCorruption = (err: CorruptLedgerError): void => {
+    const episodeKey = `${err.ledgerPath}\0${err.reason}`;
+    if (!reportedCorruptionEpisodes.has(episodeKey)) {
+      reportedCorruptionEpisodes.add(episodeKey);
+      io.print(`Intake ledger corruption: ${err.message}`);
+    }
+  };
 
   // ── 5.5 Intake: poll-on-launch → enqueue → process the oldest (FR-31) ───────
   // Polls every injected source once, buffers what they surface (adapters dedup
@@ -255,6 +262,11 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
       try {
         envs = await source.poll();
       } catch (err: unknown) {
+        if (err instanceof CorruptLedgerError) {
+          intakeLedgerIsCorrupt = true;
+          reportLedgerCorruption(err);
+          continue;
+        }
         io.print(`Intake poll failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       for (const e of envs) {
@@ -270,11 +282,7 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
         } catch (err: unknown) {
           if (err instanceof CorruptLedgerError) {
             intakeLedgerIsCorrupt = true;
-            const episodeKey = `${err.ledgerPath}\0${err.reason}`;
-            if (!reportedCorruptionEpisodes.has(episodeKey)) {
-              reportedCorruptionEpisodes.add(episodeKey);
-              io.print(`Intake ledger corruption: ${err.message}`);
-            }
+            reportLedgerCorruption(err);
             break;
           }
           // A single malformed envelope must not abort the whole intake phase.

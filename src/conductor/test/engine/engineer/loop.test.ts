@@ -1305,7 +1305,47 @@ describe('Task 17: intake capture preserves ledger durability', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe('Task 18: intake corruption episode handling', () => {
-  it('warns once and holds dispatch per corruption episode, then rearms after repair', async () => {
+  it('reports poll corruption and holds an already-queued claim without dispatching it', async () => {
+    await writeRegistry([]);
+
+    const { CorruptLedgerError } = await import('../../../src/engine/engineer/intake/ledger.js');
+    const { runEngineerMode } = await loadLoop();
+    const { io, text } = scriptedIo(['exit']);
+    const queuedEnvelope = {
+      id: 'queued-issue',
+      source: 'github-issues',
+      sourceRef: 'org/repo#queued',
+      text: 'already queued intake idea',
+      status: 'pending' as const,
+      receivedAt: '2026-08-14T00:00:00.000Z',
+    };
+    const claim = vi.fn(async () => queuedEnvelope);
+    const route = vi.fn(noopProvider.invoke);
+
+    await runEngineerMode({
+      route: { invoke: route },
+      io,
+      registryPath,
+      engineerDir,
+      sources: [{
+        poll: async () => {
+          throw new CorruptLedgerError(join(engineerDir, 'ledger.json'), 'invalid JSON');
+        },
+      }],
+      queue: {
+        enqueue: async () => undefined,
+        claim,
+        ack: async () => undefined,
+        release: async () => undefined,
+      },
+    });
+
+    expect(text()).toMatch(/intake ledger corruption.*invalid JSON/i);
+    expect(claim).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+  });
+
+  it('warns in each fresh session and rearms after repair', async () => {
     await writeRegistry([]);
 
     const { createLedger } = await import('../../../src/engine/engineer/intake/ledger.js');
@@ -1366,7 +1406,7 @@ describe('Task 18: intake corruption episode handling', () => {
       quarantineCount: quarantines.length,
       claimed,
     }).toEqual({
-      corruptionWarnings: 2,
+      corruptionWarnings: 3,
       firstQuarantineCount: 1,
       quarantineCount: 2,
       claimed: ['claim-3'],
