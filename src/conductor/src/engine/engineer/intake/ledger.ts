@@ -7,6 +7,7 @@
 import { readFile, writeFile, mkdir, rename, readdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   createConductStateLease,
   type ConductStateLease,
@@ -118,6 +119,19 @@ const ledgerStatuses: ReadonlySet<LedgerStatus> = new Set([
   'done',
   'needs-manual',
 ]);
+
+const TRANSIENT_LEASE_OWNER_METADATA_FAILURE =
+  'Unable to recover intake ledger lease: owner metadata is invalid or ambiguous';
+const TRANSIENT_LEASE_OWNER_METADATA_RETRIES = 10;
+
+function isTransientLeaseOwnerMetadataFailure(
+  acquired: Awaited<ReturnType<ConductStateLease['acquire']>>,
+): boolean {
+  return !acquired.ok &&
+    acquired.kind === 'recovery_refused' &&
+    (acquired.message === TRANSIENT_LEASE_OWNER_METADATA_FAILURE ||
+      acquired.message.includes('owner metadata is unavailable (ENOENT:'));
+}
 
 function isLedgerEntry(value: unknown): value is LedgerEntry {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -243,7 +257,18 @@ async function saveStore(path: string, store: LedgerStore): Promise<void> {
 }
 
 async function withLedgerLease<T>(lease: ConductStateLease, body: () => Promise<T>): Promise<T> {
-  const acquired = await lease.acquire();
+  let acquired = await lease.acquire();
+  // A competing process creates the lease directory immediately before writing
+  // owner.json. Retry that narrow creation window; a persistent ambiguity still
+  // fails closed below.
+  for (
+    let retry = 0;
+    isTransientLeaseOwnerMetadataFailure(acquired) && retry < TRANSIENT_LEASE_OWNER_METADATA_RETRIES;
+    retry += 1
+  ) {
+    await delay(10);
+    acquired = await lease.acquire();
+  }
   if (!acquired.ok) throw new Error(`Unable to acquire intake ledger lease: ${acquired.message}`);
   let bodySucceeded = false;
   try {
