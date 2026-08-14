@@ -1,5 +1,7 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -224,5 +226,73 @@ describe('runLiveE2ERunBody authentication source', () => {
       .rejects.toThrow('expected api-key, resolved cached-login');
     expect(resolveAuthenticationSource).toHaveBeenCalledTimes(1);
     expect(resolveAuthenticationSource).toHaveBeenCalledWith(provider);
+  });
+});
+
+describe('withProvisionedLiveProviderHome', () => {
+  it.each([
+    ['successful', undefined],
+    ['failed', new Error('simulated live-provider failure')],
+  ] as const)('removes the provisioned Codex home after a %s run without changing the checkout', async (_outcome, runError) => {
+    const { withProvisionedLiveProviderHome } = await import('./live-e2e-run-body.js') as {
+      withProvisionedLiveProviderHome: <T>(
+        sourceRoot: string,
+        credential: string | undefined,
+        provision: NonNullable<LiveE2ERunBodyDependencies['provisionProviderHome']>,
+        run: (home: { homeDir: string }) => Promise<T>,
+      ) => Promise<T>;
+    };
+    const checkoutDir = await mkdtemp(`${tmpdir()}/live-e2e-checkout-`);
+    const homesDir = await mkdtemp(`${tmpdir()}/live-e2e-codex-homes-`);
+    const checkoutFile = join(checkoutDir, 'tracked-fixture.txt');
+    const homeDir = join(homesDir, 'provisioned-codex-home');
+    const teardown = vi.fn(async () => { await rm(homeDir, { recursive: true, force: true }); });
+    const provision = vi.fn(async () => {
+      await writeFile(homeDir, 'isolated provider state');
+      return {
+        provider: 'codex' as const,
+        homeDir,
+        childEnv: () => ({ CODEX_HOME: homeDir }),
+        childArgs: () => [],
+        teardown,
+      };
+    });
+
+    try {
+      await writeFile(checkoutFile, 'checkout bytes must remain unchanged');
+      const before = await readFile(checkoutFile);
+
+      const outcome = await withProvisionedLiveProviderHome(
+        checkoutDir,
+        'live-codex-key',
+        provision,
+        async (home) => {
+          expect(home.homeDir).toBe(homeDir);
+          expect(existsSync(home.homeDir)).toBe(true);
+          if (runError) throw runError;
+          return 'completed';
+        },
+      ).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+
+      expect({
+        outcome: outcome.error instanceof Error ? outcome.error.message : outcome.value,
+        provisionCalls: provision.mock.calls.length,
+        teardownCalls: teardown.mock.calls.length,
+        homeExists: existsSync(homeDir),
+        checkoutBytes: await readFile(checkoutFile),
+      }).toEqual({
+        outcome: runError?.message ?? 'completed',
+        provisionCalls: 1,
+        teardownCalls: 1,
+        homeExists: false,
+        checkoutBytes: before,
+      });
+    } finally {
+      await rm(checkoutDir, { recursive: true, force: true });
+      await rm(homesDir, { recursive: true, force: true });
+    }
   });
 });
