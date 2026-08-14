@@ -542,6 +542,7 @@ export const HUMAN_REQUIRED_REASONS = {
 
 const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]> = {
   establish_pr: [
+    'publication_transition_indeterminate',
     'draft_pr_effect_unavailable',
     'draft_pr_skipped',
     'draft_pr_no-commits',
@@ -555,8 +556,9 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'pr_url_persistence_failed',
     'pr_identity_not_verified_after_establish',
   ],
-  verify_release_readiness: [],
+  verify_release_readiness: ['publication_transition_indeterminate'],
   author_pr_prose: [
+    'publication_transition_indeterminate',
     'authoring_effect_unavailable',
     'authoring_dispatch_failed',
     'authoring_not_verified_after_pass',
@@ -566,11 +568,13 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'authoring_required_after_judgment',
   ],
   write_shipped_record: [
+    'publication_transition_indeterminate',
     'shipped_record_effect_unavailable',
     'shipped_record_write_failed',
     'shipped_record_not_verified_after_write',
   ],
   judge_pr_prose: [
+    'publication_transition_indeterminate',
     'judgment_timed_out',
     'judgment_provider_unavailable',
     'judgment_dispatch_failed',
@@ -582,11 +586,13 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'judgment_completed_reobserve',
   ],
   ready_pr: [
+    'publication_transition_indeterminate',
     'presentation_repair_effect_unavailable',
     'presentation_repair_failed',
     'presentation_not_verified_after_repair',
   ],
   record_outcome: [
+    'publication_transition_indeterminate',
     'outcome_record_effect_unavailable',
     'outcome_record_write_failed',
     'outcome_record_not_verified_after_write',
@@ -1263,11 +1269,22 @@ export async function advancedPublicationTransition(
   before: PublicationSnapshot,
   after: PublicationSnapshot,
 ): Promise<
-  | Extract<AdvanceFinishPublicationResult, { kind: 'advanced' | 'human_required' }>
-  | undefined
+  Extract<
+    AdvanceFinishPublicationResult,
+    { kind: 'advanced' | 'human_required' | 'publication_retry' }
+  >
 > {
   const movement = publicationTransitionDimensionMovement(transition, before, after);
-  if (movement === 'indeterminate') return undefined;
+  // The post-effect observation is the authority for this guard. An
+  // indeterminate result cannot establish either advancement or a stuck
+  // transition, so it follows the ordinary bounded retry path.
+  if (movement === 'indeterminate') {
+    return {
+      kind: 'publication_retry',
+      transition,
+      reason: 'publication_transition_indeterminate',
+    };
+  }
   if (movement === 'unmoved') {
     const dimension = PUBLICATION_TRANSITION_DIMENSIONS[transition];
     const value = publicationTransitionDimensionValue(dimension, after);
