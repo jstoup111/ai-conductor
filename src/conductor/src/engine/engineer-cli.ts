@@ -1246,7 +1246,7 @@ export async function dispatchEngineer(
         if (error instanceof CorruptLedgerError) {
           printErr(
             `engineer claim: intake ledger is corrupt at ${error.ledgerPath}; ` +
-              `quarantine path: ${error.ledgerPath}.corrupt-*`,
+              `quarantine path: ${error.ledgerPath}.corrupt-*; ledger was not modified.`,
           );
           return 1;
         }
