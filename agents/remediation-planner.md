@@ -19,6 +19,9 @@ The `remediate` skill dispatches you with focused context:
 - **The blocking gaps** — the `FR-N` rows (or ADR findings) that block, each with its verdict,
   gap-class, and `file:line` evidence from the audit report.
 - **The Per-FR / per-finding detail** for those gaps (what's missing, what diverged, where).
+- **The `build_review` trigger** — when a failed `.pipeline/build-review.json` verdict dispatched
+  you, its rubric findings and reasons are the gap evidence; use the distinct gap id format
+  `build_review:<stem>`, never the finish-test-failure form `test:<stem>`.
 
 You will NOT re-audit and you will NOT read the whole codebase. The evidence you need is in the
 gap's report detail. Request a specific file only when reading it would change the disposition (e.g.

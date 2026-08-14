@@ -42,7 +42,7 @@ kicks back to does that.
 Read the blocking gaps or stall-question and their per-gap evidence from whichever trigger
 dispatched this skill (the conductor's dispatch context names it):
 
-**Gap-based inputs (prd-audit, architecture-review_as-built, finish failure):**
+**Gap-based inputs (prd-audit, architecture-review_as-built, finish failure, build_review trigger):**
 - `.pipeline/prd-audit.md` — the per-FR verdict table + Per-FR Detail (verdict, gap-class,
   `file:line` evidence). Blocking rows are the `FR-N` rows that are `MISSING`/`PARTIAL`/`DIVERGED`
   and **not** `ACCEPTED`.
@@ -52,6 +52,8 @@ dispatched this skill (the conductor's dispatch context names it):
   test failures: per failing file, the tests, one-line reasons, and finish's read on the cause.
   If finish left no artifact (older skill, or it crashed), fall back to running the failing part
   of the suite yourself to gather the evidence.
+- `.pipeline/build-review.json` — present when the `build_review` trigger dispatches remediation
+  after a FAIL verdict. Read its rubric findings and reasons as the per-gap evidence.
 
 **Stall-question input (daemon mode only, build_stall trigger):**
 - `.pipeline/build-stall-question.md` — present when the build step stalled with
@@ -160,7 +162,7 @@ The conductor reads this file to route, so the shape is exact:
 ```
 
 Field rules:
-- `id` — the blocking FR id (`FR-N`); for an as-built finding, the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`); for a stall-question, `stall:<slug>` where `<slug>` is a 1-3 word summary of the question topic (e.g. `stall:validation-layer`, `stall:acceptance-test-fidelity`).
+- `id` — the blocking FR id (`FR-N`); for an as-built finding, the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`); for a `build_review` trigger gap, `build_review:<stem>` (e.g. `build_review:completeness`); for a stall-question, `stall:<slug>` where `<slug>` is a 1-3 word summary of the question topic (e.g. `stall:validation-layer`, `stall:acceptance-test-fidelity`).
 - `disposition` — one of `build` | `acceptance_specs` | `architecture_review` | `plan` | `publication` | `halt`.
   Use `publication` when the shipped code is already correct and the ONLY defect is in what the
   pull request *says* — a placeholder or wrong-template body, a stale title, a missing `Closes`
