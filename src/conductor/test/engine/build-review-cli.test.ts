@@ -51,6 +51,26 @@ describe('build-review findings CLI', () => {
     expect(store.list).not.toHaveBeenCalled();
   });
 
+  it('refuses malformed state, lock failure, and a replacement lap observed after waiting for the shared store', async () => {
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!;
+    const nextLap = { ...aggregate, lapId: parseBuildReviewLapId('lap-next')!, results: { ...aggregate.results, scope: { ...aggregate.results.scope, lapId: parseBuildReviewLapId('lap-next')! } } };
+    const append = vi.fn();
+    const store = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append };
+    let reads = 0;
+    await expect(dispatchBuildReviewAccept({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: identity.id, rationale: 'risk' }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(++reads === 1 ? aggregate : nextLap), createStore: () => store, print: vi.fn(),
+    })).resolves.toBe(1);
+    expect(append).not.toHaveBeenCalled();
+
+    const locked = { list: vi.fn(async () => ({ ok: false as const, kind: 'lock' as const, message: 'occupied' })), append };
+    await expect(dispatchBuildReviewAccept({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: identity.id, rationale: 'risk' }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate), createStore: () => locked, print: vi.fn(),
+    })).resolves.toBe(1);
+    expect(append).not.toHaveBeenCalled();
+  });
+
   it('reads the canonical feature worktree and deterministically renders raw, accepted, unresolved, skipped, and infrastructure state', async () => {
     const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!;
     const print = vi.fn();

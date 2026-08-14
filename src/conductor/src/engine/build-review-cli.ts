@@ -128,6 +128,14 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const listed = await store.list(feature);
     if (!listed.ok) throw new Error(listed.message);
+    // The store wait can let a new coordinator lap replace the aggregate. Read
+    // again immediately after the shared-state boundary; never bind a human
+    // decision to the lap that happened to be current before that wait.
+    const current = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
+    if (!current || current.lapId !== requestedLap || current.snapshotDigest !== aggregate.snapshotDigest ||
+      JSON.stringify(current.results) !== JSON.stringify(aggregate.results)) {
+      throw new Error('current review lap changed while waiting for disposition state');
+    }
     const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records);
     if (!effective || !effective.unresolvedFindingIds.includes(identity.id)) throw new Error('finding is already accepted or not actionable');
     const appended = await store.append({ feature, finding: identity, sourceLapId: requestedLap, summary: identity.canonicalPayload.concernKind, rationale: command.rationale.trim(), operator: operator.trim() });
