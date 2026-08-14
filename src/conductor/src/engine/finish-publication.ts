@@ -428,6 +428,7 @@ export function nextFinishPublicationTransition(
 export type HumanRequiredReason =
   | 'judgment_refused'
   | 'judgment_halt_prose'
+  | 'halt_state_pr'
   | 'publication_transition_unmoved'
   | 'ambiguous_pr_identity'
   | 'invalid_shipped_record'
@@ -501,6 +502,10 @@ export const HUMAN_REQUIRED_REASONS = {
   judgment_halt_prose: {
     message: 'The PR contains halt prose that must not be overwritten automatically.',
     nextAction: 'Review the halt prose and resolve its stated blocker.',
+  },
+  halt_state_pr: {
+    message: 'The PR still carries a remediation halt signal and cannot be published automatically.',
+    nextAction: 'Resolve the stated blocker and clear the remediation signal before retrying FINISH.',
   },
   publication_transition_unmoved: {
     message: 'A FINISH publication transition did not change the state it owns.',
@@ -1131,7 +1136,7 @@ export type AdvanceFinishPublicationResult =
     }
   | {
       kind: 'human_required';
-      reason: 'judgment_halt_prose' | 'judgment_refused';
+      reason: 'halt_state_pr' | 'judgment_halt_prose' | 'judgment_refused';
       detail?: string;
     };
 
@@ -1495,6 +1500,10 @@ export async function advanceFinishPublication(
           : 'authoring_not_verified_after_pass',
       };
     });
+  }
+
+  if (snapshot.pr.identity === 'one' && snapshot.pr.prose === 'halt') {
+    return { kind: 'human_required', reason: 'halt_state_pr' };
   }
 
   if (isPrProseJudgmentNeeded(snapshot.pr)) {

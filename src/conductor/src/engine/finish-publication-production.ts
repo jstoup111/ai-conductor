@@ -12,13 +12,10 @@ import { dirname, join } from 'node:path';
 import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './conductor.js';
-import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from './pr-labels.js';
+import { type GhRunner, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
-import {
-  NEEDS_REMEDIATION_TITLE_PREFIX,
-  PR_BODY_FLOOR_MARKER,
-} from './halt-pr-rehabilitation.js';
+import { PR_BODY_FLOOR_MARKER, hasHaltSignal } from './halt-pr-rehabilitation.js';
 import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import {
   dispatchFinishRecord,
@@ -138,15 +135,15 @@ async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
 }
 
-function prProse(title: unknown, body: unknown): 'accepted' | 'stale' | 'placeholder' | 'halt' {
+function prProse(title: unknown, body: unknown, rawLabels: unknown): 'accepted' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
   const text = `${prTitle}\n${prBody}`.trim();
+  const labels = Array.isArray(rawLabels)
+    ? rawLabels.map((label) => String((label as { name?: unknown } | null)?.name ?? ''))
+    : [];
   if (!text) return 'placeholder';
-  if (
-    prTitle.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
-    prBody.includes(HALT_PR_BANNER_SENTINEL)
-  ) return 'halt';
+  if (hasHaltSignal({ title: prTitle, body: prBody, labels, isDraft: false })) return 'halt';
   if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
@@ -314,16 +311,22 @@ export function createProductionFinishPublicationCoordinator(
               if (!state.pr_url) return { state: 'missing' };
               try {
                 const { stdout } = await deps.gh(
-                  ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft'],
+                  ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft,labels'],
                   { cwd: deps.projectRoot },
                 );
-                const pr = JSON.parse(stdout) as { url?: unknown; title?: unknown; body?: unknown; isDraft?: unknown };
+                const pr = JSON.parse(stdout) as {
+                  url?: unknown;
+                  title?: unknown;
+                  body?: unknown;
+                  isDraft?: unknown;
+                  labels?: unknown;
+                };
                 if (typeof pr.url === 'string') {
                   proseRevisionByPr.set(pr.url, `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`);
                   return {
                       state: 'one' as const,
                       url: pr.url,
-                      prose: prProse(pr.title, pr.body),
+                      prose: prProse(pr.title, pr.body, pr.labels),
                       ready: !pr.isDraft,
                     };
                 }
