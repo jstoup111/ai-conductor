@@ -192,7 +192,6 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       tautology: false,
       scope: false,
       rootCause: false,
-      completeness: false,
     };
     const codexInvoke = vi.fn(
       async (options: InvokeOptions): Promise<InvokeResult> => {
@@ -327,8 +326,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       scope: false,
       rootCause: false,
       completeness: false,
-      wiring: false,
-    };
+      };
     const buildReview = await runner.run('build_review', {});
     const attribution = await runner.dispatchVerifier({
       residueIds: ['7'],
@@ -389,7 +387,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       ],
       legacyBuildReview: expect.objectContaining({
         success: false,
-        output: expect.stringMatching(/rubric\.wiring/i),
+        output: expect.stringMatching(/rubric\.completeness/i),
         preferredProvider: 'codex',
         actualProvider: 'codex',
       }),

@@ -35,7 +35,7 @@ exception — reserved for two human categories only.
 
 | Disposition | Use when | Routes to |
 |---|---|---|
-| **build** | impl / test / wiring bug with clear evidence; **implementation/test/documentation drift that preserves the approved architecture** | re-open BUILD with your tasks |
+| **build** | impl / test bug with clear evidence; **implementation/test/documentation drift that preserves the approved architecture** | re-open BUILD with your tasks |
 | **acceptance_specs** | the real miss is acceptance coverage — behavior isn't pinned by a failing spec | regenerate specs, then BUILD |
 | **architecture_review** | changing or clarifying **approved architecture** is required before the gap can be closed | re-run the architecture review |
 | **plan** | functionality that **is in scope** but the plan omitted it (a planning miss, not a design gap) | terminal needs-human HALT; never re-plans |

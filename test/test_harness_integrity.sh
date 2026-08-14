@@ -1372,7 +1372,7 @@ else
   fi
 
   architecture_review_skill="${HARNESS_DIR}/skills/architecture-review/SKILL.md"
-  if grep -qF 'adr-2026-08-11-wiring-judged-in-build-review.md' "$architecture_review_skill"; then
+  if grep -qF 'adr-2026-08-14-retire-build-review-wiring-rubric.md' "$architecture_review_skill"; then
     assert "architecture-review relates its unchanged SHIP sweep to BUILD-time judgement" 0
   else
     echo "    architecture-review lacks the BUILD-time wiring judgement ADR citation." | sed 's/^/  /'

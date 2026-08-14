@@ -171,8 +171,7 @@ describe('engine/conductor', () => {
                 scope: false,
                 rootCause: false,
                 completeness: false,
-                wiring: false,
-              },
+                },
             }),
           );
         }
@@ -245,8 +244,7 @@ describe('engine/conductor', () => {
                 scope: true,
                 rootCause: false,
                 completeness: false,
-                wiring: false,
-              },
+                },
             }),
           );
         }
@@ -1702,7 +1700,7 @@ describe('engine/conductor', () => {
         full,
         JSON.stringify({
           verdict: 'PASS',
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
         }),
       );
       if (mtimeMs !== undefined) {
@@ -11385,7 +11383,7 @@ describe('engine/conductor', () => {
               JSON.stringify({
                 verdict: 'PASS',
                 reasons: [],
-                rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+                rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
               }),
             );
           } else if (step === 'manual_test') {

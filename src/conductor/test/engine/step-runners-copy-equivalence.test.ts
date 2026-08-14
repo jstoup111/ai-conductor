@@ -42,8 +42,7 @@ describe('build_review copy equivalence', () => {
             scope: false,
             rootCause: false,
             completeness: false,
-            wiring: false,
-          },
+            },
         }),
       );
       return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
@@ -100,13 +99,12 @@ describe('build_review copy equivalence', () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
-  it('rejects a legacy incomplete grader rubric before accepting the complete five-key verdict', async () => {
+  it('rejects a legacy incomplete grader rubric before accepting the complete four-key verdict', async () => {
     await writeFile(planPath, '# Plan\n\nNo declared replication.\n');
     let rubric: Record<string, boolean> = {
       tautology: false,
       scope: false,
       rootCause: false,
-      completeness: false,
     };
     const invoke = vi.fn(async () => {
       await mkdir(join(projectDir, '.pipeline'), { recursive: true });
@@ -120,10 +118,10 @@ describe('build_review copy equivalence', () => {
 
     await expect(subject.run('build_review', {})).resolves.toMatchObject({
       success: false,
-      output: expect.stringMatching(/rubric\.wiring/i),
+      output: expect.stringMatching(/rubric\.completeness/i),
     });
 
-    rubric = { ...rubric, wiring: false };
+    rubric = { ...rubric, completeness: false };
     await expect(subject.run('build_review', {})).resolves.toMatchObject({
       success: true,
     });

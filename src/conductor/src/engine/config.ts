@@ -305,7 +305,8 @@ export function validateConfig(
     'build_progress_halt',
     // Retry-routing kill-switch (retry-classify-rerun-vs-route).
     'retry_routing',
-    // Build-review wiring-rubric entry points.
+    // Retired build-review wiring rubric. The key is still accepted so an
+    // existing consumer config does not hard-fail on upgrade; it is ignored.
     'wiring',
     // Kickback→build no-op escalation (adr-2026-07-13-kickback-build-no-op-escalation).
     'kickback_escalation',
@@ -774,25 +775,6 @@ export function validateConfig(
     for (const entry of obj.model_fallback_ladder) {
       if (typeof entry !== 'string' || entry === '') {
         return errVal('model_fallback_ladder must contain only non-empty strings');
-      }
-    }
-  }
-
-  // wiring — build-review entry points. Must be an object with an optional
-  // entry_points array of non-empty strings.
-  if (obj.wiring !== undefined) {
-    if (!isPlainObject(obj.wiring)) {
-      return errVal('wiring must be an object');
-    }
-    const wiring = obj.wiring as Record<string, unknown>;
-    if (wiring.entry_points !== undefined) {
-      if (!Array.isArray(wiring.entry_points)) {
-        return errVal('wiring.entry_points must be an array of strings');
-      }
-      for (const entry of wiring.entry_points) {
-        if (typeof entry !== 'string' || entry === '') {
-          return errVal('wiring.entry_points must contain only non-empty strings');
-        }
       }
     }
   }

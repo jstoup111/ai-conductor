@@ -130,7 +130,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               verdict: 'FAIL',
               reasons: [`diff touches ${flaggedPath} which is out of scope`],
               findings: { scope: [`diff touches ${flaggedPath} which is out of scope`] },
-              rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
+              rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
             }),
           );
           return {
@@ -239,7 +239,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               // not a stale-mirage, under any base.
               reasons: ['diff touches feat.txt which is out of scope'],
               findings: { scope: ['diff touches feat.txt which is out of scope'] },
-              rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
+              rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
             }),
           );
           return {
@@ -341,7 +341,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
                 verdict: 'FAIL',
                 reasons: ['diff touches feat.txt which is out of scope'],
                 findings: { scope: ['diff touches feat.txt which is out of scope'] },
-                rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
+                rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
               }),
             );
             return {
@@ -362,7 +362,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
                 verdict: 'FAIL',
                 reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
                 findings: { scope: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`] },
-                rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
+                rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
               }),
             );
             return {
@@ -386,7 +386,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
               verdict: 'FAIL',
               reasons: ['diff touches feat.txt which is out of scope'],
               findings: { scope: ['diff touches feat.txt which is out of scope'] },
-              rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
+              rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
             }),
           );
           return {
@@ -457,7 +457,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
                 verdict: 'FAIL',
                 reasons: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`],
                 findings: { scope: [`diff touches ${fixture.mergedOnlyPath} which is out of scope`] },
-                rubric: { tautology: false, scope: true, rootCause: false, completeness: false, wiring: false },
+                rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
               }),
             );
             return {
@@ -479,7 +479,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             .catch(() => true);
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
-            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }),
+            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { tautology: false, scope: false, rootCause: false, completeness: false } }),
           );
           return {
             success: true,
@@ -577,7 +577,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
-            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }),
+            JSON.stringify({ verdict: 'PASS', reasons: [], rubric: { tautology: false, scope: false, rootCause: false, completeness: false } }),
           );
           return {
             success: true,
@@ -628,7 +628,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
       calls.push(step);
       if (step === 'build_review') {
         await writeFile(join(repo, '.pipeline/build-review.json'), JSON.stringify({
-          verdict: 'PASS', reasons: [], rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+          verdict: 'PASS', reasons: [], rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
         }));
       }
       return { success: true };
@@ -672,7 +672,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     const runner: StepRunner = { run: async (step) => {
       if (step === 'build_review') await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
         verdict: 'FAIL', reasons: ['tautology: stale assertion'], findings: { tautology: ['stale assertion'] },
-        rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+        rubric: { tautology: true, scope: false, rootCause: false, completeness: false },
       }));
       return { success: true };
     } };
@@ -691,11 +691,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
   it.each([
     ['an incomplete rubric', /rubric\.completeness/, {
       verdict: 'PASS', reasons: [],
-      rubric: { tautology: false, scope: false, rootCause: false, wiring: false },
-    }],
-    ['wiring without actionable findings', /findings\.wiring/, {
-      verdict: 'FAIL', reasons: ['wiring failed'],
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
+      rubric: { tautology: false, scope: false, rootCause: false },
     }],
   ])('fails closed for %s before any retry can dispatch wiring_check', async (_label, expectedHalt, invalidVerdict) => {
     const fixture = await setupStaleTrackingRefFixture(dir);

@@ -143,7 +143,7 @@ function createFixtureAgentFake(
             tautology: false,
             scope: false,
             rootCause: false,
-            completeness: false, wiring: false },
+            completeness: false },
         }),
         'utf-8',
       );

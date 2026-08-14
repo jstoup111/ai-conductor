@@ -361,12 +361,13 @@ runs; in interactive runs it runs serially, after `/prd-audit` and before `/retr
 it does **no** new design, creates no new feasibility/complexity assessment, and reuses the drift
 logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
 
-**Relationship to BUILD-time judgement:** [ADR: Wiring reachability becomes a
-`build_review` rubric item](../../.docs/decisions/adr-2026-08-11-wiring-judged-in-build-review.md)
-moves the static reachability judgement to the every-tier BUILD gate. This §12 sweep is
-unchanged: when it runs at SHIP, it independently verifies the approved architecture against
-the shipped source and remains authoritative for the SHIP compliance verdict. It does not rely
-on BUILD proof as authority.
+**Relationship to BUILD-time judgement:** [ADR: The build_review wiring rubric is
+retired](../../.docs/decisions/adr-2026-08-14-retire-build-review-wiring-rubric.md) removes static
+reachability from the BUILD gate, superseding the relocation made by
+[adr-2026-08-11](../../.docs/decisions/adr-2026-08-11-wiring-judged-in-build-review.md). BUILD no
+longer judges reachability at all. This §12 sweep is unchanged: when it runs at SHIP, it
+independently verifies the approved architecture against the shipped source and remains
+authoritative for the SHIP compliance verdict. It never relied on BUILD proof as authority.
 
 **Scope (only this):**
 - Load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`) and the approved

@@ -3131,13 +3131,13 @@ TIER: M`,
     it.each([
       {
         name: 'complete five-flag PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
         success: true,
       },
-      ...(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const).map((missing) => ({
+      ...(['tautology', 'scope', 'rootCause', 'completeness'] as const).map((missing) => ({
         name: `PASS missing rubric.${missing}`,
         rubric: Object.fromEntries(
-          ['tautology', 'scope', 'rootCause', 'completeness', 'wiring']
+          ['tautology', 'scope', 'rootCause', 'completeness']
             .filter((name) => name !== missing)
             .map((name) => [name, false]),
         ),
@@ -3540,7 +3540,7 @@ TIER: M`,
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }), 'utf-8');
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false } }), 'utf-8');
           return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
         });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
@@ -3582,8 +3582,7 @@ TIER: M`,
             scope: false,
             rootCause: false,
             completeness: false,
-            wiring: false,
-          },
+            },
           codeStamp: headSha,
         });
       });
@@ -3629,7 +3628,7 @@ TIER: M`,
         const verdictPath = join(dir, '.pipeline', 'build-review.json');
         const invoke = vi.fn().mockImplementation(async () => {
           await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }), 'utf-8');
+          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false } }), 'utf-8');
           return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
         });
         const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };

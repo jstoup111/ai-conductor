@@ -183,8 +183,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
             scope: false,
             rootCause: false,
             completeness: false,
-            wiring: false,
-          },
+            },
         }),
       );
     } else if (step === 'wiring_check') {

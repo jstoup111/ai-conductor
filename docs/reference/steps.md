@@ -66,7 +66,8 @@ Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 5, SHIP 6.
 
 `wiring_check` is deprecated. It remains a gating, engine-native no-op solely for compatibility: it
 always succeeds, dispatches no agent, produces no evidence, and emits a deprecation notice. Static
-wiring reachability is instead an all-or-FAIL `build_review` rubric item.
+static reachability is no longer judged in BUILD: the `build_review` wiring rubric item was retired
+by `adr-2026-08-14-retire-build-review-wiring-rubric`, leaving four rubric items.
 
 ### Retiring a step safely
 

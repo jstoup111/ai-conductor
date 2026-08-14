@@ -43,16 +43,6 @@ attribution_audit_sample_pct: 10
 build_progress_halt:
   enabled: true
 
-# Build-review wiring contract. `entry_points` is supplied verbatim to the
-# build_review grader prompt as the declared production entry-point surface it
-# must judge; it is not an import-graph probe configuration.
-wiring:
-  entry_points:
-    - src/conductor/src/index.ts
-    - src/conductor/src/daemon-cli.ts
-    - src/conductor/src/intake-loop-cli.ts
-    - src/conductor/src/engine/engineer-cli.ts
-
 # Native pre-SHIP aggregate verification. The project-owned npm script runs
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
 # in one operation. Harness integrity remains a separate self-host gate.

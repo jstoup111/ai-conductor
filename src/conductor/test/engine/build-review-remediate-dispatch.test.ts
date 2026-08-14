@@ -45,7 +45,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['implementation does not cover the approved plan'],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
             }),
           );
         }
@@ -114,7 +114,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['implementation does not cover the approved plan'],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
             }),
           );
         }
@@ -188,8 +188,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
                 scope: false,
                 rootCause: false,
                 completeness: true,
-                wiring: false,
-              },
+                },
             }),
           );
         }
