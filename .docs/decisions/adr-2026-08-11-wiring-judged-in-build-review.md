@@ -1,7 +1,9 @@
 # ADR: Wiring reachability becomes a build_review rubric item
 
 **Date:** 2026-08-11
-**Status:** APPROVED
+**Status:** APPROVED — PARTIALLY SUPERSEDED by
+`adr-2026-08-13-engine-managed-build-review-rubric-branches` for single-dispatch topology and the
+no-new-dispatch cost claim; Wiring meaning remains approved
 **Deciders:** James Stoup (operator), architecture-review for #1496
 
 ## Context
@@ -90,6 +92,11 @@ a property of the code as written, not of runtime behavior, which remains `manua
 The all-or-FAIL rule extends from four items to five, and the `rubric` object in
 `.pipeline/build-review.json` gains a `wiring` boolean with a matching `findings.wiring` key. Verdicts
 written before this change lack the key and must be read as "not judged", never as a silent pass.
+
+> **Amended 2026-08-13 by #1542:** Wiring now runs in its own default-enabled rubric branch. Missing
+> or empty `config.wiring.entry_points` is represented as `skipped: missing-entry-points`, preserving
+> this ADR's not-judged behavior without calling it a pass. The extra branch is a new dispatch; the
+> static reachability definition and legacy aggregate compatibility remain authoritative.
 
 **On the deterministic-where-possible principle.** This removes deterministic machinery in favour of
 LLM judgement, which reads as a violation. It is not, for the reason in Finding 3: the deterministic

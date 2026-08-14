@@ -72,6 +72,14 @@ As the trust boundary, I want the grader fed only structurally-assembled inputs 
 - Given the dispatch, when inputs are assembled, then the prompt contains exactly: the `git diff <merge-base(default-branch, HEAD)>..HEAD` output, the plan document body, and the instruction to run the project test suite itself — assembled by engine code from git/fs, not by any agent.
 - Given the grader session, when it executes, then it runs the test suite and writes `.pipeline/build-review.json` with `{verdict, reasons[], rubric:{tautology, scope, rootCause}}`.
 
+> **Amended 2026-08-13 by #1542:** the singular-session and three-rubric topology above is
+> superseded. The engine now assembles one immutable input snapshot, dispatches one fresh session
+> per eligible rubric through the shared capped executor, and single-writes a backward-compatible
+> aggregate `.pipeline/build-review.json`. The input-starvation trust boundary remains unchanged.
+> The preceding code-valid `test_suite` PASS supplies current-HEAD green evidence; no rubric repeats
+> that run. The engine supplies Tautology's missing counterfactual through an isolated preflight that
+> keeps changed tests while substituting merge-base production code.
+
 #### Negative Paths
 - Given the maker's summary/transcript and `.pipeline/task-status.json` exist on disk, when the grader prompt is assembled, then a **structural test** asserts none of their content appears in the prompt (assert by construction — the assembly function's inputs are only git diff + plan path — and by prompt-content test, not convention).
 - Given `git merge-base` fails (detached/unborn edge), when input assembly errors, then the step fails with a diagnostic and the gate stays unsatisfied — never dispatch a grader with a partial/empty diff presented as complete.
@@ -80,6 +88,9 @@ As the trust boundary, I want the grader fed only structurally-assembled inputs 
 
 ### Done When
 - [ ] Grader dispatch uses a fresh one-shot session; unit test asserts `resume: false` + new session id.
+
+> **Amended 2026-08-13 by #1542:** this freshness check applies independently to every dispatched
+> rubric branch; no branch resumes the maker, a sibling, or a prior attempt.
 - [ ] Input-assembly function has a structural isolation test (prompt built from git diff + plan only; task-status/summary content absent).
 - [ ] Error paths (merge-base failure, runner death, empty diff) covered by tests, each ending unsatisfied.
 

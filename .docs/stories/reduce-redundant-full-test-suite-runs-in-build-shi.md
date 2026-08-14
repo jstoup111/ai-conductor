@@ -50,6 +50,14 @@ observing that the diff's tests pass firsthand.
   unchanged — the grader still writes `.pipeline/build-review.json` and still FAILs if any
   rubric item fails.
 
+> **Amended 2026-08-13 by #1542:** later approved work first extended the rubric to five items, and
+> #1542 now dispatches eligible rubric judgements independently before a single backward-compatible
+> aggregate write. Because the immediately preceding `test_suite` gate already proves current HEAD,
+> no rubric branch repeats the green-side scoped or full-suite run. The only test execution owned by
+> `build_review` is Tautology's isolated counterfactual preflight: changed tests against merge-base
+> production code. This supersedes the grader-run-HEAD wording above without restoring a full-suite
+> run inside `build_review`.
+
 **Negative path (a diff-scoped regression is still caught)**
 - Given a diff whose own new/changed test would fail without the diff, or that breaks a
   test in a file the diff touches,
@@ -73,6 +81,12 @@ signal.
 - Then completion is still derived from the verdict JSON predicate
   (`CUSTOM_COMPLETION_PREDICATES.build_review`) — a PASS still requires all three rubric
   items — and a FAIL still kicks back to build under the existing bounded self-heal.
+
+> **Amended 2026-08-13 by #1542:** effective PASS now requires at least one valid judgement and no
+> unresolved finding or infrastructure failure among non-skipped outcomes. The public completion
+> predicate and bounded kickback route remain authoritative. Cache hits reuse only validated
+> semantic rubric results and always materialize fresh current-lap branch and aggregate evidence, so
+> they do not relax the verdict-freshness floor.
 
 **Negative path (no free pass)**
 - Given a grader that cannot run the diff's scoped tests, or produces no/malformed

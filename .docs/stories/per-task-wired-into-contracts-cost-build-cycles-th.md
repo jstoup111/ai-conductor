@@ -27,6 +27,10 @@ As the build reviewer, I want to judge whether the diff's new production surface
 - Given the diff adds no new production surface at all, when the wiring item is judged, then it passes rather than failing for absence of evidence.
 - Given the wiring item fails, when the finding is written, then it never instructs the reader to edit plan notation, and never cites a `**Wired-into:**` line.
 - Given `config.wiring.entry_points` is absent or empty, when the wiring item is judged, then it reports "not judged" and does not fail the build — the item never passes or fails on an undefined premise.
+
+> **Amended 2026-08-13 by #1542:** the observable not-judged state above is represented as
+> `skipped: missing-entry-points` and does not dispatch the Wiring rubric branch. It remains visible
+> as reduced coverage and is neither a pass nor a failure.
 - Given a plan task states in its own Steps that it intentionally ships scaffolding a later task or feature will consume, when the grader judges that task's symbols, then the plan-stated intent is honored and the wiring item does not fail on them — the approved plan is already a grader input, so the committed plan text is the reviewable record of what was left unwired and why.
 - Given a symbol is unwired but no plan task states that intent, when the wiring item is judged, then it fails — silence is never an implicit waiver.
 
