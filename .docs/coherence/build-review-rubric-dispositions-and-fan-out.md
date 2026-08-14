@@ -5,6 +5,11 @@
 **Plan:** `.docs/plans/build-review-rubric-dispositions-and-fan-out.md`
 **Verdict:** COVERED — no gaps or contradictions
 
+> **Amended 2026-08-14 after the operator-directed post-BUILD plan repair:** Tasks 1-40 remain the
+> original implementation history. Tasks `rem-build-review-1` through `rem-build-review-8` restore
+> production reachability for behavior already traced below. The new task rows and affected story
+> counterparts are additive; no FR, story, outcome, or ADR row changed meaning.
+
 The staged intake marker identifies `jstoup111/ai-conductor#1542` but its `## Desired outcome`
 section contains no bullets, so the outcome row class is not required. The product FR, story, task,
 and current-change-set ADR layers all apply. Every verdict below was checked against the cited
@@ -41,31 +46,31 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
 | fr | fr-25 | story-25 | covered | Story 25 content-addressably reuses semantic rubric results while rematerializing current-lap evidence. |
 
 ## Stories
-| story | story-1 | task-4, task-5, task-6, task-7, task-8, task-9, task-10, task-11, task-20, task-23, task-24, task-27, task-40 | covered | Registry, skills, domain, dispatch, artifacts, join, and acceptance proof implement separate attribution. |
-| story | story-2 | task-1, task-3, task-20, task-21, task-23, task-40 | covered | Config, auxiliary semaphore use, coordinator dispatch, and acceptance proof cover bounded concurrency. |
-| story | story-3 | task-1, task-2, task-8, task-9, task-22, task-40 | covered | Default enablement, explicit disablement, prerequisite skips, and provider-zero assertions are planned. |
+| story | story-1 | task-4, task-5, task-6, task-7, task-8, task-9, task-10, task-11, task-20, task-23, task-24, task-27, task-40, task-rem-build-review-2, task-rem-build-review-8 | covered | Registry, skills, domain, provider-aware production dispatch, artifacts, join, and acceptance proof implement separate attribution. |
+| story | story-2 | task-1, task-3, task-20, task-21, task-23, task-40, task-rem-build-review-2, task-rem-build-review-8 | covered | Config, auxiliary semaphore use, provider policy, coordinator dispatch, and acceptance proof cover bounded concurrency. |
+| story | story-3 | task-1, task-2, task-8, task-9, task-22, task-40, task-rem-build-review-5, task-rem-build-review-8 | covered | Default enablement, explicit disablement, neutral prerequisite skips, and provider-zero assertions are planned. |
 | story | story-4 | task-2, task-22, task-40 | covered | Config and coordinator both refuse enabled-zero coverage before provider work. |
-| story | story-5 | task-1, task-2, task-3, task-4, task-10, task-20, task-21, task-23, task-40 | covered | Policy schema, validation, resolution, fingerprint, execution, and integration evidence align. |
-| story | story-6 | task-12, task-13, task-18, task-23, task-24, task-40 | covered | Snapshot, projections, cache rematerialization, coordinator, artifact identity, and acceptance checks align. |
-| story | story-7 | task-11, task-22, task-27, task-28, task-30, task-40 | covered | Closed outcomes, join, effective reducer, disposition application, and integration proof align. |
-| story | story-8 | task-5, task-6, task-7, task-8, task-9, task-11, task-16, task-18, task-19, task-21, task-23, task-24, task-26, task-27, task-28, task-40 | covered | All model, preflight, cache, branch, identity, join, and predicate failure seams fail closed. |
+| story | story-5 | task-1, task-2, task-3, task-4, task-10, task-20, task-21, task-23, task-40, task-rem-build-review-2, task-rem-build-review-8 | covered | Policy schema, validation, resolution, fingerprint, provider-aware skill execution, and integration evidence align. |
+| story | story-6 | task-12, task-13, task-18, task-23, task-24, task-40, task-rem-build-review-2, task-rem-build-review-3 | covered | Snapshot, projections, cache rematerialization, provider isolation, artifact identity, and acceptance checks align. |
+| story | story-7 | task-11, task-22, task-27, task-28, task-30, task-40, task-rem-build-review-5, task-rem-build-review-6, task-rem-build-review-7, task-rem-build-review-8 | covered | Closed outcomes, neutral skips, join, effective reducer, disposition-aware lifecycle consumers, and integration proof align. |
+| story | story-8 | task-5, task-6, task-7, task-8, task-9, task-11, task-16, task-18, task-19, task-21, task-23, task-24, task-26, task-27, task-28, task-40, task-rem-build-review-3, task-rem-build-review-5, task-rem-build-review-7, task-rem-build-review-8 | covered | All model, preflight, cache, branch, identity, join, and predicate failure seams fail closed. |
 | story | story-9 | task-5, task-6, task-7, task-8, task-9, task-11, task-25, task-26, task-27, task-40 | covered | Skill contracts emit complete typed findings and engine tasks validate/canonicalize every one. |
 | story | story-10 | task-31, task-40 | covered | Read-only CLI and acceptance scenario expose exact current unresolved state. |
-| story | story-11 | task-30, task-32, task-40 | covered | Post-join matching and authorized single-finding CLI mutation implement active-loop acceptance. |
-| story | story-12 | task-13, task-25, task-28, task-30, task-40 | covered | Projection, identity, reducer, and matching tests preserve concern identity across prose drift. |
-| story | story-13 | task-13, task-19, task-25, task-26, task-28, task-30, task-40 | covered | Cache invalidation and full-payload identity checks leave changed concerns blocking. |
+| story | story-11 | task-30, task-32, task-40, task-rem-build-review-6, task-rem-build-review-7, task-rem-build-review-8 | covered | Post-join matching, authorized mutation, and disposition-aware runner/completion implement active-loop acceptance. |
+| story | story-12 | task-13, task-25, task-28, task-30, task-40, task-rem-build-review-6, task-rem-build-review-8 | covered | Projection, identity, live reducer, and matching tests preserve concern identity across prose drift. |
+| story | story-13 | task-13, task-19, task-25, task-26, task-28, task-30, task-40, task-rem-build-review-6, task-rem-build-review-7, task-rem-build-review-8 | covered | Cache invalidation, full-payload identity, and lifecycle predicate checks leave changed concerns blocking. |
 | story | story-14 | task-29, task-31, task-33, task-40 | covered | Store, inspection, exhaustive refusal, and acceptance tests preserve state on invalid requests. |
 | story | story-15 | task-32, task-33, task-40 | covered | TTY/identity success and refusal cases exclude autonomous acceptance. |
-| story | story-16 | task-17, task-29, task-30, task-32, task-40 | covered | Cache/state paths, canonical feature identity, matching, and CLI mutation remain feature-local. |
+| story | story-16 | task-17, task-29, task-30, task-32, task-40, task-rem-build-review-6, task-rem-build-review-8 | covered | Cache/state paths, canonical feature identity, live matching, and CLI mutation remain feature-local. |
 | story | story-17 | task-29, task-32, task-33, task-40 | covered | Shared lock and exact-current compare cover lap races and atomic refusal. |
-| story | story-18 | task-34, task-35, task-36, task-37, task-40 | covered | Event variants, existing-ledger merge, metrics, renderers, and acceptance proof reuse one spine. |
+| story | story-18 | task-34, task-35, task-36, task-37, task-40, task-rem-build-review-4, task-rem-build-review-8 | covered | Event variants, production emitters, existing-ledger merge, metrics, renderers, and acceptance proof reuse one spine. |
 | story | story-19 | task-38, task-39, task-40 | covered | One deterministic renderer feeds retained PR, shipped record, and end-to-end evidence. |
-| story | story-20 | task-34, task-35, task-36, task-37, task-40 | covered | Event capture through calculation and presentation covers both requested metrics. |
-| story | story-21 | task-22, task-27, task-34, task-36, task-37, task-40 | covered | Closed skip outcomes flow into coverage but not raw judgement denominators. |
-| story | story-22 | task-1, task-2, task-3, task-10, task-22, task-40 | covered | Defaults, partial resolution, skill metadata, coordinator membership, and integration fixture align. |
-| story | story-23 | task-12, task-22, task-28, task-40 | covered | Disabled dispatch bypasses evidence assembly/judgement and stale evidence cannot become current PASS. |
+| story | story-20 | task-34, task-35, task-36, task-37, task-40, task-rem-build-review-4, task-rem-build-review-8 | covered | Production event capture through calculation and presentation covers both requested metrics. |
+| story | story-21 | task-22, task-27, task-34, task-36, task-37, task-40, task-rem-build-review-4, task-rem-build-review-5, task-rem-build-review-8 | covered | Emitted closed skip outcomes flow into coverage but not raw judgement denominators. |
+| story | story-22 | task-1, task-2, task-3, task-10, task-22, task-40, task-rem-build-review-1, task-rem-build-review-8 | covered | Defaults, partial resolution, skill metadata, production fan-out selection, and integration fixture align. |
+| story | story-23 | task-12, task-22, task-28, task-40, task-rem-build-review-1, task-rem-build-review-7, task-rem-build-review-8 | covered | Disabled dispatch bypasses judgement and stale/legacy evidence cannot become disposition-aware PASS. |
 | story | story-24 | task-5, task-12, task-14, task-15, task-16, task-23, task-40 | covered | Green proof, selector/patch derivation, isolated/cached RED execution, failures, and composition align. |
-| story | story-25 | task-4, task-13, task-17, task-18, task-19, task-22, task-23, task-24, task-28, task-34, task-36, task-40 | covered | Cache descriptors, keys/state, hits/misses, skip short-circuit, fresh evidence, events, metrics, and integration align. |
+| story | story-25 | task-4, task-13, task-17, task-18, task-19, task-22, task-23, task-24, task-28, task-34, task-36, task-40, task-rem-build-review-3, task-rem-build-review-8 | covered | Cache descriptors, keys/state, production writes, hits/misses, fresh evidence, events, metrics, and integration align. |
 
 ## Tasks
 | task | task-1 | story-1, story-2, story-3, story-5, story-22 | covered | Raw config and default fixtures directly support cited configuration behavior. |
@@ -108,6 +113,14 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
 | task | task-38 | story-19 | covered | Deterministic accepted-risk renderer/upsert feeds the retained PR and blocks omission. |
 | task | task-39 | story-19 | covered | Shipped records reuse identical accepted-risk data while preserving legacy structure. |
 | task | task-40 | story-1, story-2, story-3, story-4, story-5, story-6, story-7, story-8, story-9, story-10, story-11, story-12, story-13, story-14, story-15, story-16, story-17, story-18, story-19, story-20, story-21, story-22, story-23, story-24, story-25 | covered | Faithful-fake acceptance scenarios prove full composition and every negative boundary without external calls. |
+| task | task-rem-build-review-1 | story-22, story-23 | covered | Resolved defaults, not raw config presence, select fan-out while explicit whole-gate disablement remains a non-dispatch. |
+| task | task-rem-build-review-2 | story-1, story-2, story-5, story-6 | covered | The typed auxiliary adapter executes each registered skill through its complete provider policy without synthetic lifecycle steps. |
+| task | task-rem-build-review-3 | story-6, story-8, story-23, story-25 | covered | Validated cold/hit outcomes atomically materialize current-lap branch evidence and only cache safe judged semantics. |
+| task | task-rem-build-review-4 | story-18, story-20, story-21 | covered | Existing event variants gain production emitters and retain one schema/reader path across engine and CLI writers. |
+| task | task-rem-build-review-5 | story-3, story-7, story-8, story-21 | covered | Skip remains explicit reduced coverage but neither raw failure nor effective blocker when at least one valid judgement exists. |
+| task | task-rem-build-review-6 | story-7, story-11, story-12, story-13, story-16 | covered | The live runner applies exact feature-scoped dispositions after raw join while preserving unresolved siblings and raw evidence. |
+| task | task-rem-build-review-7 | story-7, story-8, story-11, story-13, story-23 | covered | The completion predicate shares the effective reducer only after strict freshness/schema checks and keeps legacy evidence fail-closed. |
+| task | task-rem-build-review-8 | story-1, story-2, story-3, story-5, story-7, story-8, story-11, story-12, story-13, story-16, story-18, story-20, story-21, story-22, story-23, story-25 | covered | Faithful fake boundaries exercise the real production runner, stores, predicate, and event persister without third-party calls. |
 
 ## ADRs in the Current Change Set
 | adr | adr-2026-07-07-build-review-judgement-gate | story-1, story-6, story-7, story-8, story-22, story-23, story-24 | covered | The amended/superseded decision retains one public engine gate, input starvation, fail-closed evidence, and routing; these stories preserve them while replacing one-shot topology and duplicate HEAD tests. |
@@ -124,3 +137,7 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
   reverted-production RED. Satisfying any one of those layers does not re-break another.
 - Future dependency check: the planned Tautology/Scope claim-or-bypass mechanism has stable finding
   anchors and a typed post-judgement seam, but no current story or task invents its semantics.
+- Amendment check: every appended task points back to an existing accepted story, and no task changes
+  rubric meaning, creates a parallel event channel, exposes resolutions to graders/cache keys, or
+  weakens freshness. Repairing one production seam does not negate another; no cross-layer
+  contradiction or kickback oscillation was found.
