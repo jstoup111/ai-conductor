@@ -453,8 +453,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 88 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(88);
+  it('is total over all 89 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(89);
   });
 
   it('routes verdict_freshness to every sink', () => {
