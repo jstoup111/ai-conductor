@@ -11,6 +11,7 @@ import {
   MergeBaseError,
 } from '../../src/engine/build-review-inputs.js';
 import type { BuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
@@ -319,6 +320,72 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           reason: 'Operator approved the amendment.',
         }],
         loose: [],
+      });
+    });
+
+    it('renders a #1502 sealed-artifact amendment only when its operator reseal is persisted', async () => {
+      const amendedPath = '.docs/stories/resealed-story.md';
+      const pairedPlanPath = join(dir, '.docs/plans/feature.md');
+      const rationale = 'Operator approved the corrected acceptance boundary verbatim.';
+      const evidenceSection = (prompt: string) => prompt.match(
+        /## Operator-authorized protected-artifact reseals\n\n[\s\S]*?(?=\n\n## Engine-derived removal evidence)/,
+      )?.[0] ?? '';
+      const withoutEvidenceSection = (prompt: string) => prompt.replace(
+        evidenceSection(prompt),
+        '<operator-reseal-evidence>',
+      );
+
+      await git('checkout', 'main');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await writeFile(pairedPlanPath, '# Approved plan\n\nAmend the sealed story.\n');
+      await writeFile(join(dir, amendedPath), 'approved story\n');
+      await git('add', '.');
+      await git('commit', '-m', 'decide: approve protected artifacts');
+      const baseline = await git('rev-parse', 'HEAD');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+      await git('checkout', '-b', 'operator-reseal-evidence');
+      await writeFile(join(dir, amendedPath), 'operator-approved amended story\n');
+      await git('add', amendedPath);
+      await git('commit', '-m', 'docs: amend sealed story');
+      const head = await git('rev-parse', 'HEAD');
+
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const writeSeal = (rebaselines: unknown[]) => writeFile(
+        join(dir, '.pipeline/protected-artifact-seal.json'),
+        JSON.stringify({
+          version: 2,
+          baselineCommit: head,
+          protectedArtifacts: [],
+          rebaselines,
+        }),
+      );
+      await writeSeal([{
+        trigger: 'operator-reseal',
+        paths: [amendedPath],
+        reason: rationale,
+        fromCommit: baseline,
+        toCommit: head,
+      }]);
+      const withResealPrompt = buildGraderPrompt(
+        await assembleBuildReviewInputs(realGit(), pairedPlanPath),
+      );
+
+      await writeSeal([]);
+      const withoutResealPrompt = buildGraderPrompt(
+        await assembleBuildReviewInputs(realGit(), pairedPlanPath),
+      );
+
+      expect({
+        populatedEvidence: [amendedPath, rationale].every((value) =>
+          evidenceSection(withResealPrompt).includes(value)),
+        emptyEvidence: evidenceSection(withoutResealPrompt).endsWith('(none)'),
+        otherwiseIdentical:
+          withoutEvidenceSection(withResealPrompt) === withoutEvidenceSection(withoutResealPrompt),
+      }).toEqual({
+        populatedEvidence: true,
+        emptyEvidence: true,
+        otherwiseIdentical: true,
       });
     });
 
