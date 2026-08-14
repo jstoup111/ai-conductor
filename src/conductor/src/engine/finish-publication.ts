@@ -1225,14 +1225,49 @@ async function emitPublicationEvent(
   }
 }
 
-async function advancedPublicationTransition(
+export async function advancedPublicationTransition(
   emit: PublicationEventEmitter | undefined,
   transition: PublicationTransition,
-): Promise<Extract<AdvanceFinishPublicationResult, { kind: 'advanced' }>> {
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+): Promise<Extract<AdvanceFinishPublicationResult, { kind: 'advanced' }> | undefined> {
+  if (!publicationTransitionDimensionMoved(transition, before, after)) return undefined;
+
   await emitPublicationEvent(emit, {
     type: 'finish_publication_transition', phase: 'completed', transition,
   });
   return { kind: 'advanced', transition };
+}
+
+function publicationTransitionDimensionMoved(
+  transition: PublicationTransition,
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+): boolean {
+  const dimension = PUBLICATION_TRANSITION_DIMENSIONS[transition];
+
+  switch (dimension) {
+    case 'pr.identity + branchPushed':
+      return before.pr.identity !== after.pr.identity || before.branchPushed !== after.branchPushed;
+    case 'releaseReadiness':
+      return before.releaseReadiness !== after.releaseReadiness;
+    case 'pr.prose':
+      return publicationPrProse(before) !== publicationPrProse(after);
+    case 'shippedRecord':
+      return before.shippedRecord !== after.shippedRecord;
+    case 'pr.ready':
+      return publicationPrReady(before) !== publicationPrReady(after);
+    case 'outcomeRecord':
+      return before.outcomeRecord !== after.outcomeRecord;
+  }
+}
+
+function publicationPrProse(snapshot: PublicationSnapshot): PublicationPullRequest['identity'] | 'accepted' | 'stale' | 'placeholder' | 'halt' | 'indeterminate' {
+  return snapshot.pr.identity === 'one' ? snapshot.pr.prose : snapshot.pr.identity;
+}
+
+function publicationPrReady(snapshot: PublicationSnapshot): PublicationPullRequest['identity'] | boolean {
+  return snapshot.pr.identity === 'one' ? snapshot.pr.ready : snapshot.pr.identity;
 }
 
 /**
@@ -1293,7 +1328,16 @@ export async function advanceFinishPublication(
         observedAfterEstablish.pr.identity === 'one' &&
         observedAfterEstablish.branchPushed === 'valid'
       ) {
-        return advancedPublicationTransition(input.emit, 'establish_pr');
+        return (await advancedPublicationTransition(
+          input.emit,
+          'establish_pr',
+          snapshot,
+          observedAfterEstablish,
+        )) ?? {
+          kind: 'publication_retry',
+          transition: 'establish_pr',
+          reason: 'pr_identity_not_verified_after_establish',
+        };
       }
       if (observedAfterEstablish.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
@@ -1342,7 +1386,18 @@ export async function advanceFinishPublication(
         observedAfterAuthoring.pr.prose !== 'placeholder' &&
         observedAfterAuthoring.pr.prose !== 'indeterminate'
       ) {
-        return advancedPublicationTransition(input.emit, 'author_pr_prose');
+        return (await advancedPublicationTransition(
+          input.emit,
+          'author_pr_prose',
+          snapshot,
+          observedAfterAuthoring,
+        )) ?? {
+          kind: 'publication_retry',
+          transition: 'author_pr_prose',
+          reason: dispatchFailure
+            ? 'authoring_dispatch_failed'
+            : 'authoring_not_verified_after_pass',
+        };
       }
 
       return {
@@ -1365,9 +1420,19 @@ export async function advanceFinishPublication(
         const result = mapPrProseJudgmentResult(
           await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
         );
-        return result.kind === 'advanced'
-          ? advancedPublicationTransition(input.emit, 'judge_pr_prose')
-          : result;
+        if (result.kind !== 'advanced') return result;
+
+        const observedAfterJudgment = await input.observe();
+        return (await advancedPublicationTransition(
+          input.emit,
+          'judge_pr_prose',
+          snapshot,
+          observedAfterJudgment,
+        )) ?? {
+          kind: 'publication_retry',
+          transition: 'judge_pr_prose',
+          reason: 'judgment_dispatch_failed',
+        };
       } catch {
         // The dispatcher can lose its response after the provider has returned.
         // Re-observation on the next FINISH pass is authoritative, so retain the
@@ -1412,7 +1477,18 @@ export async function advanceFinishPublication(
 
       const observedAfterWrite = await input.observe();
       if (observedAfterWrite.shippedRecord === 'valid') {
-        return advancedPublicationTransition(input.emit, 'write_shipped_record');
+        return (await advancedPublicationTransition(
+          input.emit,
+          'write_shipped_record',
+          snapshot,
+          observedAfterWrite,
+        )) ?? {
+          kind: 'publication_retry',
+          transition: 'write_shipped_record',
+          reason: writeFailure
+            ? 'shipped_record_write_failed'
+            : 'shipped_record_not_verified_after_write',
+        };
       }
       if (observedAfterWrite.shippedRecord === 'invalid') {
         return { kind: 'human_required', reason: 'invalid_shipped_record' };
@@ -1459,7 +1535,16 @@ export async function advanceFinishPublication(
         observedAfterPresentationRepair.pr.prose === 'accepted' &&
         observedAfterPresentationRepair.pr.ready
       ) {
-        return advancedPublicationTransition(input.emit, 'ready_pr');
+        return (await advancedPublicationTransition(
+          input.emit,
+          'ready_pr',
+          snapshot,
+          observedAfterPresentationRepair,
+        )) ?? {
+          kind: 'publication_retry',
+          transition: 'ready_pr',
+          reason: 'presentation_not_verified_after_repair',
+        };
       }
 
       return {
@@ -1522,10 +1607,13 @@ export async function advanceFinishPublication(
         nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome' &&
         observedAfterRecord.outcomeRecord === 'valid'
       ) {
-        await emitPublicationEvent(input.emit, {
-          type: 'finish_publication_transition', phase: 'completed', transition: 'record_outcome',
-        });
-        return { kind: 'complete' };
+        const advanced = await advancedPublicationTransition(
+          input.emit,
+          'record_outcome',
+          snapshot,
+          observedAfterRecord,
+        );
+        if (advanced) return { kind: 'complete' };
       }
 
       return {
