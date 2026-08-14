@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canonicalizeBuildReviewFindingIdentity,
+  canonicalizeBuildReviewFindingSet,
   type BuildReviewFindingIdentityInput,
 } from '../../src/engine/build-review-finding-identity.js';
 
@@ -77,5 +78,37 @@ describe('build-review finding identity', () => {
     const changedAnchor = canonicalizeBuildReviewFindingIdentity({ ...base, anchor: { ...base.anchor, path: 'src/b.ts' } });
 
     expect([changedConcern?.id, changedAnchor?.id]).not.toContain(canonicalizeBuildReviewFindingIdentity(base)?.id);
+  });
+
+  it('fails closed instead of omitting invalid, duplicate, or colliding finding records', () => {
+    const first = {
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+    };
+    const second = { ...first, anchor: { ...first.anchor, path: 'src/b.ts' } };
+    const firstId = canonicalizeBuildReviewFindingIdentity(first)?.id;
+
+    expect(canonicalizeBuildReviewFindingSet([
+      first,
+      { rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface', anchor: { rubric: 'scope', relation: 'outside-plan' } },
+    ])).toBeUndefined();
+    expect(canonicalizeBuildReviewFindingSet([{ ...first, contractVersion: 'v2' }])).toBeUndefined();
+    expect(canonicalizeBuildReviewFindingSet([first, first])).toBeUndefined();
+    expect(canonicalizeBuildReviewFindingSet([{ ...first, id: firstId }, { ...second, id: firstId }])).toBeUndefined();
+  });
+
+  it('retains every independently valid finding rather than truncating a grader result', () => {
+    const findings = canonicalizeBuildReviewFindingSet([
+      {
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      },
+      {
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'missing-approval',
+        anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'outside-plan' },
+      },
+    ]);
+
+    expect(findings).toHaveLength(2);
   });
 });

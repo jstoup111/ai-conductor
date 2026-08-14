@@ -108,3 +108,30 @@ export function canonicalizeBuildReviewFindingIdentity(value: unknown): BuildRev
     canonicalJson,
   });
 }
+
+/**
+ * Canonicalizes a complete grader finding list as one fail-closed operation.
+ * A malformed record or duplicate identity invalidates the entire result: it
+ * must never be silently dropped before the aggregate is joined.
+ */
+export function canonicalizeBuildReviewFindingSet(value: unknown): readonly BuildReviewFindingIdentity[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const identities: BuildReviewFindingIdentity[] = [];
+  const seenIds = new Map<string, string>();
+  for (const candidate of value) {
+    const source = record(candidate);
+    const identity = canonicalizeBuildReviewFindingIdentity(candidate);
+    if (!source || !identity || (source.id !== undefined && source.id !== identity.id)) return undefined;
+
+    const previousPayload = seenIds.get(identity.id);
+    if (previousPayload !== undefined) {
+      // Both identical duplicates and an impossible hash collision are unsafe:
+      // neither can select a disposition target unambiguously.
+      return undefined;
+    }
+    seenIds.set(identity.id, identity.canonicalJson);
+    identities.push(identity);
+  }
+  return Object.freeze(identities);
+}
