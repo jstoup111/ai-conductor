@@ -285,6 +285,43 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.repairContext).toEqual([repair]);
     });
 
+    it('threads operator reseals only when the plan belongs to the feature root', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/protected-artifact-seal.json'), JSON.stringify({
+        version: 2,
+        baselineCommit: 'baseline',
+        protectedArtifacts: [],
+        rebaselines: [{
+          trigger: 'operator-reseal',
+          fromCommit: 'before',
+          toCommit: 'after',
+          paths: ['.docs/stories/fixture.md'],
+          reason: 'Operator approved the amendment.',
+        }],
+      }));
+
+      const [featureInputs, looseInputs] = await Promise.all([
+        assembleBuildReviewInputs(realGit(), scopedPlanPath),
+        assembleBuildReviewInputs(realGit(), planPath),
+      ]);
+
+      expect({
+        feature: featureInputs.operatorReseals,
+        loose: looseInputs.operatorReseals,
+      }).toEqual({
+        feature: [{
+          fromCommit: 'before',
+          toCommit: 'after',
+          paths: ['.docs/stories/fixture.md'],
+          reason: 'Operator approved the amendment.',
+        }],
+        loose: [],
+      });
+    });
+
     it('classifies a closed provenance disposition for available, unwarranted, and unmatched repair context', async () => {
       const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
