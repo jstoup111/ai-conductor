@@ -84,6 +84,29 @@ describe('smoke capability declarations', () => {
     });
   });
 
+  it('gate-enforces a credential-present provider leg and checks its toolchain', () => {
+    const file = 'test/engine/daemon-e2e-live-codex.smoke.test.ts';
+
+    expect(resolveGateSmokeFile(file, 'credentialed:codex', {
+      hasCommand: () => false,
+      environment: {},
+    })).toEqual({
+      outcome: 'skipped',
+      provider: 'codex',
+      unmet: 'CODEX_API_KEY',
+    });
+
+    expect(resolveGateSmokeFile(file, 'credentialed:codex', {
+      hasCommand: () => false,
+      environment: { CODEX_API_KEY: 'token' },
+    })).toEqual({ outcome: 'failed', unmet: 'codex' });
+
+    expect(resolveGateSmokeFile(file, 'credentialed:codex', {
+      hasCommand: () => true,
+      environment: { CODEX_API_KEY: 'token' },
+    })).toEqual({ outcome: 'ran' });
+  });
+
   it('fails gate mode when no credentialed case executed', () => {
     expect(() => assertGateCredentialedExecution(['hermetic', 'toolchain'])).toThrow(
       'Gate-mode smoke run executed no credentialed test files',

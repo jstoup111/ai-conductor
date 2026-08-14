@@ -43,8 +43,18 @@ export type GateSmokeCapabilityResolution =
 
 /** The live-provider descriptors that own credentialed smoke capabilities. */
 const LIVE_SMOKE_PROVIDER_DESCRIPTORS = [
-  { capability: 'credentialed:claude', provider: 'claude', credentialEnvVar: 'CLAUDE_CODE_OAUTH_TOKEN' },
-  { capability: 'credentialed:codex', provider: 'codex', credentialEnvVar: 'CODEX_API_KEY' },
+  {
+    capability: 'credentialed:claude',
+    provider: 'claude',
+    credentialEnvVar: 'CLAUDE_CODE_OAUTH_TOKEN',
+    toolchainCommand: 'claude',
+  },
+  {
+    capability: 'credentialed:codex',
+    provider: 'codex',
+    credentialEnvVar: 'CODEX_API_KEY',
+    toolchainCommand: 'codex',
+  },
 ] as const;
 
 /** The executable required by each smoke file that needs the toolchain capability. */
@@ -170,12 +180,14 @@ function resolveGateSmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, GateSmokeCapabilityResolution> {
   const credentialedCapabilities = Object.fromEntries(
-    LIVE_SMOKE_PROVIDER_DESCRIPTORS.map(({ capability, provider, credentialEnvVar }) => [
+    LIVE_SMOKE_PROVIDER_DESCRIPTORS.map(({ capability, provider, credentialEnvVar, toolchainCommand }) => [
       capability,
       forceSkipsCapability(environment, capability)
         ? { outcome: 'failed', unmet: 'operator override' }
         : environment[credentialEnvVar]
-        ? { outcome: 'ran' }
+        ? hasCommand(toolchainCommand)
+          ? { outcome: 'ran' }
+          : { outcome: 'failed', unmet: toolchainCommand }
         : { outcome: 'skipped', provider, unmet: credentialEnvVar },
     ]),
   ) as Record<
