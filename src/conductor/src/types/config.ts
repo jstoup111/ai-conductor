@@ -635,12 +635,37 @@ export interface MergeableAutoresolveConfig {
   suiteCommand?: string;
 }
 
+/** The closed set of independently-executed build-review rubric branches. */
+export type BuildReviewRubricId =
+  | 'tautology'
+  | 'scope'
+  | 'rootCause'
+  | 'completeness'
+  | 'wiring';
+
+/** Optional execution overrides for one build-review rubric branch. */
+export interface BuildReviewRubricConfig {
+  enabled?: boolean;
+  llm_provider?: ProviderSelection;
+  model?: string;
+  effort?: EffortLevel;
+  model_fallback_ladder?: string[];
+  max_retries?: number;
+  escalate?: boolean;
+}
+
+/** Per-rubric settings keyed by the closed {@link BuildReviewRubricId} set. */
+export type BuildReviewRubricsConfig = Partial<
+  Record<BuildReviewRubricId, BuildReviewRubricConfig>
+>;
+
 /**
- * Configuration for the opt-in `build_review` judgement gate. Every field is
- * optional and follows the safe-by-default principle: absent/malformed → off.
+ * Configuration for the default-on `build_review` judgement gate. Legacy
+ * fields retain their tolerant per-key parsing; the rubric execution subtree
+ * is a closed policy map.
  */
 export interface BuildReviewConfig {
-  /** Enable the build_review gate. Default: false (off, legacy topology). */
+  /** Enable the build_review gate. Default: true. */
   enabled?: boolean;
   /** Enable the per-task work-happened commit floor gate. Default: true (on, fail-safe). */
   perTaskFloor?: boolean;
@@ -649,6 +674,10 @@ export interface BuildReviewConfig {
    * scope. Default: false (report-only).
    */
   scopeContainmentEnforced?: boolean;
+  /** Maximum concurrently-dispatched enabled rubric branches. Default: 5. */
+  maxParallel?: number;
+  /** Closed per-rubric enablement and execution-policy overrides. */
+  rubrics?: BuildReviewRubricsConfig;
 }
 
 /**

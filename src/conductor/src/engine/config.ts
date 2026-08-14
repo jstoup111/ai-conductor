@@ -49,6 +49,13 @@ const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'm
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
 const BUILT_IN_MODEL_PROVIDERS = new Set(['claude', 'codex']);
 const VALID_ADR_CORPORA = new Set(['change_set', 'repo_wide']);
+const BUILD_REVIEW_RUBRIC_IDS = [
+  'tautology',
+  'scope',
+  'rootCause',
+  'completeness',
+  'wiring',
+] as const;
 
 function normalizeKeyedBlock(
   blockName: string,
@@ -945,21 +952,44 @@ export function validateConfig(
           { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
           { key: 'perTaskFloor', isValid: (value) => typeof value === 'boolean' },
           { key: 'scopeContainmentEnforced', isValid: (value) => typeof value === 'boolean' },
+          { key: 'maxParallel', isValid: () => true },
+          { key: 'rubrics', isValid: () => true },
         ],
         warnings,
       );
       obj.build_review = {
         ...br,
         enabled: typeof br.enabled === 'boolean' ? br.enabled : true,
+        maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 5,
+        rubrics: Object.fromEntries(
+          BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
+            rubricId,
+            {
+              ...((br.rubrics as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
+              enabled:
+                typeof (br.rubrics as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
+                  ? (br.rubrics as Record<string, Record<string, unknown>>)[rubricId].enabled
+                  : true,
+            },
+          ]),
+        ),
       };
     } else {
       warnings.push(
         `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,
       );
-      obj.build_review = { enabled: true };
+      obj.build_review = {
+        enabled: true,
+        maxParallel: 5,
+        rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: true }])),
+      };
     }
   } else if (obj.build_review === null || materializeDefaults) {
-    obj.build_review = { enabled: true };
+    obj.build_review = {
+      enabled: true,
+      maxParallel: 5,
+      rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: true }])),
+    };
   }
 
   // ci_watch — CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
