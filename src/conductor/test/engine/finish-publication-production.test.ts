@@ -5,7 +5,11 @@ import { tmpdir } from 'node:os';
 import {
   createProductionFinishPublicationCoordinator,
   createProductionReleaseReadinessObserver,
+  publishAcceptedBuildReviewRiskToRetainedPr,
 } from '../../src/engine/finish-publication-production.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
@@ -15,6 +19,26 @@ import type { ConductState } from '../../src/types/index.js';
 const commandResult = { stdout: '' };
 
 describe('production FINISH publication composition', () => {
+  it('upserts accepted build-review risk into the retained PR and blocks unrenderable records', async () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+    })!;
+    const accepted: BuildReviewDispositionRecord = {
+      version: 'v1', feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
+      finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+    };
+    const gh = vi.fn(async () => commandResult);
+
+    await expect(publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [accepted], gh, cwd: '/project',
+    })).resolves.toEqual({ ok: true, changed: true });
+    expect(gh).toHaveBeenCalledWith(expect.arrayContaining(['pr', 'edit', 'https://github.com/acme/conductor/pull/1', '--body']), { cwd: '/project' });
+    await expect(publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [{ ...accepted, rationale: '' }], gh, cwd: '/project',
+    })).resolves.toMatchObject({ ok: false });
+  });
+
   it('reports a verified advance as publication progress', async () => {
     const advanceFinishPublication = vi.fn(async () => ({
       kind: 'advanced' as const,

@@ -35,6 +35,8 @@ import {
   type PrProseJudgmentResult,
 } from './finish-publication.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
+import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -81,6 +83,20 @@ export interface ProductionFinishPublicationDeps {
 export interface ProductionReleaseReadinessObserverInput {
   projectRoot: string;
   config?: HarnessConfig;
+}
+
+/** Applies the authoritative accepted-risk section to one already-retained PR. */
+export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
+  prUrl: string;
+  body: string;
+  records: readonly BuildReviewDispositionRecord[];
+  gh: GhRunner;
+  cwd: string;
+}): Promise<{ readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly message: string }> {
+  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records);
+  if (!upserted.ok) return upserted;
+  if (upserted.changed) await input.gh(['pr', 'edit', input.prUrl, '--body', upserted.body], { cwd: input.cwd });
+  return { ok: true, changed: upserted.changed };
 }
 
 /**
