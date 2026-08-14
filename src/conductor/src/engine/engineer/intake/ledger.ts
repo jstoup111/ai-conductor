@@ -271,8 +271,10 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
 
   return {
     async known(source: string, sourceRef: string): Promise<boolean> {
-      const store = await readStore(path);
-      return makeKey(source, sourceRef) in store;
+      return withLedgerLease(lease, async () => {
+        const store = await readStore(path);
+        return makeKey(source, sourceRef) in store;
+      });
     },
 
     async record({ source, sourceRef }: { source: string; sourceRef: string }): Promise<void> {
@@ -327,8 +329,10 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
     },
 
     async get(source: string, sourceRef: string): Promise<LedgerEntry | undefined> {
-      const store = await readStore(path);
-      return store[makeKey(source, sourceRef)];
+      return withLedgerLease(lease, async () => {
+        const store = await readStore(path);
+        return store[makeKey(source, sourceRef)];
+      });
     },
 
     async forget(source: string, sourceRef: string): Promise<void> {
@@ -343,8 +347,10 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
     },
 
     async list(): Promise<LedgerEntry[]> {
-      const store = await readStore(path);
-      return Object.values(store);
+      return withLedgerLease(lease, async () => {
+        const store = await readStore(path);
+        return Object.values(store);
+      });
     },
 
     async reopen(source: string, sourceRef: string): Promise<void> {

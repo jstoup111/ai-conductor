@@ -114,7 +114,14 @@ describe('loadStore()', () => {
     await chmod(lockedDir, 0o555);
 
     try {
-      const result = await createLedger(ledgerPath).list().then(
+      const result = await createLedger(ledgerPath, {
+        lease: {
+          acquire: async () => ({
+            ok: true,
+            handle: { release: async () => ({ ok: true }) },
+          }),
+        },
+      }).list().then(
         () => ({ error: undefined, errorIsTyped: false, original: undefined }),
         async (error: unknown) => ({
           error,
@@ -185,6 +192,159 @@ describe('loadStore()', () => {
 });
 
 describe('lease-bracketed ledger access', () => {
+  it.each([
+    ['known', (ledger: ReturnType<typeof createLedger>) => ledger.known('github-issues', 'o/a#1')],
+    ['get', (ledger: ReturnType<typeof createLedger>) => ledger.get('github-issues', 'o/a#1')],
+    ['list', (ledger: ReturnType<typeof createLedger>) => ledger.list()],
+  ])('refuses corrupt bytes and releases its lease through %s', async (_method, read) => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const events: string[] = [];
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        events.push('acquire');
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              events.push('release');
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    const ledger = createLedger(ledgerPath, { lease });
+    await writeFile(ledgerPath, '{ not valid json', 'utf8');
+
+    const refused = await read(ledger).then(
+      () => false,
+      (error: unknown) => error instanceof CorruptLedgerError,
+    );
+    await writeFile(ledgerPath, '{}', 'utf8');
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    expect({ refused, events }).toEqual({
+      refused: true,
+      events: ['acquire', 'release', 'acquire', 'release'],
+    });
+  });
+
+  it('queues list behind a concurrent write and returns only the complete saved state', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const events: string[] = [];
+    let releaseFirstWrite: (() => void) | undefined;
+    let firstWriteReleaseCalled: (() => void) | undefined;
+    const firstWriteRelease = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const firstWriteReleased = new Promise<void>((resolve) => {
+      firstWriteReleaseCalled = resolve;
+    });
+    let firstWriteFullyReleased: (() => void) | undefined;
+    const firstWriteReleaseFinished = new Promise<void>((resolve) => {
+      firstWriteFullyReleased = resolve;
+    });
+    let acquireCount = 0;
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        acquireCount += 1;
+        const acquisition = acquireCount;
+        events.push(`acquire-${acquisition}`);
+        if (acquisition > 1) await firstWriteReleaseFinished;
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              events.push(`release-${acquisition}`);
+              if (acquisition === 1) {
+                firstWriteReleaseCalled?.();
+                await firstWriteRelease;
+                firstWriteFullyReleased?.();
+              }
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    const ledger = createLedger(ledgerPath, { lease });
+
+    const write = ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await firstWriteReleased;
+    let listSettled = false;
+    const list = ledger.list().then((entries) => {
+      listSettled = true;
+      return entries;
+    });
+    await Promise.resolve();
+    const stateWhileWriteHeld = { listSettled, events: [...events] };
+    releaseFirstWrite?.();
+    await write;
+    const entries = await list;
+
+    expect({ stateWhileWriteHeld, entries }).toEqual({
+      stateWhileWriteHeld: { listSettled: false, events: ['acquire-1', 'release-1', 'acquire-2'] },
+      entries: [expect.objectContaining({ source: 'github-issues', sourceRef: 'o/a#1' })],
+    });
+  });
+
+  it('queues a mutation while a read still owns the lease', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const events: string[] = [];
+    let releaseRead: (() => void) | undefined;
+    let readReleaseCalled: (() => void) | undefined;
+    const readRelease = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readReleased = new Promise<void>((resolve) => {
+      readReleaseCalled = resolve;
+    });
+    let readFullyReleased: (() => void) | undefined;
+    const readReleaseFinished = new Promise<void>((resolve) => {
+      readFullyReleased = resolve;
+    });
+    let acquireCount = 0;
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        acquireCount += 1;
+        const acquisition = acquireCount;
+        events.push(`acquire-${acquisition}`);
+        if (acquisition > 1) await readReleaseFinished;
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              events.push(`release-${acquisition}`);
+              if (acquisition === 1) {
+                readReleaseCalled?.();
+                await readRelease;
+                readFullyReleased?.();
+              }
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    const ledger = createLedger(ledgerPath, { lease });
+
+    const read = ledger.list();
+    await readReleased;
+    let mutationSettled = false;
+    const mutation = ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }).then(() => {
+      mutationSettled = true;
+    });
+    await Promise.resolve();
+    const stateWhileReadHeld = { mutationSettled, events: [...events] };
+    releaseRead?.();
+    await Promise.all([read, mutation]);
+
+    expect(stateWhileReadHeld).toEqual({
+      mutationSettled: false,
+      events: ['acquire-1', 'release-1', 'acquire-2'],
+    });
+  });
+
   it('acquires before record loads, releases after save, and releases when record throws', async () => {
     const ledgerPath = join(dir, 'ledger.json');
     const events: string[] = [];
