@@ -9,7 +9,12 @@ import {
 import { classifyReleasePublication as classifyReleasePublicationFromIndex } from '../../src/index.js';
 
 describe('engine/release-publisher-action — release PR provenance and retry safety (Tasks 14–16)', () => {
-  const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
+  const config = {
+    branch: 'release/pending',
+    base: 'main',
+    appLogin: 'release-app[bot]',
+    stableBranch: 'stable',
+  };
 
   it('classifies a designated merged release PR as publishable with its resolved version without mutating', async () => {
     const { git, github } = dependencies();
@@ -123,6 +128,7 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
       })),
       readAnnotatedTag: vi.fn(async (): Promise<{ commit: string } | undefined> => undefined),
       createAnnotatedTag: vi.fn(async () => undefined),
+      updateStableBranch: vi.fn(async () => undefined),
     };
     const github = {
       findMergedPullRequestByMergeCommit: vi.fn(async () => ({
@@ -155,6 +161,22 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
       title: 'v1.2.4',
       body: '### Fixed\n\n- Publish only approved releases.\n',
       target: 'merged-release-head',
+    });
+  });
+
+  it('advances the configured stable branch to the published commit', async () => {
+    const { git, github } = dependencies();
+
+    await runReleasePublisherAction({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    });
+
+    expect(git.updateStableBranch).toHaveBeenCalledWith({
+      branch: 'stable',
+      commit: 'merged-release-head',
     });
   });
 
@@ -339,6 +361,7 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
         readCommitFiles: vi.fn<ReleasePublisherGit['readCommitFiles']>(async () => ({ VERSION: '1.2.4\n', 'CHANGELOG.md': '# Changelog\n\n## [1.2.4] - 2026-08-02\n\nApproved.\n' })),
         readAnnotatedTag: vi.fn(async (): Promise<{ commit: string } | undefined> => undefined),
         createAnnotatedTag: vi.fn(async () => undefined),
+        updateStableBranch: vi.fn(async () => undefined),
       },
       github: {
         findMergedPullRequestByMergeCommit: vi.fn(async () => ({ number: 42, headCommit: 'release-head-42', ...pullRequest })),
