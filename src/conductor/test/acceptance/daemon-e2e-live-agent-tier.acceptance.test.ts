@@ -26,6 +26,10 @@ const FIXTURE_PATH = join(
   CONDUCTOR_ROOT,
   'test/engine/daemon-e2e-fixture.test.ts',
 );
+const LIVE_RUN_BODY_PATH = join(
+  CONDUCTOR_ROOT,
+  'test/fixtures/live-e2e-run-body.ts',
+);
 const WORKFLOW_PATH = join(REPO_ROOT, '.github/workflows/live-daemon-e2e.yml');
 
 async function requiredSource(path: string): Promise<string> {
@@ -37,9 +41,12 @@ async function requiredSource(path: string): Promise<string> {
 
 describe('live-agent daemon E2E tier (#1124)', () => {
   it('wires the real Claude provider through the daemon fixture and asserts outcomes, not agent choices', async () => {
-    const source = await requiredSource(LIVE_SMOKE_PATH);
+    const [smoke, source] = await Promise.all([
+      requiredSource(LIVE_SMOKE_PATH),
+      requiredSource(LIVE_RUN_BODY_PATH),
+    ]);
 
-    expect(source).toMatch(/new\s+ClaudeProvider\s*\(/);
+    expect(smoke).toMatch(/runLiveE2ERunBody\s*\(\s*claude\s*,\s*tokenCap\s*\)/);
     expect(source).toMatch(/new\s+DefaultStepRunner\s*\(/);
     expect(source).toMatch(/runDaemon\s*\(/);
     expect(source).toMatch(/class\s+ProvisionedHome\s+implements\s+LLMProvider/);
@@ -54,18 +61,25 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(source).not.toMatch(/providerCalls\s*[:),]/);
     expect(source).not.toContain('test: complete fixture task');
     expect(source).not.toMatch(/retry(?:Count|Attempts?)\s*[:=]/i);
+    expect(source).toMatch(/expect\(\{[\s\S]*terminal:\s*await\s+hasSuccessfulTerminalState[\s\S]*madeCommit:\s*commitSha\.trim\(\)\s*!==\s*baselineSha\?\.trim\(\)[\s\S]*touchedFixture:[\s\S]*taskTrailer:[\s\S]*\}\)\.toEqual\(\{\s*terminal:\s*true,\s*madeCommit:\s*true,\s*touchedFixture:\s*true,\s*taskTrailer:\s*true\s*\}\)/);
   });
 
   it('combines an accumulated token cap with an independent workflow wall-clock timeout', async () => {
-    const [smoke, workflow] = await Promise.all([
+    const [smoke, runBody, workflow] = await Promise.all([
       requiredSource(LIVE_SMOKE_PATH),
+      requiredSource(LIVE_RUN_BODY_PATH),
       requiredSource(WORKFLOW_PATH),
     ]);
 
-    expect(smoke).toMatch(/tokenUsage/);
+    expect(runBody).toMatch(/tokenUsage/);
     expect(smoke).toMatch(/process\.env\.[A-Z0-9_]*TOKEN[A-Z0-9_]*CAP/);
-    expect(smoke).toMatch(/console\.(?:log|info)\([^)]*(?:token|cost)/i);
-    expect(smoke).toMatch(/(?:cap|limit)[^\n]*(?:observed|total)|(?:observed|total)[^\n]*(?:cap|limit)/i);
+    expect(runBody).toMatch(/console\.(?:log|info)\([^)]*(?:token|cost)/i);
+    expect(runBody).toMatch(/(?:cap|limit)[^\n]*(?:observed|total)|(?:observed|total)[^\n]*(?:cap|limit)/i);
+    expect(runBody).toMatch(/expect\(meter\.totalTurns\)\.toBeGreaterThan\(0\)/);
+    expect(runBody).toMatch(/expect\(meter\.totalTokens\)\.toBeGreaterThan\(0\)/);
+    expect(runBody).toMatch(/assertTokenCap\(meter\.totalTokens,\s*meter\.unmetered,\s*tokenCap\)/);
+    expect(runBody).toMatch(/const\s+STEPS_ALLOWED_UNMETERED[^=]*=\s*\[\s*['\"]finish['\"]\s*\]/);
+    expect(runBody).toMatch(/meter\.unmeteredSteps\.filter\([\s\S]*!STEPS_ALLOWED_UNMETERED\.includes/);
     expect(workflow).toMatch(/timeout-minutes:\s*[1-9][0-9]*/);
   });
 
@@ -83,10 +97,11 @@ describe('live-agent daemon E2E tier (#1124)', () => {
   });
 
   it('keeps the live workflow advisory to merges and fail-closed for reusable gating callers', async () => {
-    const [workflow, ci, smoke] = await Promise.all([
+    const [workflow, ci, smoke, runBody] = await Promise.all([
       requiredSource(WORKFLOW_PATH),
       requiredSource(join(REPO_ROOT, '.github/workflows/ci.yml')),
       requiredSource(LIVE_SMOKE_PATH),
+      requiredSource(LIVE_RUN_BODY_PATH),
     ]);
 
     expect(workflow).toMatch(/workflow_dispatch\s*:/);
@@ -105,8 +120,8 @@ describe('live-agent daemon E2E tier (#1124)', () => {
 
     expect(smoke).toMatch(/describe\.skipIf\s*\(/);
     expect(smoke).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
-    expect(smoke).toMatch(/delete\s+process\.env\.AI_CONDUCTOR_NO_REAL_EXEC/);
-    expect(smoke).toMatch(/expect\(process\.env\.AI_CONDUCTOR_NO_REAL_EXEC\)\.toBeUndefined\(\)/);
+    expect(runBody).toMatch(/delete\s+process\.env\.AI_CONDUCTOR_NO_REAL_EXEC/);
+    expect(runBody).toMatch(/expect\(process\.env\.AI_CONDUCTOR_NO_REAL_EXEC\)\.toBeUndefined\(\)/);
   });
 
   it('routes the live workflow through the full smoke entry point without running third-party smoke cases in acceptance', async () => {
