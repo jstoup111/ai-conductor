@@ -157,6 +157,8 @@ export interface ParkedEntry {
 }
 
 export interface InheritedState {
+  /** Optional read-only build-review summary; skipped coverage is never a pass. */
+  buildReviewMetrics?: { lapsToPass?: number; skipped: number; cacheHits: number; infrastructureFailures: number };
   halted: HaltedEntry[];
   inProgress: InProgressEntry[];
   eligible: EligibleEntry[];
@@ -848,6 +850,10 @@ export function renderDashboard(
 ): string {
   const lines: string[] = [];
   lines.push('── inherited state ──────────────────────────────────────────');
+  if (state.buildReviewMetrics) {
+    const metrics = state.buildReviewMetrics;
+    lines.push(`BUILD REVIEW: laps-to-pass=${metrics.lapsToPass ?? 'not reached'}; reduced coverage (skipped, not pass)=${metrics.skipped}; cache-hits=${metrics.cacheHits}; infrastructure-failures=${metrics.infrastructureFailures}`);
+  }
 
   // PARKED (FR-6) has ABSOLUTE precedence over every other group: it renders
   // FIRST, and a parked slug is excluded from HALTED, PROCESSED, IN-PROGRESS,
