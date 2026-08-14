@@ -45,6 +45,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review no longer flags diff-required fixture relocations as Tautology failures when a production hunk in the same diff forces the path move. ([implementation PR #1546](https://github.com/jstoup111/ai-conductor/pull/1546)).
 - build_review no longer flags diff-required fixture relocations as Tautology failures when a production hunk in the same diff forces the path move. ([implementation PR #1549](https://github.com/jstoup111/ai-conductor/pull/1549)).
 - Rebase-invalidated test failures are now durably matched to the base advance that caused them via the event spine, so build_review reliably receives repair context instead of losing it to an overwritten transient signal. ([implementation PR #1543](https://github.com/jstoup111/ai-conductor/pull/1543)).
+- Self-host daemon runs now sweep and reclaim leaked provider scratch homes left behind by abruptly interrupted attempts, instead of leaving them to accumulate. ([implementation PR #1495](https://github.com/jstoup111/ai-conductor/pull/1495)).
 
 ## Migration
 
