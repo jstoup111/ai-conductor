@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
-import { expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -139,6 +139,17 @@ export function liveProviderAvailable(descriptor: LiveE2EProviderDescriptor): bo
   } catch {
     return false;
   }
+}
+
+export function defineLiveE2EProviderSmoke(descriptor: LiveE2EProviderDescriptor): void {
+  const tokenCap = Number(process.env.DAEMON_E2E_LIVE_TOKEN_CAP ?? '100000');
+  const shouldRun = liveProviderAvailable(descriptor);
+
+  describe.skipIf(!shouldRun)(`daemon E2E with real ${descriptor.id} provider`, () => {
+    it('finishes a seeded daemon fixture with a trailered task commit', async () => {
+      await runLiveE2ERunBody(descriptor, tokenCap);
+    }, 20 * 60_000);
+  });
 }
 
 export async function assertDescriptorAuthenticationSource(
