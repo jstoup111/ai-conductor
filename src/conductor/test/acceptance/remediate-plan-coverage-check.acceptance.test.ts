@@ -81,8 +81,9 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect(baselinePassingTest).not.toBeNull();
   });
 
-  it('requires plan rationale evidence and makes plan terminal', async () => {
+  it('requires plan rationale evidence, makes plan terminal, and retains autonomous DECIDE refusal', async () => {
     const text = await contract();
+    const policy = await readFile(join(REPO_ROOT, DECIDE_ENTRY_POLICY), 'utf8');
 
     const rationaleEvidence = text.match(
       /`plan` rationale must name the examined plan task IDs and why none admits the fix/i,
@@ -93,6 +94,7 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
 
     expect(rationaleEvidence).not.toBeNull();
     expect(terminalPlan).not.toBeNull();
+    expect(policy).toMatch(/const UNGRANTABLE_STEP:\s*StepName\s*=\s*'plan';/);
   });
 
   it('preserves the sibling trigger guidance and its routes', async () => {
@@ -125,10 +127,4 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect(text).not.toMatch(/\(?re-plan\)?, then build/i);
     expect(text).not.toMatch(/so re-plan it/i);
   });
-});
-
-it('keeps the ungrantable autonomous DECIDE target bound to plan', async () => {
-  const policy = await readFile(join(REPO_ROOT, DECIDE_ENTRY_POLICY), 'utf8');
-
-  expect(policy).toMatch(/const UNGRANTABLE_STEP:\s*StepName\s*=\s*'plan';/);
 });
