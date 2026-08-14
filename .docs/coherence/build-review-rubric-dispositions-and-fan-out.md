@@ -41,9 +41,6 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
 | fr | fr-25 | story-25 | covered | Story 25 content-addressably reuses semantic rubric results while rematerializing current-lap evidence. |
 
 ## Stories
-
-| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
-|---|---|---|---|---|
 | story | story-1 | task-4, task-5, task-6, task-7, task-8, task-9, task-10, task-11, task-20, task-23, task-24, task-27, task-40 | covered | Registry, skills, domain, dispatch, artifacts, join, and acceptance proof implement separate attribution. |
 | story | story-2 | task-1, task-3, task-20, task-21, task-23, task-40 | covered | Config, auxiliary semaphore use, coordinator dispatch, and acceptance proof cover bounded concurrency. |
 | story | story-3 | task-1, task-2, task-8, task-9, task-22, task-40 | covered | Default enablement, explicit disablement, prerequisite skips, and provider-zero assertions are planned. |
@@ -71,9 +68,6 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
 | story | story-25 | task-4, task-13, task-17, task-18, task-19, task-22, task-23, task-24, task-28, task-34, task-36, task-40 | covered | Cache descriptors, keys/state, hits/misses, skip short-circuit, fresh evidence, events, metrics, and integration align. |
 
 ## Tasks
-
-| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
-|---|---|---|---|---|
 | task | task-1 | story-1, story-2, story-3, story-5, story-22 | covered | Raw config and default fixtures directly support cited configuration behavior. |
 | task | task-2 | story-3, story-4, story-5, story-22 | covered | Negative validation implements explicit-disable and fail-closed policy boundaries. |
 | task | task-3 | story-2, story-5, story-22 | covered | Resolved policy/default precedence implements independent execution settings. |
@@ -116,9 +110,6 @@ artifact text; the consistency pass found no cross-layer contradiction or oscill
 | task | task-40 | story-1, story-2, story-3, story-4, story-5, story-6, story-7, story-8, story-9, story-10, story-11, story-12, story-13, story-14, story-15, story-16, story-17, story-18, story-19, story-20, story-21, story-22, story-23, story-24, story-25 | covered | Faithful-fake acceptance scenarios prove full composition and every negative boundary without external calls. |
 
 ## ADRs in the Current Change Set
-
-| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
-|---|---|---|---|---|
 | adr | adr-2026-07-07-build-review-judgement-gate | story-1, story-6, story-7, story-8, story-22, story-23, story-24 | covered | The amended/superseded decision retains one public engine gate, input starvation, fail-closed evidence, and routing; these stories preserve them while replacing one-shot topology and duplicate HEAD tests. |
 | adr | adr-2026-07-21-completeness-as-build-review-rubric | story-1, story-3, story-7, story-9, story-22 | covered | Completeness meaning and default-on holistic plan comparison remain; explicit disable is visible reduced coverage as the amendment requires. |
 | adr | adr-2026-08-11-wiring-judged-in-build-review | story-1, story-3, story-7, story-9, story-21, story-22 | covered | Wiring meaning, entry-point premise, and not-judged behavior remain; fan-out maps missing premise to a visible skip rather than PASS. |
