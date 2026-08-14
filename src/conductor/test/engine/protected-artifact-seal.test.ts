@@ -257,12 +257,12 @@ it('reads only operator reseals from persisted v2 lineage', async () => {
     operatorReseal,
   ]);
 
-  await expect(Promise.all([
+  expect([
     proactiveRebases,
     defensiveHistoryRewrites,
     unknownTriggers,
-    readOperatorReseals(repo),
-  ])).resolves.toEqual([[], [], [], [{
+    await readOperatorReseals(repo),
+  ]).toEqual([[], [], [], [{
     fromCommit: commits[3],
     toCommit: commits[4],
     paths: ['.docs/stories/feature.md'],
