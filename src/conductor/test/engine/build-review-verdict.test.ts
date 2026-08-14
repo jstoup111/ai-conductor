@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_VERDICT,
+  canonicalizeBuildReviewGraderVerdict,
   validateBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
@@ -24,6 +25,88 @@ describe('engine/build-review verdict wiring contract', () => {
     await writeFile(path, JSON.stringify(verdict));
     return dir;
   }
+
+  it('derives the canonical all-pass rubric from an empty failed-rubric list', () => {
+    expect(canonicalizeBuildReviewGraderVerdict({
+      reasons: [],
+      failedRubrics: [],
+    })).toEqual({
+      ok: true,
+      verdict: 'PASS',
+      reasons: [],
+      rubric: {
+        tautology: false,
+        scope: false,
+        rootCause: false,
+        completeness: false,
+        wiring: false,
+      },
+    });
+  });
+
+  it('derives only named failures and preserves their structured findings', () => {
+    expect(canonicalizeBuildReviewGraderVerdict({
+      reasons: ['Wiring is unreachable.'],
+      failedRubrics: ['wiring'],
+      findings: { wiring: ['The configured entry point cannot reach the new surface.'] },
+    })).toEqual({
+      ok: true,
+      verdict: 'FAIL',
+      reasons: ['Wiring is unreachable.'],
+      findings: { wiring: ['The configured entry point cannot reach the new surface.'] },
+      rubric: {
+        tautology: false,
+        scope: false,
+        rootCause: false,
+        completeness: false,
+        wiring: true,
+      },
+    });
+  });
+
+  it('rejects a grader-authored outer verdict', () => {
+    expect(canonicalizeBuildReviewGraderVerdict({
+      verdict: 'PASS',
+      reasons: [],
+      failedRubrics: [],
+    })).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/grader output must not include.*verdict/i),
+    });
+  });
+
+  it('rejects findings for a rubric that is not named as failed', () => {
+    expect(canonicalizeBuildReviewGraderVerdict({
+      reasons: [],
+      failedRubrics: [],
+      findings: { tautology: ['The changed test is tautological.'] },
+    })).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/findings\.tautology.*not named.*failedRubrics/i),
+    });
+  });
+
+  it.each([undefined, []])('rejects a named failed rubric when its findings are %j', (scope) => {
+    expect(canonicalizeBuildReviewGraderVerdict({
+      reasons: ['Scope failed.'],
+      failedRubrics: ['scope'],
+      findings: scope === undefined ? {} : { scope },
+    })).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/findings\.scope.*non-empty.*failedRubrics/i),
+    });
+  });
+
+  it('rejects unknown finding keys instead of dropping their evidence', () => {
+    expect(canonicalizeBuildReviewGraderVerdict({
+      reasons: [],
+      failedRubrics: [],
+      findings: { root_cause: ['The change addresses only a symptom.'] },
+    })).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/findings.*unknown rubric.*root_cause/i),
+    });
+  });
 
   it('does not judge or satisfy a PASS verdict that omits rubric.wiring', async () => {
     const verdict = {

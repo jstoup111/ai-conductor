@@ -28,7 +28,7 @@ import {
   findArtifactFiles,
   resolveFeaturePlanPath,
   BUILD_REVIEW_VERDICT,
-  validateBuildReviewVerdict,
+  canonicalizeBuildReviewGraderVerdict,
 } from './artifacts.js';
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
@@ -1948,17 +1948,8 @@ export class DefaultStepRunner implements StepRunner {
       return finalize({ success: false, output: result.output, sessionExpired: true });
     }
     if (result.success) {
-      await this.stampBuildReviewVerdict();
-      const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
-      try {
-        const validation = validateBuildReviewVerdict(JSON.parse(await readFile(verdictPath, 'utf-8')));
-        if (!validation.ok) return finalize({ success: false, output: validation.reason });
-      } catch {
-        return finalize({
-          success: false,
-          output: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must record a complete PASS/FAIL verdict`,
-        });
-      }
+      const finalized = await this.finalizeBuildReviewVerdict();
+      if (!finalized.ok) return finalize({ success: false, output: finalized.reason });
       return finalize({ success: true, output: result.output });
     }
 
@@ -1989,39 +1980,43 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   /**
-   * Post-write augmentation of the grader-authored build-review.json: attach
-   * the HEAD SHA the verdict was formed against (gate-code-validity-on-
-   * redispatch, #817, Task 3). The engine cannot control what JSON the LLM
-   * grader writes, so this reads the file back after a successful dispatch
-   * and merges in `codeStamp` before the completion predicate ever reads it.
-   * Never fails the step: a missing/unparseable file is left untouched and
-   * silently skipped (an absent stamp is the safe fail-closed default —
-   * treated as "rerun" by the re-dispatch preservation check, Task 5/6).
+   * Replace the grader-authored judgement with the engine-owned canonical
+   * public verdict and attach its code stamp when enabled. This is the
+   * deterministic seam that converts an explicit failed-rubric list into the
+   * legacy `true means failed` booleans consumed by existing gate readers.
    */
-  private async stampBuildReviewVerdict(): Promise<void> {
-    if (!resolveGateCodeValidityConfig(this.config).enabled) {
-      // gate_code_validity disabled: restore pre-feature behavior exactly —
-      // no read-back, no codeStamp field, no git-diff calls.
-      return;
-    }
+  private async finalizeBuildReviewVerdict(): Promise<{ ok: true } | { ok: false; reason: string }> {
     const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
     let parsed: unknown;
     try {
       const raw = await readFile(verdictPath, 'utf-8');
       parsed = JSON.parse(raw);
     } catch {
-      return;
+      return {
+        ok: false,
+        reason: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must record a complete PASS/FAIL verdict`,
+      };
     }
-    if (typeof parsed !== 'object' || parsed === null) {
-      return;
+    const validation = canonicalizeBuildReviewGraderVerdict(parsed);
+    if (!validation.ok) return validation;
+    const canonical: Record<string, unknown> = {
+      verdict: validation.verdict,
+      ...(validation.reasons !== undefined ? { reasons: validation.reasons } : {}),
+      ...(validation.findings !== undefined ? { findings: validation.findings } : {}),
+      rubric: validation.rubric,
+    };
+    if (resolveGateCodeValidityConfig(this.config).enabled) {
+      canonical.codeStamp = await currentCommitSha(this.projectDir).catch(() => null);
     }
-    const codeStamp = await currentCommitSha(this.projectDir).catch(() => null);
-    const stamped = { ...(parsed as Record<string, unknown>), codeStamp };
     try {
-      await writeFile(verdictPath, JSON.stringify(stamped, null, 2), 'utf-8');
+      await writeFile(verdictPath, JSON.stringify(canonical, null, 2), 'utf-8');
     } catch {
-      // Best-effort augmentation only — never fail the step over a write error.
+      return {
+        ok: false,
+        reason: `${BUILD_REVIEW_VERDICT} could not be finalized by the engine`,
+      };
     }
+    return { ok: true };
   }
 
   private async fileExists(path: string): Promise<boolean> {

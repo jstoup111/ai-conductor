@@ -3557,6 +3557,37 @@ TIER: M`,
         expect(written.verdict).toBe('PASS');
       });
 
+      it('replaces grader failedRubrics with engine-derived canonical rubric booleans', async () => {
+        const headSha = initGitRepo(dir);
+        const verdictPath = join(dir, '.pipeline', 'build-review.json');
+        const invoke = vi.fn().mockImplementation(async () => {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(verdictPath, JSON.stringify({ reasons: [], failedRubrics: [] }), 'utf-8');
+          return { success: true, output: '{"failedRubrics":[]}', exitCode: 0 };
+        });
+        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+          gitRunner: scriptedGit(),
+          planPath,
+        });
+
+        const result = await runner.run('build_review', emptyState);
+
+        expect(result.success).toBe(true);
+        expect(JSON.parse(await readFile(verdictPath, 'utf-8'))).toEqual({
+          verdict: 'PASS',
+          reasons: [],
+          rubric: {
+            tautology: false,
+            scope: false,
+            rootCause: false,
+            completeness: false,
+            wiring: false,
+          },
+          codeStamp: headSha,
+        });
+      });
+
       it('rejects a successful dispatch when build-review.json is missing', async () => {
         initGitRepo(dir);
         const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
