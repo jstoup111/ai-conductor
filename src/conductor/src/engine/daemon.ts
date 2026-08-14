@@ -439,6 +439,14 @@ export interface DaemonDeps {
   }) => Promise<void>;
 
   /**
+   * Reclaim provider scratch directories left behind by interrupted feature
+   * runs. Invoked at the daemon's startup and idle dispatch boundaries with
+   * the other reconciliation sweeps. Best-effort: failures are logged and
+   * never block feature dispatch.
+   */
+  sweepProviderScratch?: () => Promise<void>;
+
+  /**
    * FR-14: sweep mergeable labels on startup (after reconciliation) and once per
    * idle poll tick. The caller binds projectRoot + log when wiring production
    * deps — this core supplies read-only activity context but needs no knowledge
@@ -626,6 +634,11 @@ export async function runDaemon(
       await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher });
     } catch (err) {
       log(`[daemon] reconcileParkedFeatures error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      await deps.sweepProviderScratch?.();
+    } catch (err) {
+      log(`[daemon] sweepProviderScratch error: ${err instanceof Error ? err.message : String(err)}`);
     }
     try {
       await deps.sweepMergeableLabels?.({

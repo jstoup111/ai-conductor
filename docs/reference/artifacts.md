@@ -596,10 +596,12 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **71 variants**. `EventPersister` subscribes to the **44** event types
+`ConductorEvent` defines **77 variants**. `EventPersister` subscribes to the **48** event types
 marked `persist: true` in `event-sinks.ts` and writes only those:
 
-`step_started`, `step_completed`, `step_failed`, `provider_attempt`, `feature_usage_total`,
+`step_started`, `step_completed`, `step_failed`, `provider_attempt`,
+`scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
+`feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `session_reset`,
 `credentials_park`, `operator_park_boundary`, `credentials_park_progress`,

@@ -32,6 +32,7 @@ import {
 } from './engine/resolved-config.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
+import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
@@ -1457,6 +1458,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      sweepProviderScratch: () => sweepFeatureWorktreeScratch({
+        worktreeBase,
+        events,
+        log,
+        startFeatureEventScope: (worktreePath) => startFeatureEventPersistence(worktreePath, events),
+      }),
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls
       // back to polling alone. Otherwise, the daemon uses event-driven re-kick
@@ -2140,6 +2147,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // operator actually asks once a build ships, and one they otherwise have
       // to answer by summing a hundred log lines by hand.
       log(`${dot}   ${chalk.dim(formatFeatureUsageTotal(event))}`);
+      break;
+    case 'scratch_cleanup_reclaimed':
+      log(`${dot} ${chalk.green('✓')} scratch reclaimed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      break;
+    case 'scratch_cleanup_retained':
+      log(`${dot} ${chalk.yellow('↷')} scratch retained ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      break;
+    case 'scratch_cleanup_failed':
+      log(`${dot} ${chalk.red('✗')} scratch cleanup failed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
       break;
     case 'provider_fallback':
       log(

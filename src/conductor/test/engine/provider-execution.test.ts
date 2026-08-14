@@ -406,7 +406,11 @@ describe('executeProviderCandidates', () => {
     });
 
     expect(result.output).toBe('/tmp/isolated-codex');
-    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ providerKey: 'codex' }), expect.anything());
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ providerKey: 'codex' }),
+      expect.anything(),
+      expect.objectContaining({ attempt: 0 }),
+    );
     expect(claude.invoke).not.toHaveBeenCalled();
     expect(teardown).toHaveBeenCalledOnce();
   });

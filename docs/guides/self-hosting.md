@@ -319,6 +319,28 @@ self-host build runs. **Do not create untracked files in the live harness checko
 provider config during the build.** Use the feature worktree for new files, or park the feature
 first.
 
+## Provider scratch homes
+
+The throwaway provider home in the table above is not created directly in the OS temp directory.
+It lives at `<worktree>/.daemon/scratch/<runId>/<attempt>-<provider>` and carries an owner lease
+(`owner.json`: repository, feature slug, run id, attempt, owner pid, start time) written when the
+home is provisioned. Ordinary teardown removes the lease and its directory when the attempt ends
+normally.
+
+An attempt killed abruptly — SIGKILL, OOM, or a daemon self-restart — skips that teardown and
+leaves the leased directory behind. The daemon reclaims it instead of relying on the process that
+died: at startup and on every idle dispatch boundary, it sweeps every feature worktree's
+`.daemon/scratch/` tree and removes any home whose lease names a process that is no longer
+running. A home whose owner is still alive, or whose lease is missing, malformed, or unreadable,
+is left in place rather than guessed at. The sweep also runs a one-time pass over the OS temp
+directory to reclaim pre-existing `self-host-*`/`harness-selfbuild-*` homes created before this
+scratch layout existed. A sweep failure for one worktree never blocks dispatch for the rest.
+
+Every reclaim, retention, and failed cleanup emits a `scratch_cleanup_reclaimed`,
+`scratch_cleanup_retained`, or `scratch_cleanup_failed` event (visible in the daemon log and
+`.pipeline/events.jsonl`) naming the path and the reason — see
+[`.pipeline/events.jsonl`](../reference/artifacts.md#pipelineeventsjsonl).
+
 ## The engine republish loop
 
 Under self-host, and only under self-host, the daemon keeps its own engine current before each

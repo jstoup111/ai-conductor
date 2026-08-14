@@ -9371,6 +9371,181 @@ describe('engine/conductor', () => {
     expect(planDispatch).toEqual({ model: 'gpt-5.6-sol', effort: 'xhigh' });
   });
 
+  it('threads the held run identity and candidate index into Codex and Claude self-host provisioning', async () => {
+    await mkdir(join(dir, 'skills'), { recursive: true });
+    const providerHomeModule = await vi.importActual<typeof import('../../src/engine/self-host/provider-home.js')>('../../src/engine/self-host/provider-home.js');
+    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
+    const provisionProviderHome = vi.fn(providerHomeModule.provisionProviderHome);
+    const provisionSandbox = vi.fn(sandboxModule.provisionSandboxBuildEnv);
+    const leases: unknown[] = [];
+    const codex: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn().mockResolvedValue({
+        success: false,
+        exitCode: 127,
+        output: 'Codex unavailable',
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+      }),
+      invokeInteractive: vi.fn(),
+      prepareSelfHostAuth: vi.fn(),
+      resolveSelfHostExecutable: vi.fn().mockResolvedValue('codex'),
+    } as LLMProvider;
+    const claude: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn().mockResolvedValue({ success: true, exitCode: 0 }),
+      invokeInteractive: vi.fn(),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      { key: 'codex', provider: codex, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability([]) },
+      { key: 'claude', provider: claude, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability([]) },
+    ]);
+    const providerExecution = {
+      configuredProviders: ['codex', 'claude'],
+      runtimes,
+      sessions: new ProviderSessionStore(),
+      config: { llm_provider: ['codex', 'claude'] },
+      warn: vi.fn(),
+    };
+    const runner = new DefaultStepRunner(codex, 'held-conductor-run', dir, {
+      config: providerExecution.config,
+      mode: 'auto',
+      providerExecution,
+      providerExecutor: async (input) => {
+        const prepare = input.prepareCandidateSelfHost;
+        if (!prepare) throw new Error('expected self-host preparation');
+        const codexInvocation = await prepare(
+          { step: 'build', providerKey: 'codex', model: 'gpt-5.6-terra', effort: 'medium' },
+          runtimes.get('codex'),
+          { runId: input.runId, attempt: 0 },
+        );
+        const claudeInvocation = await prepare(
+          { step: 'build', providerKey: 'claude', model: 'sonnet', effort: 'medium' },
+          runtimes.get('claude'),
+          { runId: input.runId, attempt: 1 },
+        );
+        for (const [attempt, invocation] of [codexInvocation, claudeInvocation].entries()) {
+          const provider = attempt === 0 ? 'codex' : 'claude';
+          leases.push(JSON.parse(await readFile(join(
+            dir, '.daemon', 'scratch', 'held-conductor-run', `${attempt}-${provider}`, 'owner.json',
+          ), 'utf8')));
+          await invocation?.teardown?.();
+        }
+        return {
+          success: true,
+          output: 'prepared',
+          exitCode: 0,
+          attempts: [],
+          preferredProvider: 'codex',
+          actualProvider: 'claude',
+          resolvedModel: 'sonnet',
+          resolvedEffort: 'medium',
+        };
+      },
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      featureSlug: 'self-host-identity',
+      config: {
+        llm_provider: ['codex', 'claude'],
+        harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } },
+      } as HarnessConfig,
+      providerExecution,
+      selfHostGuardrails: {
+        resolveHarnessRoot: vi.fn(),
+        resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
+        relink: vi.fn(),
+        provisionSandbox,
+        provisionProviderHome,
+        versionGate: vi.fn(),
+        releaseGate: vi.fn(),
+      } as any,
+    });
+
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', {} as ConductState);
+
+    expect({
+      codex: provisionProviderHome.mock.calls[0]?.[0],
+      claude: provisionSandbox.mock.calls[0]?.[0],
+    }).toEqual({
+      codex: expect.objectContaining({
+        provider: expect.objectContaining({ id: 'codex' }),
+        worktreeRoot: dir,
+        repository: dir,
+        featureSlug: 'self-host-identity',
+        runId: 'held-conductor-run',
+        attempt: 0,
+      }),
+      claude: expect.objectContaining({
+        worktreeRoot: dir,
+        harnessRoot: dir,
+        repository: dir,
+        featureSlug: 'self-host-identity',
+        runId: 'held-conductor-run',
+        attempt: 1,
+      }),
+    });
+    for (const [attempt, lease] of leases.entries()) {
+      expect(Object.keys(lease as object).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(lease).toMatchObject({ repository: dir, featureSlug: 'self-host-identity', runId: 'held-conductor-run', attempt, ownerPid: process.pid });
+      expect(new Date((lease as { startedAt: string }).startedAt).toISOString()).toBe((lease as { startedAt: string }).startedAt);
+    }
+  });
+
+  it('writes the authoritative lease before cleanup on the legacy Claude self-host path', async () => {
+    await mkdir(join(dir, 'skills'), { recursive: true });
+    const sandboxModule = await vi.importActual<typeof import('../../src/engine/self-host/sandbox-build-env.js')>('../../src/engine/self-host/sandbox-build-env.js');
+    const leasePath = join(dir, '.daemon', 'scratch', 'legacy-held-run', '1-claude', 'owner.json');
+    let lease: unknown;
+    const runner: StepRunner = {
+      selfHostRunId: () => 'legacy-held-run',
+      run: vi.fn(async () => {
+        lease = JSON.parse(await readFile(leasePath, 'utf8'));
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      featureSlug: 'legacy-self-host-identity',
+      config: {
+        llm_provider: 'claude',
+        harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } },
+      } as HarnessConfig,
+      selfHostGuardrails: {
+        resolveHarnessRoot: vi.fn(),
+        resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
+        relink: vi.fn(),
+        provisionSandbox: sandboxModule.provisionSandboxBuildEnv,
+        versionGate: vi.fn(),
+        releaseGate: vi.fn(),
+      } as any,
+    });
+
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', {} as ConductState);
+
+    expect(lease).toMatchObject({
+      repository: dir,
+      featureSlug: 'legacy-self-host-identity',
+      runId: 'legacy-held-run',
+      attempt: 1,
+    });
+    await expect(readFile(leasePath, 'utf8')).rejects.toThrow();
+  });
+
   it('keeps shared provider CLI overrides authoritative for ordinary step dispatch', async () => {
     await writeState(statePath, {
       worktree: 'done',

@@ -21,6 +21,9 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_completed',
   'step_failed',
   'provider_attempt',
+  'scratch_cleanup_reclaimed',
+  'scratch_cleanup_retained',
+  'scratch_cleanup_failed',
   'feature_usage_total',
   'provider_fallback',
   'session_policy',
@@ -113,6 +116,9 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_stall',
   'pipeline_closeout',
   'provider_attempt',
+  'scratch_cleanup_reclaimed',
+  'scratch_cleanup_retained',
+  'scratch_cleanup_failed',
   'feature_usage_total',
   'provider_fallback',
   'session_policy',
@@ -328,8 +334,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 75 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(75);
+  it('is total over all 78 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(78);
   });
 
   it('routes verdict_freshness to every sink', () => {

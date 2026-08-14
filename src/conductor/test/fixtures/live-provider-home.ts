@@ -3,6 +3,7 @@ import {
   type ProviderHome,
   type ResolvedSelfHostProvider,
 } from '../../src/engine/self-host/provider-home.js';
+import { tmpdir } from 'node:os';
 
 /**
  * Provision the isolated Claude home used by the opt-in live daemon smoke.
@@ -24,6 +25,9 @@ export async function provisionLiveProviderHome(
   return provisionProviderHome({
     provider,
     worktreeRoot: sourceRoot,
-    baseDir,
+    // This fixture models an opt-in live smoke, not a daemon self-host
+    // dispatch. Supply an explicit temporary base so production's mandatory
+    // scratch-lease identity remains a compile-time requirement.
+    baseDir: baseDir ?? tmpdir(),
   });
 }

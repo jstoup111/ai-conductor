@@ -66,6 +66,7 @@ const READY_STATE: ConductState = {
  */
 const BUILD_AUTH_READY_STATE: ConductState = {
   ...READY_STATE,
+  feature_desc: 'isolate-daemon-build-auth-from-operator-oauth',
   build_review: 'done',
   wiring_check: 'done',
   manual_test: 'done',
@@ -167,6 +168,7 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
   function tokenCapturingRunner(behaviors: (() => StepRunResult | Promise<StepRunResult>)[]): StepRunner {
     let call = 0;
     return {
+      selfHostRunId: () => 'isolate-daemon-build-auth-run',
       run: vi.fn(async (step): Promise<StepRunResult> => {
         if (step !== 'build') return { success: true };
         tokensSeenByRunner.push(process.env.CLAUDE_CODE_OAUTH_TOKEN);

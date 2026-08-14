@@ -13,17 +13,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
+import { access, chmod, mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
+import { acquireScratchHome } from '../../src/engine/self-host/provider-scratch.js';
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
-import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import { renderDaemonEvent, runDaemonMode } from '../../src/daemon-cli.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -446,6 +447,60 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     expect(src).toMatch(/new Conductor\({[\s\S]*?rateLimitEpisode,/);
     // Verify wiring to runDaemon deps (should appear in the deps object)
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
+  });
+
+  it('persists each CLI-created provider scratch cleanup decision to its feature ledger', async () => {
+    const worktreeBase = join(root, '.worktrees');
+    const feature = join(worktreeBase, 'provider-scratch');
+    await mkdir(feature, { recursive: true });
+    const deadHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, provider: 'codex', ownerPid: 99999999 });
+    const liveHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 2, provider: 'claude', ownerPid: process.pid });
+    const failedHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'F', attempt: 3, provider: 'codex', ownerPid: 99999998 });
+    const failedRun = join(feature, '.daemon', 'scratch', 'F');
+    await chmod(failedRun, 0o555);
+    const daemonModule = await import('../../src/engine/daemon.js');
+    const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async (deps) => {
+      await deps.sweepProviderScratch?.();
+      return { processed: [], stoppedReason: 'backlog_drained' };
+    });
+    try {
+      await runDaemonMode({
+        projectRoot: root,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        runHaltClassMigration: async () => worktreeBase,
+        workSource: { discover: async () => [] },
+        watch: false,
+      });
+
+      expect(runDaemonSpy).toHaveBeenCalledOnce();
+      await expect(access(deadHome)).rejects.toThrow();
+      await expect(access(liveHome)).resolves.toBeUndefined();
+      await expect(access(failedHome)).resolves.toBeUndefined();
+      const ledger = (await readFile(join(feature, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const cleanupEvents = ledger.map((event) => ({
+        type: event.type,
+        repository: event.repository,
+        featureSlug: event.featureSlug,
+        runId: event.runId,
+        attempt: event.attempt,
+        path: event.path,
+        reason: event.reason,
+      }));
+      expect(cleanupEvents).toHaveLength(3);
+      expect(cleanupEvents).toEqual(expect.arrayContaining([
+        { type: 'scratch_cleanup_reclaimed', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, path: deadHome, reason: 'dead-owner' },
+        { type: 'scratch_cleanup_retained', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 2, path: liveHome, reason: 'live-owner' },
+        { type: 'scratch_cleanup_failed', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'F', attempt: 3, path: failedHome, reason: expect.any(String) },
+      ]));
+    } finally {
+      await chmod(failedRun, 0o755);
+      vi.restoreAllMocks();
+    }
   });
 });
 

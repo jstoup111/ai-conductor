@@ -12,6 +12,10 @@ import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Identity is deliberately explicit when a retention decision has no readable lease. */
+type ScratchCleanupIdentityValue = string | 'unknown';
+type ScratchCleanupAttempt = number | 'unknown';
+
 /** Closed, credential-safe FINISH publication observability vocabulary. */
 export type FinishPublicationTransition =
   | 'establish_pr'
@@ -170,6 +174,36 @@ export type ConductorEvent =
       observedIntervals?: readonly ObservedInterval[];
     }
   | ProviderAttemptEvent
+  | {
+      /** A provider scratch home was removed during a daemon sweep or legacy collection. */
+      type: 'scratch_cleanup_reclaimed';
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
+      path: string;
+      reason: 'dead-owner' | 'legacy-preexisting';
+    }
+  | {
+      /** A provider scratch home was retained during a daemon sweep. */
+      type: 'scratch_cleanup_retained';
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
+      path: string;
+      reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition' | 'legacy-nonmatching' | 'legacy-not-directory' | 'legacy-mtime-unavailable' | 'legacy-newer-than-process-start' | 'legacy-unreadable-lease' | 'legacy-live-owner' | 'legacy-unknown-owner';
+    }
+  | {
+      /** A provider scratch home could not be removed during a daemon sweep or legacy collection. */
+      type: 'scratch_cleanup_failed';
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
+      path: string;
+      reason: string;
+    }
   | {
       /**
        * Whole-feature provider usage, emitted once when `finish` completes.

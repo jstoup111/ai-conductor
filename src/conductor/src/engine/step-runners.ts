@@ -480,6 +480,10 @@ export class DefaultStepRunner implements StepRunner {
     return this.resolvedConfigFor(step).model;
   }
 
+  selfHostRunId(): string {
+    return this.runId;
+  }
+
   escalateForStep(step: StepName, state: ConductState): boolean {
     return this.resolvedConfigFor(step, state.complexity_tier).escalate;
   }
@@ -778,6 +782,7 @@ export class DefaultStepRunner implements StepRunner {
             config: this.config,
             tier: state.complexity_tier,
             attempt: opts?.attempt ?? 1,
+            runId: this.runId,
             escalate: opts?.escalate ?? true,
             modelOverride: opts?.modelOverride ?? this.modelOverride,
             effortOverride: opts?.effortOverride ?? this.effortOverride,
@@ -868,6 +873,7 @@ export class DefaultStepRunner implements StepRunner {
           config: this.config,
           tier: request.tier,
           attempt: request.dispatch?.attempt ?? 1,
+          runId: this.runId,
           escalate: request.dispatch?.escalate ?? true,
           modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
           effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
