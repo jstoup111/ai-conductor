@@ -29,8 +29,23 @@ const runnableMigrationFenceRe = /^```bash migration\s*\n[\s\S]*?```$/;
 const thematicBreakRe = /^(?:-{3,}|\*{3,}|_{3,})$/;
 const fenceDelimiterRe = /^```/;
 const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(?:\r?\n|$)/gm;
-/** A single release-metadata line, non-global — ends the Migration section (#1396). */
-const migrationSectionTerminatorRe = /^Release-(?:Disposition|Category|Semver|Note):/;
+/**
+ * A single release-metadata line, or a GitHub issue-linking trailer — either
+ * ends the Migration section (#1396).
+ *
+ * The trailer arm exists because `injectIssueRef` appends `Refs owner/repo#N`
+ * (spec PRs) or `Closes owner/repo#N` (implementation PRs) to the END of a body
+ * whose last section is routinely `## Migration` — `DEFAULT_SPEC_RELEASE_BLOCK`
+ * closes with exactly `## Migration\n\nnone`, and the PR template promises no
+ * separator below it. Without this arm the trailer is swallowed into the
+ * section, a correct `none` reads back as `none\n\nRefs …`, and every
+ * intake-sourced spec PR fails the required release-metadata check as
+ * malformed. Fence tracking in `migrationSectionContent` keeps a linking line
+ * INSIDE a runnable block (an echoed commit message, say) from truncating a
+ * real migration.
+ */
+const migrationSectionTerminatorRe =
+  /^(?:Release-(?:Disposition|Category|Semver|Note):|(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|references?)\s+\S*#\d)/i;
 // No trailing lookahead. The non-greedy body already ends the match at the
 // section's own closing fence, so requiring "next `##` heading or end-of-string"
 // added no precision — it only made the strip position-dependent. A Migration

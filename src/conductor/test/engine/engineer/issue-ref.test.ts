@@ -17,6 +17,8 @@ import {
   closeIssueOnImplementationMerge,
 } from '../../../src/engine/engineer/issue-ref.js';
 import type { GhRunner } from '../../../src/engine/engineer/issue-ref.js';
+import { DEFAULT_SPEC_RELEASE_BLOCK } from '../../../src/engine/engineer/release-metadata-inject.js';
+import { parseReleaseDisposition } from '../../../src/engine/release-metadata.js';
 
 interface Call {
   args: string[];
@@ -161,6 +163,23 @@ describe('injectIssueRef', () => {
     const body = edit.args[edit.args.indexOf('--body') + 1];
     expect(body).not.toMatch(/\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b/i);
     expect(body).toContain('Refs acme/app#49');
+  });
+
+  it('does not swallow the injected line into a trailing Migration section', async () => {
+    // The engineer's default spec block ends with `## Migration\n\nnone`, so a
+    // line appended at the end of the body lands INSIDE that section. The
+    // migration parser only ends a section at a thematic break, a `Release-…`
+    // line, or the next heading — a bare `Refs …` line is none of those, so the
+    // content read back as `none\n\nRefs …`: neither the literal `none` nor a
+    // runnable block, and every intake-sourced spec PR failed the required
+    // release-metadata check as malformed.
+    const { gh, calls } = makeGh(DEFAULT_SPEC_RELEASE_BLOCK);
+    await injectIssueRef({ gh, prUrl: 'URL', keyword: 'Refs', sourceRef: 'acme/app#49', cwd });
+    const edit = calls.find((c) => c.args[1] === 'edit')!;
+    const body = edit.args[edit.args.indexOf('--body') + 1]!;
+
+    expect(body).toContain('Refs acme/app#49');
+    expect(parseReleaseDisposition(body)).toEqual({ disposition: 'no-note' });
   });
 
   it('is non-fatal when gh throws (returns false, no throw)', async () => {
