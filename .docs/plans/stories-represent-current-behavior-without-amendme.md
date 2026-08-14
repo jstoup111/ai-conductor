@@ -17,9 +17,16 @@ The entire surface of this change is agent-executed contract prose plus the one 
 that asserts it. Verified by `grep` over `src/`, `bin/`, and `hooks/`: no runtime engine code path
 reads or parses the `Amended` marker, so there is no production module to change, no schema, no CLI
 flag, and no hook. The four contract files (`HARNESS.md`, `skills/stories/SKILL.md`,
-`skills/conflict-check/SKILL.md`, `skills/architecture-review/SKILL.md`) are the production surface;
-`src/conductor/test/acceptance/build-tasks-can-amend-protected-docs-artifacts-ame.acceptance.test.ts`
+`skills/conflict-check/SKILL.md`, `skills/architecture-review/SKILL.md`) are the behavioral contract
+this change edits; `src/conductor/test/acceptance/build-tasks-can-amend-protected-docs-artifacts-ame.acceptance.test.ts`
 is the machine check over them.
+
+**No production code surface (load-bearing for the Wiring rubric).** Every task below edits Markdown
+contract prose or the acceptance suite that reads it. The diff adds no module, export, symbol, CLI
+flag, hook, or schema, so it creates no callable production surface and therefore no static path to
+any configured entry point in `.ai-conductor/config.yml:49-54` exists or is expected. Wiring is not
+applicable to this diff — not deferred, not scaffolded for a later feature. The acceptance suite is
+the reachability check that a code surface would otherwise get.
 
 **Sequencing.** The acceptance suite's `TS-1` block is currently an `it.each` parameterized over
 `['conflict-check', 'architecture-review', 'stories']` (line ~175-188), all three rows asserting the
@@ -158,7 +165,10 @@ mechanical rule can perform the replacement correctly. Convergence is on touch (
 - `HARNESS.md` — story exception added to the DECIDE artifact amendment section
 - `src/conductor/test/acceptance/build-tasks-can-amend-protected-docs-artifacts-ame.acceptance.test.ts` — HARNESS.md carve-out assertion
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** none — `HARNESS.md` is agent-executed contract prose, not a callable production
+surface, so this task adds no symbol that could reach a configured entry point. Its verification is
+the acceptance assertion in step 1, not a wiring path. See the Technical Approach's "No production
+code surface" paragraph.
 
 **Dependencies:** Task 2
 
