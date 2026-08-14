@@ -1,0 +1,46 @@
+/**
+ * RED acceptance contract for build_review remediation planning.
+ *
+ * Task 1 proves both machine-consumed planner surfaces recognize a
+ * build_review failure as its own dispatch trigger, consume the verdict it
+ * produced, and preserve a trigger-specific gap identifier.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
+
+const CONTRACT_SURFACES = [
+  ['remediate skill', 'skills/remediate/SKILL.md'],
+  ['remediation planner', 'agents/remediation-planner.md'],
+] as const;
+
+describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, relativePath) => {
+  async function contract(): Promise<string> {
+    return readFile(join(REPO_ROOT, relativePath), 'utf8');
+  }
+
+  it('dispatches build_review from its verdict artifact with a trigger-specific gap id', async () => {
+    const text = await contract();
+
+    const buildReviewTrigger = text.match(
+      /(?:(?:`?build_review`? trigger|The `build_review` trigger)[\s\S]{0,300}\.pipeline\/build-review\.json|\.pipeline\/build-review\.json[\s\S]{0,300}`?build_review`? trigger)/i,
+    );
+    const buildReviewId = text.match(
+      /(?:for a `?build_review`? trigger gap|use the distinct gap id format)[\s\S]{0,120}`build_review:<stem>`/i,
+    );
+    const finishFailureId = text.match(
+      /(?:for a finish test failure|finish-test-failure form)[\s\S]{0,120}`test:<(?:failing file )?stem>`/i,
+    );
+
+    expect(buildReviewTrigger).not.toBeNull();
+    expect(buildReviewId).not.toBeNull();
+    expect(finishFailureId).not.toBeNull();
+    expect(buildReviewId?.[0]).not.toContain('test:<');
+    expect(finishFailureId?.[0]).not.toContain('build_review:<');
+  });
+});
