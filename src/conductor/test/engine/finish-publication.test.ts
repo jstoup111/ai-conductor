@@ -1302,11 +1302,17 @@ describe('resolveUnattendedPublicationIntent', () => {
 
 describe('advanceFinishPublication preflight', () => {
   it('reaches the judgment boundary once when observed publication, SHIP, and release readiness are valid', async () => {
-    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' };
+    });
 
     await expect(
       advanceFinishPublication({
-        observe: async () => readyPublicationSnapshot(),
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose, ready: false },
+        }),
         effects: { dispatchJudgment },
       }),
     ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
@@ -1358,12 +1364,18 @@ describe('advanceFinishPublication preflight', () => {
 
 describe('advanceFinishPublication PR identity', () => {
   it('reuses an observed existing draft identity without opening another PR', async () => {
-    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' };
+    });
     const draft = draftPrFakes(() => new Error('must not call GitHub'));
 
     await expect(
       advanceFinishPublication({
-        observe: async () => readyPublicationSnapshot(),
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose, ready: false },
+        }),
         effects: { dispatchJudgment, establishPr: draft.deps },
       }),
     ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
@@ -1422,11 +1434,7 @@ describe('advanceFinishPublication PR identity', () => {
 
     await expect(
       advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
-    ).resolves.toEqual({
-      kind: 'publication_retry',
-      transition: 'establish_pr',
-      reason: 'draft_pr_failed',
-    });
+    ).resolves.toEqual({ kind: 'human_required', reason: 'judgment_halt_prose' });
 
     expect(observe).toHaveBeenCalledTimes(2);
     expect(dispatchJudgment).not.toHaveBeenCalled();
@@ -1447,11 +1455,17 @@ describe('advanceFinishPublication durable shipped evidence', () => {
 
   it('reuses an existing verified shipped record without invoking its writer', async () => {
     const createShippedRecord = vi.fn(async () => undefined);
-    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' };
+    });
 
     await expect(
       advanceFinishPublication({
-        observe: async () => readyPublicationSnapshot(),
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose, ready: false },
+        }),
         effects: { dispatchJudgment, createShippedRecord },
       }),
     ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
@@ -1509,11 +1523,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
         observe,
         effects: { dispatchJudgment, createShippedRecord },
       }),
-    ).resolves.toEqual({
-      kind: 'publication_retry',
-      transition: 'write_shipped_record',
-      reason: 'shipped_record_write_failed',
-    });
+    ).resolves.toEqual({ kind: 'human_required', reason: 'judgment_halt_prose' });
 
     expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
       writes: 1,
@@ -1699,9 +1709,11 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
   it.each(['stale', 'halt'] as const)(
     'dispatches one bounded judgment pass for %s PR prose',
     async (prose) => {
+      let observedProse: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = prose;
       let request: unknown;
       const dispatchJudgment = vi.fn(async (receivedRequest: unknown) => {
         request = receivedRequest;
+        observedProse = 'accepted';
         return { kind: 'accepted' };
       });
 
@@ -1712,7 +1724,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
               pr: {
                 identity: 'one',
                 url: 'https://github.com/acme/widget/pull/1172',
-                prose,
+                prose: observedProse,
                 ready: false,
               },
             }),
@@ -1760,6 +1772,16 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
             identity: 'one',
             url: 'https://github.com/acme/widget/pull/1172',
             prose: 'stale',
+            ready: false,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
             ready: false,
           },
         }),
