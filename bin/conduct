@@ -293,6 +293,18 @@ check_harness_update_main() {
   apply_harness_update "main@${new_sha}" "$rollback_ref" || true
 }
 
+# Stable update behavior lives in bin/update. Delegate so this compatibility
+# entry point cannot drift, then reload conduct if the harness advanced.
+check_harness_update_stable() {
+  local before_head after_head
+  before_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  "${HARNESS_DIR}/bin/update" || return 1
+  after_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  if [ -n "$after_head" ] && [ "$after_head" != "$before_head" ]; then
+    exec "$0" "${ORIGINAL_ARGS[@]}"
+  fi
+}
+
 # Dispatch based on the configured update channel.
 check_harness_update() {
   [ -d "${HARNESS_DIR}/.git" ] || return 0
@@ -306,6 +318,7 @@ check_harness_update() {
 
   channel=$(conductor_cfg_get updateChannel tagged) || return 1
   case "$channel" in
+    stable) check_harness_update_stable ;;
     main)   check_harness_update_main ;;
     tagged|*) check_harness_update_tagged ;;
   esac
@@ -315,8 +328,8 @@ check_harness_update() {
 set_update_channel() {
   local new_channel=$1
   case "$new_channel" in
-    tagged|main) ;;
-    *) fail "Invalid channel: ${new_channel} (expected: tagged, main)"; exit 2 ;;
+    stable|tagged|main) ;;
+    *) fail "Invalid channel: ${new_channel} (expected: stable, tagged, main)"; exit 2 ;;
   esac
   conductor_cfg_set updateChannel "$new_channel"
   ok "Update channel set to: ${new_channel}"
@@ -2590,7 +2603,7 @@ usage() {
   echo "  --cooldown <sec>  Seconds between steps (default: 10, 0 to disable)"
   echo "  --reset           Clear session state and start fresh"
   echo "  --update          Run the harness update check now and exit"
-  echo "  --set-channel <c> Set update channel (tagged|main) and exit"
+  echo "  --set-channel <c> Set update channel (stable|tagged|main) and exit"
   echo "  -h, --help        Show this help"
   echo ""
   echo "Steps: worktree, memory, brainstorm, complexity, stories, conflict-check,"

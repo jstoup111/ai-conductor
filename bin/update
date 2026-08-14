@@ -233,14 +233,15 @@ check_harness_update_stable() {
     return 1
   fi
   prior_checked_at=$(conductor_cfg_get lastCheckedAt "" 2>/dev/null || true)
-  if ! git -C "$HARNESS_DIR" pull --ff-only origin stable 2>/dev/null; then
-    fail "Fast-forward pull failed — update manually: cd ${HARNESS_DIR} && git pull --ff-only origin stable"
+  if ! git -C "$HARNESS_DIR" merge --ff-only "$remote_head" >/dev/null 2>&1; then
+    fail "Fast-forward to approved stable commit failed — update manually: cd ${HARNESS_DIR} && git merge --ff-only ${remote_head}"
     return 1
   fi
 
-  local new_version
+  local new_head new_version
+  new_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
   new_version=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD --match 'v*.*.*' 2>/dev/null || echo "")
-  if [ "$new_version" != "$target_version" ]; then
+  if [ "$new_head" != "$remote_head" ] || [ "$new_version" != "$target_version" ]; then
     fail "Stable branch head is not an exact semver tag — update aborted"
     restore_stable_checkout "$local_head" || fail "Stable rollback failed — restore ${local_head} manually"
     return 1

@@ -42,8 +42,9 @@ With no arguments, forces an attended check of the configured harness update cha
 
 `stable` is the fresh-install default. It fetches `origin/stable`, verifies that its head is an exact
 semver tag, requires a clean local `stable` checkout and a fast-forward relationship, then prompts
-before pulling and running `bin/migrate`. An untagged target is rejected before local mutation. If
-migration fails after a pull, the updater restores the prior `stable` branch head and recorded version.
+before fast-forwarding to that captured commit and running `bin/migrate`. An untagged target is rejected
+before local mutation. If migration fails after the fast-forward, the updater restores the prior `stable`
+branch head and recorded version.
 `tagged` follows semver tag checkouts; `main` follows every merge to the development branch.
 
 ## `bin/migrate`

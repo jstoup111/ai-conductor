@@ -199,6 +199,58 @@ describe('update-check config uses one schema-owned surface (#1400)', () => {
     expect(existsSync(join(home, '.claude', 'ai-conductor.config.json'))).toBe(false);
   });
 
+  it('keeps legacy bin/conduct on stable branch semantics without detaching to a tag', async () => {
+    const harness = await makeHarness();
+    await writeUserConfig(
+      'conductor:\n  auto_check: true\n  current_version: v1.2.3\n',
+    );
+    const approvedSha = '2222222222222222222222222222222222222222';
+    const installedSha = '1111111111111111111111111111111111111111';
+    await writeFile(
+      join(harness.root, 'bin', 'git'),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_GIT_LOG"
+args=("$@")
+if [ "\${args[0]:-}" = '-C' ]; then
+  args=("\${args[@]:2}")
+fi
+case "\${args[*]}" in
+  'rev-parse --is-inside-work-tree') echo true ;;
+  'status --porcelain') ;;
+  fetch*origin*stable*) ;;
+  'rev-parse origin/stable') echo '${approvedSha}' ;;
+  describe*${approvedSha}*) echo v1.2.4 ;;
+  'rev-parse HEAD') echo '${installedSha}' ;;
+  'branch --show-current') echo stable ;;
+  'merge-base --is-ancestor ${installedSha} ${approvedSha}') exit 0 ;;
+  *) exit 0 ;;
+esac
+`,
+      'utf8',
+    );
+
+    const setResult = await run(harness.conduct, ['--set-channel', 'stable'], harness.env);
+    const updateResult = await run(harness.conduct, ['--update'], harness.env);
+    const config = parsedConfig(
+      await readFile(join(home, '.ai-conductor', 'config.yml'), 'utf8'),
+    ) as { conductor?: { update_channel?: unknown } };
+    const gitCalls = await readFile(harness.gitLog, 'utf8').catch(() => '');
+
+    expect({
+      setExit: setResult.exitCode,
+      updateExit: updateResult.exitCode,
+      channel: config.conductor?.update_channel,
+      fetchedStable: /fetch .*origin stable/.test(gitCalls),
+      detachedToTag: /checkout .*?(?:tags\/|v\d)/.test(gitCalls),
+    }).toEqual({
+      setExit: 0,
+      updateExit: 0,
+      channel: 'stable',
+      fetchedStable: true,
+      detachedToTag: false,
+    });
+  });
+
   it('seeds live legacy identity before a fresh write, renames the seed, and preserves unrelated YAML', async () => {
     const harness = await makeHarness();
     const configPath = await writeUserConfig(

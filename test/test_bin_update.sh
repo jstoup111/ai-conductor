@@ -1128,6 +1128,55 @@ run_update_tty "$REPO" "$HOME_DIR" y
 assert "stable accept: remains on stable, fast-forwards to the tagged release, migrates, and records its version" \
   "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_RELEASE_SHA" ] && [ "$(git -C "$REPO" rev-parse origin/stable)" = "$STABLE_RELEASE_SHA" ] && [ -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
 
+PAIR=$(make_main_repo "stable-atomic-target")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-atomic-target-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+STABLE_APPROVED_SHA=$(git -C "$WORK" rev-parse HEAD)
+git -C "$WORK" commit -q --allow-empty -m "later untagged stable advance"
+STABLE_LATER_SHA=$(git -C "$WORK" rev-parse HEAD)
+
+RACE_GIT_DIR="$TMP_ROOT/stable-atomic-git-wrapper"
+RACE_MARKER="$TMP_ROOT/stable-atomic-race-fired"
+REAL_GIT_BIN=$(command -v git)
+mkdir -p "$RACE_GIT_DIR"
+cat > "$RACE_GIT_DIR/git" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+case " \$* " in
+  *" merge "*|*" pull "*)
+    if [ ! -f "\$RACE_MARKER" ]; then
+      : > "\$RACE_MARKER"
+      "$REAL_GIT_BIN" -C "\$RACE_WORK" push -q origin stable
+      "$REAL_GIT_BIN" fetch -q origin stable
+    fi
+    ;;
+esac
+exec "$REAL_GIT_BIN" "\$@"
+EOF
+chmod +x "$RACE_GIT_DIR/git"
+export RACE_WORK="$WORK" RACE_MARKER
+TEST_PATH_BEFORE_RACE=$TEST_PATH
+TEST_PATH="$RACE_GIT_DIR:$TEST_PATH"
+run_update_tty "$REPO" "$HOME_DIR" y
+TEST_PATH=$TEST_PATH_BEFORE_RACE
+unset RACE_WORK RACE_MARKER
+assert "stable atomic target: ignores a later untagged remote advance after approving the tagged SHA" \
+  "$( [ "$CODE" -eq 0 ] && [ -f "$TMP_ROOT/stable-atomic-race-fired" ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_APPROVED_SHA" ] && [ "$(git -C "$REPO" rev-parse HEAD)" != "$STABLE_ORIGINAL_SHA" ] && [ "$(git -C "$REPO" rev-parse HEAD)" != "$STABLE_LATER_SHA" ] && [ "$(wc -l < "$REPO/.migrate-calls")" -eq 1 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
+
 PAIR=$(make_main_repo "stable-untagged")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 git -C "$REPO" checkout -q -b stable
