@@ -133,6 +133,61 @@ it('reads persisted operator-reseal lineage for build-review evidence', async ()
   }]);
 });
 
+it('preserves operator-reseal lineage order and every path in multi-path entries', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const commits = ['a', 'b', 'c', 'd'].map((character) => character.repeat(40));
+  await mkdir(join(repo, '.pipeline'), { recursive: true });
+  await writeFile(join(repo, '.pipeline/protected-artifact-seal.json'), `${JSON.stringify({
+    version: 2,
+    baselineCommit: commits[3],
+    protectedArtifacts: [],
+    rebaselines: [
+      {
+        trigger: 'operator-reseal',
+        fromCommit: commits[0],
+        toCommit: commits[1],
+        paths: ['.docs/stories/first.md'],
+        reason: 'First correction.',
+      },
+      {
+        trigger: 'operator-reseal',
+        fromCommit: commits[1],
+        toCommit: commits[2],
+        paths: ['.docs/plans/second.md', '.docs/stories/second.md'],
+        reason: 'Second correction.',
+      },
+      {
+        trigger: 'operator-reseal',
+        fromCommit: commits[2],
+        toCommit: commits[3],
+        paths: ['.docs/specs/third.md'],
+        reason: 'Third correction.',
+      },
+    ],
+  })}\n`);
+
+  await expect(readOperatorReseals(repo)).resolves.toEqual([
+    {
+      fromCommit: commits[0],
+      toCommit: commits[1],
+      paths: ['.docs/stories/first.md'],
+      reason: 'First correction.',
+    },
+    {
+      fromCommit: commits[1],
+      toCommit: commits[2],
+      paths: ['.docs/plans/second.md', '.docs/stories/second.md'],
+      reason: 'Second correction.',
+    },
+    {
+      fromCommit: commits[2],
+      toCommit: commits[3],
+      paths: ['.docs/specs/third.md'],
+      reason: 'Third correction.',
+    },
+  ]);
+});
+
 describe('createProtectedArtifactSeal', () => {
   it('persists committed product, architecture, story, and plan content under its approved baseline', async () => {
     const repo = await makeRepo({
