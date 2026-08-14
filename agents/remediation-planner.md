@@ -37,7 +37,7 @@ exception — reserved for two human categories only.
 | **build** | impl / test / wiring bug with clear evidence; **implementation/test/documentation drift that preserves the approved architecture** | re-open BUILD with your tasks |
 | **acceptance_specs** | the real miss is acceptance coverage — behavior isn't pinned by a failing spec | regenerate specs, then BUILD |
 | **architecture_review** | changing or clarifying **approved architecture** is required before the gap can be closed | re-run the architecture review |
-| **plan** | functionality that **is in scope** but the plan omitted it (a planning miss, not a design gap) | re-plan, then BUILD |
+| **plan** | functionality that **is in scope** but the plan omitted it (a planning miss, not a design gap) | terminal needs-human HALT; never re-plans |
 | **halt** · `architectural-clarity` | an architectural gap needing a human **decision** (ambiguous trade-off, missing/conflicting ADR) | human |
 | **halt** · `product-scope` | functionality the **initial design never accounted for** — new product scope | human DECIDE |
 
@@ -64,7 +64,9 @@ exception — reserved for two human categories only.
   must change or be clarified.
 - **Keep omissions distinct from decisions.** An in-scope planning omission is a plan miss, not an
   architecture or design decision, so it routes to `plan`; it does not make `architecture_review`
-  appropriate. Positive example: a plan omitted an approved validation task, so re-plan it.
+  appropriate. Positive example: a plan omitted an approved validation task, so select `plan` after
+  coverage proof. `plan` remains a routed disposition distinct from `halt`; its terminal needs-human
+  HALT is an engine outcome, not a HALT category.
   Negative example: do not reopen architecture review when no approved architectural change or
   clarification is required.
 - **Check plan-task coverage before `plan`.** Before selecting `plan`, examine the approved plan's

@@ -13,6 +13,10 @@ import { fileURLToPath } from 'node:url';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
+const DECIDE_ENTRY_POLICY = join(
+  REPO_ROOT,
+  'src/conductor/src/engine/decide-entry-policy.ts',
+);
 
 const CONTRACT_SURFACES = [
   ['remediate skill', 'skills/remediate/SKILL.md'],
@@ -88,5 +92,30 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect(text).toMatch(
       /a clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`[\s\S]{0,160}a `build_stall` question answerable from committed artifacts routes `build`[\s\S]{0,160}(?:architecture|product|unanswerable) judgment routes `halt`/i,
     );
+  });
+
+  it('keeps plan routed separately from HALT categories', async () => {
+    const text = await contract();
+    const planRow = text.match(/^\|[^\n]*\bplan\b[^\n]*\|[^\n]*$/im);
+
+    expect(planRow).not.toBeNull();
+    expect(planRow?.[0]).not.toMatch(/re-plan, then BUILD/i);
+    expect(text).not.toMatch(/so re-plan it/i);
+    expect(text).toMatch(/architectural-clarity[\s\S]{0,160}product-scope/i);
+    expect(text).toMatch(/low confidence[\s\S]{0,160}HALT/i);
+
+    if (relativePath === 'skills/remediate/SKILL.md') {
+      expect(text).toMatch(/unanswerable.*stall-question/i);
+    } else {
+      expect(text).toMatch(/only two things HALT/i);
+    }
+  });
+});
+
+describe('autonomous DECIDE entry policy', () => {
+  it('refuses autonomous entry to plan', async () => {
+    const text = await readFile(DECIDE_ENTRY_POLICY, 'utf8');
+
+    expect(text).toMatch(/const UNGRANTABLE_STEP: StepName = 'plan';/);
   });
 });
