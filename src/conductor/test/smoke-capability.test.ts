@@ -203,6 +203,32 @@ describe('smoke capability declarations', () => {
     });
   });
 
+  it('fails the gate instead of non-gating-skipping a force-skipped credentialed file', async () => {
+    const runVitest = vi.fn();
+    const emit = vi.fn();
+    const file = 'test/engine/daemon-e2e-live-claude.smoke.test.ts';
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [{
+        file,
+        source: "const smokeCapability = 'credentialed:claude';",
+      }],
+      runVitest,
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: {
+        CLAUDE_CODE_OAUTH_TOKEN: 'token',
+        SMOKE_FORCE_SKIP: `file:${file}`,
+      },
+      emit,
+    })).rejects.toThrow(`Smoke gate unmet for ${file}: operator override`);
+
+    expect(runVitest).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith(
+      `smoke ledger: ${file} [credentialed:claude] failed (evidence: operator override)`,
+    );
+  });
+
   it('emits a distinct attributable ledger entry for every smoke-file outcome', () => {
     const emit = vi.fn();
 
