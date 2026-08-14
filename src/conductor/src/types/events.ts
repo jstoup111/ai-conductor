@@ -294,6 +294,8 @@ export type ConductorEvent =
       paths: string[];
       /** Base-ahead paths excluded after provenance proved they were not feature-authored. */
       excludedBaseAheadPaths?: string[];
+      /** Feature-authored paths excluded because an operator reseal already approved their sealed content. */
+      excludedOperatorResealedPaths?: string[];
     }
   | {
       type: 'protected_artifact_rebaseline_refused';

@@ -2329,9 +2329,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const excludedBaseAheadPaths = event.excludedBaseAheadPaths?.length
         ? `; excluded base-ahead paths: ${event.excludedBaseAheadPaths.join(', ')}`
         : '';
+      const excludedOperatorResealedPaths = event.excludedOperatorResealedPaths?.length
+        ? `; kept operator-resealed paths: ${event.excludedOperatorResealedPaths.join(', ')}`
+        : '';
       log(
         `${dot} ${chalk.dim(
-          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)${excludedBaseAheadPaths}`,
+          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)`
+          + `${excludedBaseAheadPaths}${excludedOperatorResealedPaths}`,
         )}`,
       );
       break;

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConductorEvent } from '../../src/types/events.js';
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
+  type ProtectedArtifactSeal,
   type ProtectedArtifactSealRebaselineEvent,
   createProtectedArtifactSeal,
   classifyMutationTarget,
@@ -843,6 +844,72 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     });
   });
 
+  describe('operator-resealed authored paths (#1574)', () => {
+    const path = '.docs/plans/amended.md';
+    const approvedBytes = Buffer.from('operator-approved amendment\n');
+    const baseBytes = Buffer.from('base-owned plan\n');
+
+    function sealWith(rebaselines: ProtectedArtifactSeal['rebaselines']): ProtectedArtifactSeal {
+      return {
+        version: 2,
+        baselineCommit: 'sealed-head',
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update(approvedBytes).digest('hex')}`,
+        }],
+        rebaselines,
+      };
+    }
+
+    const operatorReseal = {
+      fromCommit: 'sealed-head',
+      toCommit: 'amended-head',
+      trigger: 'operator-reseal',
+      paths: [path],
+      reason: 'Operator-approved plan repair',
+    };
+
+    function evaluate(
+      seal: ProtectedArtifactSeal,
+      content: Buffer,
+    ): ReturnType<typeof evaluateProtectedArtifactSealRotation> {
+      return evaluateProtectedArtifactSealRotation({
+        seal,
+        baselineAncestry: 'non-ancestor',
+        workspaceArtifacts: new Map([[path, content]]),
+        headArtifacts: new Map([[path, content]]),
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        authorshipByPath: new Map([[path, 'authored']]),
+      });
+    }
+
+    it('permits rotation for an authored path the operator already resealed at its sealed content', () => {
+      expect(evaluate(sealWith([operatorReseal]), approvedBytes)).toEqual({
+        permitted: true,
+        paths: [],
+        excludedOperatorResealedPaths: [path],
+      });
+    });
+
+    it('refuses an authored path amended again after its operator reseal', () => {
+      expect(evaluate(sealWith([operatorReseal]), Buffer.from('unapproved later edit\n'))).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('refuses an authored path carried only by a non-operator rebaseline trigger', () => {
+      const engineRebaseline = { ...operatorReseal, trigger: 'defensive-history-rewrite' };
+
+      expect(evaluate(sealWith([engineRebaseline]), approvedBytes)).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+  });
+
   it('refuses a diverging path when its authorship is indeterminate', () => {
     const path = '.docs/plans/changed.md';
     const headBytes = Buffer.from('head\n');
@@ -1063,6 +1130,50 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       headCommit: await git(repo, ['rev-parse', 'HEAD']),
       baseTipRef: 'main',
     })).resolves.toEqual({ permitted: true, paths: [], excludedBaseAheadPaths: [path] });
+  });
+
+  it('rebaselines a feature-authored plan the operator resealed, once the base moves on (#1574)', async () => {
+    const path = '.docs/plans/feature.md';
+    const amended = 'approved plan\n\nOperator-approved amendment.\n';
+    const repo = await makeRepo({ [path]: 'approved plan\n' });
+    const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
+    await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
+    await writeProjectFile(repo, path, amended);
+    await git(repo, ['add', path]);
+    await git(repo, ['commit', '-q', '-m', 'docs(plan): operator-approved amendment']);
+    const amendedCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path,
+        fingerprint: `sha256:${createHash('sha256').update(amended).digest('hex')}`,
+      }],
+      rebaselines: [{
+        fromCommit: sharedCommit,
+        toCommit: amendedCommit,
+        trigger: 'operator-reseal',
+        paths: [path],
+        reason: 'Operator-approved plan repair',
+      }],
+    };
+
+    await expect(evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: repo,
+      seal,
+      headCommit: amendedCommit,
+      baseTipRef: 'main',
+    })).resolves.toEqual({
+      permitted: true,
+      paths: [],
+      excludedOperatorResealedPaths: [path],
+    });
   });
 
   it('probes authorship only for protected paths that diverge from the base tip', async () => {

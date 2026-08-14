@@ -717,6 +717,13 @@ the protected-artifact class. The rationale is not only an audit record: the nex
 this feature also renders it, alongside the resealed paths and commit range, in the grader's prompt —
 see [operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
 
+The reseal survives later rebaselines. When the base branch subsequently moves and the seal rebaselines
+onto the feature's new merge base, a resealed path is no longer refused as a feature-authored DECIDE
+change: it is kept at its approved content and reported as `kept operator-resealed paths: <path>` in
+the daemon log. That approval is bound to the content it was taken against, not to the path — amend the
+artifact again after resealing and it refuses exactly as before, because the sealed fingerprint no
+longer matches. Reseal again only after reviewing the new amendment.
+
 If REKICK encounters this refusal before starting git, the HALT begins
 `protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase
 resolver or run `git rebase --continue`; review and rotate the seal as above, then clear the HALT
