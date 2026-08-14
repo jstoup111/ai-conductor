@@ -1223,6 +1223,29 @@ function mapPrProseJudgmentResult(
   }
 }
 
+/**
+ * A retry must name the transition a fresh authoritative observation would
+ * actually dispatch. Otherwise re-entering FINISH cannot perform the work the
+ * retry promises and would only consume its bounded retry allowance.
+ */
+async function reconcileSelectablePublicationRetry(
+  retry: Extract<AdvanceFinishPublicationResult, { kind: 'publication_retry' }> & {
+    transition: PublicationTransition;
+  },
+  observe: AdvanceFinishPublicationInput['observe'],
+): Promise<AdvanceFinishPublicationResult> {
+  const selectedTransition = nextFinishPublicationTransition(await observe());
+  if (selectedTransition === retry.transition) return retry;
+
+  return {
+    kind: 'human_required',
+    reason: 'publication_transition_unmoved',
+    detail:
+      `The ${retry.transition} retry cannot run because the fresh publication ` +
+      `observation selects ${selectedTransition}.`,
+  };
+}
+
 async function emitPublicationEvent(
   emit: PublicationEventEmitter | undefined,
   event: FinishPublicationEvent,
@@ -1463,33 +1486,38 @@ export async function advanceFinishPublication(
       type: 'finish_publication_transition', phase: 'started', transition: 'judge_pr_prose',
     });
     return coalescePublicationEffect(input.effects, 'judge_pr_prose', async () => {
+      let result: AdvanceFinishPublicationResult;
       try {
-        const result = mapPrProseJudgmentResult(
+        result = mapPrProseJudgmentResult(
           await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
         );
-        if (result.kind !== 'advanced') return result;
-
-        const observedAfterJudgment = await input.observe();
-        return (await advancedPublicationTransition(
-          input.emit,
-          'judge_pr_prose',
-          snapshot,
-          observedAfterJudgment,
-        )) ?? {
-          kind: 'publication_retry',
-          transition: 'judge_pr_prose',
-          reason: 'judgment_dispatch_failed',
-        };
       } catch {
         // The dispatcher can lose its response after the provider has returned.
-        // Re-observation on the next FINISH pass is authoritative, so retain the
-        // already verified PR effects and retry only judgment.
-        return {
+        // A fresh observation determines whether judgment is still the stage
+        // that can run before this attempt is allowed to retry it.
+        return reconcileSelectablePublicationRetry({
           kind: 'publication_retry',
           transition: 'judge_pr_prose',
           reason: 'judgment_dispatch_failed',
-        };
+        }, input.observe);
       }
+
+      if (result.kind === 'publication_retry' && 'transition' in result) {
+        return reconcileSelectablePublicationRetry(result, input.observe);
+      }
+      if (result.kind !== 'advanced') return result;
+
+      const observedAfterJudgment = await input.observe();
+      return (await advancedPublicationTransition(
+        input.emit,
+        'judge_pr_prose',
+        snapshot,
+        observedAfterJudgment,
+      )) ?? {
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_dispatch_failed',
+      };
     });
   }
 
