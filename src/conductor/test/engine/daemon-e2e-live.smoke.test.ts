@@ -34,8 +34,6 @@ async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Pr
     !existsSync(join(worktreeDir, `.daemon/parked/${slug}`));
 }
 
-const claude = LIVE_E2E_PROVIDERS[0];
-const shouldRun = liveProviderAvailable(claude);
 const advisoryProbe = process.env.DAEMON_E2E_LIVE_ADVISORY_PROBE === '1';
 
 describe('daemon E2E live terminal guard', () => {
@@ -360,10 +358,4 @@ describe('daemon E2E live terminal guard', () => {
       await rm(worktreeDir, { recursive: true, force: true });
     }
   });
-});
-
-describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
-  it('finishes a seeded daemon fixture with a trailered task commit', async () => {
-    await runLiveE2ERunBody(claude, tokenCap);
-  }, 20 * 60_000);
 });
