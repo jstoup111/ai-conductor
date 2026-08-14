@@ -67,4 +67,18 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
 
     expect(baselinePassingTest).not.toBeNull();
   });
+
+  it('requires plan rationale evidence and makes plan terminal', async () => {
+    const text = await contract();
+
+    const rationaleEvidence = text.match(
+      /`plan` rationale must name the examined plan task IDs and why none admits the fix/i,
+    );
+    const terminalPlan = text.match(
+      /in a daemon run, a `plan` disposition is a terminal needs-human HALT and never re-plans/i,
+    );
+
+    expect(rationaleEvidence).not.toBeNull();
+    expect(terminalPlan).not.toBeNull();
+  });
 });

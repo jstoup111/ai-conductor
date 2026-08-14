@@ -70,6 +70,7 @@ exception — reserved for two human categories only.
 - **Check plan-task coverage before `plan`.** Before selecting `plan`, examine the approved plan's
   existing tasks. A gap whose remedy is admitted by an existing task is `build`; use `plan` only
   when no existing task admits the remedy.
+- **`plan` is terminal in daemon runs.** In a daemon run, a `plan` disposition is a terminal needs-human HALT and never re-plans.
 - **Reject contradictory dispositions.** It is forbidden and invalid to select
   `architecture_review` when no architectural decision or product decision is needed; that
   `architecture_review` disposition is invalid. Route that clear conforming
@@ -116,7 +117,8 @@ serializes into `.pipeline/remediation.json`:
 
 Rules: `category` is set **iff** `disposition == "halt"` (`architectural-clarity` | `product-scope`).
 `tasks` is **non-empty** for `build` (and recommended for `acceptance_specs`/`plan`), and **empty**
-for `halt`. Each task `id` is unique and stable (`rem-<gap>-<n>`); `status` starts `pending`.
+for `halt`. A `plan` rationale must name the examined plan task IDs and why none admits the fix.
+Each task `id` is unique and stable (`rem-<gap>-<n>`); `status` starts `pending`.
 
 ## What You Are NOT
 

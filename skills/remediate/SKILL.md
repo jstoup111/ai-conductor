@@ -84,7 +84,7 @@ gap must be turned into concrete work:
 | `build` | impl / test / wiring bug with clear evidence (the fix is obvious from the gap); **implementation/test/documentation drift that preserves the approved architecture**; OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
 | `acceptance_specs` | the gap exists because acceptance coverage is missing or too weak to pin the behavior | kick to **acceptance_specs** (regenerate failing specs), then build |
 | `architecture_review` | changing or clarifying **approved architecture** is required before the gap can be closed | kick to **architecture_review** |
-| `plan` | functionality that **is in scope** but the plan simply omitted or missed (a planning omission, not an architecture or design decision) | kick to **plan** (re-plan), then build |
+| `plan` | functionality that **is in scope** but the plan simply omitted or missed (a planning omission, not an architecture or design decision) | In a daemon run, a `plan` disposition is a terminal needs-human HALT and never re-plans. |
 | `halt` + `category: architectural-clarity` | an architectural gap that needs a human *decision* before any code can be right; OR **stall-question requires architectural judgement beyond the committed spec** | **HALT** for human |
 | `halt` + `category: product-scope` | functionality the **initial design never covered**; OR **stall-question hinges on product-level decision not in the PRD** | **HALT** for human DECIDE |
 | `halt` + `category: unanswerable` | **stall-question only:** the question is ambiguous or cannot be answered from committed artifacts alone; need more evidence | **HALT** — flag the question as unanswerable and preserve it verbatim |
@@ -178,7 +178,7 @@ Field rules:
   `gh pr edit` is the failure this disposition exists to prevent. Conversely, never use
   `publication` when any code, test, spec, or configuration must change — that is `build`.
 - `category` — **only** when `disposition == "halt"`: `architectural-clarity` | `product-scope` | `unanswerable` (stall-question only). Otherwise `null`.
-- `rationale` — one sentence citing the gap's `file:line` evidence and justifying the disposition. For a **stall-question with `disposition == "build"`**, the rationale contains the **answer to the question**, grounded in the committed artifacts that support it.
+- `rationale` — one sentence citing the gap's `file:line` evidence and justifying the disposition. For a **stall-question with `disposition == "build"`**, the rationale contains the **answer to the question**, grounded in the committed artifacts that support it. A `plan` rationale must name the examined plan task IDs and why none admits the fix.
 - `tasks` — for a `publication` disposition, tasks are OPTIONAL and purely informational: the
   `rationale` is the remedy, and nothing is ever appended to the plan (see §5). Otherwise:
   **required, non-empty** when `disposition == "build"` (and recommended for `acceptance_specs`/`plan`), EXCEPT for **stall-question answers**, which have `tasks: []` (no further work — the answer in `rationale` is the remedy). Each task is concrete and **file-scoped** (`file:line` + exactly what to change), drawn from the audit evidence. **`[]` for all `halt` dispositions.** A `build` disposition with empty `tasks` is invalid EXCEPT when the input is a `build_stall` stall-question.
@@ -233,5 +233,6 @@ Headers re-parse via the Task 18 grammar and must include:
 - [ ] For a stall-question answer (`build_stall` disposition `build`), the `rationale` clearly answers the original question and cites the artifacts that support it
 - [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,
       never to `build` or `acceptance_specs`
+- [ ] A `plan` rationale names the examined plan task IDs and why none admits the fix
 - [ ] `id` format correct: `FR-N`, `test:<stem>`, `adr-<stem>`, or `stall:<slug>`
 - [ ] Valid JSON written to `.pipeline/remediation.json` matching the contract exactly
