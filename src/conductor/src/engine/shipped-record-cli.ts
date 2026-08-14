@@ -25,12 +25,14 @@ import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
   appendTimingSection,
+  appendBuildReviewAcceptedRisk,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
   resolveEngineVersion,
   writeShippedRecord,
 } from './shipped-record.js';
+import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { computeCostRollup } from './cost-rollup.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
@@ -168,6 +170,11 @@ export async function dispatchShippedRecord(
       );
       recordBody = appendTimingSection(recordBody, { state: 'unavailable' });
     }
+    const dispositions = await new BuildReviewDispositionStore(cwd).list({
+      version: 'v1', repository: cwd, feature: identity.slug,
+    });
+    if (!dispositions.ok) throw new Error(dispositions.message);
+    recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);
     await writeShippedRecord(join(cwd, relPath), recordBody);
 
     await execa('git', ['add', relPath], { cwd });

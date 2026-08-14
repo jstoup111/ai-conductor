@@ -5,6 +5,8 @@ import type { BacklogTreeSource } from './backlog-tree-source.js';
 import type { CostRollup } from './cost-rollup.js';
 import { versionIdFromEngineDir } from './engine-version-id.js';
 import type { TimingRollup } from './timing-rollup.js';
+import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -237,6 +239,16 @@ export function appendTimingSection(
     activeLine +
     measuredLines
   );
+}
+
+/** Appends the same validated accepted-risk section used by retained PRs. */
+export function appendBuildReviewAcceptedRisk(
+  existingContent: string,
+  records: readonly BuildReviewDispositionRecord[],
+): string {
+  const upserted = upsertBuildReviewAcceptedRisk(existingContent, records);
+  if (!upserted.ok) throw new Error(upserted.message);
+  return upserted.body;
 }
 
 const FRONTMATTER_LINE = /^([a-zA-Z_]+):\s*(.*)$/;
