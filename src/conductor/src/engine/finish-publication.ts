@@ -428,6 +428,7 @@ export function nextFinishPublicationTransition(
 export type HumanRequiredReason =
   | 'judgment_refused'
   | 'judgment_halt_prose'
+  | 'publication_transition_unmoved'
   | 'ambiguous_pr_identity'
   | 'invalid_shipped_record'
   | 'interactive_intent_deferred'
@@ -500,6 +501,10 @@ export const HUMAN_REQUIRED_REASONS = {
   judgment_halt_prose: {
     message: 'The PR contains halt prose that must not be overwritten automatically.',
     nextAction: 'Review the halt prose and resolve its stated blocker.',
+  },
+  publication_transition_unmoved: {
+    message: 'A FINISH publication transition did not change the state it owns.',
+    nextAction: 'Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH.',
   },
   ambiguous_pr_identity: {
     message: 'More than one pull request matches this feature, so FINISH cannot select one safely.',
@@ -1112,7 +1117,11 @@ export type AdvanceFinishPublicationResult =
     }
   | {
       kind: 'human_required';
-      reason: 'ambiguous_pr_identity' | 'invalid_shipped_record';
+      reason:
+        | 'publication_transition_unmoved'
+        | 'ambiguous_pr_identity'
+        | 'invalid_shipped_record';
+      detail?: string;
     }
   | {
       kind: 'human_required';
@@ -1237,10 +1246,13 @@ export async function advancedPublicationTransition(
   const movement = publicationTransitionDimensionMovement(transition, before, after);
   if (movement === 'indeterminate') return undefined;
   if (movement === 'unmoved') {
-    // Task 10 replaces this compatibility reason with a dedicated reason and
-    // operator-facing detail. Until then, keep the result inside the existing
-    // typed human-required route rather than spending a retry budget.
-    return { kind: 'human_required', reason: 'judgment_halt_prose' };
+    const dimension = PUBLICATION_TRANSITION_DIMENSIONS[transition];
+    const value = publicationTransitionDimensionValue(dimension, after);
+    return {
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: `The ${transition} transition left ${dimension} unchanged at ${String(value)}.`,
+    };
   }
 
   await emitPublicationEvent(emit, {
