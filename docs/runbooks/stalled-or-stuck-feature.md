@@ -713,7 +713,9 @@ unrelated changes into the seal. On success it writes a new baseline at the curr
 `rebaselines` entry recording the trigger (`operator-reseal`) and rationale, and writes a
 `protected_artifact_reseal` audit record with an `operator` origin — so the override is auditable
 rather than silent. `--clear-halt` also clears the worktree's HALT in the same step, once its class is
-the protected-artifact class.
+the protected-artifact class. The rationale is not only an audit record: the next `build_review` on
+this feature also renders it, alongside the resealed paths and commit range, in the grader's prompt —
+see [operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
 
 If REKICK encounters this refusal before starting git, the HALT begins
 `protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase
