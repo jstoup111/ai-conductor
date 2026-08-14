@@ -158,9 +158,80 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     expect(remediationContext).not.toContain('Active plan:');
   });
 
-  it('keeps the validation-group remediation dispatch context unchanged', async () => {
+  it('adds coverage guidance only to build_review remediation, leaving validation-group dispatch unchanged', async () => {
     dir = await mkdtemp(join(tmpdir(), 'validation-group-remediate-dispatch-'));
-    const statePath = join(dir, '.pipeline', 'state.json');
+    const buildReviewDir = join(dir, 'build-review');
+    const buildReviewStatePath = join(buildReviewDir, '.pipeline', 'state.json');
+    const buildReviewState: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const step of ALL_STEPS) {
+      if (step.name !== 'build_review') buildReviewState[step.name] = 'done';
+    }
+    await mkdir(buildReviewDir, { recursive: true });
+    await writeState(buildReviewStatePath, buildReviewState as ConductState);
+    await mkdir(join(buildReviewDir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(buildReviewDir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+    );
+
+    let buildReviewContext: string | undefined;
+    const buildReviewRunner: StepRunner = {
+      run: async (step: StepName, _state, options): Promise<StepRunResult> => {
+        if (step === 'build_review') {
+          await writeFile(
+            join(buildReviewDir, '.pipeline', 'build-review.json'),
+            JSON.stringify({
+              verdict: 'FAIL',
+              reasons: ['implementation does not cover the approved plan'],
+              rubric: {
+                tautology: false,
+                scope: false,
+                rootCause: false,
+                completeness: true,
+                wiring: false,
+              },
+            }),
+          );
+        }
+        if (step === 'remediate') {
+          buildReviewContext = options?.retryReason;
+          await writeFile(
+            join(buildReviewDir, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'completeness-boundary',
+                  disposition: 'halt',
+                  category: 'architectural-clarity',
+                  rationale: 'End the focused dispatch after observing its context.',
+                  tasks: [],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      projectRoot: buildReviewDir,
+      stateFilePath: buildReviewStatePath,
+      stepRunner: buildReviewRunner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'build_review',
+      verifyArtifacts: true,
+      mode: 'auto',
+      daemon: true,
+    }).run();
+
+    expect(buildReviewContext).toContain(
+      'Check the approved plan’s existing tasks before proposing a plan-level change.',
+    );
+
+    const validationGroupDir = join(dir, 'validation-group');
+    await mkdir(validationGroupDir, { recursive: true });
+    const statePath = join(validationGroupDir, '.pipeline', 'state.json');
     const state: Record<string, unknown> = { complexity_tier: 'M' };
     for (const step of ALL_STEPS) {
       state[step.name] = [
@@ -173,9 +244,9 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     }
     state.build_review = 'skipped';
     await writeState(statePath, state as ConductState);
-    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await mkdir(join(validationGroupDir, '.pipeline'), { recursive: true });
     await writeFile(
-      join(dir, '.pipeline', 'task-status.json'),
+      join(validationGroupDir, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
     );
 
@@ -184,27 +255,27 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
       run: async (step: StepName, _state, options): Promise<StepRunResult> => {
         if (step === 'manual_test') {
           await writeFile(
-            join(dir!, '.pipeline', 'manual-test-results.md'),
+            join(validationGroupDir, '.pipeline', 'manual-test-results.md'),
             '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n',
           );
         }
         if (step === 'prd_audit') {
           await writeFile(
-            join(dir!, '.pipeline', 'prd-audit.md'),
+            join(validationGroupDir, '.pipeline', 'prd-audit.md'),
             '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n' +
               '| FR-1 | GAP | missing | evidence.ts:1 | no |\n',
           );
         }
         if (step === 'architecture_review_as_built') {
           await writeFile(
-            join(dir!, '.pipeline', 'architecture-review-as-built.md'),
+            join(validationGroupDir, '.pipeline', 'architecture-review-as-built.md'),
             '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
           );
         }
         if (step === 'remediate') {
           remediationContext = options?.retryReason;
           await writeFile(
-            join(dir!, '.pipeline', 'remediation.json'),
+            join(validationGroupDir, '.pipeline', 'remediation.json'),
             JSON.stringify({
               dispositions: [
                 {
@@ -223,7 +294,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     };
 
     const conductor = new Conductor({
-      projectRoot: dir,
+      projectRoot: validationGroupDir,
       stateFilePath: statePath,
       stepRunner: runner,
       events: new ConductorEventEmitter(),
