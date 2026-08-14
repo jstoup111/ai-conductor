@@ -473,6 +473,12 @@ export type AuxiliaryBranchExecutor<MemberId extends string, Policy, Outcome> = 
   policy: Policy,
 ) => Promise<Outcome>;
 
+/** A policy-bearing auxiliary member, deliberately separate from `GroupMember`. */
+export interface AuxiliaryGroupMember<MemberId extends string, Policy> {
+  memberId: MemberId;
+  policy: Policy;
+}
+
 /**
  * Runs one typed auxiliary branch without inventing a lifecycle-step identity
  * or mutable conductor state for it.
@@ -483,6 +489,24 @@ export async function runAuxiliaryGroupBranch<MemberId extends string, Policy, O
   execute: AuxiliaryBranchExecutor<MemberId, Policy, Outcome>,
 ): Promise<Outcome> {
   return execute(memberId, policy);
+}
+
+/**
+ * Schedules auxiliary branches through the shared capped semaphore. Each
+ * branch receives its own resolved policy unchanged, leaving provider
+ * fallback, retry, fresh-session, rate-limit, and actual-provider outcome
+ * attribution to the injected provider-aware executor rather than inventing
+ * a lifecycle `StepName` for the auxiliary member.
+ */
+export function runAuxiliaryGroupBranches<MemberId extends string, Policy, Outcome>(
+  members: readonly AuxiliaryGroupMember<MemberId, Policy>[],
+  maxParallel: number,
+  execute: AuxiliaryBranchExecutor<MemberId, Policy, Outcome>,
+): Promise<Outcome[]> {
+  return runWithConcurrency(
+    members.map(({ memberId, policy }) => () => runAuxiliaryGroupBranch(memberId, policy, execute)),
+    maxParallel,
+  );
 }
 
 /**
