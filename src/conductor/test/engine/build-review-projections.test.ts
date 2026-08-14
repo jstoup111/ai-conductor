@@ -45,6 +45,26 @@ describe('build-review rubric projections', () => {
     const projections = deriveBuildReviewRubricProjections(source());
 
     expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness', 'wiring']);
+    expect(Object.keys(projections.tautology).sort()).toEqual([
+      'changedTestSelectors', 'contractVersion', 'diff', 'digest', 'lapId', 'preflightEvidence',
+      'projectionVersion', 'revertedProductionPatch', 'rubric', 'snapshotDigest', 'testSuiteProof',
+    ]);
+    expect(Object.keys(projections.scope).sort()).toEqual([
+      'acceptedWidenings', 'contractVersion', 'diff', 'digest', 'lapId', 'planBody', 'projectionVersion',
+      'repairContext', 'rubric', 'snapshotDigest',
+    ]);
+    expect(Object.keys(projections.rootCause).sort()).toEqual([
+      'contractVersion', 'diff', 'digest', 'lapId', 'planBody', 'projectionVersion', 'repairContext',
+      'rubric', 'snapshotDigest',
+    ]);
+    expect(Object.keys(projections.completeness).sort()).toEqual([
+      'contractVersion', 'diff', 'digest', 'lapId', 'planBody', 'projectionVersion', 'rubric',
+      'snapshotDigest',
+    ]);
+    expect(Object.keys(projections.wiring).sort()).toEqual([
+      'contractVersion', 'diff', 'digest', 'entryPoints', 'lapId', 'planBody', 'projectionVersion',
+      'relocationEvidence', 'removalContext', 'rubric', 'scaffoldingDeclarations', 'snapshotDigest',
+    ]);
     expect(projections.tautology).toMatchObject({
       rubric: 'tautology', projectionVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot',
       diff: expect.any(String), changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
@@ -54,7 +74,10 @@ describe('build-review rubric projections', () => {
     expect(projections.rootCause).toMatchObject({ planBody: '# Approved plan\n', repairContext: expect.any(Array) });
     expect(projections.completeness).toMatchObject({ planBody: '# Approved plan\n', diff: expect.any(String) });
     expect(projections.wiring).toMatchObject({ entryPoints: expect.any(Array), removalContext: expect.any(Object), relocationEvidence: expect.any(Array), scaffoldingDeclarations: expect.any(Array) });
-    for (const projection of Object.values(projections)) expect(projection.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    for (const projection of Object.values(projections)) {
+      expect(projection.contractVersion).toBe('v1');
+      expect(projection.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    }
   });
 
   it('canonically serializes unordered evidence and ignores source prose outside a projection', () => {
@@ -74,13 +97,15 @@ describe('build-review rubric projections', () => {
 
     expect(second).toEqual(first);
     expect(projectionDigest(first.scope)).toBe(first.scope.digest);
+    expect(projectionDigest({ ...first.scope, projectionVersion: 'v2' } as unknown as typeof first.scope))
+      .not.toBe(first.scope.digest);
 
     const forbiddenSource = source();
     const changedForbiddenProse: BuildReviewProjectionSource = {
       ...forbiddenSource,
       inputs: { ...forbiddenSource.inputs, repairProvenance: { disposition: 'no_join' } },
     };
-    expect(deriveBuildReviewRubricProjections(changedForbiddenProse).completeness).toEqual(first.completeness);
+    expect(deriveBuildReviewRubricProjections(changedForbiddenProse)).toEqual(first);
   });
 
   it('rejects any undeclared field rather than widening a rubric contract', () => {
