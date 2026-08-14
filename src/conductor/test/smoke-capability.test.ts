@@ -60,6 +60,29 @@ describe('smoke capability declarations', () => {
     });
   });
 
+  it('resolves each credentialed provider against its own gate credential variable', () => {
+    const dependencies = {
+      hasCommand: () => true,
+      environment: { CLAUDE_CODE_OAUTH_TOKEN: 'token' },
+    };
+
+    expect({
+      claude: resolveGateSmokeFile(
+        'test/engine/daemon-e2e-live-claude.smoke.test.ts',
+        'credentialed:claude',
+        dependencies,
+      ),
+      codex: resolveGateSmokeFile(
+        'test/engine/daemon-e2e-live-codex.smoke.test.ts',
+        'credentialed:codex',
+        dependencies,
+      ),
+    }).toEqual({
+      claude: { outcome: 'ran' },
+      codex: { outcome: 'failed', unmet: 'CODEX_API_KEY' },
+    });
+  });
+
   it('fails gate mode when no credentialed case executed', () => {
     expect(() => assertGateCredentialedExecution(['hermetic', 'toolchain'])).toThrow(
       'Gate-mode smoke run executed no credentialed test files',

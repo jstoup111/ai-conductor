@@ -168,6 +168,20 @@ export function resolveGateSmokeFile(
 function resolveGateSmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, GateSmokeCapabilityResolution> {
+  const credentialedCapabilities = Object.fromEntries(
+    LIVE_SMOKE_PROVIDER_DESCRIPTORS.map(({ capability, credentialEnvVar }) => [
+      capability,
+      forceSkipsCapability(environment, capability)
+        ? { outcome: 'failed', unmet: 'operator override' }
+        : environment[credentialEnvVar]
+        ? { outcome: 'ran' }
+        : { outcome: 'failed', unmet: credentialEnvVar },
+    ]),
+  ) as Record<
+    (typeof LIVE_SMOKE_PROVIDER_DESCRIPTORS)[number]['capability'],
+    GateSmokeCapabilityResolution
+  >;
+
   return {
     hermetic: forceSkipsCapability(environment, 'hermetic')
       ? { outcome: 'failed', unmet: 'operator override' }
@@ -177,16 +191,7 @@ function resolveGateSmokeCapabilities(
       : hasCommand('toolchain')
       ? { outcome: 'ran' }
       : { outcome: 'failed', unmet: 'toolchain' },
-    'credentialed:claude': forceSkipsCapability(environment, 'credentialed:claude')
-      ? { outcome: 'failed', unmet: 'operator override' }
-      : environment.CLAUDE_CODE_OAUTH_TOKEN
-      ? { outcome: 'ran' }
-      : { outcome: 'failed', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
-    'credentialed:codex': forceSkipsCapability(environment, 'credentialed:codex')
-      ? { outcome: 'failed', unmet: 'operator override' }
-      : environment.CLAUDE_CODE_OAUTH_TOKEN
-      ? { outcome: 'ran' }
-      : { outcome: 'failed', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    ...credentialedCapabilities,
   };
 }
 
