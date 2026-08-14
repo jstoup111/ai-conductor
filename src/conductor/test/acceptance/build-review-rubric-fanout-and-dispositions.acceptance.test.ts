@@ -82,6 +82,11 @@ describe('acceptance: independent build_review rubric execution', () => {
       config,
       planPath,
       pipelineDir: join(dir, '.pipeline'),
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
     });
 
     await runner.run('build_review', {

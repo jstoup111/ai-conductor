@@ -1,4 +1,6 @@
-import { writeFile, access, readFile, mkdir } from 'node:fs/promises';
+import { writeFile, access, readFile, mkdir, rename } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
@@ -47,6 +49,12 @@ import {
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { buildGraderPrompt } from './build-review-prompt.js';
+import { coordinateBuildReviewRubrics, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
+import { readBuildReviewCacheEntry } from './build-review-cache.js';
+import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
+import { parseBuildReviewLapId, parseBuildReviewJudgedResult, type BuildReviewRubricResult } from './build-review-domain.js';
+import type { BuildReviewRubricProjection } from './build-review-projections.js';
+import { classifyTautologyPaths, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -1698,6 +1706,151 @@ export class DefaultStepRunner implements StepRunner {
    * completion gate (artifacts.ts) stays unsatisfied; it is never reported
    * as a PASS.
    */
+  private async runRubricBuildReview(
+    inputs: BuildReviewFrozenInputs,
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ): Promise<StepRunResult> {
+    const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
+    if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
+
+    const coordination = await coordinateBuildReviewRubrics({
+      config,
+      inputs,
+      lapId,
+      preflight: async () => this.runTautologyPreflight(inputs),
+      readCache: async (branch) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
+      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection),
+    });
+
+    if (coordination.kind === 'gate-disabled') {
+      return { success: true, output: 'build_review disabled' };
+    }
+    if (coordination.kind === 'refused') {
+      return { success: false, output: `build_review refused: ${coordination.reason}` };
+    }
+
+    const results = Object.fromEntries(coordination.branches.map((branch) => [
+      branch.rubric,
+      branch.kind === 'cache-hit' || branch.kind === 'dispatched'
+        ? branch.result
+        : branch.kind === 'skipped'
+          ? branch
+          : {
+              kind: 'infrastructure-failure' as const,
+              rubric: branch.rubric,
+              reason: 'provider-error' as const,
+              detail: branch.reason,
+            },
+    ])) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: inputs.sourceSnapshot.digest,
+      results,
+    });
+    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    await mkdir(effectivePipelineDir, { recursive: true });
+    await writeFile(join(effectivePipelineDir, 'build-review.json'), JSON.stringify(aggregate, null, 2), 'utf-8');
+    if (aggregate.verdict === 'PASS') await this.stampBuildReviewVerdict();
+    return { success: aggregate.verdict === 'PASS', output: JSON.stringify(aggregate) };
+  }
+
+  private async dispatchBuildReviewRubric(
+    branch: BuildReviewDispatchableRubric,
+    projection: BuildReviewRubricProjection,
+  ): Promise<unknown> {
+    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
+      tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness', wiring: 'Wiring',
+    };
+    const result = await this.provider.invoke({
+      prompt: [
+        `Build Review ${label[branch.rubric]} rubric.`,
+        `Use only this closed projection and return one JSON judged result for rubric ${branch.rubric}.`,
+        JSON.stringify(projection),
+      ].join('\n\n'),
+      sessionId: randomUUID(),
+      resume: false,
+      dangerouslySkipPermissions: true,
+      cwd: this.projectDir,
+      model: branch.policy.model,
+      effort: branch.policy.effort,
+    });
+    this.callCount++;
+    if (!result.success || typeof result.output !== 'string') return undefined;
+    try {
+      return parseBuildReviewJudgedResult(JSON.parse(result.output));
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {
+    const paths = [...inputs.diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+    const classified = classifyTautologyPaths(paths);
+    // There is no empty selector fallback: a rubric still receives an
+    // explicit, engine-authored exception projection and decides whether the
+    // absence of changed tests is a concern.
+    if (classified.tests.length === 0) {
+      return {
+        classification: 'approved-exception' as const,
+        exception: 'empty-test-set' as const,
+        cacheable: true as const,
+        cacheProvenance: 'miss' as const,
+        changedPaths: paths,
+        changedTestSelectors: [],
+        revertedProductionPatch: [],
+        sourceIdentities: { mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha },
+        output: { stdout: '', stderr: '' },
+      };
+    }
+    return materializeTautologyPreflight({
+      scopedWorkingDirectory: this.projectDir,
+      mergeBase: inputs.sourceSnapshot.mergeBase,
+      headSha: inputs.sourceSnapshot.headSha,
+      diff: inputs.diff,
+      createCheckout: async (path, headSha) => {
+        const result = await this.gitRunner(['worktree', 'add', '--detach', path, headSha]);
+        if (result.exitCode !== 0) throw new Error(result.stderr);
+      },
+      readMergeBaseFile: async (path) => {
+        const result = await this.gitRunner(['show', `${inputs.sourceSnapshot.mergeBase}:${path}`]);
+        return result.exitCode === 0 ? result.stdout : undefined;
+      },
+      writeFile,
+      runScoped: async (cwd, selectors, signal) => this.runScopedTautologyCommand(cwd, selectors, signal),
+      removeCheckout: async (path) => {
+        await this.gitRunner(['worktree', 'remove', '--force', path]);
+      },
+    });
+  }
+
+  private async runScopedTautologyCommand(cwd: string, selectors: readonly string[], signal: AbortSignal): Promise<TautologyScopedRunResult> {
+    const template = this.config?.test_suite?.scoped_command;
+    if (!template || selectors.length === 0) return { kind: 'launch-error' as const, stdout: '', stderr: '' };
+    const command = template.replace('{selectors}', selectors.map((selector) => JSON.stringify(selector)).join(' '));
+    return new Promise<TautologyScopedRunResult>((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const child = spawn('sh', ['-c', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const finish = (value: TautologyScopedRunResult) => {
+        if (!settled) { settled = true; resolve(value); }
+      };
+      child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+      child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+      child.once('error', () => finish({ kind: 'launch-error', stdout, stderr }));
+      child.once('close', (code, receivedSignal) => {
+        if (receivedSignal) finish({ kind: 'signal', signal: receivedSignal, stdout, stderr });
+        else finish({ exitCode: code ?? 1, stdout, stderr });
+      });
+      signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
+    });
+  }
+
   private async runBuildReview(): Promise<StepRunResult> {
     // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
     // sort()[last] guess (#407): with several features in flight the shared plans
@@ -1781,6 +1934,13 @@ export class DefaultStepRunner implements StepRunner {
     // artifact/aggregate compatibility is introduced by later tasks.
     if (this.buildReviewCoordinator) {
       return withBaseFreshness(await this.buildReviewCoordinator(inputs, buildReviewConfig));
+    }
+
+    // The public gate owns the rubric fan-out in production too.  The
+    // injectable coordinator above remains a narrow test seam; it is never
+    // the condition for using the five independent rubric sessions.
+    if (this.config?.build_review !== undefined) {
+      return withBaseFreshness(await this.runRubricBuildReview(inputs, buildReviewConfig));
     }
 
     // Per-task "work happened at all" floor (#781): purely additive,

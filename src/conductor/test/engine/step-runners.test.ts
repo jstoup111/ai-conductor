@@ -3148,6 +3148,36 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
+    it('uses the production rubric coordinator by default when build_review is configured', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        config: {
+          build_review: { enabled: true, perTaskFloor: false },
+          wiring: { entry_points: ['src/index.ts'] },
+        },
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
+      });
+
+      await runner.run('build_review', emptyState);
+
+      expect(provider.invoke).toHaveBeenCalledTimes(5);
+      expect((provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => options.prompt)).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('Build Review Tautology rubric'),
+          expect.stringContaining('Build Review Scope rubric'),
+          expect.stringContaining('Build Review Root Cause rubric'),
+          expect.stringContaining('Build Review Completeness rubric'),
+          expect.stringContaining('Build Review Wiring rubric'),
+        ]),
+      );
+    });
+
     it.each([
       {
         name: 'complete five-flag PASS',
