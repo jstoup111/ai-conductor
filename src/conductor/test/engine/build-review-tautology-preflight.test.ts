@@ -61,4 +61,36 @@ describe('build-review Tautology preflight', () => {
     expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'materialization-failed' });
     expect(removeCheckout).toHaveBeenCalledWith('/feature/.pipeline/build-review-preflight/head');
   });
+
+  it('keeps RED, stayed-green, and approved exceptions distinct and caches only completed evidence', async () => {
+    const base = {
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: vi.fn(async () => {}), readMergeBaseFile: vi.fn(async () => 'BASE'), writeFile: vi.fn(async () => {}),
+      removeCheckout: vi.fn(async () => {}), readCache: vi.fn(async () => undefined), writeCache: vi.fn(async () => {}),
+    };
+    const red = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ exitCode: 1, stdout: 'failed', stderr: '' }) });
+    const stayedGreen = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ exitCode: 0, stdout: 'passed', stderr: '' }) });
+    const exception = await materializeTautologyPreflight({ ...base, approvedException: 'removal-maintenance', runScoped: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
+
+    expect(red).toMatchObject({ classification: 'red', cacheable: true });
+    expect(stayedGreen).toMatchObject({ classification: 'stayed-green', cacheable: true });
+    expect(exception).toMatchObject({ classification: 'approved-exception', exception: 'removal-maintenance', cacheable: true });
+    expect(base.writeCache).toHaveBeenCalledTimes(3);
+    expect(base.createCheckout).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses an exact cached completed result without another checkout or scoped command', async () => {
+    const cached = { classification: 'red', cacheable: true, changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'], revertedProductionPatch: [{ path: 'src/a.ts', mergeBaseContent: 'BASE' }], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, output: { stdout: '', stderr: '' } } as const;
+    const createCheckout = vi.fn(async () => {});
+    const runScoped = vi.fn(async () => ({ exitCode: 1, stdout: '', stderr: '' }));
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head', diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout, readMergeBaseFile: async () => 'BASE', writeFile: async () => {}, runScoped, removeCheckout: async () => {},
+      readCache: async () => cached, writeCache: async () => {},
+    });
+    expect(result).toMatchObject({ classification: 'red', cacheProvenance: 'hit' });
+    expect(createCheckout).not.toHaveBeenCalled();
+    expect(runScoped).not.toHaveBeenCalled();
+  });
 });
