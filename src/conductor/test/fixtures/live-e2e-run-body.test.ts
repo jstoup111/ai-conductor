@@ -115,6 +115,10 @@ describe('runLiveE2ERunBody authentication source', () => {
     };
     const priorKey = process.env.CODEX_API_KEY;
     let dispatches = 0;
+    const stderr: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderr.push(args.map(String).join(' '));
+    });
     const readinessCheck = vi.fn(async (): Promise<AuthenticationReadiness> => readiness);
     const provider: LLMProvider = {
       readiness: readinessCheck,
@@ -147,6 +151,9 @@ describe('runLiveE2ERunBody authentication source', () => {
     try {
       process.env.CODEX_API_KEY = 'live-codex-key';
       vi.mocked(dumpPipelineDiagnostics).mockClear();
+      vi.mocked(dumpPipelineDiagnostics).mockImplementation(async () => {
+        console.error('pipeline readiness diagnostic:', process.env.CODEX_API_KEY);
+      });
 
       await expect(runLiveE2ERunBody(descriptor, 1, {
         binaryAvailable: () => true,
@@ -158,13 +165,17 @@ describe('runLiveE2ERunBody authentication source', () => {
         readinessChecks: readinessCheck.mock.calls.length,
         provisionAttempts: provisionProviderHome.mock.calls.length,
         dispatches,
+        credentialWasEmitted: stderr.join('\n').includes('live-codex-key'),
       }).toEqual({
         providerConstructions: 1,
         readinessChecks: 2,
         provisionAttempts: 0,
         dispatches: 0,
+        credentialWasEmitted: false,
       });
     } finally {
+      errorSpy.mockRestore();
+      vi.mocked(dumpPipelineDiagnostics).mockReset();
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
       else process.env.CODEX_API_KEY = priorKey;
     }
@@ -234,6 +245,51 @@ describe('runLiveE2ERunBody authentication source', () => {
 });
 
 describe('live E2E failure diagnostics', () => {
+  it('redacts a configured credential from diagnostic output while retaining presence-only failure reporting', async () => {
+    const { dumpLiveE2EFailureDiagnostics, reportLiveE2ESpend } = await import('./live-e2e-run-body.js') as {
+      dumpLiveE2EFailureDiagnostics: (worktreeDir: string, credentialValues?: readonly string[]) => Promise<void>;
+      reportLiveE2ESpend: (
+        metrics: { totalTokens: number; dispatches: number },
+        cap: number,
+        report?: (message: string) => void,
+      ) => void;
+    };
+    const credential = 'sk-live-e2e-credential-value';
+    const worktreeDir = await mkdtemp(`${tmpdir()}/live-e2e-redacted-diagnostics-`);
+    const stderr: string[] = [];
+    const summary = vi.fn();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderr.push(args.map(String).join(' '));
+    });
+
+    try {
+      await mkdir(join(worktreeDir, '.daemon'), { recursive: true });
+      vi.mocked(dumpPipelineDiagnostics).mockImplementation(async () => {
+        console.error('pipeline failure: CODEX_API_KEY=', credential);
+        throw new Error(`pipeline failure: CODEX_API_KEY=${credential}`);
+      });
+
+      await expect(dumpLiveE2EFailureDiagnostics(worktreeDir, [credential])).resolves.toBeUndefined();
+      reportLiveE2ESpend({ totalTokens: 123, dispatches: 4 }, 321, summary);
+
+      expect({
+        emitted: `${stderr.join('\n')}\n${summary.mock.calls.map((call) => call.join(' ')).join('\n')}`,
+        retainsRedactedPipelineState: stderr.join('\n').includes('pipeline failure: CODEX_API_KEY= [redacted]'),
+        hidesCaughtFailureDetails: stderr.join('\n').includes('live E2E pipeline diagnostics failed; diagnostic details redacted.'),
+        summary: summary.mock.calls,
+      }).toEqual({
+        emitted: expect.not.stringContaining(credential),
+        retainsRedactedPipelineState: true,
+        hidesCaughtFailureDetails: true,
+        summary: [['daemon E2E live smoke observed total: 123; dispatch count: 4; cap: 321']],
+      });
+    } finally {
+      errorSpy.mockRestore();
+      vi.mocked(dumpPipelineDiagnostics).mockReset();
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['absent worktree', 'absent'],
     ['missing daemon log', 'missing-log'],

@@ -289,7 +289,17 @@ export async function assertLiveProviderReadiness(provider: LLMProvider): Promis
   throw new Error(`Provider readiness is ${readiness.state}: ${readinessRemediation(readiness)}`);
 }
 
-export async function dumpLiveE2EFailureDiagnostics(worktreeDir: string): Promise<void> {
+function redactLiveE2ECredentialValues(value: unknown, credentialValues: readonly string[]): string {
+  return credentialValues
+    .filter((credential) => credential.length > 0)
+    .sort((left, right) => right.length - left.length)
+    .reduce((redacted, credential) => redacted.split(credential).join('[redacted]'), String(value));
+}
+
+export async function dumpLiveE2EFailureDiagnostics(
+  worktreeDir: string,
+  credentialValues: readonly string[] = [],
+): Promise<void> {
   if (!existsSync(worktreeDir)) {
     console.error(`live worktree not found at ${worktreeDir}; pipeline diagnostics unavailable.`);
     return;
@@ -303,22 +313,28 @@ export async function dumpLiveE2EFailureDiagnostics(worktreeDir: string): Promis
     console.error(`daemon log is empty at ${logPath}`);
   }
 
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    originalError(...args.map((argument) => redactLiveE2ECredentialValues(argument, credentialValues)));
+  };
   try {
     await dumpPipelineDiagnostics(worktreeDir);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    console.error(`live E2E pipeline diagnostics failed: ${detail}`);
+  } catch {
+    console.error('live E2E pipeline diagnostics failed; diagnostic details redacted.');
+  } finally {
+    console.error = originalError;
   }
 }
 
 async function withLiveE2EFailureDiagnostics<T>(
   worktreeDir: string,
+  credentialValues: readonly string[],
   run: () => Promise<T>,
 ): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    await dumpLiveE2EFailureDiagnostics(worktreeDir);
+    await dumpLiveE2EFailureDiagnostics(worktreeDir, credentialValues);
     throw error;
   }
 }
@@ -350,7 +366,7 @@ export async function runLiveE2ERunBody(
   let provisioned: ProvisionedHome | undefined;
   let baselineSha: string | undefined;
 
-  return withLiveE2EFailureDiagnostics(worktreeDir, async () => {
+  return withLiveE2EFailureDiagnostics(worktreeDir, [credential ?? ''], async () => {
     await assertDescriptorAuthenticationSource(descriptor, provider);
     await assertLiveProviderReadiness(provider);
     return enforceLiveE2ETokenCap(async () => {
