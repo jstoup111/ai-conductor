@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
@@ -8,6 +11,50 @@ vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
 }));
 
 describe('runLiveE2ERunBody authentication source', () => {
+  it('fails a credential-less Codex leg before any provider dispatch, naming the missing credential and cached-login path searched', async () => {
+    const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
+      runLiveE2ERunBody: (descriptor: LiveE2EProviderDescriptor, tokenCap: number) => Promise<void>;
+    };
+    const codexHome = await mkdtemp(`${tmpdir()}/live-e2e-empty-codex-home-`);
+    const priorKey = process.env.CODEX_API_KEY;
+    const priorHome = process.env.CODEX_HOME;
+    let dispatches = 0;
+    const createProvider = vi.fn((): LLMProvider => ({
+      invoke: vi.fn(async () => {
+        dispatches += 1;
+        throw new Error('provider must not dispatch');
+      }),
+      invokeInteractive: vi.fn(async () => {
+        dispatches += 1;
+        throw new Error('provider must not dispatch');
+      }),
+    }));
+    const descriptor = {
+      id: 'codex',
+      credentialEnvVar: 'CODEX_API_KEY',
+      createProvider,
+    } as unknown as LiveE2EProviderDescriptor;
+
+    try {
+      delete process.env.CODEX_API_KEY;
+      process.env.CODEX_HOME = codexHome;
+
+      await expect(runLiveE2ERunBody(descriptor, 1)).rejects.toThrow(
+        `Missing Codex credential: set CODEX_API_KEY or sign in at ${codexHome}/auth.json`,
+      );
+      expect({ providerConstructions: createProvider.mock.calls.length, dispatches }).toEqual({
+        providerConstructions: 0,
+        dispatches: 0,
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+      if (priorHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = priorHome;
+      await rm(codexHome, { recursive: true, force: true });
+    }
+  });
+
   it('installs the live Codex API key before construction, rather than repairing a cached-login provider afterward', async () => {
     const { createLiveProvider } = await import('./live-e2e-run-body.js') as {
       createLiveProvider: (descriptor: LiveE2EProviderDescriptor, credential: string | undefined) => LLMProvider;

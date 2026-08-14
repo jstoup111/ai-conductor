@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
@@ -154,6 +154,24 @@ export function createLiveProvider(
   return descriptor.createProvider();
 }
 
+/**
+ * Codex may authenticate with either an API key or its cached login. Reject
+ * an unavailable pair before constructing a provider or reaching dispatch.
+ */
+export function assertLiveProviderCredential(
+  descriptor: LiveE2EProviderDescriptor,
+  credential: string | undefined,
+): void {
+  if (descriptor.id !== 'codex' || credential?.trim()) return;
+
+  const cachedLoginPath = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'auth.json');
+  if (existsSync(cachedLoginPath)) return;
+
+  throw new Error(
+    `Missing Codex credential: set ${descriptor.credentialEnvVar} or sign in at ${cachedLoginPath}`,
+  );
+}
+
 export function defineLiveE2EProviderSmoke(descriptor: LiveE2EProviderDescriptor): void {
   const tokenCap = Number(process.env.DAEMON_E2E_LIVE_TOKEN_CAP ?? '100000');
   const shouldRun = liveProviderAvailable(descriptor);
@@ -185,6 +203,8 @@ export async function runLiveE2ERunBody(
   descriptor: LiveE2EProviderDescriptor,
   tokenCap: number,
 ): Promise<void> {
+  const credential = process.env[descriptor.credentialEnvVar];
+  assertLiveProviderCredential(descriptor, credential);
   const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
   const slug = 'daemon-e2e-live';
   const pipelineDir = join(worktreeDir, '.pipeline');
@@ -192,7 +212,7 @@ export async function runLiveE2ERunBody(
   const planPath = join(worktreeDir, `.docs/plans/${slug}.md`);
   const provider = createLiveProvider(
     descriptor,
-    process.env[descriptor.credentialEnvVar],
+    credential,
   );
   await assertDescriptorAuthenticationSource(descriptor, provider);
   let meter = new TokenMeter(provider);
