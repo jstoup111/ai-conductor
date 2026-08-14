@@ -80,6 +80,17 @@ describe('engine/build-review verdict wiring contract', () => {
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({ done: true });
   });
 
+  it('rejects PASS for failed rubric flags before requiring wiring findings', () => {
+    expect(validateBuildReviewVerdict({
+      verdict: 'PASS',
+      reasons: [],
+      rubric: { tautology: true, scope: true, rootCause: true, completeness: true, wiring: true },
+    })).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/PASS requires every rubric flag/i),
+    });
+  });
+
   it.each(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const)(
     'rejects PASS when rubric.%s reports a failure',
     (failedRubric) => {
