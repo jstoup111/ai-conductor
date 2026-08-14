@@ -48,13 +48,13 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
       ).join('\n')
     : '(none)';
   const renderedOperatorReseals = operatorReseals && operatorReseals.length > 0
-    ? `\n## Operator-authorized protected-artifact reseals\n\n${operatorReseals.map((reseal) => [
+    ? operatorReseals.map((reseal) => [
       `Paths: ${reseal.paths.join(', ')}`,
       `Reason: ${reseal.reason}`,
       `From commit SHA: ${reseal.fromCommit}`,
       `To commit SHA: ${reseal.toCommit}`,
-    ].join('\n')).join('\n\n')}`
-    : '';
+    ].join('\n')).join('\n\n')
+    : '(none)';
 
   return `You are reviewing a code diff for build_review — a code-review grade,
 NOT a full architectural review. Judge diff honesty only: whether the diff
@@ -180,6 +180,9 @@ evidence, not exemptions, for the Scope rubric. Judge whether each rationale
 actually justifies the widened path:
 
 ${renderedAcceptedWidenings}
+
+
+## Operator-authorized protected-artifact reseals
 
 ${renderedOperatorReseals}
 

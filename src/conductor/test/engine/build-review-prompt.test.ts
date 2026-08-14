@@ -263,6 +263,20 @@ describe('buildGraderPrompt', () => {
     ].every(Boolean)).toBe(true);
   });
 
+  it('renders (none) for empty and omitted operator reseals', () => {
+    const prompts = [
+      buildGraderPrompt({ ...inputs, operatorReseals: [] }),
+      buildGraderPrompt(inputs),
+    ];
+
+    expect(prompts.every((prompt) => {
+      const section = prompt.match(
+        /## Operator-authorized protected-artifact reseals\n\n([\s\S]*?)(?:\n\n## |$)/,
+      )?.[1];
+      return section === '(none)' && !section?.includes('undefined');
+    })).toBe(true);
+  });
+
   it('renders populated and empty removal evidence as evidence, escaping backticks', () => {
     const populated = buildGraderPrompt({
       ...inputs,
