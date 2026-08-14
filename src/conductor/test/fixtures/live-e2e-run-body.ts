@@ -60,13 +60,14 @@ export class TokenMeter implements LLMProvider {
   }
 
   private record(result: InvokeResult): void {
-    if (!result.tokenUsage) {
+    const usage = result.tokenUsage;
+    if (!usage || !Number.isFinite(usage.input) || !Number.isFinite(usage.output)) {
       this.unmetered += 1;
       this.unmeteredSteps.push(this.currentStep() ?? 'unattributed');
       return;
     }
-    this.totalTokens += result.tokenUsage.input + result.tokenUsage.output;
-    this.totalTurns += result.tokenUsage.numTurns ?? 0;
+    this.totalTokens += usage.input + usage.output;
+    this.totalTurns += usage.numTurns ?? 0;
   }
 }
 
@@ -180,14 +181,19 @@ export function assertSuccessfulCredentialedRun(
   provisioned: Pick<ProvisionedHome, 'dispatches'> | undefined,
   meter: Pick<TokenMeter, 'totalTurns' | 'totalTokens' | 'unmetered' | 'unmeteredSteps'>,
 ): void {
-  expect(provisioned?.dispatches ?? 0).toBeGreaterThan(0);
-  expect(meter.totalTurns).toBeGreaterThan(0);
-  expect(meter.totalTokens).toBeGreaterThan(0);
+  if (meter.unmeteredSteps.includes('unattributed')) {
+    throw new Error('Unattributable unmetered dispatch cannot be allow-listed.');
+  }
   const disallowed = meter.unmeteredSteps.filter(
     (step) => !STEPS_ALLOWED_UNMETERED.includes(step as StepName),
   );
-  expect(disallowed).toEqual([]);
+  if (disallowed.length > 0) {
+    throw new Error(`Unmetered dispatch at ${disallowed[0]} before publication boundary.`);
+  }
   expect(meter.unmeteredSteps.length).toBe(meter.unmetered);
+  expect(provisioned?.dispatches ?? 0).toBeGreaterThan(0);
+  expect(meter.totalTurns).toBeGreaterThan(0);
+  expect(meter.totalTokens).toBeGreaterThan(0);
 }
 
 const fixturePlanPath = fileURLToPath(new URL('./daemon-e2e/plan.md', import.meta.url));

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { AuthenticationReadiness, LLMProvider } from '../../src/execution/llm-provider.js';
+import type { AuthenticationReadiness, InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
 import { LIVE_E2E_PROVIDERS, type LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import type { LiveE2ERunBodyDependencies } from './live-e2e-run-body.js';
 
@@ -299,6 +299,41 @@ describe('withProvisionedLiveProviderHome', () => {
 });
 
 describe('live E2E shared spend policy', () => {
+  it('fails unmetered and unattributable dispatches for every provider instead of silently dropping unknown usage', async () => {
+    const { assertSuccessfulCredentialedRun, TokenMeter } = await import('./live-e2e-run-body.js');
+    const unknownUsageProvider: LLMProvider = {
+      invoke: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        tokenUsage: { prompt_tokens: 12, completion_tokens: 3 },
+      }),
+      invokeInteractive: vi.fn(),
+    };
+    const meter = new TokenMeter(unknownUsageProvider, () => 'build');
+
+    await meter.invoke({ prompt: 'live meter validation' } as InvokeOptions);
+
+    expect({
+      totalTokens: meter.totalTokens,
+      totalTurns: meter.totalTurns,
+      unmetered: meter.unmetered,
+      unmeteredSteps: meter.unmeteredSteps,
+    }).toEqual({
+      totalTokens: 0,
+      totalTurns: 0,
+      unmetered: 1,
+      unmeteredSteps: ['build'],
+    });
+    expect(() => assertSuccessfulCredentialedRun({ dispatches: 1 }, meter)).toThrow(
+      'Unmetered dispatch at build before publication boundary.',
+    );
+    expect(() => assertSuccessfulCredentialedRun(
+      { dispatches: 1 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 2, unmeteredSteps: ['finish', 'unattributed'] },
+    )).toThrow('Unattributable unmetered dispatch cannot be allow-listed.');
+  });
+
   it('uses one default and documented override for every descriptor, then reports observed spend', async () => {
     const {
       DEFAULT_LIVE_E2E_TOKEN_CAP,
