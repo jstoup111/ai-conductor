@@ -53,6 +53,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Spec and implementation PRs no longer fail the release-metadata check when their issue-linking trailer follows a trailing Migration section. ([implementation PR #1569](https://github.com/jstoup111/ai-conductor/pull/1569)).
 - Fresh installs and updates now follow a stable branch that advances only after a release is fully published. ([implementation PR #1561](https://github.com/jstoup111/ai-conductor/pull/1561)).
 - `remediate` now routes a build_review gap to `build` when an existing approved-plan task already admits the fix, instead of incorrectly halting for a needless re-plan. ([implementation PR #1571](https://github.com/jstoup111/ai-conductor/pull/1571)).
+- An operator-authorized protected-artifact reseal now survives later seal rebaselining, instead of halting the feature every time its base branch moves. ([implementation PR #1576](https://github.com/jstoup111/ai-conductor/pull/1576)).
 
 ## Migration
 
