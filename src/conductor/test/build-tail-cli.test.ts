@@ -7,6 +7,17 @@ import {
   detectBuildTailCommand,
   dispatchBuildTailCommand,
 } from '../src/engine/build-tail-cli.js';
+import { computeBuildReviewMetrics } from '../src/engine/build-tail-rollup.js';
+
+it('projects effective laps while retaining raw failures and excluding skipped rubrics', () => {
+  expect(computeBuildReviewMetrics([
+    { type: 'build_review_rubric_result', ts: 1, rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
+    { type: 'build_review_rubric_infrastructure_failure', ts: 2, rubric: 'wiring', lapId: 'lap-1', reason: 'provider-error' },
+    { type: 'build_review_rubric_skipped', ts: 3, rubric: 'tautology', lapId: 'lap-1', reason: 'disabled' },
+    { type: 'build_review_cache_hit', ts: 4, rubric: 'scope', lapId: 'lap-1' },
+    { type: 'build_review_outer_verdict', ts: 5, lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
+  ])).toEqual({ lapsToPass: 1, rubricFailureRates: { scope: { failures: 1, judged: 1 } }, skipped: 1, cacheHits: 1 });
+});
 
 const temporaryDirectories: string[] = [];
 

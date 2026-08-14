@@ -3,6 +3,16 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseCostBlock, renderKpi } from '../../src/engine/kpi-report.js';
+import { computeBuildReviewMetrics } from '../../src/engine/build-tail-rollup.js';
+
+it('keeps a raw rubric failure in the enabled-judgement denominator after an effective pass', () => {
+  const metrics = computeBuildReviewMetrics([
+    { type: 'build_review_rubric_result', ts: 1, rubric: 'scope', lapId: 'one', verdict: 'FAIL' },
+    { type: 'build_review_outer_verdict', ts: 2, lapId: 'one', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
+  ]);
+  expect(metrics.rubricFailureRates.scope).toEqual({ failures: 1, judged: 1 });
+  expect(metrics.lapsToPass).toBe(1);
+});
 
 let root: string;
 
