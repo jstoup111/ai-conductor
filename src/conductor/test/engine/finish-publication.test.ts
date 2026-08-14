@@ -104,6 +104,28 @@ async function publicationTransitionDimension(transition: PublicationTransition)
   return Reflect.get(dimensions, transition);
 }
 
+type AdvancedPublicationTransition = (
+  emit: undefined,
+  transition: PublicationTransition,
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+) => Promise<{ kind: 'advanced'; transition: PublicationTransition }>;
+
+async function advancedPublicationTransition(
+  transition: PublicationTransition,
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const advance = mod.advancedPublicationTransition;
+  if (typeof advance !== 'function') {
+    throw new Error(
+      'expected export "advancedPublicationTransition" to compare pre- and post-effect publication observations (not yet implemented)',
+    );
+  }
+  return (advance as AdvancedPublicationTransition)(undefined, transition, before, after);
+}
+
 type PublicationCondition =
   | {
       code: 'release_readiness_invalid';
@@ -1069,6 +1091,48 @@ describe('resolveInteractivePublicationIntent', () => {
       await expect(resolveInteractivePublicationIntent(choice)).resolves.toEqual({
         kind: 'human_required',
         reason: 'interactive_intent_destructive_choice',
+      });
+    },
+  );
+});
+
+describe('advancedPublicationTransition', () => {
+  it.each([
+    [
+      'author_pr_prose',
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'placeholder', ready: false },
+      }),
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+      }),
+    ],
+    [
+      'write_shipped_record',
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+        shippedRecord: 'missing',
+      }),
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+        shippedRecord: 'valid',
+      }),
+    ],
+    [
+      'ready_pr',
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+      }),
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+      }),
+    ],
+  ] as const satisfies readonly [PublicationTransition, PublicationSnapshot, PublicationSnapshot][]) (
+    'reports advanced when %s moves its owned dimension',
+    async (transition, before, after) => {
+      await expect(advancedPublicationTransition(transition, before, after)).resolves.toEqual({
+        kind: 'advanced',
+        transition,
       });
     },
   );
