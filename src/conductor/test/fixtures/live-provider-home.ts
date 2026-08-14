@@ -5,23 +5,19 @@ import {
 } from '../../src/engine/self-host/provider-home.js';
 import { tmpdir } from 'node:os';
 
-/**
- * Provision the isolated Claude home used by the opt-in live daemon smoke.
- * The caller supplies the token so this fixture never reads ambient credentials.
- */
+const DEFAULT_LIVE_PROVIDER: ResolvedSelfHostProvider = { id: 'claude' };
+
+/** Provision the isolated home used by the opt-in live daemon smoke. */
 export async function provisionLiveProviderHome(
   sourceRoot: string,
-  claudeCodeOauthToken?: string,
+  providerOrLegacyToken?: ResolvedSelfHostProvider | string,
   baseDir?: string,
-  provider: ResolvedSelfHostProvider = {
-    id: 'claude',
-    prepareSelfHostAuth: async () => ({
-      env: claudeCodeOauthToken
-        ? { CLAUDE_CODE_OAUTH_TOKEN: claudeCodeOauthToken }
-        : {},
-    }),
-  },
+  legacyProvider?: ResolvedSelfHostProvider,
 ): Promise<ProviderHome> {
+  const provider = typeof providerOrLegacyToken === 'object'
+    ? providerOrLegacyToken
+    : legacyProvider ?? DEFAULT_LIVE_PROVIDER;
+
   return provisionProviderHome({
     provider,
     worktreeRoot: sourceRoot,

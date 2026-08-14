@@ -45,6 +45,29 @@ async function withLiveProviderHome<T>(
 }
 
 describe('provisionLiveProviderHome', () => {
+  it('uses the supplied provider to prepare auth for its isolated home', async () => {
+    const sourceRoot = await createSourceCheckout();
+    const authContexts: Array<{ provider: string; homeDir: string }> = [];
+    const provider: ResolvedSelfHostProvider = {
+      id: 'codex',
+      prepareSelfHostAuth: async (context) => {
+        authContexts.push(context);
+        return { env: { CODEX_API_KEY: 'provider-owned-token' } };
+      },
+    };
+
+    try {
+      const home = await provisionLiveProviderHome(sourceRoot, provider);
+      try {
+        expect(authContexts).toEqual([{ provider: 'codex', homeDir: home.homeDir }]);
+      } finally {
+        await home.teardown();
+      }
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
   it('copies skills from the explicit source root into a Claude provider home', async () => {
     const sourceRoot = await mkdtemp(join(tmpdir(), 'live-provider-home-source-'));
     const skillsDir = join(sourceRoot, 'skills');
@@ -129,8 +152,6 @@ describe('provisionLiveProviderHome', () => {
     try {
       const home = await provisionLiveProviderHome(
         sourceRoot,
-        'claude-fixture-token',
-        undefined,
         codexProvider,
       );
       try {
