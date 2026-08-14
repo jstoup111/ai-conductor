@@ -9,7 +9,12 @@ import {
 import { classifyReleasePublication as classifyReleasePublicationFromIndex } from '../../src/index.js';
 
 describe('engine/release-publisher-action — release PR provenance and retry safety (Tasks 14–16)', () => {
-  const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
+  const config = {
+    branch: 'release/pending',
+    base: 'main',
+    appLogin: 'release-app[bot]',
+    stableBranch: 'stable',
+  };
 
   it('classifies a designated merged release PR as publishable with its resolved version without mutating', async () => {
     const { git, github } = dependencies();
@@ -123,6 +128,7 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
       })),
       readAnnotatedTag: vi.fn(async (): Promise<{ commit: string } | undefined> => undefined),
       createAnnotatedTag: vi.fn(async () => undefined),
+      updateStableBranch: vi.fn(async () => undefined),
     };
     const github = {
       findMergedPullRequestByMergeCommit: vi.fn(async () => ({
@@ -156,6 +162,96 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
       body: '### Fixed\n\n- Publish only approved releases.\n',
       target: 'merged-release-head',
     });
+  });
+
+  it('advances the configured stable branch to the published commit', async () => {
+    const { git, github } = dependencies();
+
+    await runReleasePublisherAction({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    });
+
+    expect(git.updateStableBranch).toHaveBeenCalledWith({
+      branch: 'stable',
+      commit: 'merged-release-head',
+    });
+  });
+
+  it('advances stable only after creating both the tag and GitHub Release', async () => {
+    const mutations: string[] = [];
+    const { git, github } = dependencies();
+    git.createAnnotatedTag.mockImplementation(async () => { mutations.push('tag'); });
+    github.createRelease.mockImplementation(async () => { mutations.push('release'); });
+    git.updateStableBranch.mockImplementation(async () => { mutations.push('stable'); });
+
+    await runReleasePublisherAction({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    });
+
+    expect(mutations).toEqual(['tag', 'release', 'stable']);
+  });
+
+  it.each([
+    ['publication rejection', ({ github }: ReturnType<typeof dependencies>) => {
+      github.readReleaseAudit.mockResolvedValue(undefined);
+    }],
+    ['GitHub Release failure', ({ github }: ReturnType<typeof dependencies>) => {
+      github.createRelease.mockRejectedValue(new Error('release creation failed'));
+    }],
+  ])('does not advance stable after %s', async (_name, arrange) => {
+    const dependenciesForCase = dependencies();
+    arrange(dependenciesForCase);
+    const { git, github } = dependenciesForCase;
+
+    await runReleasePublisherAction({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    }).catch(() => undefined);
+
+    expect(git.updateStableBranch).not.toHaveBeenCalled();
+  });
+
+  it('advances stable when retry finds both matching publication artifacts', async () => {
+    const { git, github } = dependencies();
+    git.readAnnotatedTag.mockResolvedValue({ commit: 'merged-release-head' });
+    github.findReleaseByTag.mockResolvedValue({
+      tag: 'v1.2.4',
+      title: 'v1.2.4',
+      body: 'Approved.\n',
+      target: 'merged-release-head',
+    });
+
+    await runReleasePublisherAction({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    });
+
+    expect(git.updateStableBranch).toHaveBeenCalledWith({
+      branch: 'stable',
+      commit: 'merged-release-head',
+    });
+  });
+
+  it('propagates a stable-branch update failure', async () => {
+    const { git, github } = dependencies();
+    git.updateStableBranch.mockRejectedValue(new Error('stable update rejected'));
+
+    await expect(runReleasePublisherAction({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    })).rejects.toThrow('stable update rejected');
   });
 
   it('rejects a candidate that changes after classification instead of publishing from stale authority', async () => {
@@ -339,6 +435,7 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
         readCommitFiles: vi.fn<ReleasePublisherGit['readCommitFiles']>(async () => ({ VERSION: '1.2.4\n', 'CHANGELOG.md': '# Changelog\n\n## [1.2.4] - 2026-08-02\n\nApproved.\n' })),
         readAnnotatedTag: vi.fn(async (): Promise<{ commit: string } | undefined> => undefined),
         createAnnotatedTag: vi.fn(async () => undefined),
+        updateStableBranch: vi.fn(async () => undefined),
       },
       github: {
         findMergedPullRequestByMergeCommit: vi.fn(async () => ({ number: 42, headCommit: 'release-head-42', ...pullRequest })),

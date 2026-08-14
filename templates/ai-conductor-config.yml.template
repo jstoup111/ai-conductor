@@ -23,7 +23,7 @@ harness_version: ">=0.99.0"
 # User-level global state. Written by bin/install and bin/conduct; safe to
 # edit by hand.
 conductor:
-  update_channel: tagged     # tagged | main
+  update_channel: stable     # stable | tagged | main
   auto_check: true
   current_version: ""         # filled in by bin/install
   last_checked_at: ""         # ISO 8601 UTC timestamp

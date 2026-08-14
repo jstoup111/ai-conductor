@@ -490,9 +490,9 @@ echo -e "${BOLD}Installer update config — conductor YAML${NC}"
 HOME_DIR=$(make_isolated_home)
 run_install_configure_conductor "$HOME_DIR" false
 assert "installer first run writes conductor YAML through shared accessors" \
-  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "tagged" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "true" ] && [ -n "$(cfg_get "$HOME_DIR" currentVersion)" ] && [ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "stable" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "true" ] && [ -n "$(cfg_get "$HOME_DIR" currentVersion)" ] && [ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
 assert "installer first run calls shared conductor accessors" \
-  "$( grep -qx 'config set conductor.update_channel tagged' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.auto_check true' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 4 ] && echo 0 || echo 1)"
+  "$( grep -qx 'config set conductor.update_channel stable' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.auto_check true' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 4 ] && echo 0 || echo 1)"
 assert "installer first run creates no legacy JSON config" \
   "$( [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json" ] && echo 0 || echo 1)"
 
@@ -509,7 +509,7 @@ cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
 EOF
 run_install_configure_conductor "$HOME_DIR" false
 assert "installer preserves seeded legacy preferences before first-run setup" \
-  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.100.0" ] && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1)"
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && case "$(cfg_get "$HOME_DIR" currentVersion)" in main@*) true;; *) false;; esac && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1)"
 
 # Update mode owns only the current version and check timestamp; it must retain
 # a user's selected channel and auto-check preference in the same YAML block.
@@ -521,8 +521,8 @@ set_conductor_cfg "$HOME_DIR" lastCheckedAt stale-time
 run_install_configure_conductor "$HOME_DIR" true
 assert "installer update refreshes version and timestamp while preserving preferences" \
   "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" != "stale-version" ] && [ "$(cfg_get "$HOME_DIR" lastCheckedAt)" != "stale-time" ] && echo 0 || echo 1)"
-assert "installer update calls only refresh accessors" \
-  "$( grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 2 ] && echo 0 || echo 1)"
+assert "installer update reads the channel before calling refresh accessors" \
+  "$( grep -qx 'config read conductor.update_channel' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 3 ] && echo 0 || echo 1)"
 
 # ─── ST-1400-2: one-time legacy JSON seed ─────────────────────────────────
 
@@ -851,6 +851,10 @@ run_update "$REPO" "$HOME_DIR" --set-channel tagged
 assert "--set-channel tagged exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "--set-channel tagged persists updateChannel=tagged" "$([ "$(cfg_get "$HOME_DIR" updateChannel)" = "tagged" ] && echo 0 || echo 1)"
 
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+assert "--set-channel stable exits 0 and persists updateChannel=stable" \
+  "$([ "$CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "stable" ] && echo 0 || echo 1)"
+
 run_update "$REPO" "$HOME_DIR" --set-channel bogus
 assert "--set-channel bogus exits 2" "$([ "$CODE" -eq 2 ] && echo 0 || echo 1)"
 assert "--set-channel bogus names valid channels" "$(case "$OUT" in *"tagged"*"main"*|*"main"*"tagged"*) echo 0;; *) echo 1;; esac)"
@@ -1101,6 +1105,176 @@ run_update_tty "$REPO" "$HOME_DIR" y
 assert "main accept: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "main accept: invokes bin/migrate" "$([ -f "$REPO/.migrate-calls" ] && echo 0 || echo 1)"
 assert "main accept: currentVersion is main@<sha>" "$(case "$(cfg_get "$HOME_DIR" currentVersion)" in main@*) echo 0;; *) echo 1;; esac)"
+
+PAIR=$(make_main_repo "stable-accept")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+
+WORK="$TMP_ROOT/stable-accept-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+STABLE_RELEASE_SHA=$(git -C "$WORK" rev-parse HEAD)
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable accept: remains on stable, fast-forwards to the tagged release, migrates, and records its version" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_RELEASE_SHA" ] && [ "$(git -C "$REPO" rev-parse origin/stable)" = "$STABLE_RELEASE_SHA" ] && [ -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-atomic-target")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-atomic-target-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+STABLE_APPROVED_SHA=$(git -C "$WORK" rev-parse HEAD)
+git -C "$WORK" commit -q --allow-empty -m "later untagged stable advance"
+STABLE_LATER_SHA=$(git -C "$WORK" rev-parse HEAD)
+
+RACE_GIT_DIR="$TMP_ROOT/stable-atomic-git-wrapper"
+RACE_MARKER="$TMP_ROOT/stable-atomic-race-fired"
+REAL_GIT_BIN=$(command -v git)
+mkdir -p "$RACE_GIT_DIR"
+cat > "$RACE_GIT_DIR/git" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+case " \$* " in
+  *" merge "*|*" pull "*)
+    if [ ! -f "\$RACE_MARKER" ]; then
+      : > "\$RACE_MARKER"
+      "$REAL_GIT_BIN" -C "\$RACE_WORK" push -q origin stable
+      "$REAL_GIT_BIN" fetch -q origin stable
+    fi
+    ;;
+esac
+exec "$REAL_GIT_BIN" "\$@"
+EOF
+chmod +x "$RACE_GIT_DIR/git"
+export RACE_WORK="$WORK" RACE_MARKER
+TEST_PATH_BEFORE_RACE=$TEST_PATH
+TEST_PATH="$RACE_GIT_DIR:$TEST_PATH"
+run_update_tty "$REPO" "$HOME_DIR" y
+TEST_PATH=$TEST_PATH_BEFORE_RACE
+unset RACE_WORK RACE_MARKER
+assert "stable atomic target: ignores a later untagged remote advance after approving the tagged SHA" \
+  "$( [ "$CODE" -eq 0 ] && [ -f "$TMP_ROOT/stable-atomic-race-fired" ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_APPROVED_SHA" ] && [ "$(git -C "$REPO" rev-parse HEAD)" != "$STABLE_ORIGINAL_SHA" ] && [ "$(git -C "$REPO" rev-parse HEAD)" != "$STABLE_LATER_SHA" ] && [ "$(wc -l < "$REPO/.migrate-calls")" -eq 1 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-untagged")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-untagged-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "untagged stable advance"
+git -C "$WORK" push -q origin stable
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable untagged: rejects the advance without moving, migrating, or changing version identity" \
+  "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -Eqi 'exact[- ]semver' && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-migrate-failure")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+cat > "$REPO/bin/migrate" <<EOF
+#!/usr/bin/env bash
+conduct-ts config set conductor.current_version v0.4.0
+echo invoked >> "$REPO/.migrate-calls"
+exit 1
+EOF
+chmod +x "$REPO/bin/migrate"
+git -C "$REPO" add bin/migrate
+git -C "$REPO" commit -q -m "install failing migrate fixture"
+git -C "$REPO" push -q origin stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-migrate-failure-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable migrate failure: restores the stable checkout and original version identity" \
+  "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-dirty")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-dirty-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+printf 'local dirty change\n' >> "$REPO/CHANGELOG.md"
+
+run_update "$REPO" "$HOME_DIR"
+assert "stable dirty: refuses the tagged fast-forward without mutating checkout or version" \
+  "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -Eqi 'clean|dirty|uncommitted' && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-diverged")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+git -C "$REPO" commit -q --allow-empty -m "local stable divergence"
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-diverged-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+
+run_update "$REPO" "$HOME_DIR"
+assert "stable diverged: refuses the remote release without mutating checkout or version" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
 
 PAIR=$(make_main_repo "s4-diverged")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"

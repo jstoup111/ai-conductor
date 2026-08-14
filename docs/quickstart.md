@@ -34,12 +34,14 @@ Pick your host now: `claude`, `codex`, or both. See
 ## Clone the harness
 
 ```bash
-git clone https://github.com/jstoup111/ai-conductor.git
+git clone --branch stable --single-branch https://github.com/jstoup111/ai-conductor.git
 cd ai-conductor
 ```
 
 Clone to a normal directory. A checkout whose physical path contains `/.worktrees/` is refused by
 the installer — see [Refusing to install from a build worktree](#refusing-to-install-from-a-build-worktree).
+The `stable` branch advances only after release CI has published its matching tag and GitHub Release;
+it therefore excludes work still in flight on `main`.
 
 ## Install
 
@@ -274,22 +276,31 @@ in [runbooks/daemon-recovery.md](runbooks/daemon-recovery.md).
 
 ## Updates
 
-The installer writes `conductor.update_channel` — `tagged` (default) or `main` — to
-`~/.ai-conductor/config.yml`; it does not create the legacy JSON configuration file.
-`conduct-ts` spawns `bin/update --auto` on startup and swallows every failure. Update by hand at
-any time:
+The installer writes `conductor.update_channel` — `stable` (default), `tagged`, or `main` — to
+`~/.ai-conductor/config.yml`; it does not create the legacy JSON configuration file. `stable`
+fast-forwards a branch only to fully published releases, `tagged` uses semver tag checkouts, and
+`main` follows every merge. Existing tag-pinned installations are not switched automatically.
+
+`conduct-ts` spawns `bin/update --auto` on startup and swallows every failure. Force an attended
+check, or update a stable checkout manually:
 
 ```bash
 cd /path/to/ai-conductor
-git pull && ./bin/install
+bin/update
+# or:
+git pull --ff-only origin stable && bin/migrate
 ```
 
-> **Known limitation.** The default `tagged` channel can never fire for a cloned adopter. Version
-> detection falls back to the `VERSION` file when `HEAD` is not on an exact tag, and CI bumps
-> `VERSION` to the next patch immediately *after* tagging — so `VERSION` is structurally always
-> ahead of the newest tag and the comparison never reports an update. On the default channel you
-> get no automatic updates. Pull manually, or switch with `bin/update --set-channel main`.
-> Tracked in [#1005](https://github.com/jstoup111/ai-conductor/issues/1005).
+Choose a different channel explicitly with `bin/update --set-channel tagged` or
+`bin/update --set-channel main`. Changing the configured channel does not move the current checkout.
+To move an existing branch-based installation to `stable` deliberately:
+
+```bash
+git fetch origin stable:refs/remotes/origin/stable
+git switch --track origin/stable
+bin/update --set-channel stable
+bin/migrate
+```
 
 ## Removing the harness
 

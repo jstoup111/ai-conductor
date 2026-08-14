@@ -28,6 +28,25 @@ so the engine's exit code is the shim's.
 `bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
 points, not `conduct-ts` subcommands.
 
+## `bin/update`
+
+```bash
+bin/update
+bin/update --auto
+bin/update --set-channel <stable|tagged|main>
+```
+
+With no arguments, forces an attended check of the configured harness update channel. `--auto` honors
+`conductor.auto_check` and is the startup form spawned by `conduct-ts`. `--set-channel` accepts
+`stable`, `tagged`, or `main` and changes configuration without moving the checkout.
+
+`stable` is the fresh-install default. It fetches `origin/stable`, verifies that its head is an exact
+semver tag, requires a clean local `stable` checkout and a fast-forward relationship, then prompts
+before fast-forwarding to that captured commit and running `bin/migrate`. An untagged target is rejected
+before local mutation. If migration fails after the fast-forward, the updater restores the prior `stable`
+branch head and recorded version.
+`tagged` follows semver tag checkouts; `main` follows every merge to the development branch.
+
 ## `bin/migrate`
 
 ```bash

@@ -104,10 +104,14 @@ publisher still re-derives all release authority immediately before mutation:
 3. The merged files must contain a matching `VERSION` and non-empty versioned `CHANGELOG.md` section.
 4. Existing tag and GitHub Release state must match the approved artifact; retries create only a missing tag
    or release.
+5. After both publication artifacts exist, `refs/heads/stable` is created or fast-forwarded to the same
+   release commit. The update is non-forced and a failure fails the publish job; retrying the workflow
+   verifies the existing artifacts and safely retries only the stable-branch advance.
 
 The publisher creates the annotated tag and GitHub Release through GitHub APIs. It never rewrites
-`CHANGELOG.md`, bumps `VERSION`, creates a release commit, or pushes `main`. An ordinary merge or an empty
-candidate set is ignored and produces no release.
+`CHANGELOG.md`, bumps `VERSION`, creates a release commit, or pushes `main`. `stable` therefore never points
+at an ordinary implementation merge or a release that has not completed publication. An ordinary merge or
+an empty candidate set is ignored and produces no release.
 
 ## The self-host release gate
 

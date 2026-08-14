@@ -883,10 +883,18 @@ configure_mermaid_renderer() {
 
 # ─── AI Conductor config (channel, current version) ──────────────────────────
 
-# Detect the current harness version from git tag or VERSION file.
-# Returns "vX.Y.Z" when on an exact tag, "vX.Y.Z" from VERSION as a fallback,
-# or "main@<short-sha>" when on main.
+# Detect the current harness version for an update channel.
+# Main follows the checked-out commit. Stable and tagged prefer an exact
+# semver tag, then fall back to VERSION.
 detect_current_version() {
+  local channel=$1
+  if [ "$channel" = "main" ]; then
+    local main_sha
+    main_sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo "main@$main_sha"
+    return 0
+  fi
+
   local tag
   tag=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD 2>/dev/null || echo "")
   if [ -n "$tag" ]; then
@@ -907,11 +915,10 @@ detect_current_version() {
 }
 
 # Create or refresh the schema-owned conductor block in ~/.ai-conductor/config.yml.
-# First run: prompt for channel (tagged vs main). Update mode: refresh the
+# First run: prompt for channel (stable, tagged, or main). Update mode: refresh the
 # current version and check timestamp while preserving user preferences.
 configure_conductor() {
-  local detected
-  detected=$(detect_current_version)
+  local channel detected
   local now
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
@@ -925,18 +932,21 @@ configure_conductor() {
 
   if [ ! -f "$HARNESS_USER_CONFIG" ]; then
     # First run — pick a channel.
-    local channel="tagged"
+    channel="stable"
     if [ "$UPDATE_MODE" != true ] && [ -t 0 ]; then
       echo ""
       info "Harness update channel — which version should /conduct follow?"
-      echo "    1) tagged  — stable semver releases (recommended)"
-      echo "    2) main    — bleeding edge, every merge to main"
+      echo "    1) stable  — stable release channel (recommended)"
+      echo "    2) tagged  — immutable semver release pin"
+      echo "    3) main    — bleeding edge, every merge to main"
       read -r -p "  Choice [1]: " choice
       case "$choice" in
-        2) channel="main" ;;
-        *) channel="tagged" ;;
+        2) channel="tagged" ;;
+        3) channel="main" ;;
+        *) channel="stable" ;;
       esac
     fi
+    detected=$(detect_current_version "$channel")
     if conductor_cfg_set updateChannel "$channel" && \
       conductor_cfg_set autoCheck true && \
       conductor_cfg_set currentVersion "$detected" && \
@@ -948,6 +958,11 @@ configure_conductor() {
     fi
   else
     # Update — refresh currentVersion + lastCheckedAt, preserve everything else.
+    if ! channel=$(conductor_cfg_get updateChannel); then
+      warn "Could not read the configured harness update channel"
+      return 1
+    fi
+    detected=$(detect_current_version "$channel")
     if conductor_cfg_set currentVersion "$detected" && \
       conductor_cfg_set lastCheckedAt "$now"; then
       ok "Refreshed conductor configuration (version: ${detected})"

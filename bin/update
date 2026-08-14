@@ -16,7 +16,7 @@ set -euo pipefail
 # Usage:
 #   update                          — force an update check now, bypassing the autoCheck gate
 #   update --auto                   — check only if autoCheck config is not false (silent no-op otherwise); used by conduct-ts at startup
-#   update --set-channel <tagged|main> — set the update channel
+#   update --set-channel <tagged|stable|main> — set the update channel
 #   update -h|--help                — usage
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -179,6 +179,90 @@ check_harness_update_tagged() {
   apply_harness_update "$latest_tag" "$rollback_ref"
 }
 
+# Stable-channel update: fast-forward the stable branch to its next tagged
+# release and retain that semver tag as the installed version identity.
+restore_stable_checkout() {
+  local local_head=$1
+  git -C "$HARNESS_DIR" reset --hard HEAD >/dev/null 2>&1 &&
+    git -C "$HARNESS_DIR" checkout stable >/dev/null 2>&1 &&
+    git -C "$HARNESS_DIR" reset --hard "$local_head" >/dev/null 2>&1
+}
+
+check_harness_update_stable() {
+  timeout 5 git -C "$HARNESS_DIR" fetch --tags --quiet origin stable 2>/dev/null || return 0
+
+  local branch local_head remote_head target_version
+  branch=$(git -C "$HARNESS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  [ "$branch" = "stable" ] || return 0
+
+  local_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  remote_head=$(git -C "$HARNESS_DIR" rev-parse origin/stable 2>/dev/null || echo "")
+  [ -z "$remote_head" ] && return 0
+  target_version=$(git -C "$HARNESS_DIR" describe --tags --exact-match "$remote_head" --match 'v*.*.*' 2>/dev/null || echo "")
+  if ! [[ "$target_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    fail "Stable update refused: origin/stable must point to an exact semver vX.Y.Z tag"
+    return 1
+  fi
+  [ "$local_head" = "$remote_head" ] && return 0
+
+  if ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD origin/stable 2>/dev/null; then
+    return 0
+  fi
+  if [ -n "$(git -C "$HARNESS_DIR" status --porcelain 2>/dev/null)" ]; then
+    fail "Stable update refused: the stable checkout must be clean"
+    return 1
+  fi
+
+  echo ""
+  warn "Harness stable update available"
+  if [ ! -t 0 ]; then
+    warn "No TTY — run: cd ${HARNESS_DIR} && git pull --ff-only origin stable && bin/migrate"
+    return 0
+  fi
+
+  read -r -p "  Pull latest stable release? [y/n]: " choice
+  case "$choice" in
+    [yY]) ;;
+    *) log "Skipping update"; return 0 ;;
+  esac
+
+  local rollback_ref prior_version prior_checked_at
+  rollback_ref=$local_head
+  if ! prior_version=$(conductor_cfg_get currentVersion ""); then
+    warn "Stable update declined: current version identity could not be read"
+    return 1
+  fi
+  prior_checked_at=$(conductor_cfg_get lastCheckedAt "" 2>/dev/null || true)
+  if ! git -C "$HARNESS_DIR" merge --ff-only "$remote_head" >/dev/null 2>&1; then
+    fail "Fast-forward to approved stable commit failed — update manually: cd ${HARNESS_DIR} && git merge --ff-only ${remote_head}"
+    return 1
+  fi
+
+  local new_head new_version
+  new_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  new_version=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD --match 'v*.*.*' 2>/dev/null || echo "")
+  if [ "$new_head" != "$remote_head" ] || [ "$new_version" != "$target_version" ]; then
+    fail "Stable branch head is not an exact semver tag — update aborted"
+    restore_stable_checkout "$local_head" || fail "Stable rollback failed — restore ${local_head} manually"
+    return 1
+  fi
+
+  if apply_harness_update "$new_version" "$rollback_ref"; then
+    return 0
+  fi
+
+  local restored=true
+  restore_stable_checkout "$local_head" || restored=false
+  conductor_cfg_set currentVersion "$prior_version" || restored=false
+  if [ -n "$prior_checked_at" ]; then
+    conductor_cfg_set lastCheckedAt "$prior_checked_at" || restored=false
+  fi
+  if [ "$restored" != true ]; then
+    fail "Stable rollback was incomplete — restore ${local_head} and ${prior_version} manually"
+  fi
+  return 1
+}
+
 # Main-channel update: preserve the old fast-forward pull behavior but run
 # bin/migrate afterward so symlinks and settings refresh.
 check_harness_update_main() {
@@ -240,6 +324,7 @@ dispatch_update_channel() {
     return 1
   fi
   case "$channel" in
+    stable) check_harness_update_stable ;;
     main)   check_harness_update_main ;;
     tagged|*) check_harness_update_tagged ;;
   esac
@@ -271,8 +356,8 @@ check_harness_update_auto() {
 set_update_channel() {
   local new_channel=$1
   case "$new_channel" in
-    tagged|main) ;;
-    *) fail "Invalid channel: ${new_channel} (expected: tagged, main)"; exit 2 ;;
+    tagged|stable|main) ;;
+    *) fail "Invalid channel: ${new_channel} (expected: tagged, stable, main)"; exit 2 ;;
   esac
   conductor_cfg_set updateChannel "$new_channel" || exit 1
   ok "Update channel set to: ${new_channel}"
@@ -285,7 +370,7 @@ Usage: update [OPTIONS]
 
   (no args)           Force an update check now, bypassing the autoCheck gate.
   --auto              Run an update check only if autoCheck is not "false".
-  --set-channel <c>   Set the update channel (tagged, main).
+  --set-channel <c>   Set the update channel (tagged, stable, main).
   -h, --help          Show this help message.
 EOF
 }
@@ -306,7 +391,7 @@ case "${1:-}" in
     ;;
   --set-channel)
     if [ -z "${2:-}" ]; then
-      fail "Missing channel argument for --set-channel (expected: tagged, main)"
+      fail "Missing channel argument for --set-channel (expected: tagged, stable, main)"
       exit 2
     fi
     set_update_channel "$2"

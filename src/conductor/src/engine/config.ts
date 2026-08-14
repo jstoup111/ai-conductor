@@ -1203,11 +1203,12 @@ function validateConductorBlock(raw: unknown): ConfigError | null {
   if (
     obj.update_channel !== undefined &&
     obj.update_channel !== 'tagged' &&
+    obj.update_channel !== 'stable' &&
     obj.update_channel !== 'main'
   ) {
     return {
       type: 'validation_error',
-      message: 'conductor.update_channel must be "tagged" or "main"',
+      message: 'conductor.update_channel must be "tagged", "stable", or "main"',
     };
   }
   if (obj.auto_check !== undefined && typeof obj.auto_check !== 'boolean') {

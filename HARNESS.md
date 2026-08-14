@@ -508,18 +508,19 @@ block in `~/.ai-conductor/config.yml`:
 
 ```yaml
 conductor:
-  update_channel: tagged
+  update_channel: stable
   auto_check: true
   current_version: v0.3.0
   last_checked_at: 2026-04-11T00:00:00Z
 ```
 
-- **`update_channel`** — `tagged` (default, stable semver releases) or `main`
-  (bleeding edge, every merge to main).
+- **`update_channel`** — `stable` (default, a branch advanced only after release
+  publication), `tagged` (semver tag checkouts), or `main` (bleeding edge,
+  every merge to main).
 - **`auto_check`** — if `true`, every `/conduct` run checks for updates on the
   configured channel before running any pipeline step.
-- **`current_version`** — the version of the harness your project is pinned to.
-  On the tagged channel this is a `vX.Y.Z` tag; on main it's `main@<sha>`.
+- **`current_version`** — the installed harness identity. On the stable and
+  tagged channels this is a `vX.Y.Z` tag; on main it's `main@<sha>`.
 - **`last_checked_at`** — the ISO-8601 UTC timestamp of the most recent update
   check.
 
@@ -530,16 +531,17 @@ It is not a live configuration source.
 
 ### Update flow
 
-1. `bin/update` fetches either the latest tag (`tagged`) or the remote branch
-   (`main`), depending on how it's invoked:
+1. `bin/update` fetches the configured release source: the moving release
+   branch (`stable`), the latest semver tag (`tagged`), or the development
+   branch (`main`):
    - `bin/update` (no args) forces a check now, bypassing the `conductor.auto_check`
      gate.
    - `bin/update --auto` checks only if `conductor.auto_check` is not `false`; this is
      what `conduct-ts` spawns automatically at daemon startup.
-2. If a newer version exists, the relevant `CHANGELOG.md` blocks are rendered
-   with the configured markdown viewer (see `markdown_viewer` in
-   `~/.ai-conductor/config.yml`) and the user is prompted before anything is
-   applied. Updates never apply without explicit approval.
+2. If a newer version exists, the user is prompted before anything is applied.
+   Tagged updates also render the relevant `CHANGELOG.md` blocks with the
+   configured markdown viewer (see `markdown_viewer` in
+   `~/.ai-conductor/config.yml`). Updates never apply without explicit approval.
 3. On approval, the harness is checked out at the new version and
    `bin/migrate` runs automatically. It:
    - Re-runs `bin/install --update` to refresh symlinks and re-merge
@@ -552,7 +554,8 @@ It is not a live configuration source.
 ### Changing channels
 
 ```
-bin/update --set-channel tagged   # follow stable semver tags
+bin/update --set-channel stable   # follow only fully published releases (default)
+bin/update --set-channel tagged   # follow semver tag checkouts
 bin/update --set-channel main     # follow main branch
 bin/update                        # force an update check now
 bin/update --auto                 # check only if conductor.auto_check != false
