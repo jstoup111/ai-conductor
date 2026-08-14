@@ -34,6 +34,8 @@ import {
 } from './task-attribution.js';
 import { evaluateSafetyBoundary, type SafetyDiagnosticGap, type SafetyProtection } from './safety-boundary.js';
 import { redactSafetyText } from './safety-diagnostics.js';
+import { ModelAvailability } from './model-availability.js';
+import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -47,6 +49,8 @@ export interface ProviderCandidateFailureClassification {
 
 export interface ProviderAttemptMetadata {
   provider: string;
+  /** Auxiliary member that selected this candidate; never a lifecycle step. */
+  auxiliaryMember?: string;
   /** Validated task-local telemetry; never an authorization input. */
   taskId?: string;
   /** Sanitized invalid-attribution classification; diagnostics only. */
@@ -193,6 +197,10 @@ export interface ExecuteProviderCandidatesInput {
   escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
+  /** A caller-owned native model ladder, used by isolated auxiliary branches. */
+  modelFallbackLadder?: readonly string[];
+  /** Attribution label for an auxiliary branch; does not manufacture a StepName. */
+  auxiliaryMember?: string;
   /** Task-local telemetry to validate before any candidate/session invocation. */
   taskAttribution?: TaskAttributionInput;
   onAttempt?: (
@@ -395,6 +403,7 @@ export interface InvokeProviderCandidateInput {
   sessions: Pick<ProviderSessionScope, 'prepare'>;
   resolved: ResolvedProviderNativeStepConfig;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+  modelFallbackLadder?: readonly string[];
 }
 
 interface SessionPolicySuppression {
@@ -412,6 +421,7 @@ export async function invokeProviderCandidate({
   sessions,
   resolved,
   options,
+  modelFallbackLadder,
 }: InvokeProviderCandidateInput): Promise<{
   result: InvokeResult;
   invokedModel?: string;
@@ -420,16 +430,24 @@ export async function invokeProviderCandidate({
   const session = await sessions.prepare(providerKey);
   const suppressForUnsupportedCapability =
     runtime.provider.supportsSessionResume !== true;
-  const invocation = await invokeRuntimeResolved(runtime, {
+  const invocationOptions = {
     ...options,
     sessionId: session.id,
     resume: false,
     model: resolved.model,
     effort: resolved.effort,
-  }, async () => {
+  };
+  const prepareFallback = async () => {
     const next = await sessions.prepare(providerKey);
     return { sessionId: next.id, resume: next.resume };
-  });
+  };
+  const invocation = modelFallbackLadder
+    ? await new ModelAvailability(modelFallbackLadder).invokeWithLadderResolved(
+        runtime.provider,
+        invocationOptions,
+        prepareFallback,
+      )
+    : await invokeRuntimeResolved(runtime, invocationOptions, prepareFallback);
   return {
     result: invocation.result,
     invokedModel: invocation.model,
@@ -453,6 +471,7 @@ export interface BuildProviderAttemptMetadataInput {
   invokedModel?: string;
   unavailable?: ProviderCandidateFailureClassification;
   nextProvider?: string;
+  auxiliaryMember?: string;
 }
 
 /** Construct event-boundary metadata for exactly one candidate result. */
@@ -465,11 +484,13 @@ export function buildProviderAttemptMetadata({
   invokedModel,
   unavailable,
   nextProvider,
+  auxiliaryMember,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
   const invoked = result.providerInvocationSkipped !== true;
   const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
   return {
     provider: providerKey,
+    ...(auxiliaryMember ? { auxiliaryMember } : {}),
     ...(taskId ? { taskId } : {}),
     ...(taskAttributionDiagnostic ? { taskAttributionDiagnostic } : {}),
     ...(result.authentication ? { authenticationSource: result.authentication.source } : {}),
@@ -512,6 +533,8 @@ export async function executeProviderCandidates({
   escalate = true,
   modelOverride,
   effortOverride,
+  modelFallbackLadder,
+  auxiliaryMember,
   taskAttribution: attributionInput,
   onAttempt,
   onTelemetryError,
@@ -587,6 +610,7 @@ export async function executeProviderCandidates({
           sessions,
           resolved,
           options: selfHost ? { ...candidateOptions, selfHost } : candidateOptions,
+          modelFallbackLadder,
         });
         return invocation.result;
       } finally {
@@ -640,6 +664,7 @@ export async function executeProviderCandidates({
       invokedModel,
       unavailable,
       nextProvider,
+      auxiliaryMember,
     });
     attempts.push(attemptMetadata);
     const observedIntervals = attempts.flatMap(
@@ -698,4 +723,48 @@ export async function executeProviderCandidates({
   }
 
   throw new Error('Provider candidate resolution produced no candidates');
+}
+
+/**
+ * Provider-aware executor for a non-lifecycle auxiliary member. It retains
+ * the enclosing lifecycle step only for supervision/telemetry while the
+ * member label carries the actual rubric attribution.
+ */
+export interface ExecuteAuxiliaryProviderCandidatesInput<MemberId extends string>
+  extends Omit<ExecuteProviderCandidatesInput,
+    'configuredProviders' | 'preferredProvider' | 'attempt' | 'escalate' |
+    'modelOverride' | 'effortOverride' | 'modelFallbackLadder' | 'auxiliaryMember'> {
+  memberId: MemberId;
+  policy: ResolvedBuildReviewRubricPolicy;
+}
+
+export async function executeAuxiliaryProviderCandidates<MemberId extends string>(
+  input: ExecuteAuxiliaryProviderCandidatesInput<MemberId>,
+): Promise<ProviderExecutionResult> {
+  const configuredProviders = Array.isArray(input.policy.llm_provider)
+    ? input.policy.llm_provider
+    : [input.policy.llm_provider];
+  let last: ProviderExecutionResult | undefined;
+  for (let attempt = 1; attempt <= input.policy.max_retries; attempt += 1) {
+    const result = await executeProviderCandidates({
+      ...input,
+      configuredProviders,
+      preferredProvider: input.policy.llm_provider,
+      attempt,
+      escalate: input.policy.escalate,
+      modelOverride: input.policy.model,
+      effortOverride: input.policy.effort,
+      modelFallbackLadder: input.policy.model_fallback_ladder,
+      auxiliaryMember: input.memberId,
+    });
+    if (result.success) return result;
+    last = result;
+  }
+  return last ?? {
+    success: false,
+    output: `Auxiliary member ${input.memberId} had no provider attempts.`,
+    exitCode: 1,
+    preferredProvider: configuredProviders[0] ?? 'unknown',
+    attempts: [],
+  };
 }

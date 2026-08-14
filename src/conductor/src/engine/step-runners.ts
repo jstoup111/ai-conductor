@@ -63,6 +63,7 @@ import type {
 } from './provider-session.js';
 import {
   executeProviderCandidates,
+  executeAuxiliaryProviderCandidates,
   type ExecuteProviderCandidatesInput,
   type ProviderExecutionResult,
   type ProviderExecutionContext,
@@ -76,6 +77,7 @@ import { normalizeProviderSelection } from './provider-selection.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
 import {
   renderSkillInvocation,
+  renderAuxiliarySkillInvocation,
   STEP_SKILL_INVOCATIONS,
 } from './skill-invocation.js';
 import {
@@ -1764,12 +1766,52 @@ export class DefaultStepRunner implements StepRunner {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
       tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness', wiring: 'Wiring',
     };
-    const result = await this.provider.invoke({
-      prompt: [
+    const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
         `Use only this closed projection and return one JSON judged result for rubric ${branch.rubric}.`,
         JSON.stringify(projection),
-      ].join('\n\n'),
+      ].join('\n\n');
+    if (this.providerRuntimes && this.sessionStore) {
+      const safety = this.candidateSafetyFor('build_review');
+      const result = await this.dispatchProviderWithLifecycleSupervision(
+        'build_review',
+        this.withFeatureDiagnosticLog({
+          prompt: rubricPrompt,
+          cwd: this.projectDir,
+          dangerouslySkipPermissions: true,
+        }),
+        (options) => executeAuxiliaryProviderCandidates({
+          step: 'build_review',
+          memberId: branch.rubric,
+          policy: branch.policy,
+          runtimes: this.providerRuntimes!,
+          sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
+          config: this.config,
+          runId: this.runId,
+          taskAttribution: this.taskAttribution,
+          withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
+          prepareCandidateSelfHost:
+            this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+          onAttempt: this.providerAttempt,
+          warn: this.providerWarn,
+          options,
+          optionsForCandidate: (providerKey) => ({
+            ...options,
+            prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${rubricPrompt}`,
+          }),
+        }),
+      );
+      const verified = safety?.verify(result) ?? result;
+      this.callCount++;
+      if (!verified.success || typeof verified.output !== 'string') return undefined;
+      try {
+        return parseBuildReviewJudgedResult(JSON.parse(verified.output));
+      } catch {
+        return undefined;
+      }
+    }
+    const result = await this.provider.invoke({
+      prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${rubricPrompt}`,
       sessionId: randomUUID(),
       resume: false,
       dangerouslySkipPermissions: true,
@@ -1875,7 +1917,10 @@ export class DefaultStepRunner implements StepRunner {
       };
     }
 
-    const buildReviewConfig = resolveBuildReviewConfig(this.config);
+    const buildReviewConfig = resolveBuildReviewConfig(this.config, this.modelPolicy, {
+      modelCliOverride: this.modelOverride,
+      effortCliOverride: this.effortOverride,
+    });
     let containmentReport: ContainmentFloorReport | undefined;
     if (buildReviewConfig.perTaskFloor) {
       try {
