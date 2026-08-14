@@ -15,6 +15,9 @@ const rootCauseSkillPath = fileURLToPath(
 const completenessSkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-completeness/SKILL.md', import.meta.url),
 );
+const wiringSkillPath = fileURLToPath(
+  new URL('../../../../skills/build-review-wiring/SKILL.md', import.meta.url),
+);
 
 describe('engine/build-review rubric skill contracts', () => {
   it('defines the versioned Tautology judgement contract over its closed projection', async () => {
@@ -134,6 +137,38 @@ describe('engine/build-review rubric skill contracts', () => {
 
     expect(skill).toMatch(/does not.*(?:read|write|apply|decide).*disposition/i);
     expect(skill).not.toMatch(/per-task SHA|commit reachability|corroborating evidence/i);
+    expect(skill).not.toMatch(/run (?:the )?tests?/i);
+    expect(skill).not.toMatch(/spawn subagents?|delegate (?:to )?(?:an )?agent/i);
+  });
+
+  it('defines the versioned Wiring judgement contract over static production reachability', async () => {
+    const skill = await readFile(wiringSkillPath, 'utf8');
+
+    expect(skill).toMatch(/^---\nname: build-review-wiring\n/m);
+    expect(skill).toMatch(/^description: ".+"$/m);
+    expect(skill).toMatch(/^enforcement: gating$/m);
+    expect(skill).toMatch(/^phase: build$/m);
+
+    expect(skill).toMatch(/projection version.*`v1`/i);
+    expect(skill).toMatch(/lap (?:ID|identity)/i);
+    expect(skill).toMatch(/snapshot digest/i);
+    expect(skill).toMatch(/changed diff/i);
+    expect(skill).toMatch(/configured production entry points/i);
+    expect(skill).toMatch(/removal evidence/i);
+    expect(skill).toMatch(/relocation evidence/i);
+    expect(skill).toMatch(/scaffolding/i);
+
+    expect(skill).toMatch(/static.*reachability/i);
+    expect(skill).toMatch(/production surface/i);
+    expect(skill).toMatch(/expected entry point/i);
+    expect(skill).toMatch(/missing reachability relation/i);
+    expect(skill).toMatch(/typed logical anchors/i);
+    expect(skill).toMatch(/concrete evidence locations/i);
+    expect(skill).toMatch(/every independent finding/i);
+
+    expect(skill).toMatch(/engine.*`missing-entry-points`.*skip/i);
+    expect(skill).toMatch(/does not.*(?:manufacture|return).*skip or pass/i);
+    expect(skill).toMatch(/does not.*(?:read|write|apply|decide).*disposition/i);
     expect(skill).not.toMatch(/run (?:the )?tests?/i);
     expect(skill).not.toMatch(/spawn subagents?|delegate (?:to )?(?:an )?agent/i);
   });
