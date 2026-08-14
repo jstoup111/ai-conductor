@@ -8,6 +8,8 @@ import {
   canonicalizeBuildReviewGraderVerdict,
   validateBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
 
 describe('engine/build-review verdict rubric contract', () => {
@@ -148,6 +150,23 @@ describe('engine/build-review verdict rubric contract', () => {
       findings: { completeness: [] },
     });
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({ done: true });
+  });
+
+  it('accepts a strict raw aggregate through the legacy verdict contract but rejects a malformed envelope', () => {
+    const lapId = parseBuildReviewLapId('lap-current')!;
+    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring') => ({
+      kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
+      findings: [], verdict: 'PASS' as const,
+    });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', codeStamp: 'head',
+      results: { tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'), completeness: judged('completeness'), wiring: judged('wiring') },
+    });
+
+    expect(validateBuildReviewVerdict(aggregate)).toMatchObject({ ok: true, verdict: 'PASS', codeStamp: 'head' });
+    expect(validateBuildReviewVerdict({ ...aggregate, results: { ...aggregate.results, wiring: undefined } })).toEqual({
+      ok: false, reason: expect.stringMatching(/aggregate.*incomplete/i),
+    });
   });
 
   it('rejects PASS for failed rubric flags before requiring wiring findings', () => {
