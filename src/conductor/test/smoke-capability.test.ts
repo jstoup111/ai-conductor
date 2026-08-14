@@ -113,6 +113,47 @@ describe('smoke capability declarations', () => {
     );
   });
 
+  it('evaluates the empty credentialed aggregate after resolving every credential-absent leg', async () => {
+    const runVitest = vi.fn();
+    const emit = vi.fn();
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [
+        { file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts', source: "const smokeCapability = 'credentialed:claude';" },
+        { file: 'test/engine/daemon-e2e-live-codex.smoke.test.ts', source: "const smokeCapability = 'credentialed:codex';" },
+      ],
+      runVitest,
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: {},
+      emit,
+    })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
+
+    expect(runVitest).not.toHaveBeenCalled();
+    expect(emit.mock.calls).toEqual([
+      ['smoke ledger: test/engine/daemon-e2e-live-claude.smoke.test.ts [credentialed:claude] skipped (unmet: CLAUDE_CODE_OAUTH_TOKEN)'],
+      ['smoke ledger: test/engine/daemon-e2e-live-codex.smoke.test.ts [credentialed:codex] skipped (unmet: CODEX_API_KEY)'],
+    ]);
+  });
+
+  it('passes the gate aggregate when a later credentialed leg executes', async () => {
+    const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [
+        { file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts', source: "const smokeCapability = 'credentialed:claude';" },
+        { file: 'test/engine/daemon-e2e-live-codex.smoke.test.ts', source: "const smokeCapability = 'credentialed:codex';" },
+      ],
+      runVitest,
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: { CODEX_API_KEY: 'token' },
+    })).resolves.toBeUndefined();
+
+    expect(runVitest).toHaveBeenCalledTimes(1);
+    expect(runVitest).toHaveBeenCalledWith('test/engine/daemon-e2e-live-codex.smoke.test.ts');
+  });
+
   it('reports a capability force-skip as an operator override in advisory mode', () => {
     const resolution = resolveAdvisorySmokeFile('test/example.smoke.test.ts', 'credentialed:claude', {
       hasCommand: () => true,

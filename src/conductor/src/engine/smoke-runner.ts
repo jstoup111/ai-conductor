@@ -78,10 +78,11 @@ async function runSmoke({
       ? resolveGateSmokeFile(file, capability, { hasCommand, environment })
       : resolveAdvisorySmokeFile(file, capability, { hasCommand, environment });
     if (resolution.outcome !== 'ran') {
-      ledger.push(mode === 'gate'
+      const gateFailure = mode === 'gate' && resolution.outcome === 'failed';
+      ledger.push(gateFailure
         ? { file, capability, outcome: 'failed', evidencePath: resolution.unmet }
         : { file, capability, outcome: 'skipped', unmet: resolution.unmet });
-      if (mode === 'gate') {
+      if (gateFailure) {
         failure ??= new Error(`Smoke gate unmet for ${file}: ${resolution.unmet}`);
       }
       continue;
