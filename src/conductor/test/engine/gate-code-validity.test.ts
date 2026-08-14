@@ -9,12 +9,16 @@
  * mirroring `rebase-autostash.test.ts`'s convention.
  */
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { gateVerdictStillValid } from '../../src/engine/gate-code-validity.js';
+import { BUILD_REVIEW_VERDICT } from '../../src/engine/artifacts.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
 
 interface Scratch {
   repo: string;
@@ -114,6 +118,51 @@ describe('gateVerdictStillValid', () => {
       baseline,
     );
     expect(result).toBe('preserve');
+  });
+
+  it('does not let a preserved aggregate bypass its effective verdict resolver', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
+    const lapId = parseBuildReviewLapId('lap-preserved')!;
+    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring') => ({
+      kind: 'judged' as const,
+      rubric,
+      lapId,
+      snapshotDigest: 'sha256:snapshot',
+      contractVersion: 'v1' as never,
+      findings: [],
+      verdict: 'PASS' as const,
+    });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:snapshot',
+      codeStamp: baseline,
+      results: {
+        tautology: judged('tautology'),
+        scope: judged('scope'),
+        rootCause: judged('rootCause'),
+        completeness: judged('completeness'),
+        wiring: judged('wiring'),
+      },
+    });
+    const artifact = join(s.repo, BUILD_REVIEW_VERDICT);
+    await mkdir(join(s.repo, '.pipeline'), { recursive: true });
+    await writeFile(artifact, JSON.stringify(aggregate));
+    await utimes(artifact, new Date(0), new Date(0));
+
+    await expect(checkGateCompletion(s.repo, 'build_review', {
+      git: s.git,
+      sessionStartedAt: Date.now(),
+      buildReviewEffectiveResolver: async () => ({
+        ok: false as const,
+        reason: 'disposition state is unavailable',
+      }),
+    })).resolves.toMatchObject({
+      done: false,
+      routeClass: 'named-route',
+      reason: expect.stringMatching(/disposition resolution failed/i),
+    });
   });
 
   it('returns rerun when the baseline is reachable but the delta touches the surface (surface hit)', async () => {

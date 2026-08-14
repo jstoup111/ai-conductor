@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   BUILD_REVIEW_VERDICT,
@@ -152,7 +152,7 @@ describe('engine/build-review verdict rubric contract', () => {
     await expect(checkGateCompletion(dir, 'build_review')).resolves.toMatchObject({ done: true });
   });
 
-  it('accepts a current strict raw aggregate through the legacy predicate but rejects a malformed envelope', async () => {
+  it('uses the effective reducer for a current strict aggregate and rejects a malformed envelope', async () => {
     const lapId = parseBuildReviewLapId('lap-current')!;
     const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring') => ({
       kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
@@ -164,10 +164,142 @@ describe('engine/build-review verdict rubric contract', () => {
     });
 
     expect(validateBuildReviewVerdict(aggregate)).toMatchObject({ ok: true, verdict: 'PASS', codeStamp: 'head' });
-    await expect(checkGateCompletion(await writeVerdict(aggregate), 'build_review')).resolves.toMatchObject({ done: true });
+    await expect(checkGateCompletion(await writeVerdict(aggregate), 'build_review', {
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+        effective: {
+          rawVerdict: 'PASS' as const, verdict: 'PASS' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [],
+        },
+      }),
+    })).resolves.toMatchObject({ done: true });
     expect(validateBuildReviewVerdict({ ...aggregate, results: { ...aggregate.results, wiring: undefined } })).toEqual({
       ok: false, reason: expect.stringMatching(/aggregate.*incomplete/i),
     });
+  });
+
+  it('completes a fresh raw failure when its one finding is exactly accepted', async () => {
+    const lapId = parseBuildReviewLapId('lap-accepted')!;
+    const finding = { concernKind: 'unplanned', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring', findings = rubric === 'scope' ? [finding] : []) => ({
+      kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
+      findings, verdict: findings.length ? 'FAIL' as const : 'PASS' as const,
+    });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', codeStamp: 'head',
+      results: { tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'), completeness: judged('completeness'), wiring: judged('wiring') },
+    });
+    const id = 'sha256:accepted-exact-payload';
+
+    const dir = await writeVerdict(aggregate);
+    const resolver = vi.fn(async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+        effective: {
+          rawVerdict: 'FAIL' as const, verdict: 'PASS' as const,
+          acceptedFindingIds: [id], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [],
+        },
+      }));
+    await expect(checkGateCompletion(dir, 'build_review', {
+      buildReviewEffectiveResolver: resolver,
+    })).resolves.toMatchObject({ done: true });
+    expect(resolver).toHaveBeenCalledWith(dir, aggregate);
+  });
+
+  it('routes unresolved siblings and infrastructure failures by their effective cause', async () => {
+    const lapId = parseBuildReviewLapId('lap-blocked')!;
+    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring') => ({
+      kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
+      findings: [], verdict: 'PASS' as const,
+    });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'), completeness: judged('completeness'), wiring: judged('wiring') },
+    });
+    const dir = await writeVerdict(aggregate);
+
+    await expect(checkGateCompletion(dir, 'build_review', {
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+        effective: {
+          rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
+          acceptedFindingIds: ['sha256:accepted'], unresolvedFindingIds: ['sha256:unresolved-sibling'],
+          skippedRubrics: [], infrastructureFailureRubrics: [],
+        },
+      }),
+    })).resolves.toMatchObject({ done: false, routeClass: 'named-route', reason: expect.stringMatching(/unresolved.*unresolved-sibling/i) });
+
+    await expect(checkGateCompletion(dir, 'build_review', {
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+        effective: {
+          rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: [],
+          skippedRubrics: [], infrastructureFailureRubrics: ['wiring'],
+        },
+      }),
+    })).resolves.toMatchObject({ done: false, routeClass: 'named-route', reason: expect.stringMatching(/infrastructure.*wiring/i) });
+  });
+
+  it('completes a judged aggregate with a neutral skip through the effective reducer', async () => {
+    const lapId = parseBuildReviewLapId('lap-skip')!;
+    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness') => ({
+      kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
+      findings: [], verdict: 'PASS' as const,
+    });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: {
+        tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'), completeness: judged('completeness'),
+        wiring: { kind: 'skipped' as const, rubric: 'wiring', reason: 'missing-entry-points' as never },
+      },
+    });
+
+    await expect(checkGateCompletion(await writeVerdict(aggregate), 'build_review', {
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+        effective: {
+          rawVerdict: 'PASS' as const, verdict: 'PASS' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: ['wiring'], infrastructureFailureRubrics: [],
+        },
+      }),
+    })).resolves.toMatchObject({ done: true });
+  });
+
+  it('never consults dispositions for stale or scalar legacy evidence', async () => {
+    const lapId = parseBuildReviewLapId('lap-stale')!;
+    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring') => ({
+      kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
+      findings: [], verdict: 'PASS' as const,
+    });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'), completeness: judged('completeness'), wiring: judged('wiring') },
+    });
+    const staleDir = await writeVerdict(aggregate);
+    const stalePath = join(staleDir, BUILD_REVIEW_VERDICT);
+    await utimes(stalePath, new Date(0), new Date(0));
+    const resolver = vi.fn(async () => {
+      throw new Error('stale evidence must not read state');
+    });
+
+    await expect(checkGateCompletion(staleDir, 'build_review', {
+      sessionStartedAt: Date.now(), buildReviewEffectiveResolver: resolver,
+    })).resolves.toMatchObject({ done: false, reason: expect.stringMatching(/not rewritten/i) });
+    expect(resolver).not.toHaveBeenCalled();
+
+    const legacyDir = await writeVerdict({
+      verdict: 'FAIL', rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+      reasons: ['legacy finding'],
+    });
+    await expect(checkGateCompletion(legacyDir, 'build_review', {
+      buildReviewEffectiveResolver: resolver,
+    })).resolves.toMatchObject({ done: false, reason: expect.stringMatching(/legacy finding/i) });
+    expect(resolver).not.toHaveBeenCalled();
   });
 
   it('rejects PASS for failed rubric flags before requiring wiring findings', () => {

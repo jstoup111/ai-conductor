@@ -34,7 +34,15 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
-import { deriveEffectiveBuildReviewVerdict, parseBuildReviewAggregate } from './build-review-aggregate.js';
+import {
+  deriveEffectiveBuildReviewVerdict,
+  parseBuildReviewAggregate,
+  type BuildReviewEffectiveVerdict,
+} from './build-review-aggregate.js';
+import {
+  resolveEffectiveBuildReviewVerdict,
+  type BuildReviewEffectiveResolution,
+} from './build-review-effective.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -1028,6 +1036,14 @@ export interface CompletionContext {
    * so real callers need not wire this; tests inject a scratch-repo runner.
    */
   git?: GitRunner;
+  /**
+   * Resolves the current feature's accepted-risk state for a strict fan-out
+   * build-review aggregate. Scalar legacy verdicts never call this seam.
+   */
+  buildReviewEffectiveResolver?: (
+    projectRoot: string,
+    aggregate: unknown,
+  ) => Promise<BuildReviewEffectiveResolution>;
 }
 
 /**
@@ -1509,6 +1525,28 @@ export function buildReviewFailureDetails(verdict: Pick<BuildReviewVerdict, 'rea
     for (const finding of verdict.findings?.[rubric] ?? []) {
       details.push(`[${rubric}] ${finding}`);
     }
+  }
+  return details;
+}
+
+/**
+ * Completion feedback is derived from the same effective reducer used by the
+ * live runner. Accepted findings remain in the raw artifact for inspection,
+ * but only unresolved findings and infrastructure failures route back to
+ * build.
+ */
+function effectiveBuildReviewFailureDetails(
+  effective: BuildReviewEffectiveVerdict,
+): string[] {
+  const details: string[] = [];
+  if (effective.unresolvedFindingIds.length > 0) {
+    details.push(`unresolved findings: ${effective.unresolvedFindingIds.join(', ')}`);
+  }
+  if (effective.infrastructureFailureRubrics.length > 0) {
+    details.push(`infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ')}`);
+  }
+  if (details.length === 0) {
+    details.push('no judged rubric result is available');
   }
   return details;
 }
@@ -2496,6 +2534,29 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           const git = ctx.git ?? makeGitRunner(dir);
           const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'build_review', preCheck.codeStamp);
           if (validity === 'preserve') {
+            // A strict aggregate still has one authoritative effective
+            // verdict. Code-stamp preservation skips only the mtime check;
+            // it must not bypass an unavailable or failing state resolver.
+            const aggregate = parseBuildReviewAggregate(parsed);
+            if (aggregate) {
+              const effectiveResolution = await (
+                ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+              )(dir, aggregate);
+              if (!effectiveResolution.ok) {
+                return {
+                  done: false,
+                  reason: `build_review disposition resolution failed: ${effectiveResolution.reason}`,
+                  routeClass: 'named-route',
+                };
+              }
+              if (effectiveResolution.effective.verdict === 'FAIL') {
+                return {
+                  done: false,
+                  reason: `build_review effective FAILed: ${effectiveBuildReviewFailureDetails(effectiveResolution.effective).join('; ')} — fix in build, then the gate re-runs build_review`,
+                  routeClass: 'named-route',
+                };
+              }
+            }
             return {
               done: true,
               verdictFreshness: await verdictFreshnessFor(path, ctx, 'preserved_surface_miss'),
@@ -2552,6 +2613,34 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const result = validateBuildReviewVerdict(parsed);
     if (!result.ok) {
       return { done: false, reason: result.reason, routeClass: 'absent' };
+    }
+    // Fan-out evidence has a strict raw envelope. Once the existing freshness
+    // and code-stamp checks above establish that this is current evidence,
+    // completion must use the same accepted-risk reducer as the live runner.
+    // Legacy scalar verdicts intentionally retain their historical predicate.
+    const aggregate = parseBuildReviewAggregate(parsed);
+    if (aggregate) {
+      const effectiveResolution = await (
+        ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+      )(dir, aggregate);
+      if (!effectiveResolution.ok) {
+        return {
+          done: false,
+          reason: `build_review disposition resolution failed: ${effectiveResolution.reason}`,
+          routeClass: 'named-route',
+        };
+      }
+      if (effectiveResolution.effective.verdict === 'FAIL') {
+        return {
+          done: false,
+          reason: `build_review effective FAILed: ${effectiveBuildReviewFailureDetails(effectiveResolution.effective).join('; ')} — fix in build, then the gate re-runs build_review`,
+          routeClass: 'named-route',
+        };
+      }
+      return {
+        done: true,
+        verdictFreshness: await verdictFreshnessFor(path, ctx, 'rewritten'),
+      };
     }
     if (result.verdict === 'FAIL') {
       const details = buildReviewFailureDetails(result);
