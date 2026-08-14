@@ -12,6 +12,9 @@ const scopeSkillPath = fileURLToPath(
 const rootCauseSkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-root-cause/SKILL.md', import.meta.url),
 );
+const completenessSkillPath = fileURLToPath(
+  new URL('../../../../skills/build-review-completeness/SKILL.md', import.meta.url),
+);
 
 describe('engine/build-review rubric skill contracts', () => {
   it('defines the versioned Tautology judgement contract over its closed projection', async () => {
@@ -101,6 +104,36 @@ describe('engine/build-review rubric skill contracts', () => {
 
     expect(skill).toMatch(/does not.*(?:read|write|apply|decide).*disposition/i);
     expect(skill).not.toMatch(/\bruntime\b|\bmanual[_ -]?test\b/i);
+    expect(skill).not.toMatch(/run (?:the )?tests?/i);
+    expect(skill).not.toMatch(/spawn subagents?|delegate (?:to )?(?:an )?agent/i);
+  });
+
+  it('defines the versioned Completeness judgement contract over the full plan and diff', async () => {
+    const skill = await readFile(completenessSkillPath, 'utf8');
+
+    expect(skill).toMatch(/^---\nname: build-review-completeness\n/m);
+    expect(skill).toMatch(/^description: ".+"$/m);
+    expect(skill).toMatch(/^enforcement: gating$/m);
+    expect(skill).toMatch(/^phase: build$/m);
+
+    expect(skill).toMatch(/projection version.*`v1`/i);
+    expect(skill).toMatch(/lap (?:ID|identity)/i);
+    expect(skill).toMatch(/snapshot digest/i);
+    expect(skill).toMatch(/full changed diff/i);
+    expect(skill).toMatch(/approved plan/i);
+    expect(skill).toMatch(/holistically/i);
+    expect(skill).toMatch(/plan.*diff.*whole/i);
+
+    expect(skill).toMatch(/default-enabled/i);
+    expect(skill).toMatch(/engine.*explicit disablement/i);
+    expect(skill).toMatch(/missing deliverable/i);
+    expect(skill).toMatch(/approved plan outcome\/task/i);
+    expect(skill).toMatch(/typed logical anchors/i);
+    expect(skill).toMatch(/concrete evidence locations/i);
+    expect(skill).toMatch(/every independent finding/i);
+
+    expect(skill).toMatch(/does not.*(?:read|write|apply|decide).*disposition/i);
+    expect(skill).not.toMatch(/per-task SHA|commit reachability|corroborating evidence/i);
     expect(skill).not.toMatch(/run (?:the )?tests?/i);
     expect(skill).not.toMatch(/spawn subagents?|delegate (?:to )?(?:an )?agent/i);
   });
