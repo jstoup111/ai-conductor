@@ -99,6 +99,34 @@ function inputs(): BuildReviewFrozenInputs {
 }
 
 describe("build-review coordinator: frozen fan-out", () => {
+  it("emits each rubric occurrence exactly once in branch settlement order", async () => {
+    const emit = vi.fn(async () => undefined);
+
+    await coordinateBuildReviewRubrics({
+      config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
+      inputs: { ...inputs(), entryPoints: [] }, lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async (branch, projection) => ({
+        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+      }),
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+      emit,
+    });
+
+    expect(emit.mock.calls.map(([event]) => event)).toEqual([
+      { type: "build_review_rubric_skipped", rubric: "tautology", lapId: "lap-current", reason: "disabled" },
+      { type: "build_review_rubric_started", rubric: "scope", lapId: "lap-current" },
+      { type: "build_review_rubric_started", rubric: "rootCause", lapId: "lap-current" },
+      { type: "build_review_rubric_started", rubric: "completeness", lapId: "lap-current" },
+      { type: "build_review_rubric_skipped", rubric: "wiring", lapId: "lap-current", reason: "missing-entry-points" },
+      { type: "build_review_rubric_result", rubric: "scope", lapId: "lap-current", verdict: "PASS" },
+      { type: "build_review_rubric_result", rubric: "rootCause", lapId: "lap-current", verdict: "PASS" },
+      { type: "build_review_rubric_result", rubric: "completeness", lapId: "lap-current", verdict: "PASS" },
+    ]);
+  });
+
   it("materializes a fresh result into both current-lap evidence stores before returning it", async () => {
     const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);

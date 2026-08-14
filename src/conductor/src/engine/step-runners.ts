@@ -48,6 +48,7 @@ import {
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { coordinateBuildReviewRubrics, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
@@ -338,6 +339,8 @@ export interface StepRunnerOptions {
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
   ) => Promise<StepRunResult>;
+  /** Shared event spine for engine-owned build-review occurrences. */
+  events?: ConductorEventEmitter;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
@@ -413,6 +416,7 @@ export class DefaultStepRunner implements StepRunner {
   private planPathOverride?: string;
   private buildReviewInputOptions?: BuildReviewInputOptions;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
+  private events?: ConductorEventEmitter;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
   private providerKey: string;
@@ -462,6 +466,7 @@ export class DefaultStepRunner implements StepRunner {
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
+    this.events = options?.events;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerKey = options?.providerKey ?? 'claude';
@@ -1738,6 +1743,7 @@ export class DefaultStepRunner implements StepRunner {
         writeFile,
         rename,
       }),
+      emit: async (event) => { await this.events?.emit(event); },
     });
 
     if (coordination.kind === 'gate-disabled') {
@@ -1792,6 +1798,12 @@ export class DefaultStepRunner implements StepRunner {
     const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     await mkdir(effectivePipelineDir, { recursive: true });
     await writeFile(join(effectivePipelineDir, 'build-review.json'), JSON.stringify(aggregate, null, 2), 'utf-8');
+    await this.events?.emit({
+      type: 'build_review_outer_verdict',
+      lapId,
+      rawVerdict: aggregate.verdict,
+      effectiveVerdict: aggregate.verdict,
+    });
     if (aggregate.verdict === 'PASS') await this.stampBuildReviewVerdict();
     return { success: aggregate.verdict === 'PASS', output: JSON.stringify(aggregate) };
   }

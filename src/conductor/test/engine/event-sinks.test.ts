@@ -87,6 +87,14 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'rebase_changed',
   'rebase_gate_invalidated',
   'build_review_repair_context',
+  'build_review_rubric_started',
+  'build_review_rubric_result',
+  'build_review_rubric_skipped',
+  'build_review_cache_hit',
+  'build_review_rubric_infrastructure_failure',
+  'build_review_disposition_accepted',
+  'build_review_disposition_refused',
+  'build_review_outer_verdict',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -189,6 +197,27 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('persists engine-owned build-review occurrences through the shared ledger exactly once', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-review-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'build_review_outer_verdict' as const,
+      lapId: 'lap-current', rawVerdict: 'FAIL' as const, effectiveVerdict: 'PASS' as const,
+    };
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('persists a kickback to the event ledger without changing its audit record', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'kickback-event-sinks-'));
     const events = new ConductorEventEmitter();

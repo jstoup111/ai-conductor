@@ -7,6 +7,7 @@ import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, t
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { parseBuildReviewLapId } from './build-review-domain.js';
 import { resolveMainRepoRoot } from './park-marker.js';
+import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
 
 export interface BuildReviewFindingsCommand {
   readonly kind: 'findings';
@@ -40,6 +41,8 @@ export interface BuildReviewAcceptDeps extends BuildReviewFindingsDeps {
   readonly resolveOperator?: () => string | undefined;
   readonly resolveRepository?: (root: string) => string | undefined;
   readonly createStore?: (worktree: string) => DispositionStore;
+  /** Same-schema external-process event writer (exceptions A/B of the event spine). */
+  readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_disposition_accepted' | 'build_review_disposition_refused' }>) => void;
 }
 
 function recordsForFeature(value: unknown, slug: string): readonly BuildReviewDispositionRecord[] | undefined {
@@ -102,6 +105,7 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
  */
 export async function dispatchBuildReviewAccept(command: BuildReviewAcceptCommand, deps: BuildReviewAcceptDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
+  let worktree: string | undefined;
   const operator = (deps.resolveOperator ?? (() => userInfo().username))();
   if (!(deps.isInteractive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true)) || !operator?.trim()) {
     print('build-review accept: requires an interactive terminal and a verified local operator identity.');
@@ -114,7 +118,7 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   }
   try {
     const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
-    const worktree = await (deps.realpath ?? realpathDefault)(join(root, '.worktrees', command.feature));
+    worktree = await (deps.realpath ?? realpathDefault)(join(root, '.worktrees', command.feature));
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');
@@ -140,9 +144,21 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     if (!effective || !effective.unresolvedFindingIds.includes(identity.id)) throw new Error('finding is already accepted or not actionable');
     const appended = await store.append({ feature, finding: identity, sourceLapId: requestedLap, summary: identity.canonicalPayload.concernKind, rationale: command.rationale.trim(), operator: operator.trim() });
     if (!appended.ok) throw new Error(appended.message);
+    (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
+      type: 'build_review_disposition_accepted', feature: command.feature, lapId: requestedLap, findingId: identity.id, operator: operator.trim(), ts: new Date().toISOString(),
+    });
     print(`build-review accept: accepted ${identity.id} for lap ${requestedLap}.`);
     return 0;
   } catch {
+    if (worktree) {
+      try {
+        (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
+          type: 'build_review_disposition_refused', feature: command.feature, reason: 'current-finding-lap-or-state-invalid', ts: new Date().toISOString(),
+        });
+      } catch {
+        // CLI refusal remains authoritative even if best-effort telemetry cannot append.
+      }
+    }
     print(`build-review accept: refused for '${command.feature}'; the current finding, lap, or state could not be verified.`);
     return 1;
   }

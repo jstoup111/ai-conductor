@@ -1261,6 +1261,7 @@ async function main(): Promise<void> {
     modelPolicy: compatibilityRuntime.policy,
     mode,
     providerExecution,
+    events,
   });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and

@@ -27,12 +27,16 @@ describe('build-review findings CLI', () => {
     }));
     const store = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append };
     const output = vi.fn();
+    const appendEvent = vi.fn();
     await expect(dispatchBuildReviewAccept({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: identity.id, rationale: 'Known migration risk' }, {
       cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
-      readFile: async () => JSON.stringify(aggregate), createStore: () => store, print: output,
+      readFile: async () => JSON.stringify(aggregate), createStore: () => store, print: output, appendEvent,
     })).resolves.toBe(0);
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ sourceLapId: lapId, finding: identity, rationale: 'Known migration risk', operator: 'local-operator' }));
     expect(output).toHaveBeenCalledWith(expect.stringMatching(/accepted/i));
+    expect(appendEvent).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', {
+      type: 'build_review_disposition_accepted', feature: 'review-rubrics', lapId: 'lap-current', findingId: identity.id, operator: 'local-operator', ts: expect.any(String),
+    });
   });
 
   it('refuses piped, unidentified, stale, or unknown acceptance before mutating state', async () => {

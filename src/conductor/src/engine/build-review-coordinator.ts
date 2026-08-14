@@ -29,6 +29,7 @@ import type {
   ResolvedBuildReviewConfig,
   ResolvedBuildReviewRubricPolicy,
 } from "./resolved-config.js";
+import type { ConductorEvent } from "../types/events.js";
 
 const BUILD_REVIEW_RUBRICS: readonly BuildReviewRubricId[] = [
   "tautology",
@@ -98,6 +99,13 @@ export interface BuildReviewCoordinationInput {
   ) => Promise<BuildReviewBranchArtifact>;
   /** Persist one bounded semantic judgement; skips and failures never reach this effect. */
   readonly writeCache: (entry: BuildReviewCacheEntry) => Promise<void>;
+  /** Engine-owned occurrence sink; callers connect this to the shared event emitter. */
+  readonly emit?: (event: Extract<ConductorEvent, { type:
+    | "build_review_rubric_started"
+    | "build_review_rubric_result"
+    | "build_review_rubric_skipped"
+    | "build_review_cache_hit"
+    | "build_review_rubric_infrastructure_failure" }>) => Promise<void>;
 }
 
 function preflightProjection(preflight: TautologyPreflightResult): {
@@ -181,10 +189,12 @@ export async function coordinateBuildReviewRubrics(
   for (const branch of classification.branches) {
     if ("kind" in branch) {
       resolved.set(branch.rubric, branch);
+      await input.emit?.({ type: "build_review_rubric_skipped", rubric: branch.rubric, lapId: input.lapId, reason: branch.reason });
       continue;
     }
     if (branch.rubric === "tautology" && preflight?.classification === "infrastructure-failure") {
       resolved.set(branch.rubric, infrastructure(branch.rubric, preflight.reason));
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: preflight.reason });
       continue;
     }
     const projection = projections[branch.rubric];
@@ -194,6 +204,7 @@ export async function coordinateBuildReviewRubrics(
       candidate = await input.readCache(branch, projection, policyFingerprint);
     } catch {
       resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed"));
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });
       continue;
     }
     const cache = classifyBuildReviewCacheLookup(candidate, {
@@ -217,10 +228,15 @@ export async function coordinateBuildReviewRubrics(
         resolved.set(branch.rubric, result
           ? { kind: "cache-hit", rubric: branch.rubric, result }
           : infrastructure(branch.rubric, "artifact-write-failed"));
+        await input.emit?.(result
+          ? { type: "build_review_cache_hit", rubric: branch.rubric, lapId: input.lapId }
+          : { type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
       } catch {
         resolved.set(branch.rubric, infrastructure(branch.rubric, "artifact-write-failed"));
+        await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
       }
     } else {
+      await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
       misses.push(branch);
     }
   }
@@ -263,6 +279,14 @@ export async function coordinateBuildReviewRubrics(
       }
     });
   for (const outcome of dispatched) resolved.set(outcome.rubric, outcome.branch);
+
+  for (const outcome of dispatched) {
+    if (outcome.branch.kind === "dispatched") {
+      await input.emit?.({ type: "build_review_rubric_result", rubric: outcome.rubric, lapId: input.lapId, verdict: outcome.branch.result.verdict });
+    } else if (outcome.branch.kind === "infrastructure-failure") {
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: outcome.rubric, lapId: input.lapId, reason: outcome.branch.reason });
+    }
+  }
 
   return {
     kind: "ready",

@@ -7,14 +7,14 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
-  build_review_rubric_started: { render: false, persist: false, audit: false },
-  build_review_rubric_result: { render: false, persist: false, audit: false },
-  build_review_rubric_skipped: { render: false, persist: false, audit: false },
-  build_review_cache_hit: { render: false, persist: false, audit: false },
-  build_review_rubric_infrastructure_failure: { render: false, persist: false, audit: false },
-  build_review_disposition_accepted: { render: false, persist: false, audit: false },
-  build_review_disposition_refused: { render: false, persist: false, audit: false },
-  build_review_outer_verdict: { render: false, persist: false, audit: false },
+  build_review_rubric_started: { render: false, persist: true, audit: false },
+  build_review_rubric_result: { render: false, persist: true, audit: false },
+  build_review_rubric_skipped: { render: false, persist: true, audit: false },
+  build_review_cache_hit: { render: false, persist: true, audit: false },
+  build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false },
+  build_review_disposition_accepted: { render: false, persist: true, audit: false },
+  build_review_disposition_refused: { render: false, persist: true, audit: false },
+  build_review_outer_verdict: { render: false, persist: true, audit: false },
   step_started: { render: true, persist: true, audit: false },
   deprecated_step: { render: true, persist: true, audit: false },
   step_completed: { render: true, persist: true, audit: true },

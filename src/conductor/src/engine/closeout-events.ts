@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import type { ConductorEvent } from '../types/events.js';
 
 export type PipelineCloseoutEvent = Extract<ConductorEvent, { type: 'pipeline_closeout' }>;
-export type ExternalPipelineEvent = PipelineCloseoutEvent | Extract<ConductorEvent,
-  { type: 'build_review_disposition_accepted' | 'build_review_disposition_refused' | 'build_review_outer_verdict' }>;
+export type BuildReviewExternalEvent = Extract<ConductorEvent,
+  { type: 'build_review_disposition_accepted' | 'build_review_disposition_refused' | 'build_review_outer_verdict' }> & { ts: string };
+export type ExternalPipelineEvent = PipelineCloseoutEvent | BuildReviewExternalEvent;
 
 /** Append a pipeline-owned closeout event without touching the engine ledger. */
 export function appendCloseoutEvent(
