@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -230,6 +230,64 @@ describe('runLiveE2ERunBody authentication source', () => {
       .rejects.toThrow('expected api-key, resolved cached-login');
     expect(resolveAuthenticationSource).toHaveBeenCalledTimes(1);
     expect(resolveAuthenticationSource).toHaveBeenCalledWith(provider);
+  });
+});
+
+describe('live E2E failure diagnostics', () => {
+  it.each([
+    ['absent worktree', 'absent'],
+    ['missing daemon log', 'missing-log'],
+    ['empty daemon log', 'empty-log'],
+  ] as const)('reports an %s without masking the original failure', async (_scenario, setup) => {
+    const { dumpLiveE2EFailureDiagnostics } = await import('./live-e2e-run-body.js') as {
+      dumpLiveE2EFailureDiagnostics: (worktreeDir: string) => Promise<void>;
+    };
+    const worktreeDir = await mkdtemp(`${tmpdir()}/live-e2e-diagnostics-`);
+    const stderr: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderr.push(args.map(String).join(' '));
+    });
+
+    try {
+      await rm(worktreeDir, { recursive: true, force: true });
+      if (setup !== 'absent') {
+        await mkdir(join(worktreeDir, '.daemon'), { recursive: true });
+      }
+      if (setup === 'empty-log') {
+        await writeFile(join(worktreeDir, '.daemon/daemon.log'), '');
+      }
+      vi.mocked(dumpPipelineDiagnostics).mockClear();
+      vi.mocked(dumpPipelineDiagnostics).mockImplementation(async () => {
+        console.error('task status at the surviving pipeline path');
+      });
+
+      await expect(dumpLiveE2EFailureDiagnostics(worktreeDir)).resolves.toBeUndefined();
+
+      const output = stderr.join('\n');
+      expect({
+        worktreeAbsent: output.includes(`live worktree not found at ${worktreeDir}`),
+        daemonLogMissing: output.includes(`daemon log not found at ${worktreeDir}/.daemon/daemon.log`),
+        daemonLogEmpty: output.includes(`daemon log is empty at ${worktreeDir}/.daemon/daemon.log`),
+        pipelineState: output.includes('task status at the surviving pipeline path'),
+        dumpCalls: vi.mocked(dumpPipelineDiagnostics).mock.calls.length,
+      }).toEqual(setup === 'absent' ? {
+        worktreeAbsent: true,
+        daemonLogMissing: false,
+        daemonLogEmpty: false,
+        pipelineState: false,
+        dumpCalls: 0,
+      } : {
+        worktreeAbsent: false,
+        daemonLogMissing: setup === 'missing-log',
+        daemonLogEmpty: setup === 'empty-log',
+        pipelineState: true,
+        dumpCalls: 1,
+      });
+    } finally {
+      errorSpy.mockRestore();
+      vi.mocked(dumpPipelineDiagnostics).mockReset();
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
   });
 });
 

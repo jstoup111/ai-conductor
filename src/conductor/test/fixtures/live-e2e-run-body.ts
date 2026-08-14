@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -289,6 +289,28 @@ export async function assertLiveProviderReadiness(provider: LLMProvider): Promis
   throw new Error(`Provider readiness is ${readiness.state}: ${readinessRemediation(readiness)}`);
 }
 
+export async function dumpLiveE2EFailureDiagnostics(worktreeDir: string): Promise<void> {
+  if (!existsSync(worktreeDir)) {
+    console.error(`live worktree not found at ${worktreeDir}; pipeline diagnostics unavailable.`);
+    return;
+  }
+
+  const logPath = join(worktreeDir, '.daemon/daemon.log');
+  const daemonLog = await readFile(logPath, 'utf8').catch(() => null);
+  if (daemonLog === null) {
+    console.error(`daemon log not found at ${logPath}`);
+  } else if (daemonLog.trim().length === 0) {
+    console.error(`daemon log is empty at ${logPath}`);
+  }
+
+  try {
+    await dumpPipelineDiagnostics(worktreeDir);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`live E2E pipeline diagnostics failed: ${detail}`);
+  }
+}
+
 async function withLiveE2EFailureDiagnostics<T>(
   worktreeDir: string,
   run: () => Promise<T>,
@@ -296,7 +318,7 @@ async function withLiveE2EFailureDiagnostics<T>(
   try {
     return await run();
   } catch (error) {
-    await dumpPipelineDiagnostics(worktreeDir);
+    await dumpLiveE2EFailureDiagnostics(worktreeDir);
     throw error;
   }
 }
