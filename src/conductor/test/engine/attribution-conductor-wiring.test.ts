@@ -44,6 +44,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -310,6 +311,12 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
           } as never),
+        },
+        buildReviewEffectiveResolver: async (_root, aggregate) => {
+          const effective = deriveEffectiveBuildReviewVerdict(aggregate);
+          return effective
+            ? { ok: true as const, feature: { version: 'v1' as const, repository: projectRoot, feature: 'fixture' }, effective }
+            : { ok: false as const, reason: 'fixture aggregate is invalid' };
         },
         sessionStore: sessions,
         providerRuntimes: runtimes,

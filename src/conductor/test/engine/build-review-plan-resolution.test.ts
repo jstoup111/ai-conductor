@@ -114,7 +114,9 @@ describe('build_review resolves the feature-scoped plan, not the alphabetically-
     await runner.run('build_review', { feature_desc: 'build-progress-1-based-display' } as ConductState);
 
     expect(invokeCalls.length).toBeGreaterThan(0);
-    const graderPrompt = invokeCalls[0].prompt ?? '';
+    const graderPrompt = invokeCalls.find((call) =>
+      call.prompt?.includes('"rubric":"scope"'),
+    )?.prompt ?? '';
     expect(graderPrompt).toContain(PLAN_FEATURE_SENTINEL);
     expect(graderPrompt).not.toContain(PLAN_DECOY_SENTINEL);
   });

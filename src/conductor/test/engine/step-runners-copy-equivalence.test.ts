@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 
 const { runCopyEquivalence } = vi.hoisted(() => ({
   runCopyEquivalence: vi.fn(),
@@ -31,21 +32,16 @@ describe('build_review copy equivalence', () => {
   });
 
   function runner(invoke?: LLMProvider['invoke']) {
-    const defaultInvoke: LLMProvider['invoke'] = async () => {
-      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(projectDir, '.pipeline', 'build-review.json'),
-        JSON.stringify({
-          verdict: 'PASS',
-          rubric: {
-            tautology: false,
-            scope: false,
-            rootCause: false,
-            completeness: false,
-            },
+    const defaultInvoke: LLMProvider['invoke'] = async (options) => {
+      const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+      return {
+        success: true,
+        output: JSON.stringify({
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [],
         }),
-      );
-      return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+        exitCode: 0,
+      };
     };
     const providerInvoke = invoke ?? vi.fn(defaultInvoke);
     const provider: LLMProvider = {
@@ -67,6 +63,12 @@ describe('build_review copy equivalence', () => {
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
           } as never),
+        },
+        buildReviewEffectiveResolver: async (_root, aggregate) => {
+          const effective = deriveEffectiveBuildReviewVerdict(aggregate);
+          return effective
+            ? { ok: true as const, feature: { version: 'v1' as const, repository: projectDir, feature: 'fixture' }, effective }
+            : { ok: false as const, reason: 'fixture aggregate is invalid' };
         },
       }),
     };
@@ -107,36 +109,32 @@ describe('build_review copy equivalence', () => {
 
     expect(result.success).toBe(true);
     expect(runCopyEquivalence).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledTimes(4);
   });
 
-  it('rejects a legacy incomplete grader rubric before accepting the complete four-key verdict', async () => {
+  it('rejects a malformed rubric response before accepting valid branch results', async () => {
     await writeFile(planPath, '# Plan\n\nNo declared replication.\n');
-    let rubric: Record<string, boolean> = {
-      tautology: false,
-      scope: false,
-      rootCause: false,
-    };
-    const invoke = vi.fn(async () => {
-      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(projectDir, '.pipeline', 'build-review.json'),
-        JSON.stringify({ verdict: 'PASS', rubric }),
-      );
-      return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+    let malformed = true;
+    const invoke = vi.fn(async (options) => {
+      if (malformed) return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+      const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+      return { success: true, output: JSON.stringify({
+        kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+        snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [],
+      }), exitCode: 0 };
     });
     const { runner: subject } = runner(invoke);
 
     await expect(subject.run('build_review', {})).resolves.toMatchObject({
       success: false,
-      output: expect.stringMatching(/rubric\.completeness/i),
+      output: expect.stringMatching(/invalid-provider-result/i),
     });
 
-    rubric = { ...rubric, completeness: false };
+    malformed = false;
     await expect(subject.run('build_review', {})).resolves.toMatchObject({
       success: true,
     });
-    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenCalledTimes(8);
     expect(runCopyEquivalence).not.toHaveBeenCalled();
   });
 
