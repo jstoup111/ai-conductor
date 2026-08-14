@@ -12,6 +12,7 @@ import {
   advanceFinishPublication,
   routeFinishPublicationDisposition,
   type AdvanceFinishPublicationResult,
+  type PublicationDisposition,
   type PublicationSnapshot,
 } from '../../src/engine/finish-publication.js';
 import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
@@ -778,13 +779,15 @@ describe('Conductor FINISH publication routing', () => {
         ready: false,
       },
     } as const satisfies PublicationSnapshot;
-    const advance = vi.fn(async () => {
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
       const disposition = await advanceFinishPublication({
         observe: async () => unchangedJudgmentSnapshot,
         effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
       });
       publicationDispositions.push(disposition);
-      return disposition;
+      return disposition.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: disposition.transition }
+        : disposition;
     });
     const conductor = new Conductor({
       stateFilePath: statePath,
