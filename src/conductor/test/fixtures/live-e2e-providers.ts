@@ -1,4 +1,5 @@
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import { CodexProvider } from '../../src/execution/codex-provider.js';
 import type { AuthenticationSource, LLMProvider } from '../../src/execution/llm-provider.js';
 import type { SelfHostProviderId } from '../../src/engine/self-host/provider-home.js';
 
@@ -25,5 +26,21 @@ export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = [
     providerKey: 'claude',
     expectedAuthenticationSource: 'oauth-token',
     resolveAuthenticationSource: async () => 'oauth-token',
+  },
+  {
+    id: 'codex',
+    createProvider: () => new CodexProvider(),
+    binaryName: 'codex',
+    credentialEnvVar: 'CODEX_API_KEY',
+    selfHostExecutable: 'codex',
+    providerKey: 'codex',
+    expectedAuthenticationSource: 'api-key',
+    resolveAuthenticationSource: async (provider) => {
+      const readiness = await provider.readiness?.();
+      if (readiness?.provider !== 'codex') {
+        throw new Error('Codex live descriptor requires Codex readiness');
+      }
+      return readiness.source;
+    },
   },
 ];
