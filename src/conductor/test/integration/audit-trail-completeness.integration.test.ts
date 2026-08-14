@@ -50,6 +50,14 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   ConductorEvent['type'],
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  build_review_rubric_started: 'not-audited-by-design',
+  build_review_rubric_result: 'not-audited-by-design',
+  build_review_rubric_skipped: 'not-audited-by-design',
+  build_review_cache_hit: 'not-audited-by-design',
+  build_review_rubric_infrastructure_failure: 'not-audited-by-design',
+  build_review_disposition_accepted: 'not-audited-by-design',
+  build_review_disposition_refused: 'not-audited-by-design',
+  build_review_outer_verdict: 'not-audited-by-design',
   step_started: 'not-audited-by-design',
   deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
@@ -138,6 +146,14 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+  build_review_rubric_started: { type: 'build_review_rubric_started', rubric: 'scope', lapId: 'lap-1' },
+  build_review_rubric_result: { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
+  build_review_rubric_skipped: { type: 'build_review_rubric_skipped', rubric: 'scope', lapId: 'lap-1', reason: 'disabled' },
+  build_review_cache_hit: { type: 'build_review_cache_hit', rubric: 'scope', lapId: 'lap-1' },
+  build_review_rubric_infrastructure_failure: { type: 'build_review_rubric_infrastructure_failure', rubric: 'scope', lapId: 'lap-1', reason: 'provider-error' },
+  build_review_disposition_accepted: { type: 'build_review_disposition_accepted', feature: 'feature', lapId: 'lap-1', findingId: 'sha256:x', operator: 'operator' },
+  build_review_disposition_refused: { type: 'build_review_disposition_refused', feature: 'feature', reason: 'non-tty' },
+  build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
   step_started: { type: 'step_started', step: 'build', index: 0 },
   deprecated_step: {
     type: 'deprecated_step',
