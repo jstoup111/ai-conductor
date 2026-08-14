@@ -52,6 +52,60 @@ describe('build-review raw aggregate', () => {
     expect(aggregate.results.scope).toMatchObject({ kind: 'judged', findings: [finding] });
   });
 
+  it('uses exhaustive neutral-skip coverage while retaining raw result evidence', () => {
+    const skip = { kind: 'skipped', rubric: 'tautology' as const, reason: 'disabled' };
+    const infrastructureFailure = {
+      kind: 'infrastructure-failure', rubric: 'wiring' as const, reason: 'provider-error', detail: 'provider unavailable',
+    };
+    const finding = {
+      concernKind: 'unplanned change', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' },
+    };
+    const cases = [
+      {
+        name: 'one clean judgement and a skip',
+        outcomes: results({ tautology: skip }),
+        verdict: 'PASS', skipped: ['tautology'], failedRubrics: [] as string[],
+      },
+      {
+        name: 'only skips',
+        outcomes: results({
+          tautology: skip,
+          scope: { kind: 'skipped', rubric: 'scope', reason: 'disabled' },
+          rootCause: { kind: 'skipped', rubric: 'rootCause', reason: 'disabled' },
+          completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
+          wiring: { kind: 'skipped', rubric: 'wiring', reason: 'disabled' },
+        }),
+        verdict: 'FAIL', skipped: ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'], failedRubrics: [] as string[],
+      },
+      {
+        name: 'a clean judgement, skip, and infrastructure failure',
+        outcomes: results({ tautology: skip, wiring: infrastructureFailure }),
+        verdict: 'FAIL', skipped: ['tautology'], failedRubrics: ['wiring'],
+      },
+      {
+        name: 'a finding and a skip',
+        outcomes: results({ tautology: skip, scope: judged('scope', [finding]) }),
+        verdict: 'FAIL', skipped: ['tautology'], failedRubrics: ['scope'],
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const aggregate = joinBuildReviewRubricOutcomes({
+        lapId, snapshotDigest: 'sha256:snapshot', results: testCase.outcomes,
+      });
+      const effective = deriveEffectiveBuildReviewVerdict(aggregate)!;
+
+      expect(aggregate.verdict, testCase.name).toBe(testCase.verdict);
+      expect(effective.verdict, testCase.name).toBe(testCase.verdict);
+      expect(effective.skippedRubrics, testCase.name).toEqual(testCase.skipped);
+      expect(
+        Object.entries(aggregate.rubric).filter(([, failed]) => failed).map(([rubric]) => rubric),
+        testCase.name,
+      ).toEqual(testCase.failedRubrics);
+      expect(aggregate.results.tautology).toEqual(testCase.outcomes.tautology);
+    }
+  });
+
   it('records skips and infrastructure failures as coverage, never as a passing judgement', () => {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot',
@@ -62,7 +116,7 @@ describe('build-review raw aggregate', () => {
     });
     expect(aggregate).toMatchObject({
       verdict: 'FAIL', coverage: { tautology: 'skipped', wiring: 'infrastructure-failure' },
-      rubric: { tautology: true, wiring: true },
+      rubric: { tautology: false, wiring: true },
     });
   });
 
@@ -111,7 +165,7 @@ describe('build-review raw aggregate', () => {
     expect(aggregate.results.scope).toMatchObject({ findings: [first, second] });
   });
 
-  it('never resolves legacy, stale, skipped, or infrastructure-shaped evidence', () => {
+  it('never resolves legacy, stale, or infrastructure-shaped evidence', () => {
     const cacheHitCurrentLap = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results() });
     const skipped = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ tautology: { kind: 'skipped', rubric: 'tautology', reason: 'disabled' } }),
@@ -121,7 +175,7 @@ describe('build-review raw aggregate', () => {
     });
 
     expect(deriveEffectiveBuildReviewVerdict(cacheHitCurrentLap)).toMatchObject({ verdict: 'PASS' });
-    expect(deriveEffectiveBuildReviewVerdict(skipped, new Set(['fabricated']))).toMatchObject({ verdict: 'FAIL' });
+    expect(deriveEffectiveBuildReviewVerdict(skipped, new Set(['fabricated']))).toMatchObject({ verdict: 'PASS', skippedRubrics: ['tautology'] });
     expect(deriveEffectiveBuildReviewVerdict(infra, new Set(['fabricated']))).toMatchObject({ verdict: 'FAIL' });
     expect(deriveEffectiveBuildReviewVerdict({ verdict: 'PASS' }, new Set(['fabricated']))).toBeUndefined();
     expect(deriveEffectiveBuildReviewVerdict({ ...cacheHitCurrentLap, lapId: parseBuildReviewLapId('lap-old')!, results: cacheHitCurrentLap.results })).toBeUndefined();

@@ -105,7 +105,12 @@ function legacyFindingDetails(result: BuildReviewRubricResult): string[] {
 }
 
 function legacyFailure(result: BuildReviewRubricResult): boolean {
-  return result.kind !== 'judged' || result.findings.length > 0;
+  return result.kind === 'infrastructure-failure' || (result.kind === 'judged' && result.findings.length > 0);
+}
+
+function aggregateVerdict(results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>): 'PASS' | 'FAIL' {
+  const judgedCount = RUBRICS.filter((name) => results[name].kind === 'judged').length;
+  return judgedCount > 0 && !RUBRICS.some((name) => legacyFailure(results[name])) ? 'PASS' : 'FAIL';
 }
 
 /** Derives an immutable, backward-compatible aggregate from every raw branch. */
@@ -123,7 +128,7 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
   }
   const aggregate: BuildReviewAggregate = {
     aggregateVersion: AGGREGATE_VERSION, lapId: input.lapId, snapshotDigest: input.snapshotDigest,
-    results: input.results, coverage, verdict: RUBRICS.some((name) => rubric[name]) ? 'FAIL' : 'PASS',
+    results: input.results, coverage, verdict: aggregateVerdict(input.results),
     rubric, findings, reasons,
     ...(input.codeStamp !== undefined ? { codeStamp: input.codeStamp } : {}),
   };
@@ -160,7 +165,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     expectedFindings[name] = legacyFindingDetails(results[name]);
     expectedReasons.push(...expectedFindings[name].map((detail) => `[${name}] ${detail}`));
   }
-  const verdict = RUBRICS.some((name) => expectedRubric[name]) ? 'FAIL' : 'PASS';
+  const verdict = aggregateVerdict(results);
   if (source.verdict !== verdict || JSON.stringify(coverage) !== JSON.stringify(expectedCoverage) ||
     JSON.stringify(rubric) !== JSON.stringify(expectedRubric) || JSON.stringify(findings) !== JSON.stringify(expectedFindings) ||
     JSON.stringify(source.reasons) !== JSON.stringify(expectedReasons)) return undefined;
@@ -186,6 +191,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const unresolved: string[] = [];
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
+  let judgedCount = 0;
   for (const rubric of RUBRICS) {
     const result = aggregate.results[rubric];
     if (result.kind === 'skipped') {
@@ -196,6 +202,7 @@ export function deriveEffectiveBuildReviewVerdict(
       infrastructure.push(rubric);
       continue;
     }
+    judgedCount += 1;
     for (const finding of result.findings) {
       const identity = canonicalizeBuildReviewFindingIdentity({
         rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
@@ -206,7 +213,7 @@ export function deriveEffectiveBuildReviewVerdict(
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
-    verdict: unresolved.length === 0 && skipped.length === 0 && infrastructure.length === 0 ? 'PASS' : 'FAIL',
+    verdict: judgedCount > 0 && unresolved.length === 0 && infrastructure.length === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
   });
