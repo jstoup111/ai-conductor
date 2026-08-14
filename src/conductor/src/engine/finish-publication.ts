@@ -1482,6 +1482,32 @@ export async function advanceFinishPublication(
       if (observedAfterAuthoring.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
       }
+
+      // A lost authoring response is not evidence that the completed pass
+      // left prose unmoved. Re-observation still wins: accept any observed
+      // change, but preserve the transient retry when the placeholder remains.
+      // The fixed-point guard below applies only once the authoring pass itself
+      // completed successfully and therefore claimed to have made progress.
+      if (dispatchFailure) {
+        if (
+          observedAfterAuthoring.pr.identity === 'one' &&
+          observedAfterAuthoring.pr.prose !== 'placeholder' &&
+          observedAfterAuthoring.pr.prose !== 'indeterminate'
+        ) {
+          return advancedPublicationTransition(
+            input.emit,
+            'author_pr_prose',
+            snapshot,
+            observedAfterAuthoring,
+          );
+        }
+        return reconcileSelectablePublicationRetry({
+          kind: 'publication_retry',
+          transition: 'author_pr_prose',
+          reason: 'authoring_dispatch_failed',
+        }, input.observe);
+      }
+
       const transition = await advancedPublicationTransition(
         input.emit,
         'author_pr_prose',
@@ -1500,9 +1526,7 @@ export async function advanceFinishPublication(
       return {
         kind: 'publication_retry',
         transition: 'author_pr_prose',
-        reason: dispatchFailure
-          ? 'authoring_dispatch_failed'
-          : 'authoring_not_verified_after_pass',
+        reason: 'authoring_not_verified_after_pass',
       };
     });
   }

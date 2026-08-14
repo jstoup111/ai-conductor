@@ -1,9 +1,9 @@
 /**
- * Acceptance spec for Stories 3-4's terminal FINISH refusal flow.
+ * Acceptance spec for Stories 3-4's terminal FINISH halt-state flow.
  *
- * A deterministic provider fake returns a refused verdict. The real production
- * coordinator decodes and maps it before the Conductor routes the resulting
- * human-required disposition to the halt-marker writer.
+ * The production coordinator recognizes the remediation signal before it
+ * reaches a provider. The Conductor then routes the human-required
+ * disposition to the halt-marker writer.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,9 +17,7 @@ import { createProductionFinishPublicationCoordinator } from '../../src/engine/f
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../test-conductor.js';
 
-const BLOCKER = 'CHANGELOG carries an unsubstituted {{IMPLEMENTATION_PR}} token';
-
-describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
+describe('acceptance: a halt-state PR stops with its guidance', () => {
   let projectRoot: string;
   let stateFilePath: string;
 
@@ -52,14 +50,10 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('writes the refusal message, next action, and provider detail as a needs-human HALT', async () => {
+  it('writes the halt-state message and next action without dispatching a provider', async () => {
     const provider: StepRunner = {
       run: vi.fn(async () => ({
         success: true,
-        publicationDisposition: {
-          kind: 'refused',
-          detail: BLOCKER,
-        },
       })),
     };
     const coordinator = createProductionFinishPublicationCoordinator({
@@ -103,16 +97,10 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
 
     await conductor.run();
 
-    expect(provider.run).toHaveBeenCalledOnce();
-    expect(provider.run).toHaveBeenCalledWith(
-      'finish',
-      expect.any(Object),
-      expect.objectContaining({ finishProsePass: 'judge' }),
-    );
+    expect(provider.run).not.toHaveBeenCalled();
     const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
-    expect(halt).toContain('The PR prose judgment was refused and requires an operator decision.');
-    expect(halt).toContain('Next action: Review the refusal and decide how to continue publication.');
-    expect(halt).toContain(BLOCKER);
+    expect(halt).toContain('The PR still carries a remediation halt signal and cannot be published automatically.');
+    expect(halt).toContain('Next action: Resolve the stated blocker and clear the remediation signal before retrying FINISH.');
     await expect(readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf8'))
       .resolves.toBe('needs-human');
   });
