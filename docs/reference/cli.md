@@ -838,6 +838,11 @@ an `operator` origin, distinct from step-attributed records. See
 [the stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#the-halt-is-a-protected-artifact-violation)
 for the full recovery procedure.
 
+The `--reason` rationale is not just an audit-trail entry: the next `build_review` on this feature
+renders every `operator-reseal`-triggered entry, with its paths, rationale, and commit range, in the
+grader's prompt as evidence to judge — see
+[operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
+
 On success the command prints `Resealed protected artifacts: <paths>` and exits 0. With
 `--clear-halt`, it additionally clears the worktree's `HALT`/`HALT.class` markers when a halt is
 present and its class is the protected-artifact class, and reports the outcome (`No halt to clear.`,

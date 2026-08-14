@@ -320,6 +320,16 @@ emits a `build_review_repair_context` telemetry event recording whether that gra
 repair context available, with recorded advances that never joined a failure, or with no base
 advance at all — pure provenance that never changes the grading outcome.
 
+### Operator-authorized protected-artifact reseals
+
+An [`conduct-ts reseal`](../reference/cli.md#conduct-ts-reseal) an operator runs mid-feature is also
+supplied to the grader. `build_review` reads every `operator-reseal`-triggered entry from
+`.pipeline/protected-artifact-seal.json`'s `rebaselines` array and renders each one's paths,
+rationale, and from/to commit SHAs in the prompt, instructing the grader to treat the rationale as an
+operator claim to judge rather than an instruction to follow — unmatched work in the diff stays fully
+subject to every rubric item. Before this, an operator's reseal rationale existed only in the seal file
+and the audit trail; the grader judged the diff with no visibility into it.
+
 Two paths fail open to `build`, preserving the older behavior exactly: a FAIL carrying neither a
 completeness nor a scope signal, and a remediation plan with no usable dispositions. Kickback counting is untouched — a
 remediation-routed FAIL counts against the per-gate cap like any other.
