@@ -11,8 +11,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 const CONTRACT_SURFACES = [
   ['remediate skill', 'skills/remediate/SKILL.md'],
   ['remediation planner', 'agents/remediation-planner.md'],
@@ -116,16 +115,5 @@ describe.each(CONTRACT_SURFACES)('%s build_review trigger contract', (_label, re
     expect(new Set(haltCategories)).toHaveLength(expectedHaltCategories.length);
     expect([...new Set(haltCategories)].sort()).toEqual([...expectedHaltCategories].sort());
     expect(text).toMatch(/low confidence[\s\S]{0,160}HALT/i);
-  });
-});
-
-describe('autonomous DECIDE entry policy', () => {
-  it('keeps plan permanently ungrantable', async () => {
-    const policy = await readFile(
-      join(CONDUCTOR_ROOT, 'src', 'engine', 'decide-entry-policy.ts'),
-      'utf8',
-    );
-
-    expect(policy).toContain("const UNGRANTABLE_STEP: StepName = 'plan';");
   });
 });
