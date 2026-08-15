@@ -157,15 +157,16 @@ export function registerBuiltins(
     new CodexProvider(undefined, undefined, undefined, undefined, codexDoctorTimeoutMs),
   );
 
-  // Task 12: Register TerminalSubscriber (lifecycle wrapper — wires event emitter to render callback)
-  const subscriber = new TerminalSubscriber(events, renderEvent);
-  registry.register('ui_renderer', 'terminal', subscriber);
-
   // Feature 1.2 T11: Also register TerminalRenderer (UIRenderer interface) if options provided
-  if (rendererOpts) {
-    const terminalRenderer = new TerminalRenderer(rendererOpts);
+  const terminalRenderer = rendererOpts ? new TerminalRenderer(rendererOpts) : undefined;
+  if (terminalRenderer) {
     registry.register('ui_renderer', 'terminal_renderer', terminalRenderer);
   }
+
+  // Task 12: Register TerminalSubscriber (lifecycle wrapper — wires event emitter to render callback).
+  // Halt-marker failures additionally reach the production TerminalRenderer sink.
+  const subscriber = new TerminalSubscriber(events, renderEvent, terminalRenderer);
+  registry.register('ui_renderer', 'terminal', subscriber);
 
   // adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / Task A3: Register built-in local memory provider (C1 — real provider, not null)
   registry.register('memory_provider', 'local', LocalMemoryProvider);

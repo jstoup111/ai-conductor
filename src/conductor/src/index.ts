@@ -1165,7 +1165,7 @@ async function main(): Promise<void> {
   const mode = deriveMode(opts);
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
-  const renderEvent = createRenderer({
+  const rendererOpts = {
     stateFilePath,
     featureDesc: opts.featureDesc,
     steps: ALL_STEPS,
@@ -1175,7 +1175,8 @@ async function main(): Promise<void> {
     liveRegion,
     viewMode: opts.view,
     tailLines: opts.tailLines,
-  });
+  };
+  const renderEvent = createRenderer(rendererOpts);
 
   // Initialize plugin registry and discover plugins
   const registry = new PluginRegistry();
@@ -1186,7 +1187,7 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  registerCliBuiltins(registry, events, renderEvent, config);
+  registerCliBuiltins(registry, events, renderEvent, config, rendererOpts);
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},

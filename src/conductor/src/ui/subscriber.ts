@@ -1,6 +1,6 @@
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from './events.js';
-import type { UISubscriber, UIEventHandler } from './types.js';
+import type { UIRenderer, UISubscriber, UIEventHandler } from './types.js';
 
 export type { UISubscriber, UIEventHandler } from './types.js';
 /** @deprecated use UIEventHandler */
@@ -11,7 +11,11 @@ export class TerminalSubscriber implements UISubscriber {
   private onRender: UIEventHandler;
   private handlers: Array<{ type: ConductorEvent['type']; handler: EventHandler }> = [];
 
-  constructor(eventEmitter: ConductorEventEmitter, onRender: UIEventHandler) {
+  constructor(
+    eventEmitter: ConductorEventEmitter,
+    onRender: UIEventHandler,
+    private readonly terminalRenderer?: UIRenderer,
+  ) {
     this.eventEmitter = eventEmitter;
     this.onRender = onRender;
   }
@@ -45,10 +49,16 @@ export class TerminalSubscriber implements UISubscriber {
       'provider_fallback',
       'session_policy',
       'feature_usage_total',
+      'halt_marker_write_failed',
     ];
 
     for (const type of eventTypes) {
-      const handler: EventHandler = (event) => this.onRender(event);
+      const handler: EventHandler = async (event) => {
+        await this.onRender(event);
+        if (event.type === 'halt_marker_write_failed') {
+          await this.terminalRenderer?.handle(event);
+        }
+      };
       this.handlers.push({ type, handler });
       this.eventEmitter.on(type, handler);
     }
