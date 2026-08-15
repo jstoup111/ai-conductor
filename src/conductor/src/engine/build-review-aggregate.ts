@@ -143,6 +143,19 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   // In-flight v1 aggregates may still carry the retired branch.  It was
   // informational only, so read it tolerantly while projecting the closed
   // four-rubric contract to every current consumer.
+  //
+  // Tolerance covers ALL state derived from the retired member, not just its
+  // maps: an aggregate whose stored top-level verdict was FAIL solely because
+  // Wiring failed or skipped must re-derive its verdict from the surviving
+  // four rubrics rather than be rejected as inconsistent. The relaxation is
+  // scoped to aggregates that verifiably carried the retired member — a
+  // four-rubric aggregate with a mismatched verdict is still corruption.
+  const carriedRetiredWiring = !!raw && (
+    (['results', 'coverage', 'rubric', 'findings'] as const)
+      .some((key) => { const memberMap = record(raw[key]); return !!memberMap && 'wiring' in memberMap; })
+    || (Array.isArray(raw.reasons)
+      && raw.reasons.some((reason) => typeof reason === 'string' && reason.startsWith('[wiring]')))
+  );
   const source = raw && Object.fromEntries(Object.entries(raw).map(([key, entry]) => {
     const memberMap = key === 'results' || key === 'coverage' || key === 'rubric' || key === 'findings'
       ? record(entry)
@@ -179,7 +192,8 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     expectedReasons.push(...expectedFindings[name].map((detail) => `[${name}] ${detail}`));
   }
   const verdict = aggregateVerdict(results);
-  if (source.verdict !== verdict || JSON.stringify(coverage) !== JSON.stringify(expectedCoverage) ||
+  const verdictTolerated = carriedRetiredWiring && (source.verdict === 'PASS' || source.verdict === 'FAIL');
+  if ((source.verdict !== verdict && !verdictTolerated) || JSON.stringify(coverage) !== JSON.stringify(expectedCoverage) ||
     JSON.stringify(rubric) !== JSON.stringify(expectedRubric) || JSON.stringify(findings) !== JSON.stringify(expectedFindings) ||
     JSON.stringify(source.reasons) !== JSON.stringify(expectedReasons)) return undefined;
   return {

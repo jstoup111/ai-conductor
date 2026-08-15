@@ -590,6 +590,102 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it('projects accepted build-review risk onto the retained PR while repairing presentation (Task 38)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-risk-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1173';
+      const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
+      const finding = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned change',
+        summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'],
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      })!;
+      const accepted: BuildReviewDispositionRecord = {
+        version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!,
+        summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+      };
+      const edits: string[][] = [];
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: 'Reader-facing summary.', isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') { edits.push(args); return commandResult; }
+        throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => undefined,
+        resolveFeatureIdentity: async () => feature,
+        createDispositionStore: () => ({ list: async () => ({ ok: true, records: Object.freeze([accepted]) }) }),
+      });
+      const state = {
+        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState;
+
+      await coordinator.advance({ state, mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {} });
+
+      expect(edits.length).toBe(1);
+      const body = edits[0][edits[0].indexOf('--body') + 1];
+      expect(body).toContain('Reader-facing summary.');
+      expect(body).toContain('Accepted build-review risk');
+      expect(body).toContain('**Rationale:** reason');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks retained-PR maintenance when disposition state is unavailable instead of dropping accepted risk (Task 38)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-risk-block-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1174';
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: 'Reader-facing summary.', isDraft: true }) };
+        throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => { throw new Error('presentation repair must not run before the risk projection settles'); },
+        resolveFeatureIdentity: async () => ({ version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' }),
+        createDispositionStore: () => ({ list: async () => ({ ok: false, kind: 'unreadable' as const, message: 'disposition store unreadable' }) }),
+      });
+      const state = {
+        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState;
+
+      // The core coordinator converts the projection failure into a bounded
+      // retry: presentation repair never completes and accepted risk is never
+      // silently dropped. The injected repairPresentation throws if reached,
+      // proving the projection blocked the effect before any repair ran.
+      await expect(
+        coordinator.advance({ state, mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {} }),
+      ).resolves.toEqual({ kind: 'publication_retry', transition: 'ready_pr', reason: 'presentation_repair_failed' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   // Production reaches `judge_pr_prose` only for prose the deterministic
   // classifier could not accept and that is NOT an unauthored placeholder —
   // a placeholder body routes to the authoring pass instead (covered below).

@@ -139,6 +139,48 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate({ ...aggregate, extra: true })).toBeUndefined();
   });
 
+  it('tolerates an in-flight aggregate whose FAIL verdict derives only from the retired wiring member', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results() });
+    const legacy = {
+      ...aggregate,
+      verdict: 'FAIL',
+      results: {
+        ...aggregate.results,
+        wiring: {
+          kind: 'judged', rubric: 'wiring', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1',
+          findings: [{ concernKind: 'unreached surface', summary: 'orphan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'wiring', path: 'src/a.ts', relation: 'outside-plan' } }],
+          verdict: 'FAIL',
+        },
+      },
+      coverage: { ...aggregate.coverage, wiring: 'judged' },
+      rubric: { ...aggregate.rubric, wiring: true },
+      findings: { ...aggregate.findings, wiring: ['unreached surface'] },
+      reasons: ['[wiring] unreached surface'],
+    };
+
+    expect(parseBuildReviewAggregate(legacy)).toEqual(aggregate);
+  });
+
+  it('tolerates an in-flight aggregate blocked only by a retired wiring skip', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results() });
+    const legacy = {
+      ...aggregate,
+      verdict: 'FAIL',
+      results: { ...aggregate.results, wiring: { kind: 'skipped', rubric: 'wiring', reason: 'missing-entry-points' } },
+      coverage: { ...aggregate.coverage, wiring: 'skipped' },
+      rubric: { ...aggregate.rubric, wiring: false },
+      findings: { ...aggregate.findings, wiring: [] },
+    };
+
+    expect(parseBuildReviewAggregate(legacy)).toEqual(aggregate);
+  });
+
+  it('still rejects a mismatched verdict on an aggregate that never carried the retired member', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results() });
+
+    expect(parseBuildReviewAggregate({ ...aggregate, verdict: 'FAIL' })).toBeUndefined();
+  });
+
   it('derives effective state only after strict raw judgement, without changing raw findings', () => {
     const finding = { concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({

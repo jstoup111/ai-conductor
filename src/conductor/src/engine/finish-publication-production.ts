@@ -36,7 +36,8 @@ import {
 } from './finish-publication.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
-import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
+import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -78,6 +79,9 @@ export interface ProductionFinishPublicationDeps {
    * coordinator never silently reduces it to a `gh pr ready` flip.
    */
   repairPresentation?: (input: { prUrl: string; state: ConductState }) => Promise<void>;
+  /** Task 38 seams: overridable in tests; production defaults resolve the real worktree identity and store. */
+  resolveFeatureIdentity?: (projectRoot: string) => Promise<BuildReviewFeatureIdentity | undefined>;
+  createDispositionStore?: (projectRoot: string) => Pick<BuildReviewDispositionStore, 'list'>;
 }
 
 export interface ProductionReleaseReadinessObserverInput {
@@ -173,6 +177,31 @@ export function createProductionFinishPublicationCoordinator(
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
   let attendedRequestedOutcome: Promise<unknown> | undefined;
+  // Task 38: the retained PR is the durable projection surface for accepted
+  // build-review risk. Every retained-PR maintenance effect applies the
+  // authoritative upsert, and an unrenderable or unwritable projection blocks
+  // the effect instead of letting an accepted finding silently disappear.
+  const projectAcceptedRiskToRetainedPr = async (prUrl: string) => {
+    const feature = await (deps.resolveFeatureIdentity ?? resolveBuildReviewFeatureIdentity)(deps.projectRoot);
+    // No feature identity means no feature-scoped disposition state can exist
+    // (a non-worktree FINISH): there is nothing to project. Everything past
+    // this point fails closed — an unreadable store or unrenderable section
+    // blocks the effect instead of letting accepted risk disappear.
+    if (!feature) return;
+    const listed = await (deps.createDispositionStore
+      ?? ((root: string) => new BuildReviewDispositionStore(root)))(deps.projectRoot).list(feature);
+    if (!listed.ok) throw new Error(`accepted-risk projection: ${listed.message}`);
+    const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });
+    const body = (JSON.parse(stdout) as { body?: unknown }).body;
+    const published = await publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl,
+      body: typeof body === 'string' ? body : '',
+      records: listed.records,
+      gh: deps.gh,
+      cwd: deps.projectRoot,
+    });
+    if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);
+  };
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
@@ -351,6 +380,7 @@ export function createProductionFinishPublicationCoordinator(
           },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');
+            await projectAcceptedRiskToRetainedPr(state.pr_url);
             if (deps.repairPresentation) {
               await deps.repairPresentation({ prUrl: state.pr_url, state });
               return;
@@ -358,6 +388,7 @@ export function createProductionFinishPublicationCoordinator(
             await deps.gh(['pr', 'ready', state.pr_url], { cwd: deps.projectRoot });
           },
           recordOutcome: async (request) => {
+            if (request.choice === 'pr') await projectAcceptedRiskToRetainedPr(request.prUrl);
             await recordFinish(
               request.choice === 'pr'
                 ? { kind: 'record', choice: 'pr', prUrl: request.prUrl, pipelineDir }
