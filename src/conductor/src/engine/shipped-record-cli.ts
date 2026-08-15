@@ -37,6 +37,7 @@ import { computeCostRollup } from './cost-rollup.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
+import { resolveMainRepoRoot } from './park-marker.js';
 
 export type ShippedRecordDispatch =
   | { kind: 'write'; slug: string; pr: string }
@@ -170,8 +171,12 @@ export async function dispatchShippedRecord(
       );
       recordBody = appendTimingSection(recordBody, { state: 'unavailable' });
     }
+    // The feature worktree owns its disposition ledger; repository identity
+    // is deliberately canonical so a linked checkout cannot forge a separate
+    // accepted-risk namespace.
+    const repository = await resolveMainRepoRoot(cwd);
     const dispositions = await new BuildReviewDispositionStore(cwd).list({
-      version: 'v1', repository: cwd, feature: identity.slug,
+      version: 'v1', repository, feature: identity.slug,
     });
     if (!dispositions.ok) throw new Error(dispositions.message);
     recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);

@@ -30,6 +30,7 @@ import type {
   ResolvedBuildReviewRubricPolicy,
 } from "./resolved-config.js";
 import type { ConductorEvent } from "../types/events.js";
+import { canonicalizeBuildReviewFindingSet } from "./build-review-finding-identity.js";
 
 const BUILD_REVIEW_RUBRICS: readonly BuildReviewRubricId[] = [
   "tautology",
@@ -131,7 +132,14 @@ function validCurrentResult(
   projection: BuildReviewRubricProjection,
 ): BuildReviewJudgedResult | undefined {
   const result = parseBuildReviewJudgedResult(candidate);
-  return result && result.rubric === rubric && result.lapId === projection.lapId &&
+  // Treat the provider list as one boundary value.  Parsing individual
+  // findings is insufficient: duplicate/colliding identities would otherwise
+  // become two independently persisted branch facts.
+  const canonical = result && canonicalizeBuildReviewFindingSet(result.findings.map((finding) => ({
+    rubric: result.rubric, contractVersion: result.contractVersion, ...finding,
+  })));
+  return result && canonical && canonical.length === result.findings.length &&
+    result.rubric === rubric && result.lapId === projection.lapId &&
     result.snapshotDigest === projection.snapshotDigest ? result : undefined;
 }
 
@@ -215,8 +223,9 @@ export async function coordinateBuildReviewRubrics(
       snapshotDigest: projection.snapshotDigest,
     });
     if (cache.kind === "hit") {
+      let result: BuildReviewJudgedResult | undefined;
       try {
-        const result = validWrittenArtifact(await input.writeArtifact({
+        result = validWrittenArtifact(await input.writeArtifact({
           rubric: branch.rubric,
           lapId: projection.lapId,
           snapshotDigest: projection.snapshotDigest,
@@ -233,6 +242,7 @@ export async function coordinateBuildReviewRubrics(
         resolved.set(branch.rubric, infrastructure(branch.rubric, "artifact-write-failed"));
         await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
       }
+      if (result) await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
     } else {
       await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
       misses.push(branch);

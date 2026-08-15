@@ -147,7 +147,11 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     const memberMap = key === 'results' || key === 'coverage' || key === 'rubric' || key === 'findings'
       ? record(entry)
       : undefined;
-    return [key, memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => member !== 'wiring')) : entry];
+    // A retired Wiring member also contributed legacy reason strings.  Drop
+    // those alongside its derived maps before validating the four-rubric view.
+    return [key, key === 'reasons' && Array.isArray(entry)
+      ? entry.filter((reason) => typeof reason !== 'string' || !reason.startsWith('[wiring]'))
+      : memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => member !== 'wiring')) : entry];
   }));
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',

@@ -1,4 +1,4 @@
-import { writeFile, access, readFile, mkdir, rename } from 'node:fs/promises';
+import { writeFile, access, readFile, mkdir, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
@@ -439,6 +439,8 @@ export class DefaultStepRunner implements StepRunner {
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
+  /** Bounded per-run evidence cache; failed preflights never enter it. */
+  private readonly tautologyPreflightCache = new Map<string, import('./build-review-tautology-preflight.js').TautologyCompletedPreflight>();
   callCount = 0;
 
   constructor(
@@ -1905,7 +1907,11 @@ export class DefaultStepRunner implements StepRunner {
         output: { stdout: '', stderr: '' },
       };
     }
-    return materializeTautologyPreflight({
+    const controller = new AbortController();
+    const timeoutMs = (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+    return await materializeTautologyPreflight({
       scopedWorkingDirectory: this.projectDir,
       mergeBase: inputs.sourceSnapshot.mergeBase,
       headSha: inputs.sourceSnapshot.headSha,
@@ -1921,11 +1927,21 @@ export class DefaultStepRunner implements StepRunner {
         return result.exitCode === 0 ? result.stdout : undefined;
       },
       writeFile,
+      removeFile: async (path) => { await rm(path, { force: true }); },
       runScoped: async (cwd, selectors, signal) => this.runScopedTautologyCommand(cwd, selectors, signal),
       removeCheckout: async (path) => {
         await this.gitRunner(['worktree', 'remove', '--force', path]);
       },
+      abortSignal: controller.signal,
+      readCache: async (key) => this.tautologyPreflightCache.get(key),
+      writeCache: async (key, evidence) => {
+        if (this.tautologyPreflightCache.size >= 32) this.tautologyPreflightCache.delete(this.tautologyPreflightCache.keys().next().value!);
+        this.tautologyPreflightCache.set(key, evidence);
+      },
     });
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async runScopedTautologyCommand(cwd: string, selectors: readonly string[], signal: AbortSignal): Promise<TautologyScopedRunResult> {
@@ -1947,7 +1963,10 @@ export class DefaultStepRunner implements StepRunner {
         if (receivedSignal) finish({ kind: 'signal', signal: receivedSignal, stdout, stderr });
         else finish({ exitCode: code ?? 1, stdout, stderr });
       });
-      signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
+      signal.addEventListener('abort', () => {
+        child.kill('SIGTERM');
+        finish({ kind: 'timeout', stdout, stderr });
+      }, { once: true });
     });
   }
 

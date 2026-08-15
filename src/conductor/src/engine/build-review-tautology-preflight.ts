@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 export interface TautologyPathClassification {
@@ -22,6 +23,8 @@ export interface TautologyPreflightDependencies {
   readonly readMergeBaseFile: (path: string) => Promise<string | undefined>;
   /** Writes only inside the disposable checkout. */
   readonly writeFile: (path: string, content: string) => Promise<void>;
+  /** Removes an added path from the disposable HEAD checkout. */
+  readonly removeFile?: (path: string) => Promise<void>;
   /** Executes precisely the supplied changed-test selectors; never an aggregate fallback. */
   readonly runScoped: (cwd: string, selectors: readonly string[], signal: AbortSignal) => Promise<TautologyScopedRunResult>;
   /** Removes the disposable checkout on every outcome. */
@@ -69,6 +72,16 @@ function changedPaths(diff: string): string[] {
     if (path !== '/dev/null') paths.add(path);
   }
   return [...paths].sort();
+}
+
+function addedPaths(diff: string): ReadonlySet<string> {
+  const added = new Set<string>();
+  const chunks = diff.split(/^diff --git /m);
+  for (const chunk of chunks) {
+    const header = /^a\/(.+) b\/(.+)$/m.exec(chunk);
+    if (header && /^new file mode /m.test(chunk)) added.add(header[2]!);
+  }
+  return added;
 }
 
 function isTestPath(path: string): boolean {
@@ -126,6 +139,7 @@ export async function materializeTautologyPreflight(
 ): Promise<TautologyPreflightResult> {
   const paths = changedPaths(deps.diff);
   const classified = classifyTautologyPaths(paths);
+  const added = addedPaths(deps.diff);
   const sourceIdentities = { mergeBase: deps.mergeBase, headSha: deps.headSha };
   if (deps.scopedWorkingDirectory.trim().length === 0) {
     return failure('missing-scoped-configuration', paths, classified.tests, sourceIdentities);
@@ -183,8 +197,12 @@ export async function materializeTautologyPreflight(
         break;
       }
       if (mergeBaseContent === undefined) {
-        result = failure('missing-merge-base-file', paths, classified.tests, sourceIdentities);
-        break;
+        if (!added.has(path)) {
+          result = failure('missing-merge-base-file', paths, classified.tests, sourceIdentities);
+          break;
+        }
+        await (deps.removeFile ?? ((target) => rm(target, { force: true })))(join(checkout, path));
+        continue;
       }
       patch.push({ path, mergeBaseContent });
       await deps.writeFile(join(checkout, path), mergeBaseContent);
@@ -196,8 +214,8 @@ export async function materializeTautologyPreflight(
     if (!result) {
       try {
         const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
-        if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
-        else if ('kind' in execution) result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
+        if ('kind' in execution) result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
+        else if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else {
           result = {
             classification: execution.exitCode === 0 ? 'stayed-green' : 'red',

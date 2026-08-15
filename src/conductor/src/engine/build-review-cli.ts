@@ -34,6 +34,7 @@ export interface BuildReviewAcceptCommand {
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
   append(input: Parameters<BuildReviewDispositionStore['append']>[0]): Promise<BuildReviewDispositionAppendResult>;
+  appendIfCurrent?: BuildReviewDispositionStore['appendIfCurrent'];
 };
 
 export interface BuildReviewAcceptDeps extends BuildReviewFindingsDeps {
@@ -130,19 +131,25 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     if (!repository?.trim()) throw new Error('machine-scoped repository identity is unavailable');
     const feature: BuildReviewFeatureIdentity = { version: 'v1', repository, feature: command.feature };
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
-    const listed = await store.list(feature);
-    if (!listed.ok) throw new Error(listed.message);
-    // The store wait can let a new coordinator lap replace the aggregate. Read
-    // again immediately after the shared-state boundary; never bind a human
-    // decision to the lap that happened to be current before that wait.
-    const current = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
-    if (!current || current.lapId !== requestedLap || current.snapshotDigest !== aggregate.snapshotDigest ||
-      JSON.stringify(current.results) !== JSON.stringify(aggregate.results)) {
-      throw new Error('current review lap changed while waiting for disposition state');
-    }
-    const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records);
-    if (!effective || !effective.unresolvedFindingIds.includes(identity.id)) throw new Error('finding is already accepted or not actionable');
-    const appended = await store.append({ feature, finding: identity, sourceLapId: requestedLap, summary: identity.canonicalPayload.concernKind, rationale: command.rationale.trim(), operator: operator.trim() });
+    const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: identity.canonicalPayload.concernKind, rationale: command.rationale.trim(), operator: operator.trim() };
+    const appended = store.appendIfCurrent
+      ? await store.appendIfCurrent(appendInput, async (records) => {
+        const current = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree!, '.pipeline/build-review.json'))));
+        if (!current || current.lapId !== requestedLap || current.snapshotDigest !== aggregate.snapshotDigest || JSON.stringify(current.results) !== JSON.stringify(aggregate.results)) return false;
+        const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records);
+        return effective?.unresolvedFindingIds.includes(identity.id) === true;
+      })
+      : await (async () => {
+        const listed = await store.list(feature);
+        if (!listed.ok) return listed;
+        const current = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree!, '.pipeline/build-review.json'))));
+        if (!current || current.lapId !== requestedLap || current.snapshotDigest !== aggregate.snapshotDigest || JSON.stringify(current.results) !== JSON.stringify(aggregate.results)) {
+          return { ok: false as const, kind: 'invalid' as const, message: 'current review lap changed while waiting for disposition state' };
+        }
+        const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records);
+        if (!effective || !effective.unresolvedFindingIds.includes(identity.id)) return { ok: false as const, kind: 'invalid' as const, message: 'finding is already accepted or not actionable' };
+        return store.append(appendInput);
+      })();
     if (!appended.ok) throw new Error(appended.message);
     (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
       type: 'build_review_disposition_accepted', feature: command.feature, lapId: requestedLap, findingId: identity.id, operator: operator.trim(), ts: new Date().toISOString(),

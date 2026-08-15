@@ -270,4 +270,38 @@ export class BuildReviewDispositionStore {
       await acquired.release();
     }
   }
+
+  /**
+   * Runs caller validation and the disposition append under the one bounded
+   * state lease.  Callers use this when their validation also reads a sibling
+   * aggregate whose lap must not change between observation and acceptance.
+   */
+  async appendIfCurrent(
+    input: BuildReviewDispositionInput,
+    validate: (records: readonly BuildReviewDispositionRecord[]) => Promise<boolean>,
+  ): Promise<BuildReviewDispositionAppendResult> {
+    const feature = parseFeatureIdentity(input.feature);
+    const finding = parseFindingIdentity(input.finding);
+    const sourceLapId = parseBuildReviewLapId(input.sourceLapId);
+    if (!feature || !finding || !sourceLapId || !nonEmptyString(input.summary) || !nonEmptyString(input.rationale) || !nonEmptyString(input.operator)) {
+      return { ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' };
+    }
+    const acquired = await this.acquire();
+    if (!acquired.ok) return acquired;
+    try {
+      const loaded = await this.load();
+      if (!loaded.ok) return loaded;
+      const records = loaded.state.records.filter((entry) => sameFeature(entry.feature, feature));
+      if (!await validate(Object.freeze(records))) return { ok: false, kind: 'invalid', message: 'current build-review lap or finding is invalid' };
+      if (records.some((entry) => entry.finding.id === finding.id)) return { ok: false, kind: 'invalid', message: 'build-review finding is already accepted for this feature' };
+      const disposition: BuildReviewDispositionRecord = {
+        version: STORE_VERSION, feature, finding, sourceLapId, summary: input.summary, rationale: input.rationale,
+        operator: input.operator, acceptedAt: new Date(this.clock()).toISOString(),
+      };
+      const replaced = await this.replace({ version: STORE_VERSION, records: [...loaded.state.records, disposition] });
+      return replaced.ok ? { ok: true, record: disposition } : replaced;
+    } finally {
+      await acquired.release();
+    }
+  }
 }
