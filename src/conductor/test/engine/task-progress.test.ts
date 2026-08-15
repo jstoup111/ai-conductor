@@ -86,7 +86,7 @@ describe('task-progress', () => {
       // Set up a real git repo (no `.pipeline/task-status.json`-side status
       // flip involved — this proves the count is sourced from commit
       // trailers directly, per feature #773 Task 15).
-      await execa('git', ['init'], { cwd: dir });
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
 
@@ -551,7 +551,9 @@ describe('task-progress', () => {
       await writeFile(blockedRoot, 'file blocks mkdir');
       const events = new ConductorEventEmitter();
       const failures: Array<{ path: string; reason: string }> = [];
-      events.on('halt_marker_write_failed', (event) => failures.push(event));
+      events.on('halt_marker_write_failed', (event) => {
+        if (event.type === 'halt_marker_write_failed') failures.push(event);
+      });
 
       const result = await writeStallHalt(blockedRoot, 'question', 'detail', events);
 
