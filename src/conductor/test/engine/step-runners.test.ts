@@ -10,6 +10,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
+  extractJudgedResultCandidate,
   DefaultStepRunner,
   parseTierFromOutput,
   parseSignalCountsFromOutput,
@@ -3738,5 +3739,25 @@ TIER: M`,
       expect(opts.cwd).toBe('/wt/feature-x');
       expect(opts.prompt).toContain("TypeError: Cannot read properties of undefined (reading 'foo')");
     });
+  });
+});
+
+describe('extractJudgedResultCandidate', () => {
+  const judged = { kind: 'judged', rubric: 'scope', contractVersion: 'v1', findings: [] };
+
+  it('parses raw JSON output', () => {
+    expect(extractJudgedResultCandidate(JSON.stringify(judged))).toEqual(judged);
+  });
+
+  it('parses JSON wrapped in a markdown fence', () => {
+    expect(extractJudgedResultCandidate('Here is the verdict:\n```json\n' + JSON.stringify(judged) + '\n```\n')).toEqual(judged);
+  });
+
+  it('parses JSON surrounded by prose', () => {
+    expect(extractJudgedResultCandidate('The scope review found no issues.\n' + JSON.stringify(judged) + '\nLet me know if you need anything else.')).toEqual(judged);
+  });
+
+  it('returns undefined when no candidate parses', () => {
+    expect(extractJudgedResultCandidate('no json here at all')).toBeUndefined();
   });
 });

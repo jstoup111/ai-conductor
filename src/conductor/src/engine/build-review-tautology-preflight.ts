@@ -298,7 +298,13 @@ export async function materializeTautologyPreflight(
     if (!result) {
       try {
         const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
-        if ('kind' in execution && execution.kind !== 'test-failure') result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
+        // A collection failure on the REVERTED tree is a valid counterfactual,
+        // not infrastructure: the preflight's precondition is a current-HEAD
+        // green proof, so changed tests that cannot even load once the diff's
+        // production is reverted (unresolvable imports of added modules) have
+        // demonstrably failed without the diff. Launch/timeout/signal/no-tests
+        // remain infrastructure — they say nothing about the counterfactual.
+        if ('kind' in execution && execution.kind !== 'test-failure' && execution.kind !== 'collection-failure') result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
         else if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else {
           result = {
