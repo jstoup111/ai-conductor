@@ -125,7 +125,7 @@ describe('gateVerdictStillValid', () => {
     scratches.push(s.repo);
     const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
     const lapId = parseBuildReviewLapId('lap-preserved')!;
-    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring') => ({
+    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness') => ({
       kind: 'judged' as const,
       rubric,
       lapId,
@@ -143,7 +143,6 @@ describe('gateVerdictStillValid', () => {
         scope: judged('scope'),
         rootCause: judged('rootCause'),
         completeness: judged('completeness'),
-        wiring: judged('wiring'),
       },
     });
     const artifact = join(s.repo, BUILD_REVIEW_VERDICT);

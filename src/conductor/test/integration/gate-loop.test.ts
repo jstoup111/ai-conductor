@@ -1265,8 +1265,8 @@ describe('integration/gate-loop', () => {
       verdicts: Array<{
         verdict: 'FAIL' | 'PASS';
         reasons: string[];
-        findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[]; wiring: string[] }>;
-        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean; wiring: boolean };
+        findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[] }>;
+        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
       }>,
       remediationDispositions?: unknown[],
     ): Promise<{

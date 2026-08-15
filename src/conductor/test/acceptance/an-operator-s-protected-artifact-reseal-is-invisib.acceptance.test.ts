@@ -175,10 +175,9 @@ describe('acceptance: operator reseal reaches build_review Scope evidence (#1502
       lapId: 'lap-operator-reseal',
       inputs: withResealInputs,
       tautology: { changedTestSelectors: [], revertedProductionPatch: '', preflightEvidence: { classification: 'red' } },
-      wiring: { relocationEvidence: [], scaffoldingDeclarations: [] },
     } as never);
     expect(projections.scope.operatorReseals).toEqual(operatorReseals(withResealInputs));
-    for (const projection of [projections.tautology, projections.rootCause, projections.completeness, projections.wiring]) {
+    for (const projection of [projections.tautology, projections.rootCause, projections.completeness]) {
       expect(projection).not.toHaveProperty('operatorReseals');
     }
     const populatedSection = evidenceSection(withResealPrompt);

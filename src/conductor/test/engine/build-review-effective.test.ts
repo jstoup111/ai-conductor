@@ -12,12 +12,12 @@ const feature = { version: 'v1' as const, repository: root, feature: 'feature' }
 
 function aggregate() {
   const finding = { concernKind: 'unplanned', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
-  const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring', findings = rubric === 'scope' ? [finding] : []) => ({
+  const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness', findings = rubric === 'scope' ? [finding] : []) => ({
     kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
     findings, verdict: findings.length ? 'FAIL' as const : 'PASS' as const,
   });
   return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
-    tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'), completeness: judged('completeness'), wiring: judged('wiring'),
+    tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'), completeness: judged('completeness'),
   } });
 }
 

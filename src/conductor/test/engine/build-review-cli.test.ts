@@ -12,9 +12,8 @@ const aggregate = joinBuildReviewRubricOutcomes({
   results: {
     tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never, findings: [], verdict: 'PASS' },
     scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never, findings: [finding], verdict: 'FAIL' },
-    rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never, findings: [], verdict: 'PASS' },
+    rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
     completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
-    wiring: { kind: 'infrastructure-failure', rubric: 'wiring', reason: 'provider-error', detail: 'offline' },
   },
 });
 
@@ -92,7 +91,7 @@ describe('build-review findings CLI', () => {
     ]);
     expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({
       feature: 'review-rubrics', lapId: 'lap-current', rawVerdict: 'FAIL', verdict: 'FAIL',
-      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['completeness'], infrastructureFailureRubrics: ['wiring'],
+      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['completeness'], infrastructureFailureRubrics: ['rootCause'],
     });
   });
 

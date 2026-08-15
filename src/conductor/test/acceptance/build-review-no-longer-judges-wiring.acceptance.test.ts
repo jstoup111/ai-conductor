@@ -50,8 +50,8 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () => {
-  it('runs the named build_review-to-build kickback for a wiring-only grader FAIL', async () => {
+describe('acceptance: build_review routes a rubric finding to build', () => {
+  it('runs the named build_review-to-build kickback for a scope-only grader FAIL', async () => {
     const mainRoot = await initRepo('build-review-wiring-');
     await writeFile(join(mainRoot, 'README.md'), '# fixture\n');
     await git(mainRoot, 'add', 'README.md');
@@ -93,11 +93,11 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
         output: JSON.stringify({
           kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
           snapshotDigest: projection.snapshotDigest, contractVersion: 'v1',
-          findings: projection.rubric === 'wiring'
-            ? [{
-                concernKind: 'orphanedProductionSurface is not production-reachable',
+        findings: projection.rubric === 'scope'
+          ? [{
+                concernKind: 'orphanedProductionSurface is outside the approved plan',
                 anchor: {
-                  rubric: 'wiring', entryPoint: 'src/entry.ts', target: 'orphanedProductionSurface', relation: 'unreached',
+                  rubric: 'scope', path: 'src/orphan.ts', relation: 'outside-plan',
                 },
               }]
             : [],
@@ -111,7 +111,6 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
     };
     const config: HarnessConfig = {
       build_review: { enabled: true, perTaskFloor: false },
-      wiring: { entry_points: ['src/entry.ts'] },
     };
     const buildReviewRunner = new DefaultStepRunner(provider, 'maker-session', dir, {
       config,
@@ -169,10 +168,10 @@ describe('acceptance: wiring judgement moves to build_review (ST-1496-1)', () =>
 
     await conductor.run();
 
-    expect(invoke).toHaveBeenCalledTimes(5);
-    expect(prompts).toHaveLength(5);
-    expect(prompts.filter((prompt) => prompt.includes('Build Review Wiring rubric'))).toHaveLength(1);
-    expect(prompts.find((prompt) => prompt.includes('Build Review Wiring rubric'))).toContain('src/entry.ts');
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(prompts).toHaveLength(4);
+    expect(prompts.filter((prompt) => prompt.includes('Build Review Scope rubric'))).toHaveLength(1);
+    expect(prompts.find((prompt) => prompt.includes('Build Review Scope rubric'))).toContain('src/orphan.ts');
     expect(calls).toContain('build_review');
     expect(calls).toContain('build');
     expect(buildStateAtDispatch).toBe('in_progress');

@@ -186,7 +186,7 @@ describe('engine/resolved-config', () => {
         maxParallel: resolved.maxParallel,
         rubrics: resolved.rubrics,
       }).toEqual({
-        maxParallel: 4,
+        maxParallel: 3,
         rubrics: {
           tautology: {
             enabled: false,
@@ -216,15 +216,6 @@ describe('engine/resolved-config', () => {
             escalate: true,
           },
           completeness: {
-            enabled: true,
-            llm_provider: ['claude', 'codex'],
-            model: 'opus',
-            effort: 'high',
-            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
-            max_retries: 4,
-            escalate: true,
-          },
-          wiring: {
             enabled: true,
             llm_provider: ['claude', 'codex'],
             model: 'opus',

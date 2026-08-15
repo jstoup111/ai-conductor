@@ -35,11 +35,11 @@ describe('build-review current-lap branch artifacts', () => {
   it('uses a write-disjoint path for every rubric and lap', () => {
     expect([
       buildReviewBranchArtifactPath('/feature', lapId, 'scope'),
-      buildReviewBranchArtifactPath('/feature', lapId, 'wiring'),
+      buildReviewBranchArtifactPath('/feature', lapId, 'tautology'),
       buildReviewBranchArtifactPath('/feature', parseBuildReviewLapId('lap-next')!, 'scope'),
     ]).toEqual([
       '/feature/.pipeline/build-review/lap-current/scope.json',
-      '/feature/.pipeline/build-review/lap-current/wiring.json',
+      '/feature/.pipeline/build-review/lap-current/tautology.json',
       '/feature/.pipeline/build-review/lap-next/scope.json',
     ]);
   });
@@ -58,7 +58,7 @@ describe('build-review current-lap branch artifacts', () => {
   it.each([
     ['malformed JSON', '{not json'],
     ['unknown envelope field', JSON.stringify({ version: 1, rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: judged(), provenance: { kind: 'fresh' }, extra: true })],
-    ['mismatched result identity', JSON.stringify({ version: 1, rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: { ...judged(), rubric: 'wiring' }, provenance: { kind: 'fresh' } })],
+    ['mismatched result identity', JSON.stringify({ version: 1, rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: { ...judged(), rubric: 'tautology' }, provenance: { kind: 'fresh' } })],
     ['missing result', JSON.stringify({ version: 1, rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', provenance: { kind: 'fresh' } })],
   ])('rejects %s without promoting it to a current branch', async (_name, raw) => {
     const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');

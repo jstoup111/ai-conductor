@@ -239,7 +239,8 @@ async function writeBuildReviewVerdict(
     tautology: false,
     scope: false,
     rootCause: false,
-    ...(legacyRubric ? {} : { completeness: false }),
+    completeness: false,
+    ...(legacyRubric ? {} : { wiring: false }),
   };
   const body: Record<string, unknown> = { verdict, rubric };
   if (codeStamp) body.codeStamp = codeStamp;
@@ -289,17 +290,6 @@ const MANUAL_TEST_PASS =
 // ---------------------------------------------------------------------------
 
 describe('Story 1: a preserve is reported as preserved_surface_miss, never as a plain pass', () => {
-  it('does not preserve a code-stamped legacy verdict without rubric.completeness', async () => {
-    const s = await makeRepo();
-    const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');
-    await writeBuildReviewVerdict(s.repo, 'PASS', baseline, OLD_MTIME, true);
-
-    const result = await checkStepCompletion(s.repo, 'build_review', ctxFor(s.repo));
-
-    expect(result.done).toBe(false);
-    expect(result.reason).toMatch(/rubric\.completeness/);
-  });
-
   it('build_review preserve reports preserved_surface_miss, not rewritten', async () => {
     const s = await makeRepo();
     const baseline = await commit(s, { 'src/a.ts': 'a\n' }, 'init');

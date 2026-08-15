@@ -284,9 +284,8 @@ describe('acceptance: removal evidence reaches the real build_review prompt (#15
     });
 
     expect(result.success, result.output).toBe(true);
-    expect(provider.invoke).toHaveBeenCalledTimes(5);
-    const wiringPrompt = prompts.find((prompt) => prompt.includes('Build Review Wiring rubric'))!;
-    expect(wiringPrompt).toContain('src/obsolete.ts');
-    expect(wiringPrompt).toContain('removedFixtureField');
+    expect(provider.invoke).toHaveBeenCalledTimes(4);
+    expect(prompts.some((prompt) => prompt.includes('src/obsolete.ts'))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes('removedFixtureField'))).toBe(true);
   });
 });

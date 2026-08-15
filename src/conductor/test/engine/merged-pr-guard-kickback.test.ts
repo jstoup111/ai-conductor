@@ -613,9 +613,9 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
               join(dir, '.pipeline/build-review.json'),
               JSON.stringify({
                 verdict: 'FAIL',
-                reasons: ['missing wiring from command to handler'],
-                rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
-                findings: { completeness: ['missing wiring from command to handler'] },
+                reasons: ['changed path is outside the plan'],
+                rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
+                findings: { scope: ['changed path is outside the plan'] },
               }),
             );
           } else if (step === 'manual_test') {
@@ -653,7 +653,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
       expect(calls).not.toContain('wiring_check');
       const verdict = JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'));
-      expect(verdict.findings.completeness).toContain('missing wiring from command to handler');
+      expect(verdict.findings.scope).toContain('changed path is outside the plan');
       expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
       expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
