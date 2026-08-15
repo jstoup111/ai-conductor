@@ -163,6 +163,10 @@ describe('build-review rubric projections', () => {
         ...original.inputs,
         baseRef: 'origin/rebased-main',
         mergeBase: 'rebased-merge-base',
+        testSuiteProof: {
+          ...original.inputs.testSuiteProof,
+          provenanceHeadSha: 'rebased-head',
+        },
         sourceSnapshot: {
           ...original.inputs.sourceSnapshot,
           digest: 'sha256:rebased-snapshot',
@@ -228,6 +232,13 @@ describe('build-review rubric projections', () => {
       {
         name: 'changed test selectors', affectedRubrics: ['tautology'],
         changed: source({ tautology: { ...original.tautology, changedTestSelectors: ['test/new.test.ts'] } }),
+      },
+      {
+        name: 'test suite evidence content', affectedRubrics: ['tautology'],
+        changed: source({ inputs: {
+          ...original.inputs,
+          testSuiteProof: { ...original.inputs.testSuiteProof, fingerprint: 'changed-proof-fingerprint' },
+        } }),
       },
     ];
 

@@ -128,6 +128,13 @@ export function canonicalJson(value: BuildReviewProjectionJson): string {
   return JSON.stringify(canonicalize(value));
 }
 
+function withoutEvidenceProvenanceHeadSha(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') return value;
+  const evidence = value as { readonly [key: string]: BuildReviewProjectionJson };
+  const { provenanceHeadSha: _ignoredProvenanceHeadSha, ...evidenceContent } = evidence;
+  return evidenceContent;
+}
+
 /** Version-bound digest of a closed projection, excluding rebase-only provenance. */
 export function projectionDigest(projection: Omit<BuildReviewRubricProjection, 'digest'> | BuildReviewRubricProjection): string {
   const {
@@ -138,7 +145,10 @@ export function projectionDigest(projection: Omit<BuildReviewRubricProjection, '
     headSha: _ignoredHeadSha,
     ...digestibleProjection
   } = projection as BuildReviewRubricProjection;
-  return `sha256:${createHash('sha256').update(canonicalJson(digestibleProjection as unknown as BuildReviewProjectionJson)).digest('hex')}`;
+  const contentIdentity = 'testSuiteProof' in digestibleProjection
+    ? { ...digestibleProjection, testSuiteProof: withoutEvidenceProvenanceHeadSha(digestibleProjection.testSuiteProof) }
+    : digestibleProjection;
+  return `sha256:${createHash('sha256').update(canonicalJson(contentIdentity as unknown as BuildReviewProjectionJson)).digest('hex')}`;
 }
 
 function json(value: unknown): BuildReviewProjectionJson {

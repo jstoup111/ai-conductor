@@ -226,6 +226,10 @@ describe("build-review coordinator: frozen fan-out", () => {
       ...initial,
       mergeBase: "rebased-base",
       baseRef: "origin/rebased-main",
+      testSuiteProof: {
+        ...initial.testSuiteProof,
+        provenanceHeadSha: "rebased-head",
+      },
       sourceSnapshot: {
         ...initial.sourceSnapshot,
         digest: "sha256:rebased-snapshot",
@@ -284,7 +288,6 @@ describe("build-review coordinator: frozen fan-out", () => {
       ...rebased,
       sourceSnapshot: {
         ...widenedSourceSnapshot,
-        contentDigest: contentDigestFor(widenedSourceSnapshot),
       },
     };
 
