@@ -108,6 +108,32 @@ describe('engine/resolved-config', () => {
       expect(resolved.perTaskFloor).toBe(true);
     });
 
+    it('applies per-rubric default efforts only when nothing is authored', () => {
+      const resolved = resolveBuildReviewConfig(undefined);
+      expect({
+        tautology: resolved.rubrics.tautology.effort,
+        scope: resolved.rubrics.scope.effort,
+        rootCause: resolved.rubrics.rootCause.effort,
+        completeness: resolved.rubrics.completeness.effort,
+      }).toEqual({ tautology: 'high', scope: 'medium', rootCause: 'medium', completeness: 'high' });
+    });
+
+    it('lets an authored step effort override every rubric default', () => {
+      const resolved = resolveBuildReviewConfig({
+        steps: { build_review: { effort: 'low' } },
+      } as HarnessConfig);
+      expect(resolved.rubrics.rootCause.effort).toBe('low');
+      expect(resolved.rubrics.tautology.effort).toBe('low');
+    });
+
+    it('lets an authored rubric effort override both the step and the default', () => {
+      const resolved = resolveBuildReviewConfig({
+        steps: { build_review: { effort: 'low' } },
+        build_review: { rubrics: { rootCause: { effort: 'high' } } },
+      } as HarnessConfig);
+      expect(resolved.rubrics.rootCause.effort).toBe('high');
+    });
+
     it('defaults scope containment enforcement to report-only', () => {
       const resolved = resolveBuildReviewConfig(undefined) as ReturnType<
         typeof resolveBuildReviewConfig
@@ -246,7 +272,8 @@ describe('engine/resolved-config', () => {
         rootCause: {
           llm_provider: 'claude',
           model: 'opus',
-          effort: 'high',
+          // Narrowest rubric: the per-rubric default effort applies (medium).
+          effort: 'medium',
           model_fallback_ladder: ['fable', 'opus', 'sonnet'],
         },
         completeness: {
@@ -258,7 +285,7 @@ describe('engine/resolved-config', () => {
         scope: {
           llm_provider: 'codex',
           model: 'gpt-5.6-sol',
-          effort: 'high',
+          effort: 'medium',
           model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
         },
       });

@@ -737,6 +737,14 @@ export interface ResolvedBuildReviewConfig {
  * malformed input happens in `validateConfig`; this resolver assumes a
  * validated (or absent) block and only applies the default.
  */
+/** Per-rubric default efforts; explicit rubric or step config overrides. */
+const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'high'>> = {
+  tautology: 'high',
+  scope: 'medium',
+  rootCause: 'medium',
+  completeness: 'high',
+};
+
 export function resolveBuildReviewConfig(
   config?: HarnessConfig,
   policy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
@@ -751,6 +759,11 @@ export function resolveBuildReviewConfig(
     : resolveProviderModelPolicy(inheritedPrimaryProvider);
   const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => {
     const rubric = block?.rubrics?.[rubricId];
+    // Default efforts weight the judgement-heavy rubrics up and the narrow
+    // root-cause check down. They apply only when neither the rubric nor the
+    // outer step authored an effort — explicit config always wins.
+    const rubricEffort = rubric?.effort
+      ?? (outerStepConfig?.effort === undefined ? DEFAULT_RUBRIC_EFFORT[rubricId] : undefined);
     const rubricProvider = rubric?.llm_provider ?? inheritedProviderSelection;
     const rubricPrimaryProvider = normalizeProviderSelection(rubricProvider)[0] ?? inheritedPrimaryProvider;
     const rubricPolicy = rubric?.llm_provider === undefined
@@ -763,7 +776,7 @@ export function resolveBuildReviewConfig(
         build_review: {
           ...outerStepConfig,
           ...(rubric?.model === undefined ? {} : { model: rubric.model }),
-          ...(rubric?.effort === undefined ? {} : { effort: rubric.effort }),
+          ...(rubricEffort === undefined ? {} : { effort: rubricEffort }),
           ...(rubric?.max_retries === undefined ? {} : { max_retries: rubric.max_retries }),
           ...(rubric?.escalate === undefined ? {} : { escalate: rubric.escalate }),
         },
@@ -778,7 +791,7 @@ export function resolveBuildReviewConfig(
         steps: {
           build_review: {
             ...(rubric?.model === undefined ? {} : { model: rubric.model }),
-            ...(rubric?.effort === undefined ? {} : { effort: rubric.effort }),
+            ...(rubricEffort === undefined ? {} : { effort: rubricEffort }),
           },
         },
       } satisfies HarnessConfig;

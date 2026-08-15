@@ -859,7 +859,10 @@ is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved o
 per-task floor telemetry (`step-runners.ts:1569-1584`).
 
 Each retained rubric accepts `enabled`, `llm_provider`, `model`, `effort`,
-`model_fallback_ladder`, `max_retries`, and `escalate`. Unknown rubric IDs, including the retired
+`model_fallback_ladder`, `max_retries`, and `escalate`. When neither the rubric nor the
+outer `steps.build_review` block authors an `effort`, per-rubric defaults apply: `tautology` and
+`completeness` default to `high`; `scope` and `rootCause` — the more mechanical judgements —
+default to `medium`. Any authored effort, at either level, overrides the default. Unknown rubric IDs, including the retired
 `wiring` member, are rejected before dispatch. The resolved configuration always contains exactly
 the four retained policies.
 

@@ -43,6 +43,27 @@ attribution_audit_sample_pct: 10
 build_progress_halt:
   enabled: true
 
+# Per-rubric build-review routing: the judgement-heavy pair runs on Claude
+# opus, the mechanical pair on Codex, halving review load per provider and
+# putting counterfactual/plan-holistic judgement on the strongest reasoner.
+# rootCause inherits the engine's medium-effort default (narrowest rubric).
+build_review:
+  rubrics:
+    tautology:
+      llm_provider: claude
+      model: opus
+      effort: high
+    completeness:
+      llm_provider: claude
+      model: opus
+      effort: high
+    scope:
+      llm_provider: codex
+      model: gpt-5.6-sol
+    rootCause:
+      llm_provider: codex
+      model: gpt-5.6-sol
+
 # Native pre-SHIP aggregate verification. The project-owned npm script runs
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
 # in one operation. Harness integrity remains a separate self-host gate.
