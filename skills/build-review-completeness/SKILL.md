@@ -47,8 +47,11 @@ It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `
 array. Return every independent finding; an empty array means no Completeness concern was found.
 Each finding contains:
 
-- an enumerated concern kind;
-- typed logical anchors for the approved plan outcome/task and missing deliverable;
+- an enumerated concern kind in a `concernKind` field (never `kind`);
+- typed logical anchors for the approved plan outcome/task and missing deliverable, carried in a
+  nested `anchor` object — `{"rubric": "completeness", "planTask": "<string>", "missingOutcome":
+  "<string>"}` — with plain string values, never flattened to the finding's top level and never
+  renamed (no `planAnchor`/`deliverableAnchor`);
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 

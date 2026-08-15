@@ -47,16 +47,22 @@ import {
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
-import { coordinateBuildReviewRubrics, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
+import { coordinateBuildReviewRubrics, validateBuildReviewDispatchedResult, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
-import { parseBuildReviewLapId, parseBuildReviewJudgedResult, type BuildReviewRubricResult } from './build-review-domain.js';
+import {
+  describeBuildReviewJudgedResultRejection,
+  makeBuildReviewDispatchFailure,
+  parseBuildReviewLapId,
+  renderBuildReviewJudgedResultShape,
+  type BuildReviewRubricResult,
+} from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
-import { classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
+import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -427,6 +433,11 @@ type ProviderAwareOneShotRequest =
  * block, then the outermost balanced object. Returns undefined when no
  * candidate parses — validation of the parsed shape stays with the caller.
  */
+/** Byte cap for the previous-output excerpt embedded in a rubric repair prompt. */
+export const RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES = 8_192;
+/** Byte cap for the raw-output diagnostic detail on a final rubric shape failure. */
+export const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
+
 export function extractJudgedResultCandidate(output: string): unknown {
   const candidates: string[] = [output.trim()];
   const fence = output.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
@@ -1842,7 +1853,7 @@ export class DefaultStepRunner implements StepRunner {
             kind: 'infrastructure-failure' as const,
             rubric: branch.rubric,
             reason: 'provider-error' as const,
-            detail: branch.reason,
+            detail: branch.detail === undefined ? branch.reason : `${branch.reason}: ${branch.detail}`,
           }];
     }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
     const aggregate = joinBuildReviewRubricOutcomes({
@@ -1882,10 +1893,12 @@ export class DefaultStepRunner implements StepRunner {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
       tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness',
     };
+    const contractShape = renderBuildReviewJudgedResultShape(branch.rubric);
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
         'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
         `Return exactly one JSON judged result for rubric ${branch.rubric}: a single JSON object whose top-level field \`kind\` is exactly the string "judged" (not \`result\`, not any other field name), whose \`rubric\` is "${branch.rubric}", whose \`contractVersion\` is "v1", whose \`lapId\` and \`snapshotDigest\` echo the projection's values verbatim, and whose \`findings\` is an array. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; every anchor value is a plain string, nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
         JSON.stringify(projection),
       ].join('\n\n');
     // Regression visibility for prompt bloat (#projection-size): record the
@@ -1896,55 +1909,113 @@ export class DefaultStepRunner implements StepRunner {
       lapId: projection.lapId,
       promptBytes: Buffer.byteLength(rubricPrompt, 'utf8'),
     });
-    if (this.providerRuntimes && this.sessionStore) {
-      const safety = this.candidateSafetyFor('build_review');
-      const result = await this.dispatchProviderWithLifecycleSupervision(
-        'build_review',
-        this.withFeatureDiagnosticLog({
-          prompt: rubricPrompt,
-          cwd: this.projectDir,
-          dangerouslySkipPermissions: true,
-        }),
-        (options) => executeAuxiliaryProviderCandidates({
-          step: 'build_review',
-          memberId: branch.rubric,
-          policy: branch.policy,
-          runtimes: this.providerRuntimes!,
-          sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
-          config: this.config,
-          runId: this.runId,
-          taskAttribution: this.taskAttribution,
-          withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
-          prepareCandidateSelfHost:
-            this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
-          onAttempt: this.providerAttempt,
-          warn: this.providerWarn,
-          options,
-          optionsForCandidate: (providerKey) => ({
-            ...options,
-            prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${rubricPrompt}`,
+    const invokeOnce = async (prompt: string): Promise<{ success: boolean; output?: string }> => {
+      if (this.providerRuntimes && this.sessionStore) {
+        const safety = this.candidateSafetyFor('build_review');
+        const result = await this.dispatchProviderWithLifecycleSupervision(
+          'build_review',
+          this.withFeatureDiagnosticLog({
+            prompt,
+            cwd: this.projectDir,
+            dangerouslySkipPermissions: true,
           }),
-        }),
-      );
-      const verified = safety?.verify(result) ?? result;
+          (options) => executeAuxiliaryProviderCandidates({
+            step: 'build_review',
+            memberId: branch.rubric,
+            policy: branch.policy,
+            runtimes: this.providerRuntimes!,
+            sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
+            config: this.config,
+            runId: this.runId,
+            taskAttribution: this.taskAttribution,
+            withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
+            prepareCandidateSelfHost:
+              this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            onAttempt: this.providerAttempt,
+            warn: this.providerWarn,
+            options,
+            optionsForCandidate: (providerKey) => ({
+              ...options,
+              prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
+            }),
+          }),
+        );
+        const verified = safety?.verify(result) ?? result;
+        this.callCount++;
+        return typeof verified.output === 'string'
+          ? { success: verified.success, output: verified.output }
+          : { success: verified.success };
+      }
+      const result = await this.provider.invoke({
+        prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
+        sessionId: randomUUID(),
+        resume: false,
+        dangerouslySkipPermissions: true,
+        cwd: this.projectDir,
+        model: branch.policy.model,
+        effort: branch.policy.effort,
+      });
       this.callCount++;
-      if (!verified.success || typeof verified.output !== 'string') return undefined;
-      const candidate = extractJudgedResultCandidate(verified.output);
-      return candidate === undefined ? undefined : parseBuildReviewJudgedResult(candidate);
+      return typeof result.output === 'string'
+        ? { success: result.success, output: result.output }
+        : { success: result.success };
+    };
+
+    // Validate-and-repair loop (deterministic shape enforcement): a session
+    // that answered but missed the judged contract gets exactly ONE bounded
+    // repair invocation — a pure re-emit task carrying the rejection
+    // diagnosis, the exact contract shape, and a bounded excerpt of its own
+    // previous output — instead of burning the whole dispatch as an
+    // infrastructure failure. Provider-agnostic by construction: both the
+    // runtime-candidates path and the legacy provider path share invokeOnce.
+    const initial = await invokeOnce(rubricPrompt);
+    if (!initial.success || initial.output === undefined) return undefined;
+    const validated = this.validateRubricOutput(initial.output, branch.rubric, projection);
+    if (validated.result) return validated.result;
+    const repairPrompt = [
+      `Your previous response for the Build Review ${label[branch.rubric]} rubric did not satisfy the judged-result contract: ${validated.rejection}.`,
+      `Re-emit your judgement as ONLY one JSON object — no prose, no markdown fences, no other text — of exactly this shape:\n${contractShape}`,
+      `Echo lapId "${projection.lapId}" and snapshotDigest "${projection.snapshotDigest}" verbatim. Preserve the semantic content of your previous findings; change only the shape.`,
+      `Your previous response (bounded excerpt):\n${boundedHeadTailExcerpt(initial.output, RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES)}`,
+    ].join('\n\n');
+    const repair = await invokeOnce(repairPrompt);
+    if (repair.success && repair.output !== undefined) {
+      const repaired = this.validateRubricOutput(repair.output, branch.rubric, projection);
+      if (repaired.result) return repaired.result;
+      return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
+        `judged-result contract not satisfied after one repair turn: ${repaired.rejection}. Raw output excerpt: ${repair.output}`,
+        RUBRIC_FAILURE_DETAIL_CAP_BYTES,
+      ));
     }
-    const result = await this.provider.invoke({
-      prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${rubricPrompt}`,
-      sessionId: randomUUID(),
-      resume: false,
-      dangerouslySkipPermissions: true,
-      cwd: this.projectDir,
-      model: branch.policy.model,
-      effort: branch.policy.effort,
-    });
-    this.callCount++;
-    if (!result.success || typeof result.output !== 'string') return undefined;
-    const candidate = extractJudgedResultCandidate(result.output);
-    return candidate === undefined ? undefined : parseBuildReviewJudgedResult(candidate);
+    return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
+      `judged-result contract not satisfied: ${validated.rejection}; the repair invocation failed. Raw output excerpt: ${initial.output}`,
+      RUBRIC_FAILURE_DETAIL_CAP_BYTES,
+    ));
+  }
+
+  /** Shared accept/reject predicate for rubric outputs — identical to the coordinator's settlement check. */
+  private validateRubricOutput(
+    output: string,
+    rubric: BuildReviewDispatchableRubric['rubric'],
+    projection: BuildReviewRubricProjection,
+  ): { result?: ReturnType<typeof validateBuildReviewDispatchedResult>; rejection: string } {
+    const candidate = extractJudgedResultCandidate(output);
+    if (candidate === undefined) {
+      return { rejection: 'no parseable JSON object was found in the response' };
+    }
+    const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
+    if (result) return { result, rejection: '' };
+    try {
+      return {
+        rejection: describeBuildReviewJudgedResultRejection(candidate, rubric, {
+          lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        }),
+      };
+    } catch {
+      // Diagnosis must never turn a repairable shape failure into a thrown
+      // provider-error that burns the dispatch.
+      return { rejection: 'the result did not satisfy the judged contract' };
+    }
   }
 
   private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {

@@ -187,3 +187,110 @@ export function parseBuildReviewInfrastructureFailure(value: unknown): BuildRevi
 export function parseBuildReviewRubricResult(value: unknown): BuildReviewRubricResult | undefined {
   return parseBuildReviewJudgedResult(value) ?? parseBuildReviewSkip(value) ?? parseBuildReviewInfrastructureFailure(value);
 }
+
+/** Per-rubric anchor field names; the single source for schema rendering and rejection diagnosis. */
+const ANCHOR_FIELDS: Record<BuildReviewRubricId, readonly string[]> = {
+  tautology: ['changedTest', 'exercisedBehavior', 'violationKind'],
+  scope: ['path', 'relation'],
+  rootCause: ['statedDefect', 'locus', 'relation'],
+  completeness: ['planTask', 'missingOutcome'],
+};
+
+/**
+ * Render the exact judged-result JSON template for one rubric. This is the
+ * machine-owned schema text embedded in every rubric dispatch and repair
+ * prompt, so the contract a grader must satisfy is never left to inference
+ * from prose (graders have returned `anchors`, `planAnchor`, and flattened
+ * top-level fields when the anchor shape was unstated).
+ */
+export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId): string {
+  const anchorFields = ANCHOR_FIELDS[rubric].map((field) => `"${field}": "<string>"`).join(', ');
+  return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "v1", ' +
+    '"lapId": "<echo the projection lapId verbatim>", "snapshotDigest": "<echo the projection snapshotDigest verbatim>", ' +
+    '"findings": [{"concernKind": "<string>", "summary": "<non-empty actionable string>", ' +
+    '"evidenceLocations": ["<path:line or path:line:column>"], ' +
+    `"anchor": {"rubric": "${rubric}", ${anchorFields}}}]}`;
+}
+
+const MAX_REJECTION_PROBLEMS = 6;
+
+/**
+ * Diagnose why a candidate fails `parseBuildReviewJudgedResult` (plus the
+ * dispatch-time lapId/snapshotDigest echo checks) in bounded, actionable
+ * prose. Powers the in-dispatch repair turn and the final diagnostic detail;
+ * it never embeds candidate content beyond short field values.
+ */
+export function describeBuildReviewJudgedResultRejection(
+  value: unknown,
+  rubric: BuildReviewRubricId,
+  expected: { readonly lapId: string; readonly snapshotDigest: string },
+): string {
+  const source = record(value);
+  if (!source) return 'the result is not a single JSON object';
+  const problems: string[] = [];
+  if (source.kind !== 'judged') problems.push(`top-level "kind" must be exactly the string "judged" (got ${(JSON.stringify(source.kind) ?? 'no kind field').slice(0, 64)})`);
+  if (source.rubric !== rubric) problems.push(`"rubric" must be "${rubric}"`);
+  if (source.lapId !== expected.lapId) problems.push(`"lapId" must echo the projection's lapId "${expected.lapId}" verbatim`);
+  if (parseBuildReviewRubricContractVersion(source.contractVersion) === undefined) problems.push('"contractVersion" must be "v1"');
+  if (source.snapshotDigest !== expected.snapshotDigest) problems.push('"snapshotDigest" must echo the projection\'s snapshotDigest verbatim');
+  if (!Array.isArray(source.findings)) {
+    problems.push('"findings" must be an array (empty when no concern was found)');
+  } else {
+    source.findings.forEach((finding, index) => {
+      const entry = record(finding);
+      if (!entry) { problems.push(`findings[${index}] is not an object`); return; }
+      if (!nonEmptyString(entry.concernKind)) problems.push(`findings[${index}].concernKind must be a non-empty string (never "kind")`);
+      if (!nonEmptyString(entry.summary)) problems.push(`findings[${index}].summary must be a non-empty string`);
+      if (!Array.isArray(entry.evidenceLocations) || entry.evidenceLocations.length === 0 ||
+        entry.evidenceLocations.some((location) => !evidenceLocation(location))) {
+        problems.push(`findings[${index}].evidenceLocations must be a non-empty array of "path:line" or "path:line:column" strings`);
+      }
+      const anchor = record(entry.anchor);
+      if (!anchor) {
+        problems.push(`findings[${index}].anchor is required: a nested object {"rubric": "${rubric}", ` +
+          `${ANCHOR_FIELDS[rubric].map((field) => `"${field}": "<string>"`).join(', ')}} — ` +
+          'never flattened top-level fields, and never an alternate name such as "anchors"');
+      } else {
+        if (anchor.rubric !== rubric) problems.push(`findings[${index}].anchor.rubric must be "${rubric}"`);
+        for (const field of ANCHOR_FIELDS[rubric]) {
+          if (!nonEmptyString(anchor[field])) problems.push(`findings[${index}].anchor.${field} must be a non-empty string`);
+        }
+      }
+    });
+  }
+  if (source.relocationAudit !== undefined && parseRelocationAudit(source.relocationAudit, rubric) === undefined) {
+    problems.push(rubric === 'tautology'
+      ? '"relocationAudit" entries must match "[relocation-audit] (EXEMPTED|MEASURED): old → new; production hunk(s) (do|do not) force the move"'
+      : `"relocationAudit" must be absent or empty for rubric ${rubric}`);
+  }
+  if (problems.length === 0 && parseBuildReviewJudgedResult(source) === undefined) {
+    problems.push('a supplied "verdict"/"passed" field contradicts the findings array — omit both; the engine derives the verdict');
+  }
+  if (problems.length === 0) return 'the result parsed but did not satisfy the judged contract (duplicate finding identities are rejected)';
+  const shown = problems.slice(0, MAX_REJECTION_PROBLEMS);
+  const remainder = problems.length - shown.length;
+  return shown.join('; ') + (remainder > 0 ? `; and ${remainder} more problem(s)` : '');
+}
+
+/**
+ * In-dispatch report of a provider result that never satisfied the judged
+ * contract, produced only after the bounded repair turn also failed. It
+ * travels through the coordinator's `dispatchModel` boundary so the rubric's
+ * infrastructure failure carries a bounded raw-output excerpt instead of a
+ * bare "invalid-provider-result".
+ */
+export interface BuildReviewDispatchFailure {
+  readonly kind: 'dispatch-failure';
+  readonly detail: string;
+}
+
+export function makeBuildReviewDispatchFailure(detail: string): BuildReviewDispatchFailure {
+  return { kind: 'dispatch-failure', detail };
+}
+
+export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined {
+  const source = record(value);
+  return source && source.kind === 'dispatch-failure' && nonEmptyString(source.detail)
+    ? { kind: 'dispatch-failure', detail: source.detail }
+    : undefined;
+}

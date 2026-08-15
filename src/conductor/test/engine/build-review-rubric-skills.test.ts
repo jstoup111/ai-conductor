@@ -31,13 +31,17 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/current.*`test_suite`.*PASS/i);
     expect(skill).toMatch(/typed.*preflight evidence/i);
     expect(skill).toMatch(/changed-test selectors/i);
-    expect(skill).toMatch(/reverted-production patch/i);
+    // #1600 replaced the embedded reverted-production patch with a
+    // content-free manifest (path + merge-base blob sha per file).
+    expect(skill).toMatch(/reverted-production manifest/i);
 
     expect(skill).toMatch(/contract version.*`v1`/i);
     expect(skill).toMatch(/concern kind/i);
     expect(skill).toMatch(/changed test/i);
     expect(skill).toMatch(/exercised behavior\/assertion/i);
     expect(skill).toMatch(/violation kind/i);
+    expect(skill).toMatch(/"rubric": "tautology", "changedTest": "<string>"/);
+    expect(skill).toMatch(/never\s+flattened/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
 
@@ -76,6 +80,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/contract version.*`v1`/i);
     expect(skill).toMatch(/out-of-plan path or surface/i);
     expect(skill).toMatch(/plan-scope relation/i);
+    expect(skill).toMatch(/"rubric": "scope", "path": "<string>"/);
     expect(skill).toMatch(/typed logical anchors/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
@@ -104,6 +109,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/stated defect\/outcome/i);
     expect(skill).toMatch(/symptom-only/i);
     expect(skill).toMatch(/implementation mechanism or locus/i);
+    expect(skill).toMatch(/"rubric": "rootCause", "statedDefect":/);
     expect(skill).toMatch(/typed logical anchors/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
@@ -135,6 +141,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/engine.*explicit disablement/i);
     expect(skill).toMatch(/missing deliverable/i);
     expect(skill).toMatch(/approved plan outcome\/task/i);
+    expect(skill).toMatch(/"rubric": "completeness", "planTask": "<string>"/);
     expect(skill).toMatch(/typed logical anchors/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);

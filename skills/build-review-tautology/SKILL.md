@@ -70,8 +70,11 @@ It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `
 Return every independent finding; an empty array means no Tautology concern was found. Each finding
 contains:
 
-- an enumerated concern kind;
-- typed logical anchors for the changed test, exercised behavior/assertion, and violation kind;
+- an enumerated concern kind in a `concernKind` field (never `kind`);
+- typed logical anchors for the changed test, exercised behavior/assertion, and violation kind,
+  carried in a nested `anchor` object — `{"rubric": "tautology", "changedTest": "<string>",
+  "exercisedBehavior": "<string>", "violationKind": "<string>"}` — with plain string values, never
+  flattened to the finding's top level and never renamed (no `anchors`, no per-field objects);
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 

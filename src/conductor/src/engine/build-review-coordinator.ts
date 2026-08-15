@@ -1,5 +1,6 @@
 import type { BuildReviewRubricId } from "../types/config.js";
 import {
+  parseBuildReviewDispatchFailure,
   parseBuildReviewJudgedResult,
   type BuildReviewJudgedResult,
   type BuildReviewLapId,
@@ -68,7 +69,13 @@ export type BuildReviewCoordinatedBranch =
   | BuildReviewSkip
   | { readonly kind: "cache-hit"; readonly rubric: BuildReviewRubricId; readonly result: BuildReviewJudgedResult }
   | { readonly kind: "dispatched"; readonly rubric: BuildReviewRubricId; readonly result: BuildReviewJudgedResult }
-  | { readonly kind: "infrastructure-failure"; readonly rubric: BuildReviewRubricId; readonly reason: string };
+  | {
+      readonly kind: "infrastructure-failure";
+      readonly rubric: BuildReviewRubricId;
+      readonly reason: string;
+      /** Bounded diagnostic (e.g. a raw-output excerpt); never part of routing identity. */
+      readonly detail?: string;
+    };
 
 export type BuildReviewCoordination =
   | { readonly kind: "gate-disabled" }
@@ -150,14 +157,20 @@ function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTa
   };
 }
 
-function infrastructure(rubric: BuildReviewRubricId, reason: string): BuildReviewCoordinatedBranch {
-  return { kind: "infrastructure-failure", rubric, reason };
+function infrastructure(rubric: BuildReviewRubricId, reason: string, detail?: string): BuildReviewCoordinatedBranch {
+  return { kind: "infrastructure-failure", rubric, reason, ...(detail === undefined ? {} : { detail }) };
 }
 
-function validCurrentResult(
+/**
+ * The single authority on whether a dispatched candidate is a usable judged
+ * result for this projection. Exported so the dispatch layer's in-session
+ * validate-and-repair loop accepts and rejects with exactly the same
+ * predicate the coordinator settles branches with.
+ */
+export function validateBuildReviewDispatchedResult(
   candidate: unknown,
   rubric: BuildReviewRubricId,
-  projection: BuildReviewRubricProjection,
+  projection: Pick<BuildReviewRubricProjection, "lapId" | "snapshotDigest">,
 ): BuildReviewJudgedResult | undefined {
   const result = parseBuildReviewJudgedResult(candidate);
   // Treat the provider list as one boundary value.  Parsing individual
@@ -281,8 +294,12 @@ export async function coordinateBuildReviewRubrics(
     async (rubric, branch) => {
       const projection = projections[rubric];
       try {
-        const result = validCurrentResult(await input.dispatchModel(branch, projection), rubric, projection);
-        if (!result) return { rubric, branch: infrastructure(rubric, "invalid-provider-result") };
+        const dispatched = await input.dispatchModel(branch, projection);
+        const result = validateBuildReviewDispatchedResult(dispatched, rubric, projection);
+        if (!result) {
+          const failure = parseBuildReviewDispatchFailure(dispatched);
+          return { rubric, branch: infrastructure(rubric, "invalid-provider-result", failure?.detail) };
+        }
         let written: BuildReviewJudgedResult | undefined;
         try {
           written = validWrittenArtifact(await input.writeArtifact({

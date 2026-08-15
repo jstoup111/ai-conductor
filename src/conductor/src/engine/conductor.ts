@@ -24,6 +24,7 @@ import {
 } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
+import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import type {
   AuthenticationReadiness,
   CodexProbeFailure,
@@ -7492,6 +7493,42 @@ export class Conductor {
                     }
                     // outcome.kind === 'none' — no usable remediation plan;
                     // fall through to the unchanged kickback-to-build path.
+                  }
+
+                  // Disposition-race guard: an operator `build-review accept`
+                  // can land while this block (and especially the /remediate
+                  // dispatch above, which takes minutes) composes rework from
+                  // the RAW aggregate. Re-read the disposition store and use
+                  // the EFFECTIVE verdict at routing time: when every raw
+                  // finding is now operator-accepted, the composed rework
+                  // would order removal of exactly the surfaces the operator
+                  // accepted, so drop it and re-land build_review instead —
+                  // its re-run settles from cache, applies the dispositions,
+                  // and re-dispatches only infrastructure-failed rubrics.
+                  // (2026-08-15: remediate dispatched 20:10:36 kicked back at
+                  // 20:13 with tasks removing a scope surface accepted at
+                  // 20:12:19.)
+                  try {
+                    const routingResolution = await (
+                      this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+                    )(this.projectRoot, verdictRaw);
+                    if (
+                      routingResolution.ok &&
+                      routingResolution.effective.unresolvedFindingIds.length === 0 &&
+                      routingResolution.effective.acceptedFindingIds.length > 0
+                    ) {
+                      this.log?.(
+                        'build_review kickback dropped: every graded finding was accepted ' +
+                          'by operator disposition at routing time; re-running build_review.',
+                      );
+                      await this.saveConductorStepStatus(state, step.name, 'failed');
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      i = i - 1; // for-loop i++ re-lands on build_review
+                      continue;
+                    }
+                  } catch {
+                    // Never block routing on disposition-store failures — the
+                    // pre-guard behavior (raw-aggregate routing) proceeds.
                   }
 
                   await emitTracked({

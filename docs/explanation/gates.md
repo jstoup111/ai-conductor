@@ -300,6 +300,21 @@ On the remediation path the planner picks the target per gap, the kickback event
 than `build`, and a gap that needs a human halts instead of routing. Remediation may still choose `build`
 for a scope gap — the difference is that the deletion becomes a recorded plan-level decision.
 
+Routing is re-checked against the disposition store at the moment the kickback is emitted, not only when
+the FAIL was graded. An operator `conduct build-review accept` can land while the remediation planner is
+composing rework from the raw aggregate (a window of minutes); when every graded finding is accepted by
+disposition at routing time, the composed rework is dropped and `build_review` re-lands instead — its
+re-run settles from cache, applies the dispositions, and re-dispatches only infrastructure-failed rubrics.
+Without this guard a kickback has ordered removal of exactly the surface the operator had just accepted.
+
+A rubric session that answers but misses the judged-result JSON contract does not burn its dispatch. The
+engine embeds the exact per-rubric result schema (including the nested `anchor` object's field names) in
+every rubric prompt, and on a shape failure issues exactly one bounded repair invocation — the rejection
+diagnosis, the schema, and a capped excerpt of the session's own previous output, asking for the JSON
+re-emitted verbatim in shape only. Only when the repair turn also fails does the rubric settle as an
+`invalid-provider-result` infrastructure failure, and that failure then carries a bounded (≤2 KB) raw-output
+excerpt in its diagnostic detail instead of a bare label.
+
 The graded diff excludes paths the **engine** authors rather than the builder — `.docs/shipped/` and
 `.pipeline/`. No plan task can describe harness machinery output, so grading it guarantees a scope
 finding the builder cannot legitimately act on.

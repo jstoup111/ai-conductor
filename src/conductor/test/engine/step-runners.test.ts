@@ -15,6 +15,7 @@ import {
   parseTierFromOutput,
   parseSignalCountsFromOutput,
   scoreComplexityFromCounts,
+  RUBRIC_FAILURE_DETAIL_CAP_BYTES,
 } from '../../src/engine/step-runners.js';
 import {
   CLAUDE_MODEL_POLICY as CLAUDE_POLICY,
@@ -3261,7 +3262,8 @@ TIER: M`,
 
       await runner.run('build_review', emptyState);
 
-      expect(provider.invoke).toHaveBeenCalledTimes(4);
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(provider.invoke).toHaveBeenCalledTimes(8);
       expect((provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => options.prompt)).toEqual(
         expect.arrayContaining([
           expect.stringContaining('Build Review Tautology rubric'),
@@ -3364,7 +3366,8 @@ TIER: M`,
       await runner.run('build_review', emptyState);
 
       const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
-      expect(invoke).toHaveBeenCalledTimes(4);
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
       expect(prompts).toContain('shared.ts');
       expect(prompts).toContain('shared parser changes atomically');
       expect(prompts).toContain('Task 3');
@@ -3405,7 +3408,8 @@ TIER: M`,
         const result = await runner.run('build_review', emptyState);
         const warnings = warnSpy.mock.calls.flat().join('\n');
 
-        expect(invoke).toHaveBeenCalledTimes(4);
+        // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+        expect(invoke).toHaveBeenCalledTimes(8);
         expect(result.output).toContain('Task 3');
         expect(result.output).toContain(sha);
         expect(result.output).toContain('artifacts.ts');
@@ -3486,7 +3490,8 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      expect(invoke).toHaveBeenCalledTimes(4);
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
       for (const [options] of invoke.mock.calls) {
         const opts = options as InvokeOptions;
         expect(opts.resume).toBe(false);
@@ -3523,7 +3528,8 @@ TIER: M`,
 
       expect(result.success).toBe(false);
       const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
-      expect(invoke).toHaveBeenCalledTimes(4);
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
       expect(prompts).toContain('Grade against this one.');
       expect(prompts).not.toContain('Wrong plan.');
     });
@@ -3544,7 +3550,8 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      expect(invoke).toHaveBeenCalledTimes(4);
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
@@ -3568,7 +3575,8 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.repairProvenance).toEqual({ disposition: 'none_warranted' });
-      expect(invoke).toHaveBeenCalledTimes(4);
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
     });
 
     it('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
@@ -3793,5 +3801,147 @@ describe('extractJudgedResultCandidate', () => {
 
   it('returns undefined when no candidate parses', () => {
     expect(extractJudgedResultCandidate('no json here at all')).toBeUndefined();
+  });
+});
+
+describe('build_review rubric dispatch: validate-and-repair loop', () => {
+  const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+  const snapshotDigest = 'sha256:434fa33612c7d7188d5ba5398a748b54a28400bcb534988863610f64a70896f8';
+  const projection = {
+    rubric: 'tautology', contractVersion: 'v1', projectionVersion: 'v1',
+    lapId, snapshotDigest, digest: 'sha256:projection',
+    mergeBase: 'base', headSha: 'head', changedFiles: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
+  } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
+  const policy = {
+    enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
+    model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
+  };
+  const branch = { rubric: 'tautology' as const, skillName: 'build-review-tautology', policy };
+
+  // The 2026-08-15 lap-a237011e failure verbatim in miniature: a semantically
+  // complete judgement whose finding flattens the anchor into structured
+  // top-level objects — the shape the strict parser rejects.
+  const incidentShapedOutput = [
+    'I read the referenced diff and measured each changed test.',
+    '```json',
+    JSON.stringify({
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId, snapshotDigest,
+      findings: [{
+        concernKind: 'assertion-cannot-fail',
+        changedTest: { path: 'test/engine/event-sinks.test.ts', suite: 'event sink subscriptions', name: 'rejects an unrelated sink' },
+        exercisedBehavior: { productionSymbol: 'EVENT_SINKS', productionPath: 'src/engine/event-sinks.ts' },
+        violationKind: 'assertion-over-test-local-construct',
+        summary: 'The assertion compares a test-local mutated copy and can never fail.',
+        evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
+      }],
+    }),
+    '```',
+  ].join('\n');
+  const validOutput = JSON.stringify({
+    kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId, snapshotDigest,
+    findings: [{
+      concernKind: 'assertion-cannot-fail',
+      summary: 'The assertion compares a test-local mutated copy and can never fail.',
+      evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
+      anchor: {
+        rubric: 'tautology',
+        changedTest: 'test/engine/event-sinks.test.ts > rejects an unrelated sink',
+        exercisedBehavior: 'EVENT_SINKS persisted routing',
+        violationKind: 'assertion-over-test-local-construct',
+      },
+    }],
+  });
+
+  function dispatch(runner: DefaultStepRunner) {
+    return (runner as unknown as {
+      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(branch, projection);
+  }
+
+  it('repairs an unparseable-then-valid sequence within the same dispatch (legacy provider path)', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest, verdict: 'FAIL' });
+    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
+    expect(repairPrompt).toContain('ONLY one JSON object');
+    expect(repairPrompt).toContain('did not satisfy the judged-result contract');
+    expect(repairPrompt).toContain('anchor');
+    expect(repairPrompt).toContain(`"lapId": "<echo the projection lapId verbatim>"`);
+    // The bounded excerpt of the model's own previous output rides along.
+    expect(repairPrompt).toContain('assertion-over-test-local-construct');
+  });
+
+  it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
+    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<string>"}');
+    expect(prompt).toContain('never flattened');
+  });
+
+  it('yields a bounded dispatch-failure report with the raw output excerpt when the repair turn is still bad', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: `still prose ${'x'.repeat(10_000)} tail-marker`, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'dispatch-failure' });
+    const detail = (result as { detail: string }).detail;
+    expect(Buffer.byteLength(detail, 'utf8')).toBeLessThanOrEqual(RUBRIC_FAILURE_DETAIL_CAP_BYTES);
+    expect(detail).toContain('Raw output excerpt: still prose');
+    expect(detail).toContain('tail-marker');
+    expect(detail).toContain('[...truncated');
+  });
+
+  it('returns undefined (not a failure report) when the provider invocation itself fails', async () => {
+    const invoke = vi.fn().mockResolvedValue({ success: false, output: 'crashed', exitCode: 1 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    await expect(dispatch(runner)).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['claude', 'codex'] as const)('repairs within the same dispatch on the %s runtime-candidates path', async (providerKey) => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
+    const policyForKey = providerKey === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
+    const runtime = {
+      key: providerKey,
+      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke, invokeInteractive: vi.fn() },
+      policy: policyForKey,
+      builtIn: true,
+      availability: new ModelAvailability(policyForKey.modelFallbackLadder),
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project', {
+      config: { llm_provider: [providerKey] },
+      providerRuntimes: new ProviderRuntimeSet([runtime]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: [providerKey],
+    });
+
+    const result = await (runner as unknown as {
+      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
+    }).dispatchBuildReviewRubric({ ...branch, policy: { ...policy, llm_provider: providerKey } }, projection);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest });
+    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
+    expect(repairPrompt).toContain('ONLY one JSON object');
+    expect(repairPrompt).toContain('assertion-over-test-local-construct');
   });
 });
