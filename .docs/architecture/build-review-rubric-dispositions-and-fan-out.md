@@ -1,7 +1,7 @@
 # Components: build_review rubric fan-out and operator dispositions
 
 **Last updated:** 2026-08-13
-**Scope:** The proposed `build_review` boundary: four independently configured rubric skills,
+**Scope:** The proposed `build_review` boundary: five independently configured rubric skills,
 one engine-owned evidence snapshot and join, durable per-finding operator dispositions, the
 existing event spine, reporting, and publication evidence. Issue #1542.
 
@@ -122,7 +122,7 @@ graph TD
   results, creates finding IDs, applies dispositions, joins the outer verdict, and routes failures.
   A rubric skill supplies judgement policy only; it cannot choose inputs, accept a risk, or publish
   the gate verdict.
-- **Rubric policy moves out of the inline prompt.** The four surviving shipped skills are consumer-facing,
+- **Rubric policy moves out of the inline prompt.** The five shipped skills are consumer-facing,
   provider-agnostic policy modules. Their model-table rows provide defaults, while project config
   may independently override provider, model, reasoning effort, fallback order, retry budget, and
   retry escalation for each rubric.

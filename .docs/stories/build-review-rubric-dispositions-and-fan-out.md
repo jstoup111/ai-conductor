@@ -27,7 +27,7 @@ can see which kind of review passed or failed without losing the authoritative o
 
 ### Done When
 
-- [ ] A four-rubric fixture produces four named outcomes and one outer verdict.
+- [ ] A five-rubric fixture produces five named outcomes and one outer verdict.
 - [ ] A missing-rubric fixture remains blocking and identifies the absent rubric.
 
 ## Story 2: Bound concurrent rubric evaluation
@@ -41,7 +41,7 @@ latency can improve without exceeding the project's parallel-session budget.
 
 #### Happy Path
 
-- Given four eligible rubrics and no explicit concurrency setting, when a lap runs, then up to four
+- Given five eligible rubrics and no explicit concurrency setting, when a lap runs, then up to five
   rubric evaluations may be active concurrently; given a lower positive ceiling, active evaluations
   never exceed that ceiling and the joined result is unchanged.
 
@@ -55,7 +55,7 @@ latency can improve without exceeding the project's parallel-session budget.
 
 ### Done When
 
-- [ ] A controlled scheduler fixture observes peak concurrency four by default and the configured
+- [ ] A controlled scheduler fixture observes peak concurrency five by default and the configured
   lower peak when overridden.
 - [ ] Invalid ceilings fail validation before provider dispatch.
 
@@ -104,7 +104,7 @@ feature can appear reviewed when every rubric was disabled.
 
 #### Negative Paths
 
-- Given the outer gate is enabled and all four rubrics are disabled, when configuration is resolved,
+- Given the outer gate is enabled and all five rubrics are disabled, when configuration is resolved,
   then startup is refused with an explanation that names the empty rubric set and the separate
   whole-gate disable choice.
 - Given the entire gate is disabled and all rubrics retain their defaults, when configuration is
@@ -581,7 +581,7 @@ that intentional omissions cannot improve or worsen the reported failure rate.
 
 **Requirement:** FR-22
 
-As an existing project operator, I want the enabled outer gate to retain full four-rubric coverage
+As an existing project operator, I want the enabled outer gate to retain full five-rubric coverage
 without new configuration so that adopting the extension does not silently narrow review.
 
 ### Acceptance Criteria
@@ -589,7 +589,7 @@ without new configuration so that adopting the extension does not silently narro
 #### Happy Path
 
 - Given `build_review` is enabled and has no rubric-specific settings, when configuration resolves,
-  then all four surviving rubrics are enabled, inherit the outer execution policy, and use a maximum of four
+  then all five rubrics are enabled, inherit the outer execution policy, and use a maximum of five
   concurrent sessions.
 
 #### Negative Paths
@@ -600,8 +600,8 @@ without new configuration so that adopting the extension does not silently narro
 
 ### Done When
 
-- [ ] Absent and partially specified rubric configuration fixtures resolve all four closed entries.
-- [ ] The resolved default maximum is exactly four.
+- [ ] Absent and partially specified rubric configuration fixtures resolve all five closed entries.
+- [ ] The resolved default maximum is exactly five.
 
 ## Story 23: Disable the whole gate without a false review success
 
