@@ -108,7 +108,6 @@ describe('build-review rubric projections', () => {
         ...original.inputs,
         repairContext: [...(original.inputs.repairContext ?? [])].reverse(),
         acceptedWidenings: [...(original.inputs.acceptedWidenings ?? [])].reverse(),
-        entryPoints: [...(original.inputs.entryPoints ?? [])].reverse(),
       },
       tautology: { ...original.tautology, changedTestSelectors: [...original.tautology.changedTestSelectors].reverse() },
     };

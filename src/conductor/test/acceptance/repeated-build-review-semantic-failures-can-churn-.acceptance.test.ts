@@ -268,7 +268,6 @@ describe('acceptance: removal evidence reaches the real build_review prompt (#15
       config: {
         build_review: { enabled: true, perTaskFloor: false },
         test_suite: { scoped_command: 'true {selectors}' },
-        wiring: { entry_points: ['src/contract.ts'] },
       },
       buildReviewInputOptions: {
         inspectTestSuite: async () => ({

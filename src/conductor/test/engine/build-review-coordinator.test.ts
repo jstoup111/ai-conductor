@@ -85,7 +85,7 @@ function inputs(): BuildReviewFrozenInputs {
     diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
     planBody: "# Plan\n",
     mergeBase: "base", baseRef: "origin/main", baseKind: "remote", trackingRefSha: "base", remoteHeadSha: "base", fresh: true,
-    entryPoints: ["src/index.ts"], repairContext: [], acceptedWidenings: [],
+    repairContext: [], acceptedWidenings: [],
     removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
     testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" } as never,
     sourceSnapshot: {
@@ -103,7 +103,7 @@ describe("build-review coordinator: frozen fan-out", () => {
 
     await coordinateBuildReviewRubrics({
       config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
-      inputs: { ...inputs(), entryPoints: [] }, lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => ({
         kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
@@ -189,7 +189,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
     const result = await coordinateBuildReviewRubrics({
       config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
-      inputs: { ...inputs(), entryPoints: [] }, lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => ({
         kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,

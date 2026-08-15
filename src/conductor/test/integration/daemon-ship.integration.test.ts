@@ -105,7 +105,7 @@ describe('conduct shipped-record — record committed on the implementation bran
     await writeFile(join(repo, '.pipeline/events.jsonl'), [
       { type: 'build_review_rubric_result', ts: 1, rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
       { type: 'build_review_rubric_skipped', ts: 2, rubric: 'tautology', lapId: 'lap-1', reason: 'disabled' },
-    ].map(JSON.stringify).join('\n') + '\n');
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
     await writeFile(join(repo, '.pipeline/pipeline-events.jsonl'), JSON.stringify(
       { type: 'build_review_outer_verdict', ts: 3, lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
     ) + '\n');
