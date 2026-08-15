@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import {
   parseArgs,
   createProgram,
@@ -92,12 +94,27 @@ describe('CLI', () => {
     expect(() => program.parse(['node', 'conduct', 'validate-wired-into'])).toThrow();
     expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/unknown command ['"]?validate-wired-into/i));
 
-    const result = await execa(
-      'bash',
-      ['-c', 'node --import tsx src/index.ts validate-wired-into 2>&1'],
-      { cwd: CONDUCTOR_ROOT, reject: false, all: true },
-    );
-    expect(result.exitCode).toBe(1);
+    const dir = mkdtempSync(join(tmpdir(), 'conductor-cli-'));
+    const stderrPath = join(dir, 'stderr');
+    const stderrFd = openSync(stderrPath, 'w');
+    try {
+      try {
+        const result = await execa(
+          process.execPath,
+          ['--import', 'tsx', join(CONDUCTOR_ROOT, 'src', 'index.ts'), 'validate-wired-into'],
+          // execa's type permits only inherited fd 1/2, while Node's spawn
+          // accepts this file descriptor. A file keeps console.error durable
+          // across the intentional immediate process.exit().
+          { cwd: CONDUCTOR_ROOT, reject: false, stderr: stderrFd as unknown as 1 },
+        );
+        expect(result.exitCode).toBe(1);
+      } finally {
+        closeSync(stderrFd);
+      }
+      expect(readFileSync(stderrPath, 'utf8')).toMatch(/unknown command ['"]?validate-wired-into/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // --from is the real, documented way to start at a specific step and must

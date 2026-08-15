@@ -848,11 +848,8 @@ async function main(): Promise<void> {
   // diagnostic explicit rather than letting it fall through as an inline
   // pipeline invocation, where the removal would be ambiguous to operators.
   if (process.argv[2] === 'validate-wired-into') {
-    await new Promise<void>((resolve) => {
-      process.stderr.write("error: unknown command 'validate-wired-into'\n", () => resolve());
-    });
-    process.exitCode = 1;
-    return;
+    console.error("error: unknown command 'validate-wired-into'");
+    process.exit(1);
   }
 
   // The inline SDLC pipeline now requires an explicit `inline` subcommand
