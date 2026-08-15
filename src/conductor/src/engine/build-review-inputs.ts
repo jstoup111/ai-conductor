@@ -167,11 +167,19 @@ function contentSnapshotDigest(snapshot: Pick<
 >): string {
   const { diff, planBody, repairContext, removalContext } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
-    diff,
+    diff: withoutDiffBlobIdentities(diff),
     planBody,
     repairContext: semanticRepairContext(repairContext),
     removalContext,
   })).digest('hex')}`;
+}
+
+/** Git's index header anchors a patch to blob objects without changing its reviewed bytes. */
+function withoutDiffBlobIdentities(diff: string): string {
+  return diff.replace(
+    /^index [0-9a-f]+(?:,[0-9a-f]+)?\.\.[0-9a-f]+(?:,[0-9a-f]+)?(?= \d+$|$)/gmi,
+    'index <blob>..<blob>',
+  );
 }
 
 /** Repair-record identity and invalidation timing explain provenance, not remediation meaning. */

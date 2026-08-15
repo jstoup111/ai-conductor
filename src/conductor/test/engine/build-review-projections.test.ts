@@ -350,6 +350,23 @@ describe('build-review rubric projections', () => {
     });
   });
 
+  it('keeps Tautology digest stable when preflight cache provenance changes', () => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const original = source();
+    const second = deriveBuildReviewRubricProjections(source({
+      tautology: {
+        ...original.tautology,
+        preflightEvidence: {
+          ...(original.tautology.preflightEvidence as Record<string, unknown>),
+          cacheProvenance: 'hit',
+        },
+      },
+    }));
+
+    expect(second.tautology.digest).toBe(first.tautology.digest);
+    expect(second.tautology.preflightEvidence).toMatchObject({ cacheProvenance: 'hit' });
+  });
+
   it('changes Tautology digest when a semantic proof field changes', () => {
     const first = deriveBuildReviewRubricProjections(source());
     const original = source();

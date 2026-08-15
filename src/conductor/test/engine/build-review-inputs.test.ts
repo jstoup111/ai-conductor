@@ -112,7 +112,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         baseRef = 'feature/first',
         mergeBase = 'base-first',
         headSha = 'head-first',
-        diff = 'diff --git a/a b/a\n+change\n',
+        diff = 'diff --git a/a b/a\nindex 1111111..2222222 100644\n+change\n',
         planBody = '# Plan body\n\nSome plan content.\n',
         resealReason = 'Operator approved the amendment.',
         acceptedWidenings = [] as BuildReviewInputOptions['acceptedWidenings'],
@@ -148,7 +148,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const changedProvenance = await contentDigestFor({
           baseRef: 'feature/rebased', mergeBase: 'base-rebased', headSha: 'head-rebased',
       });
-      const oneByteDiff = await contentDigestFor({ diff: 'diff --git a/a b/a\n+changed\n' });
+      const rebasedBlobIdentity = await contentDigestFor({
+        diff: 'diff --git a/a b/a\nindex aaaaaaa..bbbbbbb 100644\n+change\n',
+      });
+      const oneByteDiff = await contentDigestFor({ diff: 'diff --git a/a b/a\nindex 1111111..2222222 100644\n+changed\n' });
       const changedPlan = await contentDigestFor({ planBody: '# Plan body\n\nChanged plan content.\n' });
       const changedReseal = await contentDigestFor({ resealReason: 'Operator approved the corrected amendment.' });
       const changedWidening = await contentDigestFor({
@@ -158,6 +161,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect({
         hasSha256Digest: /^sha256:[a-f0-9]{64}$/.test(baseline),
         provenanceIsExcluded: changedProvenance === baseline,
+        blobIdentityIsExcluded: rebasedBlobIdentity === baseline,
         diffIsIncluded: oneByteDiff !== baseline,
         planIsIncluded: changedPlan !== baseline,
         resealIsExcluded: changedReseal === baseline,
@@ -165,6 +169,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       }).toEqual({
         hasSha256Digest: true,
         provenanceIsExcluded: true,
+        blobIdentityIsExcluded: true,
         diffIsIncluded: true,
         planIsIncluded: true,
         resealIsExcluded: true,

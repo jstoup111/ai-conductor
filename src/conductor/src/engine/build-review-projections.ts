@@ -141,11 +141,15 @@ function withoutEvidenceProvenance(value: BuildReviewProjectionJson): BuildRevie
   return evidenceContent;
 }
 
-/** Tautology preflight records these anchors for readable provenance, not cache identity. */
-function withoutPreflightSourceIdentities(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
+/** Tautology preflight records anchors and local cache execution for provenance, not identity. */
+function withoutPreflightProvenance(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
   if (value === null || Array.isArray(value) || typeof value !== 'object') return value;
   const evidence = value as { readonly [key: string]: BuildReviewProjectionJson };
-  const { sourceIdentities: _ignoredSourceIdentities, ...evidenceContent } = evidence;
+  const {
+    sourceIdentities: _ignoredSourceIdentities,
+    cacheProvenance: _ignoredCacheProvenance,
+    ...evidenceContent
+  } = evidence;
   return evidenceContent;
 }
 
@@ -198,7 +202,7 @@ export function projectionDigest(projection: Omit<BuildReviewRubricProjection, '
       ? { testSuiteProof: withoutEvidenceProvenance(digestibleProjection.testSuiteProof) }
       : {}),
     ...('preflightEvidence' in digestibleProjection
-      ? { preflightEvidence: withoutPreflightSourceIdentities(digestibleProjection.preflightEvidence) }
+      ? { preflightEvidence: withoutPreflightProvenance(digestibleProjection.preflightEvidence) }
       : {}),
     ...('acceptedWidenings' in digestibleProjection
       ? { acceptedWidenings: withoutAcceptedWideningCommitShas(digestibleProjection.acceptedWidenings) }
