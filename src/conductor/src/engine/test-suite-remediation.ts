@@ -2,7 +2,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { boundedHeadTailExcerpt } from './build-review-tautology-preflight.js';
+
 export const BUILD_REVIEW_REPAIR_LEDGER = '.pipeline/build-review-rebase-repairs.json';
+
+/**
+ * Byte cap for one record's persisted diagnostic. Repair records ride into
+ * the tautology, scope, and rootCause rubric prompts and accumulate across
+ * rebases, so each diagnostic is bounded by construction at creation time —
+ * pure byte-position head+tail truncation, no runner-output parsing.
+ */
+export const REMEDIATION_DIAGNOSTIC_CAP_BYTES = 2_048;
 
 export interface TestSuiteRemediationFailure {
   reason: string;
@@ -197,10 +207,16 @@ export async function recordTestSuiteRemediation(
     const ledger = await readLedger(projectRoot);
 
     const record: TestSuiteRemediationRecord = {
+      // Identity is derived from the FULL failure message (remediationIdentity
+      // above), before the diagnostic is bounded — truncation never changes
+      // dedup semantics for records that differ only past the cap.
       id: `repair-${remediationIdentity(advance, failure)}`,
       gate,
       reason: failure.reason,
-      diagnostic: failure.message.replace(/\s+/g, ' ').trim(),
+      diagnostic: boundedHeadTailExcerpt(
+        failure.message.replace(/\s+/g, ' ').trim(),
+        REMEDIATION_DIAGNOSTIC_CAP_BYTES,
+      ),
       rebaseInvalidatedAt: invalidatedAt,
     };
     if (!ledger.repairs.some((candidate) => candidate.id === record.id)) {

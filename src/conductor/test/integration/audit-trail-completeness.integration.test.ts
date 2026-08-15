@@ -52,6 +52,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   'friction-mapped' | 'not-audited-by-design'
 > = {
   build_review_rubric_started: 'not-audited-by-design',
+  build_review_rubric_prompt: 'not-audited-by-design',
   build_review_rubric_result: 'not-audited-by-design',
   build_review_rubric_skipped: 'not-audited-by-design',
   build_review_cache_hit: 'not-audited-by-design',
@@ -148,6 +149,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
   build_review_rubric_started: { type: 'build_review_rubric_started', rubric: 'scope', lapId: 'lap-1' },
+  build_review_rubric_prompt: { type: 'build_review_rubric_prompt', rubric: 'scope', lapId: 'lap-1', promptBytes: 4096 },
   build_review_rubric_result: { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
   build_review_rubric_skipped: { type: 'build_review_rubric_skipped', rubric: 'scope', lapId: 'lap-1', reason: 'disabled' },
   build_review_cache_hit: { type: 'build_review_cache_hit', rubric: 'scope', lapId: 'lap-1' },

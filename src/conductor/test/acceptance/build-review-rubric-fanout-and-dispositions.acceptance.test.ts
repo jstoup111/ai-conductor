@@ -224,7 +224,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     const projectionSource = (inputs: Awaited<ReturnType<typeof assembleBuildReviewInputs>>) =>
       deriveBuildReviewRubricProjections({
         lapId: 'cache-isolation-projection', inputs,
-        tautology: { changedTestSelectors: [], revertedProductionPatch: '[]', preflightEvidence: { classification: 'approved-exception' } },
+        tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: 'approved-exception' } },
       } as never);
     const beforeReseal = projectionSource(await assembleBuildReviewInputs(
       makeGitRunner(dir), planPath,
