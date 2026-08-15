@@ -3,7 +3,11 @@ import { rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 export interface TautologyPathClassification {
+  /** Executable changed tests: kept at HEAD and passed to the scoped command. */
   readonly tests: readonly string[];
+  /** Changed test fixtures, helpers, and runners: kept at HEAD, never selectors. */
+  readonly testSupport: readonly string[];
+  /** Changed runtime paths: restored to their merge-base form. */
   readonly production: readonly string[];
 }
 
@@ -112,11 +116,16 @@ function isTestPath(path: string): boolean {
     || /(?:^|\/)(?:__tests__|tests?|spec)\/.*(?:_test|_spec)\.[^/]+$/i.test(path);
 }
 
-/** Closed path classifier; unknown paths are production, never a broad test selector. */
+function isTestSupportPath(path: string): boolean {
+  return /(?:^|\/)(?:__tests__|tests?|spec)(?:\/|$)/i.test(path);
+}
+
+/** Closed three-way classifier; unknown paths are production, never a broad test selector. */
 export function classifyTautologyPaths(paths: readonly string[]): TautologyPathClassification {
   return {
     tests: paths.filter(isTestPath).sort(),
-    production: paths.filter((path) => !isTestPath(path)).sort(),
+    testSupport: paths.filter((path) => !isTestPath(path) && isTestSupportPath(path)).sort(),
+    production: paths.filter((path) => !isTestPath(path) && !isTestSupportPath(path)).sort(),
   };
 }
 

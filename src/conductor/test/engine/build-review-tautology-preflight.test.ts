@@ -62,7 +62,9 @@ describe('build-review Tautology preflight', () => {
       removeCheckout: async (path) => { calls.push(`remove:${path}`); },
     });
 
-    expect(classifyTautologyPaths(result.changedPaths)).toEqual({ tests: ['test/a.test.ts'], production: ['src/a.ts'] });
+    expect(classifyTautologyPaths(result.changedPaths)).toEqual({
+      tests: ['test/a.test.ts'], testSupport: [], production: ['src/a.ts'],
+    });
     expect(result).toMatchObject({
       classification: 'red', changedTestSelectors: ['test/a.test.ts'],
       sourceIdentities: { mergeBase: 'base-sha', headSha: 'head-sha' },
@@ -88,26 +90,84 @@ describe('build-review Tautology preflight', () => {
     expect(runScoped).not.toHaveBeenCalled();
   });
 
-  it('selects only executable changed test files, never test-directory helpers or red runners', () => {
+  it('classifies executable tests, test support, and production separately', () => {
     expect(classifyTautologyPaths([
-      'test/helpers/build-review.ts',
-      'tests/fixtures/setup.mjs',
-      'spec/support/assertions.ts',
+      'test/engine/memory-writer-helper.ts',
+      'test/fixtures/claude-envelopes/successful-command.json',
       'test/acceptance/build-review-rubric-fanout.red-runner.mjs',
-      'test/engine/build-review.test.ts',
+      'test/engine/build-review-cli.test.ts',
       'tests/unit/runner.spec.mts',
       'spec/models/widget_test.rb',
       'src/engine/build-review.ts',
     ])).toEqual({
-      tests: ['spec/models/widget_test.rb', 'test/engine/build-review.test.ts', 'tests/unit/runner.spec.mts'],
-      production: [
-        'spec/support/assertions.ts',
-        'src/engine/build-review.ts',
+      tests: ['spec/models/widget_test.rb', 'test/engine/build-review-cli.test.ts', 'tests/unit/runner.spec.mts'],
+      testSupport: [
         'test/acceptance/build-review-rubric-fanout.red-runner.mjs',
-        'test/helpers/build-review.ts',
-        'tests/fixtures/setup.mjs',
+        'test/engine/memory-writer-helper.ts',
+        'test/fixtures/claude-envelopes/successful-command.json',
       ],
+      production: ['src/engine/build-review.ts'],
     });
+  });
+
+  it('keeps test support at HEAD and refuses a support-only counterfactual', async () => {
+    const readMergeBaseFile = vi.fn(async () => 'BASE production');
+    const writeFile = vi.fn(async () => {});
+    const runScoped = vi.fn(async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: 'RED', stderr: '' }));
+    const diff = [
+      'diff --git a/test/engine/memory-writer-helper.ts b/test/engine/memory-writer-helper.ts',
+      'diff --git a/test/fixtures/claude-envelopes/successful-command.json b/test/fixtures/claude-envelopes/successful-command.json',
+      'diff --git a/test/acceptance/build-review-rubric-fanout.red-runner.mjs b/test/acceptance/build-review-rubric-fanout.red-runner.mjs',
+      'diff --git a/test/engine/build-review-cli.test.ts b/test/engine/build-review-cli.test.ts',
+    ].join('\n');
+
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head', diff,
+      createCheckout: async () => {}, readMergeBaseFile, writeFile, runScoped, removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({
+      classification: 'infrastructure-failure', reason: 'no-production-changes',
+      changedTestSelectors: ['test/engine/build-review-cli.test.ts'],
+    });
+    expect(readMergeBaseFile).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(runScoped).not.toHaveBeenCalled();
+  });
+
+  it('reverts only true production while retaining changed test support at HEAD', async () => {
+    const readMergeBaseFile = vi.fn(async (path: string) => path === 'src/engine/build-review.ts' ? 'BASE production' : undefined);
+    const writeFile = vi.fn(async () => {});
+    const runScoped = vi.fn(async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: 'RED', stderr: '' }));
+    const diff = [
+      'diff --git a/src/engine/build-review.ts b/src/engine/build-review.ts',
+      'diff --git a/test/engine/memory-writer-helper.ts b/test/engine/memory-writer-helper.ts',
+      'diff --git a/test/fixtures/claude-envelopes/successful-command.json b/test/fixtures/claude-envelopes/successful-command.json',
+      'diff --git a/test/acceptance/build-review-rubric-fanout.red-runner.mjs b/test/acceptance/build-review-rubric-fanout.red-runner.mjs',
+      'diff --git a/test/engine/build-review-cli.test.ts b/test/engine/build-review-cli.test.ts',
+    ].join('\n');
+
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head', diff,
+      createCheckout: async () => {}, readMergeBaseFile, writeFile, runScoped, removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({
+      classification: 'red', changedTestSelectors: ['test/engine/build-review-cli.test.ts'],
+      revertedProductionPatch: [{ path: 'src/engine/build-review.ts', mergeBaseContent: 'BASE production' }],
+    });
+    expect(readMergeBaseFile).toHaveBeenCalledTimes(1);
+    expect(readMergeBaseFile).toHaveBeenCalledWith('src/engine/build-review.ts');
+    expect(writeFile).toHaveBeenCalledTimes(1);
+    expect(writeFile).toHaveBeenCalledWith(
+      '/feature/.pipeline/build-review-preflight/head/src/engine/build-review.ts',
+      'BASE production',
+    );
+    expect(runScoped).toHaveBeenCalledWith(
+      '/feature/.pipeline/build-review-preflight/head',
+      ['test/engine/build-review-cli.test.ts'],
+      expect.any(AbortSignal),
+    );
   });
 
   it.each([
