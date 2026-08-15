@@ -39,7 +39,7 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
         toCommit: 'reseal-head',
       }],
       sourceSnapshot: {
-        digest: 'sha256:snapshot', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head',
+        digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head',
         diff: FIXTURE_DIFF, planBody: '# Approved plan\n', repairContext: [],
         acceptedWidenings: [{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }],
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
@@ -70,25 +70,25 @@ describe('build-review rubric projections', () => {
 
     expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness']);
     expect(Object.keys(projections.tautology).sort()).toEqual([
-      'changedFiles', 'changedTestSelectors', 'contractVersion', 'digest', 'headSha', 'lapId',
+      'changedFiles', 'changedTestSelectors', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'preflightEvidence', 'projectionVersion', 'removalContext', 'repairContext',
       'revertedProductionManifest', 'rubric', 'snapshotDigest', 'testSuiteProof',
     ]);
     expect(Object.keys(projections.scope).sort()).toEqual([
-      'acceptedWidenings', 'changedFiles', 'contractVersion', 'digest', 'headSha', 'lapId',
+      'acceptedWidenings', 'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'operatorReseals', 'planBody', 'projectionVersion', 'removalContext',
       'repairContext', 'rubric', 'snapshotDigest',
     ]);
     expect(Object.keys(projections.rootCause).sort()).toEqual([
-      'changedFiles', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
+      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
       'projectionVersion', 'removalContext', 'repairContext', 'rubric', 'snapshotDigest',
     ]);
     expect(Object.keys(projections.completeness).sort()).toEqual([
-      'changedFiles', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
+      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
       'projectionVersion', 'removalContext', 'rubric', 'snapshotDigest',
     ]);
     expect(projections.tautology).toMatchObject({
-      rubric: 'tautology', projectionVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot',
+      rubric: 'tautology', projectionVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
       mergeBase: 'base', headSha: 'head',
       changedFiles: [{
         path: 'src/a.ts', changeKind: 'modified',
@@ -121,6 +121,7 @@ describe('build-review rubric projections', () => {
     }
     for (const projection of Object.values(projections)) {
       expect(projection.contractVersion).toBe('v1');
+      expect(projection.contentDigest).toBe('sha256:content');
       expect(projection.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     }
   });
@@ -150,6 +151,97 @@ describe('build-review rubric projections', () => {
       inputs: { ...forbiddenSource.inputs, repairProvenance: { disposition: 'no_join' } },
     };
     expect(deriveBuildReviewRubricProjections(changedForbiddenProse)).toEqual(first);
+  });
+
+  it('keeps SHA anchors readable while all four projection digests ignore rebase-only metadata', () => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const original = source();
+    const rebasedLapId = parseBuildReviewLapId('lap-rebased')!;
+    const rebased = deriveBuildReviewRubricProjections(source({
+      lapId: rebasedLapId,
+      inputs: {
+        ...original.inputs,
+        baseRef: 'origin/rebased-main',
+        mergeBase: 'rebased-merge-base',
+        sourceSnapshot: {
+          ...original.inputs.sourceSnapshot,
+          digest: 'sha256:rebased-snapshot',
+          baseRef: 'origin/rebased-main',
+          mergeBase: 'rebased-merge-base',
+          headSha: 'rebased-head',
+        },
+      },
+    }));
+
+    for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+      expect(rebased[rubric].digest).toBe(first[rubric].digest);
+      expect(rebased[rubric]).toMatchObject({
+        lapId: rebasedLapId,
+        snapshotDigest: 'sha256:rebased-snapshot',
+        mergeBase: 'rebased-merge-base',
+        headSha: 'rebased-head',
+      });
+    }
+
+    const contentMutations: readonly {
+      readonly name: string;
+      readonly affectedRubrics: readonly (keyof typeof first)[];
+      readonly changed: BuildReviewProjectionSource;
+    }[] = [
+      {
+        name: 'diff text', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
+          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-diff', diff: `${FIXTURE_DIFF}changed`,
+        } } }),
+      },
+      {
+        name: 'plan body', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
+          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-plan', planBody: '# Changed plan\n',
+        } } }),
+      },
+      {
+        name: 'repair context', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
+          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-repair',
+          repairContext: [{ id: 'repair-new', reason: 'command_failed', diagnostic: 'new', rebaseInvalidatedAt: 3 }],
+        } } }),
+      },
+      {
+        name: 'accepted widenings', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
+          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-widening',
+          acceptedWidenings: [{ path: 'src/new.ts', rationale: 'new', taskId: '3', sha: 'new' }],
+        } } }),
+      },
+      {
+        name: 'removal context', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
+          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-removal',
+          removalContext: { deletedFiles: ['new-old.ts'], removedDeclarations: ['new-old'], removedMembers: [] },
+        } } }),
+      },
+      {
+        name: 'tautology preflight evidence', affectedRubrics: ['tautology'],
+        changed: source({ tautology: { ...original.tautology, preflightEvidence: { classification: 'green' } } }),
+      },
+      {
+        name: 'changed test selectors', affectedRubrics: ['tautology'],
+        changed: source({ tautology: { ...original.tautology, changedTestSelectors: ['test/new.test.ts'] } }),
+      },
+    ];
+
+    for (const { name, affectedRubrics, changed } of contentMutations) {
+      const changedProjections = deriveBuildReviewRubricProjections(changed);
+      for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+        const expectation = affectedRubrics.includes(rubric) ? 'not' : '';
+        if (expectation === 'not') {
+          expect(changedProjections[rubric].digest, name).not.toBe(first[rubric].digest);
+        } else {
+          expect(changedProjections[rubric].digest, name).toBe(first[rubric].digest);
+        }
+      }
+    }
   });
 
   it.each([

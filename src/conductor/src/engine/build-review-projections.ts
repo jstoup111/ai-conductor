@@ -61,6 +61,8 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly projectionVersion: 'v1';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
+  /** Stable identity of the source content, independent of commit provenance. */
+  readonly contentDigest: string;
   readonly digest: string;
   /** Anchors for by-reference reads: `git diff <mergeBase>..HEAD -- <path>`. */
   readonly mergeBase: string;
@@ -126,10 +128,17 @@ export function canonicalJson(value: BuildReviewProjectionJson): string {
   return JSON.stringify(canonicalize(value));
 }
 
-/** Version-bound digest of a closed projection (with its digest field excluded). */
+/** Version-bound digest of a closed projection, excluding rebase-only provenance. */
 export function projectionDigest(projection: Omit<BuildReviewRubricProjection, 'digest'> | BuildReviewRubricProjection): string {
-  const { digest: _ignored, ...withoutDigest } = projection as BuildReviewRubricProjection;
-  return `sha256:${createHash('sha256').update(canonicalJson(withoutDigest as unknown as BuildReviewProjectionJson)).digest('hex')}`;
+  const {
+    digest: _ignoredDigest,
+    lapId: _ignoredLapId,
+    snapshotDigest: _ignoredSnapshotDigest,
+    mergeBase: _ignoredMergeBase,
+    headSha: _ignoredHeadSha,
+    ...digestibleProjection
+  } = projection as BuildReviewRubricProjection;
+  return `sha256:${createHash('sha256').update(canonicalJson(digestibleProjection as unknown as BuildReviewProjectionJson)).digest('hex')}`;
 }
 
 function json(value: unknown): BuildReviewProjectionJson {
@@ -190,6 +199,7 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     projectionVersion: descriptor.projectionVersion,
     lapId: source.lapId,
     snapshotDigest: snapshot.digest,
+    contentDigest: snapshot.contentDigest,
     mergeBase: snapshot.mergeBase,
     headSha: snapshot.headSha,
     changedFiles: deriveChangedFileReferences(snapshot.diff),
