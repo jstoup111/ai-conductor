@@ -596,10 +596,12 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **77 variants**. `EventPersister` subscribes to the **48** event types
+`ConductorEvent` defines **86 variants**. `EventPersister` subscribes to the **57** event types
 marked `persist: true` in `event-sinks.ts` and writes only those:
 
-`step_started`, `step_completed`, `step_failed`, `provider_attempt`,
+`build_review_rubric_started`, `build_review_rubric_result`, `build_review_rubric_skipped`,
+`build_review_cache_hit`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
+`step_started`, `deprecated_step`, `step_completed`, `step_failed`, `provider_attempt`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
@@ -608,10 +610,15 @@ marked `persist: true` in `event-sinks.ts` and writes only those:
 `finish_publication_transition`, `finish_publication_blocked`, `finish_publication_disposition`,
 `feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
-`verdict_freshness`, `mode_skip`, `build_stall`, `build_progress`, `build_no_progress`,
-`renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`,
-`build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
+`verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
+`build_no_progress`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
+`parallel_failure`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
+`rebase_changed`, `rebase_gate_invalidated`,
 `unattributed_progress`, `attribution_divergence`, `acceptance_red`.
+
+`build_review_disposition_accepted` and `build_review_disposition_refused` are declared `persist:
+false` deliberately: they are written by the external build-review CLI to its own pipeline-owned
+ledger and tailed onto the live bus, so re-persisting them here would duplicate the same occurrence.
 
 The BUILD-member settle events carry only a member, decision, and closed basis classification:
 `build_member_evidence_reused` is `reuse` with `fingerprint-match`;
@@ -638,15 +645,16 @@ Readers: `conduct-ts inline --report`, `computeCostRollup` (which feeds the ship
 block), the daemon signal emitters, the engineer-loop signal assembler, and the `retro` skill by prose.
 No dashboard and no `kpi` path reads it.
 
-> **Known limitation.** The other 28 event types — including `gate_verdict`, `kickback`, `loop_halt`,
+> **Known limitation.** The other 29 event types — including `gate_verdict`, `loop_halt`,
 > `loop_converged`, `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`,
-> `ci_failed`, and every `rebase_*` variant — are emitted for real but never persisted, because the
-> emitter dispatches only to handlers registered for that exact type. Three read paths are structurally
-> dead as a result: `cost-rollup.halts` counts `loop_halt` and is therefore **permanently 0** — and that
-> zero is committed verbatim into every shipped record's `## Cost` block and re-read by `conduct-ts kpi`;
-> `aggregateKickbacks` and `aggregateHalts` always return `[]`, so `--report` shows no kickbacks and no
-> halts however many occurred. Read halts from `.pipeline/HALT` and the daemon log instead.
-> Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+> `ci_failed`, and every remaining `rebase_*` variant not listed above — are emitted for real but
+> never persisted, because the emitter dispatches only to handlers registered for that exact type.
+> One read path is structurally dead as a result: `cost-rollup.halts` counts `loop_halt` and is
+> therefore **permanently 0** — and that zero is committed verbatim into every shipped record's
+> `## Cost` block and re-read by `conduct-ts kpi`. `aggregateHalts` always returns `[]`, so `--report`
+> shows no halts however many occurred; read halts from `.pipeline/HALT` and the daemon log instead.
+> `kickback` is persisted, so `aggregateKickbacks` and `--report`'s kickback table do reflect real
+> occurrences. Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
 `build_progress` events carry an additional `tickReason` (`task-delta` | `head-moved` |
 `heartbeat`) and an explicit `headMoved` boolean, letting a reader distinguish "HEAD did not
