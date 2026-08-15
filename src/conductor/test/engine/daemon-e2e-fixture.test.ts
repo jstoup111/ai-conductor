@@ -333,7 +333,10 @@ describe('daemon E2E fixture', () => {
           pipelineDir,
           planPath,
           providerKey: 'codex',
-          config: { build_review: { maxParallel: 4 } },
+          // This fixture has no runnable scoped-test command in its isolated
+          // temporary repository. Disable only the tautology branch; the
+          // other three fan-out branches still exercise the daemon join.
+          config: { build_review: { maxParallel: 4, rubrics: { tautology: { enabled: false } } } },
           buildReviewInputOptions: {
             inspectTestSuite: async () => ({
               status: 'CURRENT', evidence: { provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(), outcome: 'PASS' },
@@ -412,7 +415,7 @@ describe('daemon E2E fixture', () => {
       }).toEqual({
         claimed: true,
         processed: [slug],
-        providerCalls: 6,
+        providerCalls: 5,
         build: 'done',
         buildReview: 'done',
         finish: 'done',
