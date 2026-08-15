@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 
 import {
   BUILD_REVIEW_REPAIR_LEDGER,
+  REMEDIATION_DIAGNOSTIC_CAP_BYTES,
   diagnosticOverlapsBaseAdvance,
   failureMatchesBaseAdvance,
   readBaseAdvanceHistory,
@@ -132,6 +133,39 @@ describe('recordTestSuiteRemediation', () => {
       ]),
     ]);
     expect(await readTestSuiteRemediations(dir)).toHaveLength(2);
+  });
+
+  it('bounds an oversized diagnostic at creation with a truncation marker while identity stays full-message-derived', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'events.jsonl'), `${JSON.stringify({
+      type: 'rebase_changed',
+      allChangedPaths: ['agents/planner.md'],
+      ts: '2026-08-13T10:01:00.000Z',
+    })}\n`);
+    const observedAt = Date.parse('2026-08-13T10:02:00.000Z');
+    const sharedPrefix = `agents/planner.md failed: ${'x'.repeat(10_000)}`;
+
+    const untouched = await recordTestSuiteRemediation(dir, 'test_suite', {
+      reason: 'missing_test', message: 'agents/planner.md has no matching test', observedAt,
+    });
+    expect(untouched?.diagnostic).toBe('agents/planner.md has no matching test');
+
+    const capped = await recordTestSuiteRemediation(dir, 'test_suite', {
+      reason: 'missing_test', message: `${sharedPrefix} SUFFIX-A`, observedAt,
+    });
+    expect(Buffer.byteLength(capped!.diagnostic, 'utf8')).toBeLessThanOrEqual(REMEDIATION_DIAGNOSTIC_CAP_BYTES);
+    expect(capped!.diagnostic.startsWith('agents/planner.md failed:')).toBe(true);
+    expect(capped!.diagnostic).toMatch(/\[\.\.\.truncated \d+ bytes\.\.\.\]/);
+    expect(capped!.diagnostic.endsWith('SUFFIX-A')).toBe(true);
+
+    // Identity derives from the FULL message before truncation: two failures
+    // that differ only past the cap remain distinct records, so truncation
+    // never collapses or forks dedup semantics.
+    const cappedSibling = await recordTestSuiteRemediation(dir, 'test_suite', {
+      reason: 'missing_test', message: `${sharedPrefix} SUFFIX-B`, observedAt,
+    });
+    expect(cappedSibling!.id).not.toBe(capped!.id);
+    expect(await readTestSuiteRemediations(dir)).toHaveLength(3);
   });
 
   it('preserves concurrent distinct repairs and surfaces an unacquirable lock', async () => {

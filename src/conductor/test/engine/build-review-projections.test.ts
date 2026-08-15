@@ -53,10 +53,11 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
     } as unknown as BuildReviewProjectionSource['inputs'],
     tautology: {
       changedTestSelectors: ['test/b.test.ts', 'test/a.test.ts'],
-      revertedProductionPatch: 'revert patch',
+      revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }],
       preflightEvidence: {
-        classification: 'red', command: 'npm test',
+        classification: 'red',
         eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
+        scopedRun: { exitCode: 1, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
       },
     },
     ...overrides,
@@ -71,7 +72,7 @@ describe('build-review rubric projections', () => {
     expect(Object.keys(projections.tautology).sort()).toEqual([
       'changedFiles', 'changedTestSelectors', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'preflightEvidence', 'projectionVersion', 'removalContext', 'repairContext',
-      'revertedProductionPatch', 'rubric', 'snapshotDigest', 'testSuiteProof',
+      'revertedProductionManifest', 'rubric', 'snapshotDigest', 'testSuiteProof',
     ]);
     expect(Object.keys(projections.scope).sort()).toEqual([
       'acceptedWidenings', 'changedFiles', 'contractVersion', 'digest', 'headSha', 'lapId',
@@ -95,7 +96,8 @@ describe('build-review rubric projections', () => {
       }],
       removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
       changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
-      revertedProductionPatch: 'revert patch', preflightEvidence: expect.any(Object), repairContext: expect.any(Array),
+      revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }],
+      preflightEvidence: expect.any(Object), repairContext: expect.any(Array),
     });
     expect(projections.tautology.preflightEvidence).toMatchObject({
       eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],

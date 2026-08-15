@@ -68,6 +68,38 @@ export interface TautologyPreflightDependencies {
   readonly abortSignal?: AbortSignal;
 }
 
+/**
+ * By-reference identity of one changed production file whose merge-base form
+ * was materialized into the counterfactual checkout. Content never travels in
+ * this structure: a grader recovers it with `git show <mergeBase>:<path>`.
+ */
+export interface RevertedProductionFileReference {
+  readonly path: string;
+  /** Git blob identity of the merge-base form (`git rev-parse <mergeBase>:<path>`). */
+  readonly mergeBaseBlobSha: string;
+}
+
+/**
+ * The engine-derived, exit-code-based verdict of the reverted-tree scoped
+ * run. Every field is bounded by construction: fixed-size scalars, the
+ * selector list actually executed, and a capped head+tail output excerpt.
+ * Raw stdout/stderr never travel wholesale.
+ */
+export interface TautologyScopedRunEvidence {
+  readonly exitCode: number;
+  /** Portable across any runner: derived from exit code and closed run kinds. */
+  readonly runKind: 'passed' | 'test-failure' | 'collection-failure';
+  /** The counterfactual selectors the scoped command actually executed. */
+  readonly ranSelectors: readonly string[];
+  /**
+   * Bounded head+tail excerpt of the combined stdout/stderr, present only for
+   * failed runs so the grader can tell an assertion failure from infra flavor.
+   * Empty on green runs. Capped at TAUTOLOGY_EXCERPT_CAP_BYTES with an
+   * explicit `[...truncated N bytes...]` marker.
+   */
+  readonly failureExcerpt: string;
+}
+
 export interface TautologyCompletedPreflight {
       readonly classification: 'red' | 'stayed-green' | 'approved-exception';
       readonly exception?: 'empty-test-set' | 'removal-maintenance';
@@ -75,11 +107,13 @@ export interface TautologyCompletedPreflight {
       readonly cacheProvenance: 'hit' | 'miss';
       readonly changedPaths: readonly string[];
       readonly changedTestSelectors: readonly string[];
-      readonly revertedProductionPatch: readonly { path: string; mergeBaseContent: string }[];
+      /** Content-free manifest of the reverted production files. */
+      readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
       /** Exact per-selector removal evidence used to exclude a changed test. */
       readonly eligibleSelectorRemovals?: readonly RemovalMaintenanceSelectorEvidence[];
       readonly sourceIdentities: { readonly mergeBase: string; readonly headSha: string };
-      readonly output: { readonly stdout: string; readonly stderr: string };
+      /** Absent when no counterfactual command ran (approved exceptions). */
+      readonly scopedRun?: TautologyScopedRunEvidence;
 }
 
 export type TautologyPreflightResult = TautologyCompletedPreflight | {
@@ -89,6 +123,36 @@ export type TautologyPreflightResult = TautologyCompletedPreflight | {
       readonly changedTestSelectors: readonly string[];
       readonly sourceIdentities: { readonly mergeBase: string; readonly headSha: string };
     };
+
+/** Total byte cap for a scoped-run failure excerpt (head+tail combined). */
+export const TAUTOLOGY_EXCERPT_CAP_BYTES = 16_384;
+/** Reserved for the truncation marker so the excerpt never exceeds the cap. */
+const EXCERPT_MARKER_RESERVE_BYTES = 64;
+
+/**
+ * Bound raw runner output by byte position only — never by parsing runner
+ * structure — so the excerpt stays stack-agnostic across pytest/jest/go test/
+ * anything. Over-cap input keeps its head and tail with an explicit
+ * `[...truncated N bytes...]` marker in between; the result never exceeds
+ * `capBytes`.
+ */
+export function boundedHeadTailExcerpt(text: string, capBytes = TAUTOLOGY_EXCERPT_CAP_BYTES): string {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.byteLength <= capBytes) return text;
+  const half = Math.max(0, Math.floor((capBytes - EXCERPT_MARKER_RESERVE_BYTES) / 2));
+  const truncated = bytes.byteLength - half * 2;
+  const head = bytes.subarray(0, half).toString('utf8');
+  const tail = bytes.subarray(bytes.byteLength - half).toString('utf8');
+  return `${head}\n[...truncated ${truncated} bytes...]\n${tail}`;
+}
+
+/** Git blob identity of `content` — identical to `git hash-object` output. */
+function gitBlobSha(content: string): string {
+  return createHash('sha1')
+    .update(`blob ${Buffer.byteLength(content, 'utf8')}\0`)
+    .update(content, 'utf8')
+    .digest('hex');
+}
 
 function changedPaths(diff: string): string[] {
   const paths = new Set<string>();
@@ -246,8 +310,7 @@ export async function materializeTautologyPreflight(
   if (deps.approvedException === 'empty-test-set' && classified.tests.length === 0) {
     const completed: TautologyCompletedPreflight = {
       classification: 'approved-exception', exception: deps.approvedException, cacheable: true, cacheProvenance: 'miss',
-      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionPatch: [], eligibleSelectorRemovals, sourceIdentities,
-      output: { stdout: '', stderr: '' },
+      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionManifest: [], eligibleSelectorRemovals, sourceIdentities,
     };
     try {
       await deps.writeCache?.(key, completed);
@@ -259,8 +322,7 @@ export async function materializeTautologyPreflight(
   if (deps.approvedException === 'removal-maintenance' && counterfactualSelectors.length === 0) {
     const completed: TautologyCompletedPreflight = {
       classification: 'approved-exception', exception: 'removal-maintenance', cacheable: true, cacheProvenance: 'miss',
-      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionPatch: [], eligibleSelectorRemovals, sourceIdentities,
-      output: { stdout: '', stderr: '' },
+      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionManifest: [], eligibleSelectorRemovals, sourceIdentities,
     };
     try { await deps.writeCache?.(key, completed); return completed; } catch { return failure('cache-write-failed', paths, classified.tests, sourceIdentities); }
   }
@@ -273,7 +335,10 @@ export async function materializeTautologyPreflight(
     if (aborted(signal)) {
       result = failure('aborted', paths, classified.tests, sourceIdentities);
     }
-    const patch: Array<{ path: string; mergeBaseContent: string }> = [];
+    // Merge-base bytes are needed only transiently, one file at a time, to
+    // materialize the reverted checkout. Only the content-free manifest — path
+    // plus git blob identity — survives into the completed preflight.
+    const manifest: RevertedProductionFileReference[] = [];
     for (const path of result ? [] : classified.production) {
       const mergeBaseContent = await deps.readMergeBaseFile(path);
       if (aborted(signal)) {
@@ -288,7 +353,7 @@ export async function materializeTautologyPreflight(
         await (deps.removeFile ?? ((target) => rm(target, { force: true })))(join(checkout, path));
         continue;
       }
-      patch.push({ path, mergeBaseContent });
+      manifest.push({ path, mergeBaseBlobSha: gitBlobSha(mergeBaseContent) });
       await deps.writeFile(join(checkout, path), mergeBaseContent);
       if (aborted(signal)) {
         result = failure('aborted', paths, classified.tests, sourceIdentities);
@@ -313,10 +378,17 @@ export async function materializeTautologyPreflight(
             cacheProvenance: 'miss',
             changedPaths: paths,
             changedTestSelectors: classified.tests,
-            revertedProductionPatch: patch,
+            revertedProductionManifest: manifest,
             eligibleSelectorRemovals,
             sourceIdentities,
-            output: { stdout: execution.stdout, stderr: execution.stderr },
+            scopedRun: {
+              exitCode: execution.exitCode,
+              runKind: 'kind' in execution ? execution.kind : 'passed',
+              ranSelectors: counterfactualSelectors,
+              failureExcerpt: execution.exitCode === 0
+                ? ''
+                : boundedHeadTailExcerpt([execution.stdout, execution.stderr].filter((chunk) => chunk.length > 0).join('\n')),
+            },
           };
         }
       } catch {

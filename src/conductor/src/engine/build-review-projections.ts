@@ -4,6 +4,9 @@ import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewLapId } from './build-review-domain.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
+import type { RevertedProductionFileReference } from './build-review-tautology-preflight.js';
+
+export type { RevertedProductionFileReference } from './build-review-tautology-preflight.js';
 
 export type BuildReviewProjectionJson =
   | null
@@ -15,7 +18,12 @@ export type BuildReviewProjectionJson =
 
 export interface BuildReviewTautologyProjectionInput {
   readonly changedTestSelectors: readonly string[];
-  readonly revertedProductionPatch: string;
+  /**
+   * Content-free identity of each reverted production file. The grader
+   * recovers any file's merge-base bytes with `git show <mergeBase>:<path>`;
+   * file content itself never travels in a projection.
+   */
+  readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
   /** Includes preflight's eligible-selector-to-removal mapping when present. */
   readonly preflightEvidence: BuildReviewProjectionJson;
 }
@@ -66,7 +74,8 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
 export interface TautologyProjection extends CommonProjection<'tautology'> {
   readonly changedTestSelectors: readonly string[];
   readonly testSuiteProof: BuildReviewProjectionJson;
-  readonly revertedProductionPatch: string;
+  /** By-reference reverted-production identity; never embedded file content. */
+  readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
   readonly preflightEvidence: BuildReviewProjectionJson;
   /** Rebase-repair evidence is visible only to the closed Tautology contract. */
   readonly repairContext: readonly BuildReviewProjectionJson[];
@@ -199,7 +208,9 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     ...common(source, 'tautology'),
     changedTestSelectors: canonicalArray(source.tautology.changedTestSelectors) as readonly string[],
     testSuiteProof: canonicalize(json(inputs.testSuiteProof)),
-    revertedProductionPatch: source.tautology.revertedProductionPatch,
+    revertedProductionManifest: canonicalArray(
+      source.tautology.revertedProductionManifest as unknown as readonly BuildReviewProjectionJson[],
+    ) as unknown as readonly RevertedProductionFileReference[],
     // Preserve the engine-derived eligible-selector-to-removal mapping inside
     // the sealed preflight evidence rather than reducing it to selector names.
     preflightEvidence: canonicalize(source.tautology.preflightEvidence),

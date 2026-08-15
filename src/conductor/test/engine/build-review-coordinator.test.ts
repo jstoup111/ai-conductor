@@ -138,7 +138,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-        revertedProductionPatch: [], sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
       }),
       readCache: async () => undefined,
       dispatchModel,
@@ -164,7 +164,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-        revertedProductionPatch: [], sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
       }),
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
         version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v1" as const,
@@ -215,7 +215,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-        revertedProductionPatch: [], sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
       }),
       readCache: async () => undefined,
       dispatchModel: async (branch, projection) => ({
@@ -247,8 +247,9 @@ describe("build-review coordinator: frozen fan-out", () => {
     const preflight = vi.fn(async () => ({
       classification: "red" as const, cacheable: true as const, cacheProvenance: "miss" as const,
       changedPaths: ["src/a.ts", "test/a.test.ts"], changedTestSelectors: ["test/a.test.ts"],
-      revertedProductionPatch: [{ path: "src/a.ts", mergeBaseContent: "base" }],
-      sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+      revertedProductionManifest: [{ path: "src/a.ts", mergeBaseBlobSha: "e79120aab4682bfe81153595c7d2ec1ad3bd3dd8" }],
+      sourceIdentities: { mergeBase: "base", headSha: "head" },
+      scopedRun: { exitCode: 1 as number, runKind: "test-failure" as const, ranSelectors: ["test/a.test.ts"], failureExcerpt: "AssertionError: expected 2 to be 1" },
     }));
     const cachedScope = {
       version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v1" as const,
@@ -275,6 +276,57 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(result.branches.map((branch) => branch.rubric)).toEqual(["tautology", "scope", "rootCause", "completeness"]);
     expect(result.branches.find((branch) => branch.rubric === "scope")).toMatchObject({ kind: "cache-hit" });
     expect(dispatchModel.mock.calls.every(([, projection]) => !("dispositions" in projection) && !("siblings" in projection))).toBe(true);
+  });
+
+  it("projects a content-free tautology payload: manifest by reference, verdict fields verbatim, no raw run output", async () => {
+    const projected: unknown[] = [];
+    const dispatchModel = vi.fn(async (branch, projection) => {
+      if (branch.rubric === "tautology") projected.push(projection);
+      return {
+        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+      };
+    });
+    const rawRunOutput = `raw runner output ${"x".repeat(4_096)}`;
+    await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: async () => ({
+        classification: "red" as const, cacheable: true as const, cacheProvenance: "miss" as const,
+        changedPaths: ["src/a.ts", "test/a.test.ts"], changedTestSelectors: ["test/a.test.ts"],
+        revertedProductionManifest: [{ path: "src/a.ts", mergeBaseBlobSha: "e79120aab4682bfe81153595c7d2ec1ad3bd3dd8" }],
+        eligibleSelectorRemovals: [],
+        sourceIdentities: { mergeBase: "base", headSha: "head" },
+        scopedRun: {
+          exitCode: 1, runKind: "test-failure" as const, ranSelectors: ["test/a.test.ts"],
+          failureExcerpt: rawRunOutput.slice(0, 64),
+        },
+      }),
+      readCache: async () => undefined, dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+
+    expect(projected).toHaveLength(1);
+    const projection = projected[0] as Record<string, unknown>;
+    // Manifest is by reference only — no merge-base content field survives projection.
+    expect(projection.revertedProductionManifest).toEqual([
+      { path: "src/a.ts", mergeBaseBlobSha: "e79120aab4682bfe81153595c7d2ec1ad3bd3dd8" },
+    ]);
+    const serialized = JSON.stringify(projection);
+    expect(serialized).not.toContain("mergeBaseContent");
+    expect(serialized).not.toContain("revertedProductionPatch");
+    expect(serialized).not.toContain(rawRunOutput);
+    // The engine-derived verdict fields travel verbatim inside preflightEvidence.
+    expect(projection.preflightEvidence).toMatchObject({
+      classification: "red",
+      changedPaths: ["src/a.ts", "test/a.test.ts"],
+      changedTestSelectors: ["test/a.test.ts"],
+      sourceIdentities: { mergeBase: "base", headSha: "head" },
+      scopedRun: {
+        exitCode: 1, runKind: "test-failure", ranSelectors: ["test/a.test.ts"],
+        failureExcerpt: rawRunOutput.slice(0, 64),
+      },
+    });
   });
 
   it("records a preflight infrastructure failure without dispatching Tautology while sibling rubrics settle", async () => {

@@ -20,9 +20,13 @@ Use only the supplied projection version `v1`. Its closed input contains:
   ranges, anchored by `mergeBase` and `headSha`) and changed-test selectors;
 - diff-derived removal evidence (`removalContext`), never an exemption;
 - the current code-valid `test_suite` PASS;
-- the reverted-production patch; and
-- typed preflight evidence, including source identities, the scoped command, bounded output, and
-  its result classification.
+- the reverted-production manifest (`revertedProductionManifest`): per reverted production file,
+  its path and merge-base git blob sha. File content is never embedded — recover any file's
+  reverted (merge-base) form with `git show <mergeBase>:<path>`; and
+- typed preflight evidence, including source identities, its result classification, and the
+  scoped-run verdict (exit code, run kind, the selectors actually executed) with a bounded
+  head+tail failure excerpt (explicit `[...truncated N bytes...]` marker) when the reverted-tree
+  run failed. Raw runner output is never embedded wholesale.
 - engine-recorded rebase-repair context, when a changed test repairs stale base-state expectations.
 
 The session runs inside the feature worktree. The diff content is not embedded: read the

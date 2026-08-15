@@ -4,6 +4,8 @@ import {
   materializeTautologyPreflight,
   classifyTautologyPaths,
   deriveRemovalMaintenanceSelectors,
+  boundedHeadTailExcerpt,
+  TAUTOLOGY_EXCERPT_CAP_BYTES,
 } from '../../src/engine/build-review-tautology-preflight.js';
 import { classifyTautologyScopedFailure } from '../../src/engine/step-runners.js';
 
@@ -68,8 +70,12 @@ describe('build-review Tautology preflight', () => {
     expect(result).toMatchObject({
       classification: 'red', changedTestSelectors: ['test/a.test.ts'],
       sourceIdentities: { mergeBase: 'base-sha', headSha: 'head-sha' },
-      revertedProductionPatch: [{ path: 'src/a.ts', mergeBaseContent: 'BASE production' }],
+      // Content-free manifest: the sha is git's own blob identity for
+      // 'BASE production' (pinned via `git hash-object`), never the bytes.
+      revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: '6d072882cd6d41f5e04eda24ee5bbafac54c2c77' }],
     });
+    // The merge-base file content must not survive anywhere in the completed evidence.
+    expect(JSON.stringify(result)).not.toContain('BASE production');
     expect(calls).toEqual([
       'checkout:/feature/.pipeline/build-review-preflight/head-sha:head-sha',
       'write:/feature/.pipeline/build-review-preflight/head-sha/src/a.ts:BASE production',
@@ -154,7 +160,7 @@ describe('build-review Tautology preflight', () => {
 
     expect(result).toMatchObject({
       classification: 'red', changedTestSelectors: ['test/engine/build-review-cli.test.ts'],
-      revertedProductionPatch: [{ path: 'src/engine/build-review.ts', mergeBaseContent: 'BASE production' }],
+      revertedProductionManifest: [{ path: 'src/engine/build-review.ts', mergeBaseBlobSha: '6d072882cd6d41f5e04eda24ee5bbafac54c2c77' }],
     });
     expect(readMergeBaseFile).toHaveBeenCalledTimes(1);
     expect(readMergeBaseFile).toHaveBeenCalledWith('src/engine/build-review.ts');
@@ -238,7 +244,7 @@ describe('build-review Tautology preflight', () => {
   });
 
   it('reuses an exact cached completed result without another checkout or scoped command', async () => {
-    const cached = { classification: 'red', cacheable: true, cacheProvenance: 'miss', changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'], revertedProductionPatch: [{ path: 'src/a.ts', mergeBaseContent: 'BASE' }], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, output: { stdout: '', stderr: '' } } as const;
+    const cached = { classification: 'red', cacheable: true, cacheProvenance: 'miss', changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'], revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, scopedRun: { exitCode: 1, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'RED' } } as const;
     const createCheckout = vi.fn(async () => {});
     const runScoped = vi.fn(async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: '', stderr: '' }));
     const result = await materializeTautologyPreflight({
@@ -318,6 +324,61 @@ describe('build-review Tautology preflight', () => {
     expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'aborted' });
     expect(removeCheckout).toHaveBeenCalledOnce();
     expect(JSON.stringify({ 'src/a.ts': 'HEAD production', 'test/a.test.ts': 'HEAD test' })).toBe(liveBytes);
+  });
+
+  it('projects the scoped-run verdict verbatim with a bounded failure excerpt instead of raw output', async () => {
+    const noise = 'x'.repeat(40_000);
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: 'test-failure' as const, exitCode: 7, stdout: `HEAD-of-run ${noise}`, stderr: 'tail-of-run' }),
+      removeCheckout: async () => {},
+    });
+
+    if (result.classification !== 'red') throw new Error('expected RED evidence');
+    expect(result.scopedRun).toMatchObject({ exitCode: 7, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'] });
+    const excerpt = result.scopedRun!.failureExcerpt;
+    expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(TAUTOLOGY_EXCERPT_CAP_BYTES);
+    expect(excerpt).toContain('HEAD-of-run');
+    expect(excerpt).toContain('tail-of-run');
+    expect(excerpt).toMatch(/\[\.\.\.truncated \d+ bytes\.\.\.\]/);
+    // Raw stdout/stderr never travel wholesale.
+    expect(JSON.stringify(result)).not.toContain(noise);
+  });
+
+  it('keeps a stayed-green result tiny: no failure excerpt even when the run printed output', async () => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ exitCode: 0, stdout: 'verbose reporter output '.repeat(4_096), stderr: '' }),
+      removeCheckout: async () => {},
+    });
+
+    if (result.classification !== 'stayed-green') throw new Error('expected stayed-green evidence');
+    expect(result.scopedRun).toEqual({ exitCode: 0, runKind: 'passed', ranSelectors: ['test/a.test.ts'], failureExcerpt: '' });
+    expect(Buffer.byteLength(JSON.stringify(result), 'utf8')).toBeLessThan(2_048);
+  });
+
+  it('bounds head+tail excerpts at the cap with an explicit truncation marker and passes small text through', () => {
+    expect(boundedHeadTailExcerpt('short output')).toBe('short output');
+    expect(boundedHeadTailExcerpt('exact', 5)).toBe('exact');
+
+    const text = `${'H'.repeat(10_000)}${'M'.repeat(10_000)}${'T'.repeat(10_000)}`;
+    const excerpt = boundedHeadTailExcerpt(text);
+    expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(TAUTOLOGY_EXCERPT_CAP_BYTES);
+    expect(excerpt.startsWith('H')).toBe(true);
+    expect(excerpt.endsWith('T')).toBe(true);
+    const marker = /\[\.\.\.truncated (\d+) bytes\.\.\.\]/.exec(excerpt);
+    expect(marker).not.toBeNull();
+    // The marker accounts for every byte not retained by head or tail.
+    const retained = Buffer.byteLength(excerpt.replace(/\n\[\.\.\.truncated \d+ bytes\.\.\.\]\n/, ''), 'utf8');
+    expect(retained + Number(marker![1])).toBe(Buffer.byteLength(text, 'utf8'));
+
+    const small = boundedHeadTailExcerpt(text, 2_048);
+    expect(Buffer.byteLength(small, 'utf8')).toBeLessThanOrEqual(2_048);
+    expect(small).toMatch(/\[\.\.\.truncated \d+ bytes\.\.\.\]/);
   });
 
   it('returns cleanup failure even when the underlying scoped run is RED', async () => {

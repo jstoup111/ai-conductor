@@ -22,6 +22,7 @@ import {
   deriveBuildReviewRubricProjections,
   type BuildReviewProjectionJson,
   type BuildReviewRubricProjection,
+  type BuildReviewTautologyProjectionInput,
 } from "./build-review-projections.js";
 import type { TautologyPreflightResult } from "./build-review-tautology-preflight.js";
 import { runAuxiliaryGroupBranches } from "./group-core.js";
@@ -108,17 +109,44 @@ export interface BuildReviewCoordinationInput {
     | "build_review_rubric_infrastructure_failure" }>) => Promise<void>;
 }
 
-function preflightProjection(preflight: TautologyPreflightResult): {
-  readonly changedTestSelectors: readonly string[];
-  readonly revertedProductionPatch: string;
-  readonly preflightEvidence: BuildReviewProjectionJson;
-} {
+/**
+ * Project the preflight into its closed, bounded prompt form. Every field is
+ * explicitly named and bounded by construction: the reverted production files
+ * travel as a content-free path+blob-sha manifest (the grader recovers bytes
+ * with `git show <mergeBase>:<path>`), and the scoped run travels as its
+ * exit-code verdict plus a capped failure excerpt — never raw stdout/stderr
+ * or merge-base file content, and never the same evidence twice.
+ */
+function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTautologyProjectionInput {
+  if (preflight.classification === "infrastructure-failure") {
+    return {
+      changedTestSelectors: preflight.changedTestSelectors,
+      revertedProductionManifest: [],
+      preflightEvidence: {
+        classification: preflight.classification,
+        reason: preflight.reason,
+        changedPaths: preflight.changedPaths,
+        changedTestSelectors: preflight.changedTestSelectors,
+        sourceIdentities: preflight.sourceIdentities,
+      },
+    };
+  }
   return {
     changedTestSelectors: preflight.changedTestSelectors,
-    revertedProductionPatch: "revertedProductionPatch" in preflight
-      ? JSON.stringify(preflight.revertedProductionPatch)
-      : "[]",
-    preflightEvidence: preflight as unknown as BuildReviewProjectionJson,
+    revertedProductionManifest: preflight.revertedProductionManifest,
+    preflightEvidence: {
+      classification: preflight.classification,
+      ...(preflight.exception !== undefined ? { exception: preflight.exception } : {}),
+      changedPaths: preflight.changedPaths,
+      changedTestSelectors: preflight.changedTestSelectors,
+      ...(preflight.eligibleSelectorRemovals !== undefined
+        ? { eligibleSelectorRemovals: preflight.eligibleSelectorRemovals as unknown as BuildReviewProjectionJson }
+        : {}),
+      sourceIdentities: preflight.sourceIdentities,
+      ...(preflight.scopedRun !== undefined
+        ? { scopedRun: preflight.scopedRun as unknown as BuildReviewProjectionJson }
+        : {}),
+    },
   };
 }
 
@@ -186,7 +214,7 @@ export async function coordinateBuildReviewRubrics(
     lapId: input.lapId,
     inputs: input.inputs,
     tautology: preflight ? preflightProjection(preflight) : {
-      changedTestSelectors: [], revertedProductionPatch: "[]", preflightEvidence: { classification: "not-requested" },
+      changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" },
     },
   });
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();

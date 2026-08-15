@@ -8,6 +8,7 @@ export interface SinkDeclaration {
 
 export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_review_rubric_started: { render: false, persist: true, audit: false },
+  build_review_rubric_prompt: { render: false, persist: true, audit: false },
   build_review_rubric_result: { render: false, persist: true, audit: false },
   build_review_rubric_skipped: { render: false, persist: true, audit: false },
   build_review_cache_hit: { render: false, persist: true, audit: false },

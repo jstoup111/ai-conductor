@@ -143,6 +143,8 @@ export interface ProviderAttemptEvent {
 
 export type ConductorEvent =
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
+  /** Serialized rubric-prompt size at dispatch — regression visibility for projection bloat. */
+  | { type: 'build_review_rubric_prompt'; rubric: string; lapId: string; promptBytes: number }
   | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }
   | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
   | { type: 'build_review_cache_hit'; rubric: string; lapId: string }

@@ -1888,6 +1888,14 @@ export class DefaultStepRunner implements StepRunner {
         `Return exactly one JSON judged result for rubric ${branch.rubric}: a single JSON object whose top-level field \`kind\` is exactly the string "judged" (not \`result\`, not any other field name), whose \`rubric\` is "${branch.rubric}", whose \`contractVersion\` is "v1", whose \`lapId\` and \`snapshotDigest\` echo the projection's values verbatim, and whose \`findings\` is an array. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
         JSON.stringify(projection),
       ].join('\n\n');
+    // Regression visibility for prompt bloat (#projection-size): record the
+    // serialized rubric-prompt byte size on the event spine, per dispatch.
+    await this.events?.emit({
+      type: 'build_review_rubric_prompt',
+      rubric: branch.rubric,
+      lapId: projection.lapId,
+      promptBytes: Buffer.byteLength(rubricPrompt, 'utf8'),
+    });
     if (this.providerRuntimes && this.sessionStore) {
       const safety = this.candidateSafetyFor('build_review');
       const result = await this.dispatchProviderWithLifecycleSupervision(
@@ -1953,9 +1961,8 @@ export class DefaultStepRunner implements StepRunner {
         cacheProvenance: 'miss' as const,
         changedPaths: paths,
         changedTestSelectors: [],
-        revertedProductionPatch: [],
+        revertedProductionManifest: [],
         sourceIdentities: { mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha },
-        output: { stdout: '', stderr: '' },
       };
     }
     const controller = new AbortController();
