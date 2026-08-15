@@ -25,9 +25,10 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/^enforcement: gating$/m);
     expect(skill).toMatch(/^phase: build$/m);
 
-    expect(skill).toMatch(/projection version.*`v1`/i);
+    expect(skill).toMatch(/projection version.*`v2`/i);
     expect(skill).toMatch(/lap (?:ID|identity)/i);
     expect(skill).toMatch(/snapshot digest/i);
+    expect(skill).toMatch(/`contentDigest`/);
     expect(skill).toMatch(/current.*`test_suite`.*PASS/i);
     expect(skill).toMatch(/typed.*preflight evidence/i);
     expect(skill).toMatch(/changed-test selectors/i);
@@ -62,9 +63,10 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/^enforcement: gating$/m);
     expect(skill).toMatch(/^phase: build$/m);
 
-    expect(skill).toMatch(/projection version.*`v1`/i);
+    expect(skill).toMatch(/projection version.*`v2`/i);
     expect(skill).toMatch(/lap (?:ID|identity)/i);
     expect(skill).toMatch(/snapshot digest/i);
+    expect(skill).toMatch(/`contentDigest`/);
     expect(skill).toMatch(/changed diff/i);
     expect(skill).toMatch(/approved plan/i);
     expect(skill).toMatch(/repair context/i);
@@ -99,9 +101,10 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/^enforcement: gating$/m);
     expect(skill).toMatch(/^phase: build$/m);
 
-    expect(skill).toMatch(/projection version.*`v1`/i);
+    expect(skill).toMatch(/projection version.*`v2`/i);
     expect(skill).toMatch(/lap (?:ID|identity)/i);
     expect(skill).toMatch(/snapshot digest/i);
+    expect(skill).toMatch(/`contentDigest`/);
     expect(skill).toMatch(/changed diff/i);
     expect(skill).toMatch(/approved plan/i);
     expect(skill).toMatch(/repair context/i);
@@ -129,9 +132,10 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/^enforcement: gating$/m);
     expect(skill).toMatch(/^phase: build$/m);
 
-    expect(skill).toMatch(/projection version.*`v1`/i);
+    expect(skill).toMatch(/projection version.*`v2`/i);
     expect(skill).toMatch(/lap (?:ID|identity)/i);
     expect(skill).toMatch(/snapshot digest/i);
+    expect(skill).toMatch(/`contentDigest`/);
     expect(skill).toMatch(/full changed diff/i);
     expect(skill).toMatch(/approved plan/i);
     expect(skill).toMatch(/holistically/i);
