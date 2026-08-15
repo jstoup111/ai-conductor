@@ -1,9 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import {
   parseArgs,
   createProgram,
@@ -13,8 +10,6 @@ import {
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
 } from '../../src/cli.js';
-
-const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 describe('CLI', () => {
   it('detects only the explicit read-only build-review findings grammar', () => {
@@ -94,27 +89,13 @@ describe('CLI', () => {
     expect(() => program.parse(['node', 'conduct', 'validate-wired-into'])).toThrow();
     expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/unknown command ['"]?validate-wired-into/i));
 
-    const dir = mkdtempSync(join(tmpdir(), 'conductor-cli-'));
-    const stderrPath = join(dir, 'stderr');
-    const stderrFd = openSync(stderrPath, 'w');
-    try {
-      try {
-        const result = await execa(
-          process.execPath,
-          ['--import', 'tsx', join(CONDUCTOR_ROOT, 'src', 'index.ts'), 'validate-wired-into'],
-          // execa's type permits only inherited fd 1/2, while Node's spawn
-          // accepts this file descriptor. A file keeps console.error durable
-          // across the intentional immediate process.exit().
-          { cwd: CONDUCTOR_ROOT, reject: false, stderr: stderrFd as unknown as 1 },
-        );
-        expect(result.exitCode).toBe(1);
-      } finally {
-        closeSync(stderrFd);
-      }
-      expect(readFileSync(stderrPath, 'utf8')).toMatch(/unknown command ['"]?validate-wired-into/i);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const result = await execa(
+      process.execPath,
+      ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'validate-wired-into'],
+      { reject: false, all: true },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.all).toMatch(/unknown command ['"]?validate-wired-into/i);
   });
 
   // --from is the real, documented way to start at a specific step and must

@@ -3119,7 +3119,6 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
-        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('wiring_check', emptyState);
@@ -3174,6 +3173,28 @@ TIER: M`,
       expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
         type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
       }));
+    });
+
+    it('settles missing current-lap branch artifacts as a blocking infrastructure failure', async () => {
+      const provider = createMockProvider();
+      const events = { emit: vi.fn(async () => undefined) } as any;
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath, events,
+        buildReviewArtifactReader: async () => undefined,
+        ...currentBuildReviewProof(),
+      });
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
+        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v1', findings: [], verdict: 'PASS',
+      }));
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: false });
+      expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'FAIL',
+      }));
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject({
+        results: { scope: { kind: 'infrastructure-failure', reason: 'artifact-read-failed' } },
+      });
     });
 
     it.each([

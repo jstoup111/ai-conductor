@@ -97,6 +97,9 @@ describe('build-review domain', () => {
       kind: 'infrastructure-failure', rubric: 'tautology', reason: 'provider-error', detail: 'provider unavailable',
     })).toEqual({ kind: 'infrastructure-failure', rubric: 'tautology', reason: 'provider-error', detail: 'provider unavailable' });
     expect(parseBuildReviewInfrastructureFailure({
+      kind: 'infrastructure-failure', rubric: 'scope', reason: 'artifact-read-failed', detail: 'missing current-lap artifact',
+    })).toEqual({ kind: 'infrastructure-failure', rubric: 'scope', reason: 'artifact-read-failed', detail: 'missing current-lap artifact' });
+    expect(parseBuildReviewInfrastructureFailure({
       kind: 'infrastructure-failure', rubric: 'tautology', reason: 'ignored', detail: 'provider unavailable',
     })).toBeUndefined();
   });

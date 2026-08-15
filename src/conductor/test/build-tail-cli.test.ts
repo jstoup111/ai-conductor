@@ -19,6 +19,14 @@ it('projects effective laps while retaining raw failures and excluding skipped r
   ])).toEqual({ lapsToPass: 1, rubricFailureRates: { scope: { failures: 1, judged: 1 } }, skipped: 1, cacheHits: 1, infrastructureFailures: 1 });
 });
 
+it('counts skip-only and infrastructure-only review laps before a later passing lap', () => {
+  expect(computeBuildReviewMetrics([
+    { type: 'build_review_rubric_skipped', ts: 1, rubric: 'scope', lapId: 'lap-skipped', reason: 'disabled' },
+    { type: 'build_review_rubric_infrastructure_failure', ts: 2, rubric: 'scope', lapId: 'lap-infrastructure', reason: 'artifact-read-failed' },
+    { type: 'build_review_outer_verdict', ts: 3, lapId: 'lap-passed', rawVerdict: 'PASS', effectiveVerdict: 'PASS' },
+  ])).toMatchObject({ lapsToPass: 3, skipped: 1, infrastructureFailures: 1 });
+});
+
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {

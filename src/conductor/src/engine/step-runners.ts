@@ -343,6 +343,8 @@ export interface StepRunnerOptions {
   ) => Promise<StepRunResult>;
   /** Shared raw-aggregate/disposition join. Tests inject a bounded fake store. */
   buildReviewEffectiveResolver?: typeof resolveEffectiveBuildReviewVerdict;
+  /** Test seam for a missing or malformed current-lap branch artifact. */
+  buildReviewArtifactReader?: typeof readBuildReviewBranchArtifact;
   /** Shared event spine for engine-owned build-review occurrences. */
   events?: ConductorEventEmitter;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
@@ -421,6 +423,7 @@ export class DefaultStepRunner implements StepRunner {
   private buildReviewInputOptions?: BuildReviewInputOptions;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
+  private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
   private events?: ConductorEventEmitter;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
@@ -474,6 +477,7 @@ export class DefaultStepRunner implements StepRunner {
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
     this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
+    this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
     this.events = options?.events;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
@@ -1770,7 +1774,7 @@ export class DefaultStepRunner implements StepRunner {
 
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
-        const artifact = await readBuildReviewBranchArtifact(
+        const artifact = await this.buildReviewArtifactReader(
           this.projectDir,
           branch.rubric,
           lapId,

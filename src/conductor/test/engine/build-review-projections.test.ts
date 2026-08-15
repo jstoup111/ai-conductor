@@ -43,7 +43,10 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
     tautology: {
       changedTestSelectors: ['test/b.test.ts', 'test/a.test.ts'],
       revertedProductionPatch: 'revert patch',
-      preflightEvidence: { classification: 'red', command: 'npm test' },
+      preflightEvidence: {
+        classification: 'red', command: 'npm test',
+        eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
+      },
     },
     ...overrides,
   };
@@ -74,6 +77,9 @@ describe('build-review rubric projections', () => {
       rubric: 'tautology', projectionVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot',
       diff: expect.any(String), changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
       revertedProductionPatch: 'revert patch', preflightEvidence: expect.any(Object), repairContext: expect.any(Array),
+    });
+    expect(projections.tautology.preflightEvidence).toMatchObject({
+      eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
     });
     expect(projections.scope).toMatchObject({
       planBody: '# Approved plan\n', repairContext: expect.any(Array), acceptedWidenings: expect.any(Array),

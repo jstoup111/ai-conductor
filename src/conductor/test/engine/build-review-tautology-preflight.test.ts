@@ -13,9 +13,34 @@ describe('build-review Tautology preflight', () => {
       'diff --git a/test/retired.test.ts b/test/retired.test.ts', '+expect(retired).toBeUndefined()',
       'diff --git a/test/new.test.ts b/test/new.test.ts', '+expect(newBehavior()).toBe(true)',
     ].join('\n');
-    expect(deriveRemovalMaintenanceSelectors(diff, ['test/retired.test.ts', 'test/new.test.ts'], {
+    const eligible = deriveRemovalMaintenanceSelectors(diff, ['test/retired.test.ts', 'test/new.test.ts'], {
       deletedFiles: [], removedDeclarations: ['retired'], removedMembers: [],
-    })).toEqual(['test/retired.test.ts']);
+    });
+    expect(eligible).toEqual(['test/retired.test.ts']);
+    expect(eligible.eligibleSelectorRemovals).toEqual([
+      { selector: 'test/retired.test.ts', removals: ['retired'] },
+    ]);
+  });
+
+  it('keeps a term-only removal match normally measured when it adds a surviving-behavior assertion', async () => {
+    const diff = [
+      'diff --git a/src/old.ts b/src/old.ts', '-export function retired() {}',
+      'diff --git a/test/retired.test.ts b/test/retired.test.ts',
+      '+expect(retired).toBeUndefined()',
+      '+expect(newBehavior()).toBe(true)',
+    ].join('\n');
+    const eligible = deriveRemovalMaintenanceSelectors(diff, ['test/retired.test.ts'], {
+      deletedFiles: [], removedDeclarations: ['retired'], removedMembers: [],
+    });
+    const runScoped = vi.fn(async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }));
+
+    expect(eligible).toEqual([]);
+    await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head', diff,
+      approvedException: 'removal-maintenance', removalMaintenanceSelectors: eligible,
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {}, runScoped, removeCheckout: async () => {},
+    });
+    expect(runScoped).toHaveBeenCalledWith(expect.any(String), ['test/retired.test.ts'], expect.any(AbortSignal));
   });
   it('keeps HEAD tests while replacing only changed production files in a nested disposable checkout', async () => {
     const rootSnapshot = { 'src/a.ts': 'HEAD production', 'test/a.test.ts': 'HEAD test' };
@@ -82,7 +107,11 @@ describe('build-review Tautology preflight', () => {
     };
     const red = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ exitCode: 1, stdout: 'failed', stderr: '' }) });
     const stayedGreen = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ exitCode: 0, stdout: 'passed', stderr: '' }) });
-    const exception = await materializeTautologyPreflight({ ...base, approvedException: 'removal-maintenance', removalMaintenanceSelectors: ['test/a.test.ts'], runScoped: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
+    const qualifyingDiff = 'diff --git a/src/a.ts b/src/a.ts\n-export function retired() {}\ndiff --git a/test/a.test.ts b/test/a.test.ts\n+expect(retired).toBeUndefined()';
+    const eligible = deriveRemovalMaintenanceSelectors(qualifyingDiff, ['test/a.test.ts'], {
+      deletedFiles: [], removedDeclarations: ['retired'], removedMembers: [],
+    });
+    const exception = await materializeTautologyPreflight({ ...base, diff: qualifyingDiff, approvedException: 'removal-maintenance', removalMaintenanceSelectors: eligible, runScoped: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
 
     expect(red).toMatchObject({ classification: 'red', cacheable: true });
     expect(stayedGreen).toMatchObject({ classification: 'stayed-green', cacheable: true });
@@ -124,8 +153,8 @@ describe('build-review Tautology preflight', () => {
     const runScoped = vi.fn(async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }));
     await materializeTautologyPreflight({
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
-      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts\ndiff --git a/test/b.test.ts b/test/b.test.ts',
-      approvedException: 'removal-maintenance', removalMaintenanceSelectors: ['test/a.test.ts'],
+      diff: 'diff --git a/src/a.ts b/src/a.ts\n-export function retired() {}\ndiff --git a/test/a.test.ts b/test/a.test.ts\n+expect(retired).toBeUndefined()\ndiff --git a/test/b.test.ts b/test/b.test.ts\n+expect(newBehavior()).toBe(true)',
+      approvedException: 'removal-maintenance', removalMaintenanceSelectors: deriveRemovalMaintenanceSelectors('diff --git a/src/a.ts b/src/a.ts\n-export function retired() {}\ndiff --git a/test/a.test.ts b/test/a.test.ts\n+expect(retired).toBeUndefined()\ndiff --git a/test/b.test.ts b/test/b.test.ts\n+expect(newBehavior()).toBe(true)', ['test/a.test.ts', 'test/b.test.ts'], { deletedFiles: [], removedDeclarations: ['retired'], removedMembers: [] }),
       createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {}, runScoped, removeCheckout: async () => {},
     });
     expect(runScoped).toHaveBeenCalledWith(expect.any(String), ['test/b.test.ts'], expect.any(AbortSignal));

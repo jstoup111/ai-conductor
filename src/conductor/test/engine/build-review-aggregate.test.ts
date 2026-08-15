@@ -119,6 +119,19 @@ describe('build-review raw aggregate', () => {
     });
   });
 
+  it('keeps a missing current-lap artifact fail-closed through the aggregate', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: results({
+        scope: { kind: 'infrastructure-failure', rubric: 'scope', reason: 'artifact-read-failed', detail: 'missing or invalid current-lap branch artifact' },
+      }),
+    });
+
+    expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
+      rawVerdict: 'FAIL', verdict: 'FAIL', infrastructureFailureRubrics: ['scope'],
+    });
+  });
+
   it('rejects missing, malformed, stale, or identity-mismatched branch results', () => {
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results() });
     expect(parseBuildReviewAggregate({ ...aggregate, results: { ...aggregate.results, completeness: undefined } })).toBeUndefined();

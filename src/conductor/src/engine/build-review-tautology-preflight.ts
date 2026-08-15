@@ -7,6 +7,21 @@ export interface TautologyPathClassification {
   readonly production: readonly string[];
 }
 
+export interface RemovalMaintenanceSelectorEvidence {
+  readonly selector: string;
+  readonly removals: readonly string[];
+}
+
+/**
+ * A selector list is deliberately accompanied by the exact removal evidence
+ * that made each selector eligible.  The array remains usable as a scoped
+ * command selector list while the evidence travels into persisted preflight
+ * output for the Tautology projection.
+ */
+export type RemovalMaintenanceSelectors = readonly string[] & {
+  readonly eligibleSelectorRemovals: readonly RemovalMaintenanceSelectorEvidence[];
+};
+
 export type TautologyScopedRunResult =
   | { readonly exitCode: number; readonly stdout: string; readonly stderr: string }
   | { readonly kind: 'launch-error' | 'timeout'; readonly stdout: string; readonly stderr: string }
@@ -34,7 +49,7 @@ export interface TautologyPreflightDependencies {
   readonly writeCache?: (key: string, evidence: TautologyCompletedPreflight) => Promise<void>;
   readonly approvedException?: 'empty-test-set' | 'removal-maintenance';
   /** Changed test selectors individually eligible for removal-maintenance. */
-  readonly removalMaintenanceSelectors?: readonly string[];
+  readonly removalMaintenanceSelectors?: RemovalMaintenanceSelectors;
   /** Exact scoped-command template used for the counterfactual. */
   readonly scopedCommand?: string | null;
   /** Identity of the CURRENT aggregate green proof this preflight relies on. */
@@ -51,6 +66,8 @@ export interface TautologyCompletedPreflight {
       readonly changedPaths: readonly string[];
       readonly changedTestSelectors: readonly string[];
       readonly revertedProductionPatch: readonly { path: string; mergeBaseContent: string }[];
+      /** Exact per-selector removal evidence used to exclude a changed test. */
+      readonly eligibleSelectorRemovals?: readonly RemovalMaintenanceSelectorEvidence[];
       readonly sourceIdentities: { readonly mergeBase: string; readonly headSha: string };
       readonly output: { readonly stdout: string; readonly stderr: string };
 }
@@ -111,18 +128,35 @@ export function deriveRemovalMaintenanceSelectors(
     readonly removedDeclarations: readonly string[];
     readonly removedMembers: readonly { readonly declaration: string; readonly member: string }[];
   },
-): readonly string[] {
+): RemovalMaintenanceSelectors {
   const terms = [
     ...removalContext.deletedFiles,
     ...removalContext.removedDeclarations,
     ...removalContext.removedMembers.flatMap(({ declaration, member }) => [declaration, member]),
   ].filter((term) => term.length > 0);
-  if (terms.length === 0) return [];
+  if (terms.length === 0) return withRemovalEvidence([]);
   const chunks = diff.split(/^diff --git /m);
-  return selectors.filter((selector) => {
+  const evidence = selectors.flatMap((selector) => {
     const chunk = chunks.find((candidate) => candidate.startsWith(`a/${selector} b/${selector}`));
-    return chunk !== undefined && terms.some((term) => chunk.includes(term));
-  }).sort();
+    if (chunk === undefined) return [];
+    const removals = terms.filter((term) => chunk.includes(term)).sort();
+    if (removals.length === 0) return [];
+    // A removal term in a test is not enough: any added assertion that does
+    // not name a removed surface is a surviving-behavior assertion and must
+    // remain in the counterfactual.
+    const addedAssertions = chunk.split('\n').filter((line) =>
+      /^\+(?!\+\+)/.test(line) && /\b(?:expect|assert|should)\b/.test(line),
+    );
+    if (addedAssertions.some((line) => !removals.some((term) => line.includes(term)))) return [];
+    return [{ selector, removals }];
+  }).sort((left, right) => left.selector.localeCompare(right.selector));
+  return withRemovalEvidence(evidence);
+}
+
+function withRemovalEvidence(evidence: readonly RemovalMaintenanceSelectorEvidence[]): RemovalMaintenanceSelectors {
+  const selectors = evidence.map(({ selector }) => selector);
+  Object.defineProperty(selectors, 'eligibleSelectorRemovals', { value: Object.freeze(evidence), enumerable: false });
+  return Object.freeze(selectors) as RemovalMaintenanceSelectors;
 }
 
 function failure(
@@ -139,6 +173,7 @@ function cacheKey(deps: TautologyPreflightDependencies, paths: readonly string[]
     version: 2, mergeBase: deps.mergeBase, headSha: deps.headSha, paths, diff: deps.diff,
     approvedException: deps.approvedException ?? null,
     removalMaintenanceSelectors: [...(deps.removalMaintenanceSelectors ?? [])].sort(),
+    eligibleSelectorRemovals: deps.removalMaintenanceSelectors?.eligibleSelectorRemovals ?? [],
     scopedCommand: deps.scopedCommand ?? null,
     currentGreenProofIdentity: deps.currentGreenProofIdentity ?? null,
   })).digest('hex')}`;
@@ -183,7 +218,8 @@ export async function materializeTautologyPreflight(
     return failure('cache-read-failed', paths, classified.tests, sourceIdentities);
   }
   if (cached) return { ...cached, cacheProvenance: 'hit' };
-  const eligibleRemovalSelectors = new Set(deps.removalMaintenanceSelectors ?? []);
+  const eligibleSelectorRemovals = deps.removalMaintenanceSelectors?.eligibleSelectorRemovals ?? [];
+  const eligibleRemovalSelectors = new Set(eligibleSelectorRemovals.map(({ selector }) => selector));
   if (classified.tests.length === 0) return failure('no-changed-tests', paths, classified.tests, sourceIdentities);
   const counterfactualSelectors = deps.approvedException === 'removal-maintenance'
     ? classified.tests.filter((selector) => !eligibleRemovalSelectors.has(selector))
@@ -191,7 +227,7 @@ export async function materializeTautologyPreflight(
   if (deps.approvedException === 'empty-test-set' && classified.tests.length === 0) {
     const completed: TautologyCompletedPreflight = {
       classification: 'approved-exception', exception: deps.approvedException, cacheable: true, cacheProvenance: 'miss',
-      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionPatch: [], sourceIdentities,
+      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionPatch: [], eligibleSelectorRemovals, sourceIdentities,
       output: { stdout: '', stderr: '' },
     };
     try {
@@ -204,7 +240,7 @@ export async function materializeTautologyPreflight(
   if (deps.approvedException === 'removal-maintenance' && counterfactualSelectors.length === 0) {
     const completed: TautologyCompletedPreflight = {
       classification: 'approved-exception', exception: 'removal-maintenance', cacheable: true, cacheProvenance: 'miss',
-      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionPatch: [], sourceIdentities,
+      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionPatch: [], eligibleSelectorRemovals, sourceIdentities,
       output: { stdout: '', stderr: '' },
     };
     try { await deps.writeCache?.(key, completed); return completed; } catch { return failure('cache-write-failed', paths, classified.tests, sourceIdentities); }
@@ -253,6 +289,7 @@ export async function materializeTautologyPreflight(
             changedPaths: paths,
             changedTestSelectors: classified.tests,
             revertedProductionPatch: patch,
+            eligibleSelectorRemovals,
             sourceIdentities,
             output: { stdout: execution.stdout, stderr: execution.stderr },
           };

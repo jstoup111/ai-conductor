@@ -17,7 +17,8 @@ export type BuildReviewInfrastructureFailureReason =
   | 'malformed-artifact'
   | 'stale-artifact'
   | 'identity-mismatch'
-  | 'preflight-failed';
+  | 'preflight-failed'
+  | 'artifact-read-failed';
 
 export type BuildReviewFindingAnchor =
   | { rubric: 'tautology'; changedTest: string; exercisedBehavior: string; violationKind: string }
@@ -64,7 +65,7 @@ export type BuildReviewRubricResult =
 
 const RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness']);
 const INFRASTRUCTURE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
-  'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact', 'identity-mismatch', 'preflight-failed',
+  'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed',
 ]);
 const LAP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 

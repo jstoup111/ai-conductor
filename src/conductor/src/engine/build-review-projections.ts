@@ -16,6 +16,7 @@ export type BuildReviewProjectionJson =
 export interface BuildReviewTautologyProjectionInput {
   readonly changedTestSelectors: readonly string[];
   readonly revertedProductionPatch: string;
+  /** Includes preflight's eligible-selector-to-removal mapping when present. */
   readonly preflightEvidence: BuildReviewProjectionJson;
 }
 
@@ -128,6 +129,8 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     changedTestSelectors: canonicalArray(source.tautology.changedTestSelectors) as readonly string[],
     testSuiteProof: canonicalize(json(inputs.testSuiteProof)),
     revertedProductionPatch: source.tautology.revertedProductionPatch,
+    // Preserve the engine-derived eligible-selector-to-removal mapping inside
+    // the sealed preflight evidence rather than reducing it to selector names.
     preflightEvidence: canonicalize(source.tautology.preflightEvidence),
     repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
   }) as TautologyProjection;
