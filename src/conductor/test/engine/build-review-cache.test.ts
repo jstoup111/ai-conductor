@@ -106,6 +106,37 @@ describe("build-review semantic cache", () => {
     });
   });
 
+  it("isolates a foreign feature entry by content digest before atomically replacing it", async () => {
+    const featureBRoot = "/features/b";
+    const path = cacheEntryPath(featureBRoot, "scope");
+    const foreignEntry = { ...entry("snapshot-feature-a"), projectionDigest: "sha256:feature-a-content" };
+    const freshEntry = { ...entry("snapshot-feature-b"), projectionDigest: "sha256:feature-b-content" };
+    const fs = memoryFilesystem({ [path]: JSON.stringify(foreignEntry) });
+
+    const foreignCandidate = await readBuildReviewCacheEntry(featureBRoot, "scope", fs);
+    await writeBuildReviewCacheEntry(featureBRoot, freshEntry, fs);
+
+    expect({
+      path,
+      lookup: classifyBuildReviewCacheLookup(foreignCandidate, {
+        rubric: "scope",
+        contractVersion: "v1",
+        projectionVersion: "v2",
+        projectionDigest: freshEntry.projectionDigest,
+        policyFingerprint: freshEntry.policyFingerprint,
+        lapId: "lap-feature-b",
+        snapshotDigest: freshEntry.result.snapshotDigest,
+      } as never),
+      storedEntry: await readBuildReviewCacheEntry(featureBRoot, "scope", fs),
+      renameCalls: fs.renameCalls,
+    }).toEqual({
+      path: "/features/b/.pipeline/build-review/cache/scope.json",
+      lookup: { kind: "miss", reason: "projection-digest-mismatch" },
+      storedEntry: freshEntry,
+      renameCalls: [[`${path}.tmp`, path]],
+    });
+  });
+
   it("treats a missing, malformed, or unsupported entry as a non-mutating cache miss", async () => {
     const root = "/feature";
     const path = cacheEntryPath(root, "scope");
