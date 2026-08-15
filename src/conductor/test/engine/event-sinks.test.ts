@@ -98,6 +98,25 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'rebase_conflict_halt',
 ] satisfies Array<ConductorEvent['type']>;
 
+// This is deliberately an exact set rather than a volume count: a newly-persisted
+// non-halt event must update this contract explicitly.
+const PINNED_PERSISTED_EVENT_TYPES = [
+  ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
+  ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
+] satisfies Array<ConductorEvent['type']>;
+
+const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
+  'rebase_noop',
+  'rebase_mergeable_skip',
+  'rebase_gate_reverified',
+  'rebase_gate_preserved',
+  'rebase_citation_residue',
+  'rebase_resolution_attempt',
+  'rebase_resolution_succeeded',
+  'rebase_resolution_failed',
+  'rebase_resolution_exhausted',
+] satisfies Array<ConductorEvent['type']>;
+
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
   BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
 );
@@ -478,17 +497,11 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('keeps persisted routing equivalent over pre-settle types while including settle decisions', () => {
-    const persisted = persistedEventTypes();
-
-    expect(new Set(persisted.filter((type) =>
-      !buildMemberSettleDecisionEventTypes.has(type),
-    ))).toEqual(new Set(PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES));
-    expect(persisted).toEqual(expect.arrayContaining(BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES));
-    expect(persisted).not.toEqual(Object.keys(EVENT_SINKS));
+  it('pins the exact persisted event set to halt-class additions', () => {
+    expect(new Set(persistedEventTypes())).toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
   });
 
-  it('pins the persisted volume to the three halt additions and excludes non-halt lifecycle events', () => {
+  it('keeps non-halt lifecycle events out of the persisted set', () => {
     const neverPersisted = [
       'loop_converged',
       'build_review_base',
@@ -496,23 +509,23 @@ describe('event sink subscriptions', () => {
       'retry_decision',
       'group_member_step',
       'test_suite_verification',
+      ...NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES,
     ] satisfies Array<ConductorEvent['type']>;
 
-    expect({
-      persisted: persistedEventTypes(),
-      haltAdditions: persistedEventTypes().filter((type) => [
-        'loop_halt',
-        'halt_marker_write_failed',
-        'rebase_conflict_halt',
-      ].includes(type)),
-      excluded: neverPersisted.filter((type) => persistedEventTypes().includes(type)),
-    }).toEqual({
-      // The exhaustive persisted list is pinned by the structural tests above;
-      // this case pins only the halt additions and the excluded lifecycle set.
-      persisted: expect.arrayContaining(['loop_halt', 'halt_marker_write_failed', 'rebase_conflict_halt']),
-      haltAdditions: ['loop_halt', 'halt_marker_write_failed', 'rebase_conflict_halt'],
-      excluded: [],
-    });
+    expect(Object.fromEntries(neverPersisted.map((type) => [type, EVENT_SINKS[type].persist])))
+      .toEqual(Object.fromEntries(neverPersisted.map((type) => [type, false])));
+  });
+
+  it('rejects an unrelated sink becoming persisted', () => {
+    const unrelatedPersistenceMutation = {
+      ...EVENT_SINKS,
+      retry_decision: { ...EVENT_SINKS.retry_decision, persist: true },
+    };
+    const persistedAfterMutation = Object.entries(unrelatedPersistenceMutation)
+      .filter(([, sinks]) => sinks.persist)
+      .map(([type]) => type);
+
+    expect(new Set(persistedAfterMutation)).not.toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
   });
 
   it('derives the audited set without changing prior routing', () => {
