@@ -23,7 +23,13 @@ export type RemovalMaintenanceSelectors = readonly string[] & {
 };
 
 export type TautologyScopedRunResult =
-  | { readonly exitCode: number; readonly stdout: string; readonly stderr: string }
+  | { readonly exitCode: 0; readonly stdout: string; readonly stderr: string }
+  /** A changed test executed and an assertion failed under the reverted production bytes. */
+  | { readonly kind: 'test-failure'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
+  /** The selector matched no executable test; it is not counterfactual RED evidence. */
+  | { readonly kind: 'no-tests'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
+  /** Test discovery or collection failed before an assertion could run. */
+  | { readonly kind: 'collection-failure'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
   | { readonly kind: 'launch-error' | 'timeout'; readonly stdout: string; readonly stderr: string }
   | { readonly kind: 'signal'; readonly signal: string; readonly stdout: string; readonly stderr: string };
 
@@ -74,7 +80,7 @@ export interface TautologyCompletedPreflight {
 
 export type TautologyPreflightResult = TautologyCompletedPreflight | {
       readonly classification: 'infrastructure-failure';
-      readonly reason: 'no-changed-tests' | 'no-production-changes' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
+      readonly reason: 'no-changed-tests' | 'no-production-changes' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'scoped-run-no-tests' | 'scoped-run-collection-failed' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
       readonly changedPaths: readonly string[];
       readonly changedTestSelectors: readonly string[];
       readonly sourceIdentities: { readonly mergeBase: string; readonly headSha: string };
@@ -102,7 +108,8 @@ function addedPaths(diff: string): ReadonlySet<string> {
 }
 
 function isTestPath(path: string): boolean {
-  return /(?:^|\/)(?:__tests__|tests?|spec)(?:\/|$)|\.(?:test|spec)\.[^/]+$/i.test(path);
+  return /(?:^|\/)(?:__tests__|tests?|spec)\/.*\.(?:test|spec)\.[^/]+$|\.(?:test|spec)\.[^/]+$/i.test(path)
+    || /(?:^|\/)(?:__tests__|tests?|spec)\/.*(?:_test|_spec)\.[^/]+$/i.test(path);
 }
 
 /** Closed path classifier; unknown paths are production, never a broad test selector. */
@@ -184,12 +191,15 @@ function aborted(signal: AbortSignal): boolean {
 }
 
 function scopedRunFailure(
-  execution: Exclude<TautologyScopedRunResult, { readonly exitCode: number }>,
+  execution: Exclude<TautologyScopedRunResult, { readonly exitCode: 0 }>,
 ): Extract<TautologyPreflightResult, { classification: 'infrastructure-failure' }>['reason'] {
   switch (execution.kind) {
     case 'launch-error': return 'scoped-run-launch-failed';
     case 'timeout': return 'scoped-run-timeout';
     case 'signal': return 'scoped-run-signaled';
+    case 'no-tests': return 'scoped-run-no-tests';
+    case 'collection-failure': return 'scoped-run-collection-failed';
+    case 'test-failure': return 'scoped-run-failed';
   }
 }
 
@@ -279,7 +289,7 @@ export async function materializeTautologyPreflight(
     if (!result) {
       try {
         const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
-        if ('kind' in execution) result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
+        if ('kind' in execution && execution.kind !== 'test-failure') result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
         else if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else {
           result = {

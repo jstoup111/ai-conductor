@@ -5,6 +5,7 @@ import {
   classifyTautologyPaths,
   deriveRemovalMaintenanceSelectors,
 } from '../../src/engine/build-review-tautology-preflight.js';
+import { classifyTautologyScopedFailure } from '../../src/engine/step-runners.js';
 
 describe('build-review Tautology preflight', () => {
   it('derives removal-maintenance eligibility per changed selector rather than per diff', () => {
@@ -32,7 +33,7 @@ describe('build-review Tautology preflight', () => {
     const eligible = deriveRemovalMaintenanceSelectors(diff, ['test/retired.test.ts'], {
       deletedFiles: [], removedDeclarations: ['retired'], removedMembers: [],
     });
-    const runScoped = vi.fn(async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }));
+    const runScoped = vi.fn(async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: 'RED', stderr: '' }));
 
     expect(eligible).toEqual([]);
     await materializeTautologyPreflight({
@@ -57,7 +58,7 @@ describe('build-review Tautology preflight', () => {
       createCheckout: async (path, head) => { calls.push(`checkout:${path}:${head}`); },
       readMergeBaseFile: async (path) => path === 'src/a.ts' ? 'BASE production' : undefined,
       writeFile: async (path, content) => { calls.push(`write:${path}:${content}`); },
-      runScoped: async (cwd, selectors) => { calls.push(`run:${cwd}:${selectors.join(',')}`); return { exitCode: 1, stdout: 'RED', stderr: '' }; },
+      runScoped: async (cwd, selectors) => { calls.push(`run:${cwd}:${selectors.join(',')}`); return { kind: 'test-failure' as const, exitCode: 1, stdout: 'RED', stderr: '' }; },
       removeCheckout: async (path) => { calls.push(`remove:${path}`); },
     });
 
@@ -87,12 +88,56 @@ describe('build-review Tautology preflight', () => {
     expect(runScoped).not.toHaveBeenCalled();
   });
 
+  it('selects only executable changed test files, never test-directory helpers or red runners', () => {
+    expect(classifyTautologyPaths([
+      'test/helpers/build-review.ts',
+      'tests/fixtures/setup.mjs',
+      'spec/support/assertions.ts',
+      'test/acceptance/build-review-rubric-fanout.red-runner.mjs',
+      'test/engine/build-review.test.ts',
+      'tests/unit/runner.spec.mts',
+      'spec/models/widget_test.rb',
+      'src/engine/build-review.ts',
+    ])).toEqual({
+      tests: ['spec/models/widget_test.rb', 'test/engine/build-review.test.ts', 'tests/unit/runner.spec.mts'],
+      production: [
+        'spec/support/assertions.ts',
+        'src/engine/build-review.ts',
+        'test/acceptance/build-review-rubric-fanout.red-runner.mjs',
+        'test/helpers/build-review.ts',
+        'tests/fixtures/setup.mjs',
+      ],
+    });
+  });
+
+  it.each([
+    ['no matching tests', 'no-tests'],
+    ['test collection failure', 'collection-failure'],
+  ])('fails closed when the scoped run reports %s rather than manufacturing RED evidence', async (_name, kind) => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: kind as 'no-tests' | 'collection-failure', exitCode: 1, stdout: '', stderr: 'no tests collected' }),
+      removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: kind === 'no-tests' ? 'scoped-run-no-tests' : 'scoped-run-collection-failed' });
+    expect(result.classification).not.toBe('red');
+  });
+
+  it('marks only a scoped assertion failure as semantic RED input', () => {
+    expect(classifyTautologyScopedFailure(1, 'AssertionError: expected false to be true', '')).toMatchObject({ kind: 'test-failure' });
+    expect(classifyTautologyScopedFailure(1, '', 'No test suite found in file test/helper.ts')).toMatchObject({ kind: 'no-tests' });
+    expect(classifyTautologyScopedFailure(1, '', 'Failed to load url ./missing.ts')).toMatchObject({ kind: 'collection-failure' });
+  });
+
   it('cleans up a partially-created checkout and reports materialization failure as infrastructure', async () => {
     const removeCheckout = vi.fn(async () => {});
     const result = await materializeTautologyPreflight({
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head', diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
       createCheckout: async () => { throw new Error('disk full'); }, readMergeBaseFile: async () => undefined, writeFile: async () => {},
-      runScoped: async () => ({ exitCode: 1, stdout: '', stderr: '' }), removeCheckout,
+      runScoped: async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: '', stderr: '' }), removeCheckout,
     });
     expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'materialization-failed' });
     expect(removeCheckout).toHaveBeenCalledWith('/feature/.pipeline/build-review-preflight/head');
@@ -105,7 +150,7 @@ describe('build-review Tautology preflight', () => {
       createCheckout: vi.fn(async () => {}), readMergeBaseFile: vi.fn(async () => 'BASE'), writeFile: vi.fn(async () => {}),
       removeCheckout: vi.fn(async () => {}), readCache: vi.fn(async () => undefined), writeCache: vi.fn(async () => {}),
     };
-    const red = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ exitCode: 1, stdout: 'failed', stderr: '' }) });
+    const red = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: 'failed', stderr: '' }) });
     const stayedGreen = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ exitCode: 0, stdout: 'passed', stderr: '' }) });
     const qualifyingDiff = 'diff --git a/src/a.ts b/src/a.ts\n-export function retired() {}\ndiff --git a/test/a.test.ts b/test/a.test.ts\n+expect(retired).toBeUndefined()';
     const eligible = deriveRemovalMaintenanceSelectors(qualifyingDiff, ['test/a.test.ts'], {
@@ -123,7 +168,7 @@ describe('build-review Tautology preflight', () => {
   it('reuses an exact cached completed result without another checkout or scoped command', async () => {
     const cached = { classification: 'red', cacheable: true, cacheProvenance: 'miss', changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'], revertedProductionPatch: [{ path: 'src/a.ts', mergeBaseContent: 'BASE' }], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, output: { stdout: '', stderr: '' } } as const;
     const createCheckout = vi.fn(async () => {});
-    const runScoped = vi.fn(async () => ({ exitCode: 1, stdout: '', stderr: '' }));
+    const runScoped = vi.fn(async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: '', stderr: '' }));
     const result = await materializeTautologyPreflight({
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head', diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
       createCheckout, readMergeBaseFile: async () => 'BASE', writeFile: async () => {}, runScoped, removeCheckout: async () => {},
@@ -140,7 +185,7 @@ describe('build-review Tautology preflight', () => {
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
       diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
       createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
-      runScoped: async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }), removeCheckout: async () => {},
+      runScoped: async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: 'RED', stderr: '' }), removeCheckout: async () => {},
       readCache: async (key: string) => { keys.push(key); return undefined; },
     };
     await materializeTautologyPreflight({ ...base, scopedCommand: 'run {selectors}', currentGreenProofIdentity: 'proof-a' });
@@ -150,7 +195,7 @@ describe('build-review Tautology preflight', () => {
   });
 
   it('runs the counterfactual for every changed test not individually eligible for removal maintenance', async () => {
-    const runScoped = vi.fn(async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }));
+    const runScoped = vi.fn(async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: 'RED', stderr: '' }));
     await materializeTautologyPreflight({
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
       diff: 'diff --git a/src/a.ts b/src/a.ts\n-export function retired() {}\ndiff --git a/test/a.test.ts b/test/a.test.ts\n+expect(retired).toBeUndefined()\ndiff --git a/test/b.test.ts b/test/b.test.ts\n+expect(newBehavior()).toBe(true)',
@@ -171,7 +216,7 @@ describe('build-review Tautology preflight', () => {
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
       diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
       createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
-      runScoped: async () => ({ exitCode: 1, stdout: 'would be red', stderr: '' }), removeCheckout,
+      runScoped: async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: 'would be red', stderr: '' }), removeCheckout,
       ...await overrides(),
     });
 
@@ -188,7 +233,7 @@ describe('build-review Tautology preflight', () => {
     const runScoped = vi.fn(async (_cwd: string, _selectors: readonly string[], signal: AbortSignal) => {
       controller.abort();
       expect(signal.aborted).toBe(true);
-      return { exitCode: 1, stdout: 'would be red', stderr: '' };
+      return { kind: 'test-failure' as const, exitCode: 1, stdout: 'would be red', stderr: '' };
     });
 
     const result = await materializeTautologyPreflight({
@@ -208,7 +253,7 @@ describe('build-review Tautology preflight', () => {
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
       diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
       createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
-      runScoped: async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }),
+      runScoped: async () => ({ kind: 'test-failure' as const, exitCode: 1, stdout: 'RED', stderr: '' }),
       removeCheckout: async () => { throw new Error('cleanup failed'); },
     });
 
