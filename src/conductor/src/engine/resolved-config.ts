@@ -13,9 +13,11 @@ import type {
 import { getStepDefinition } from './steps.js';
 import {
   CLAUDE_MODEL_POLICY,
+  resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import { escalateAttempt } from './escalation.js';
+import { normalizeProviderSelection } from './provider-selection.js';
 
 // Legacy aliases retained for existing consumers. New resolution accepts a
 // provider policy explicitly, so these never participate in provider-aware
@@ -742,10 +744,18 @@ export function resolveBuildReviewConfig(
 ): ResolvedBuildReviewConfig {
   const block = config?.build_review;
   const outerStepConfig = config?.steps?.build_review;
-  const inheritedProvider = outerStepConfig?.llm_provider ?? config?.llm_provider ?? 'claude';
-  const inheritedFallbackLadder = config?.model_fallback_ladder ?? policy.modelFallbackLadder;
+  const inheritedProviderSelection = outerStepConfig?.llm_provider ?? config?.llm_provider ?? 'claude';
+  const inheritedPrimaryProvider = normalizeProviderSelection(inheritedProviderSelection)[0] ?? 'claude';
+  const inheritedPolicy = outerStepConfig?.llm_provider === undefined && config?.llm_provider === undefined
+    ? policy
+    : resolveProviderModelPolicy(inheritedPrimaryProvider);
   const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => {
     const rubric = block?.rubrics?.[rubricId];
+    const rubricProvider = rubric?.llm_provider ?? inheritedProviderSelection;
+    const rubricPrimaryProvider = normalizeProviderSelection(rubricProvider)[0] ?? inheritedPrimaryProvider;
+    const rubricPolicy = rubric?.llm_provider === undefined
+      ? inheritedPolicy
+      : resolveProviderModelPolicy(rubricPrimaryProvider);
     const rubricConfig: HarnessConfig = {
       ...config,
       steps: {
@@ -759,15 +769,44 @@ export function resolveBuildReviewConfig(
         },
       },
     };
-    const resolvedStep = resolveStepConfig('build_review', 'BUILD', policy, rubricConfig, options);
+    // An explicitly routed rubric must not inherit native Claude/Codex values
+    // from its siblings. Keep only its own authored native overrides, while
+    // provider-neutral retry settings continue to inherit normally.
+    const nativeConfig = rubricPrimaryProvider === inheritedPrimaryProvider
+      ? rubricConfig
+      : {
+        steps: {
+          build_review: {
+            ...(rubric?.model === undefined ? {} : { model: rubric.model }),
+            ...(rubric?.effort === undefined ? {} : { effort: rubric.effort }),
+          },
+        },
+      } satisfies HarnessConfig;
+    const resolvedNative = resolveProviderNativeStepConfig(
+      'build_review',
+      'BUILD',
+      rubricPolicy,
+      nativeConfig,
+      options,
+    );
+    const resolvedNeutral = resolveProviderNeutralStepConfig(
+      'build_review',
+      'BUILD',
+      rubricPolicy,
+      rubricConfig,
+      options,
+    );
     return [rubricId, {
       enabled: rubric?.enabled ?? true,
-      llm_provider: rubric?.llm_provider ?? inheritedProvider,
-      model: resolvedStep.model,
-      effort: resolvedStep.effort,
-      model_fallback_ladder: rubric?.model_fallback_ladder ?? inheritedFallbackLadder,
-      max_retries: resolvedStep.max_retries,
-      escalate: resolvedStep.escalate,
+      llm_provider: rubricProvider,
+      model: resolvedNative.model,
+      effort: resolvedNative.effort,
+      model_fallback_ladder: rubric?.model_fallback_ladder
+        ?? (rubricPrimaryProvider === inheritedPrimaryProvider
+          ? config?.model_fallback_ladder ?? inheritedPolicy.modelFallbackLadder
+          : rubricPolicy.modelFallbackLadder),
+      max_retries: resolvedNeutral.max_retries,
+      escalate: resolvedNeutral.escalate,
     } satisfies ResolvedBuildReviewRubricPolicy];
   })) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
   const enabledRubricCount = Object.values(rubrics).filter((rubric) => rubric.enabled).length;

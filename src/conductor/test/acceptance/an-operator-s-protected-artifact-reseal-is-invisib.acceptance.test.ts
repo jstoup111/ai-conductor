@@ -195,11 +195,25 @@ describe('acceptance: operator reseal reaches build_review Scope evidence (#1502
     );
     const withoutResealPrompt = buildGraderPrompt(withoutResealInputs);
 
+    // Assemble both source snapshots through production, rather than holding
+    // the shared digest fixed in a fixture. A reseal is Scope-only cache input:
+    // it must not perturb the three closed sibling projections.
+    const withoutResealProjections = deriveBuildReviewRubricProjections({
+      lapId: 'lap-operator-reseal',
+      inputs: withoutResealInputs,
+      tautology: { changedTestSelectors: [], revertedProductionPatch: '', preflightEvidence: { classification: 'red' } },
+    } as never);
+
     expect(operatorReseals(withoutResealInputs)).toEqual([]);
     expect(evidenceSection(withoutResealPrompt)).toContain('(none)');
     expect(withoutEvidenceSection(withResealPrompt)).toBe(
       withoutEvidenceSection(withoutResealPrompt),
     );
+    expect(projections.scope.digest).not.toBe(withoutResealProjections.scope.digest);
+    for (const rubric of ['tautology', 'rootCause', 'completeness'] as const) {
+      expect(projections[rubric].digest).toBe(withoutResealProjections[rubric].digest);
+      expect(projections[rubric].snapshotDigest).toBe(withoutResealProjections[rubric].snapshotDigest);
+    }
   });
 
   it('renders an unused reseal without labeling the amended diff path', async () => {

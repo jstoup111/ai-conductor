@@ -139,7 +139,7 @@ describe('build-review rubric projections', () => {
     ['named path', { paths: ['.docs/plans/also-resealed.md'] }],
     ['from commit', { fromCommit: 'reseal-base-2' }],
     ['to commit', { toCommit: 'reseal-head-2' }],
-  ])('invalidates only Scope when a reseal %s changes', (_field, mutation) => {
+  ])('uses the supplied shared snapshot identity while a reseal %s changes only Scope', (_field, mutation) => {
     const first = deriveBuildReviewRubricProjections(source());
     const original = source();
     const changed = source({
@@ -156,6 +156,7 @@ describe('build-review rubric projections', () => {
     });
     const second = deriveBuildReviewRubricProjections(changed);
 
+    expect(second.scope.snapshotDigest).toBe(first.scope.snapshotDigest);
     expect(second.scope.digest).not.toBe(first.scope.digest);
     expect(second.tautology.digest).toBe(first.tautology.digest);
     expect(second.rootCause.digest).toBe(first.rootCause.digest);

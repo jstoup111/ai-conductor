@@ -13,6 +13,8 @@ import {
 } from '../../src/engine/build-review-inputs.js';
 import type { BuildReviewFrozenInputs, BuildReviewInputOptions } from '../../src/engine/build-review-inputs.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
@@ -380,6 +382,45 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       await writeFile(join(dir, '.pipeline/protected-artifact-seal.json'), '{ unusable');
       expect((await assembleBuildReviewInputs(realGit(), scopedPlanPath)).sourceSnapshot.operatorReseals).toEqual([]);
+    });
+
+    it('keeps shared rubric snapshot identity stable while a real operator reseal invalidates Scope only', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const writeSeal = (reason: string) => writeFile(
+        join(dir, '.pipeline/protected-artifact-seal.json'),
+        JSON.stringify({
+          version: 2,
+          baselineCommit: 'baseline',
+          protectedArtifacts: [],
+          rebaselines: [{
+            trigger: 'operator-reseal', fromCommit: 'before', toCommit: 'after',
+            paths: ['.docs/stories/fixture.md'], reason,
+          }],
+        }),
+      );
+      const project = (inputs: BuildReviewFrozenInputs) => deriveBuildReviewRubricProjections({
+        lapId: parseBuildReviewLapId('lap-input-assembly')!,
+        inputs,
+        tautology: {
+          changedTestSelectors: [], revertedProductionPatch: '[]', preflightEvidence: { classification: 'not-requested' },
+        },
+      });
+
+      await writeSeal('Operator approved the amendment.');
+      const firstInputs = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+      const first = project(firstInputs);
+      await writeSeal('Operator approved the corrected amendment rationale.');
+      const secondInputs = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+      const second = project(secondInputs);
+
+      expect(secondInputs.sourceSnapshot.digest).toBe(firstInputs.sourceSnapshot.digest);
+      expect(second.scope.digest).not.toBe(first.scope.digest);
+      expect(second.tautology).toEqual(first.tautology);
+      expect(second.rootCause).toEqual(first.rootCause);
+      expect(second.completeness).toEqual(first.completeness);
     });
 
     it('renders a #1502 sealed-artifact amendment only when its operator reseal is persisted', async () => {

@@ -227,6 +227,58 @@ describe('engine/resolved-config', () => {
         },
       });
     });
+
+    it('resolves a provider-only rubric from its Codex-native policy without changing sibling policies', () => {
+      const resolved = resolveBuildReviewConfig({
+        llm_provider: 'claude',
+        build_review: {
+          rubrics: { scope: { llm_provider: 'codex' } },
+        },
+      } as HarnessConfig, CLAUDE_MODEL_POLICY);
+
+      expect(resolved.rubrics).toMatchObject({
+        tautology: {
+          llm_provider: 'claude',
+          model: 'opus',
+          effort: 'high',
+          model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+        },
+        rootCause: {
+          llm_provider: 'claude',
+          model: 'opus',
+          effort: 'high',
+          model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+        },
+        completeness: {
+          llm_provider: 'claude',
+          model: 'opus',
+          effort: 'high',
+          model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+        },
+        scope: {
+          llm_provider: 'codex',
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+          model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+        },
+      });
+    });
+
+    it('keeps explicit partial rubric overrides while resolving omitted native settings from Codex', () => {
+      const resolved = resolveBuildReviewConfig({
+        llm_provider: 'claude',
+        build_review: {
+          rubrics: { scope: { llm_provider: 'codex', effort: 'max' } },
+        },
+      } as HarnessConfig, CLAUDE_MODEL_POLICY);
+
+      expect(resolved.rubrics.scope).toMatchObject({
+        llm_provider: 'codex',
+        model: 'gpt-5.6-sol',
+        effort: 'max',
+        model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+      });
+    });
   });
 
   describe('Claude policy and provider-neutral defaults', () => {

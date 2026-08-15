@@ -21,7 +21,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderFullHelp } from '../../src/cli.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeBuildReviewMetrics } from '../../src/engine/build-tail-rollup.js';
@@ -168,14 +171,79 @@ describe('acceptance: independent build_review rubric execution', () => {
     expect(provider.invoke).toHaveBeenCalledTimes(4);
   });
 
-  it('uses provider-native runtimes, sessions, and policy for every mixed-provider rubric through the real runner', async () => {
+  it('misses Scope alone after production assembly observes a new operator reseal', async () => {
+    const { dir, planPath, head } = await fixtureRepo();
+    const projections: Array<{ rubric: string; digest: string; snapshotDigest: string }> = [];
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (options) => {
+        const projection = JSON.parse(options.prompt.slice(options.prompt.indexOf('{')));
+        projections.push({ rubric: projection.rubric, digest: projection.digest, snapshotDigest: projection.snapshotDigest });
+        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
+      }),
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
+      config: { build_review: { enabled: true, perTaskFloor: false }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+      events, planPath, pipelineDir: join(dir, '.pipeline'),
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' } } as never) },
+    });
+    const state = { complexity_tier: 'L', feature_desc: 'reseal-cache-isolation', track: 'product' } as const;
+    const projectionSource = (inputs: Awaited<ReturnType<typeof assembleBuildReviewInputs>>) =>
+      deriveBuildReviewRubricProjections({
+        lapId: 'cache-isolation-projection', inputs,
+        tautology: { changedTestSelectors: [], revertedProductionPatch: '[]', preflightEvidence: { classification: 'approved-exception' } },
+      } as never);
+    const beforeReseal = projectionSource(await assembleBuildReviewInputs(
+      makeGitRunner(dir), planPath,
+      { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' } } as never) },
+    ));
+
+    await runner.run('build_review', state);
+    await writeFile(join(dir, '.pipeline', 'protected-artifact-seal.json'), `${JSON.stringify({
+      version: 2, baselineCommit: head, protectedArtifacts: [], rebaselines: [{
+        trigger: 'operator-reseal', paths: ['.docs/stories/resealed-story.md'],
+        reason: 'Operator approved the protected story amendment.', fromCommit: 'reseal-base', toCommit: head,
+      }],
+    })}\n`);
+    const afterReseal = projectionSource(await assembleBuildReviewInputs(
+      makeGitRunner(dir), planPath,
+      { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' } } as never) },
+    ));
+    await runner.run('build_review', state);
+    persister.stop();
+
+    expect(projections).toHaveLength(5);
+    const initial = new Map(projections.slice(0, 4).map((projection) => [projection.rubric, projection]));
+    const resealedScope = projections[4]!;
+    expect(resealedScope.rubric).toBe('scope');
+    expect(resealedScope.digest).not.toBe(initial.get('scope')!.digest);
+    for (const rubric of ['tautology', 'rootCause', 'completeness']) {
+      expect(projections.filter((projection) => projection.rubric === rubric)).toHaveLength(1);
+      expect(beforeReseal[rubric as 'tautology' | 'rootCause' | 'completeness'].digest).toBe(
+        afterReseal[rubric as 'tautology' | 'rootCause' | 'completeness'].digest,
+      );
+    }
+    expect(beforeReseal.scope.digest).not.toBe(afterReseal.scope.digest);
+    const ledger = await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8');
+    expect(ledger.match(/build_review_cache_hit/g)).toHaveLength(3);
+  });
+
+  it('uses each mixed-provider rubric\'s native default model, effort, and fallback ladder through the real runner', async () => {
     const { dir, planPath } = await fixtureRepo();
-    const calls: Array<{ provider: string; prompt: string; model: string | undefined; sessionId: string | undefined }> = [];
+    const calls: Array<{ provider: string; prompt: string; model: string | undefined; effort: string | undefined; sessionId: string | undefined }> = [];
     const fake = (provider: string): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn(async (options) => {
-        calls.push({ provider, prompt: options.prompt, model: options.model, sessionId: options.sessionId });
+        calls.push({ provider, prompt: options.prompt, model: options.model, effort: options.effort, sessionId: options.sessionId });
         const projection = JSON.parse(options.prompt.slice(options.prompt.indexOf('{')));
+        // Make the real provider executor walk the resolved provider-native
+        // ladder. The model it retries is the observable policy boundary.
+        if (options.model === (provider === 'claude' ? 'opus' : 'gpt-5.6-sol')) {
+          return { success: false, output: 'fixture model unavailable', exitCode: 1, modelUnavailable: true };
+        }
         return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
     });
@@ -190,16 +258,23 @@ describe('acceptance: independent build_review rubric execution', () => {
     persister.start();
     const runner = new DefaultStepRunner(codex, 'maker-session', dir, {
       providerKey: 'codex', providerRuntimes: runtimes, sessionStore: new ProviderSessionStore({ createSessionId: (() => { let id = 0; return () => `review-session-${++id}`; })() }), events, planPath, pipelineDir: join(dir, '.pipeline'),
-      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { llm_provider: 'claude', model: 'opus' }, scope: { llm_provider: 'codex', model: 'gpt-5.6-sol' }, rootCause: { llm_provider: 'claude', model: 'sonnet' }, completeness: { llm_provider: 'codex', model: 'gpt-5.6-terra' } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { llm_provider: 'claude' }, scope: { llm_provider: 'codex' }, rootCause: { llm_provider: 'claude', effort: 'medium' }, completeness: {} } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) },
     });
     const result = await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'mixed-policy', track: 'product' });
     expect(result.success, result.output).toBe(true);
-    expect(calls.map(({ provider, prompt, model, sessionId }) => ({ provider, skill: prompt.match(/^[/$](build-review-[\w-]+)/m)?.[1], model, sessionId }))).toEqual(expect.arrayContaining([
-      { provider: 'claude', skill: 'build-review-tautology', model: 'opus', sessionId: 'review-session-1' },
-      { provider: 'codex', skill: 'build-review-scope', model: 'gpt-5.6-sol', sessionId: 'review-session-2' },
-      { provider: 'claude', skill: 'build-review-root-cause', model: 'sonnet', sessionId: 'review-session-3' },
-      { provider: 'codex', skill: 'build-review-completeness', model: 'gpt-5.6-terra', sessionId: 'review-session-4' },
+    const observed = calls.map(({ provider, prompt, model, effort }) => ({
+      provider, skill: prompt.match(/^[/$](build-review-[\w-]+)/m)?.[1], model, effort,
+    }));
+    expect(observed).toEqual(expect.arrayContaining([
+      { provider: 'claude', skill: 'build-review-tautology', model: 'opus', effort: 'high' },
+      { provider: 'claude', skill: 'build-review-tautology', model: 'sonnet', effort: 'high' },
+      { provider: 'codex', skill: 'build-review-scope', model: 'gpt-5.6-sol', effort: 'high' },
+      { provider: 'codex', skill: 'build-review-scope', model: 'gpt-5.6-terra', effort: 'high' },
+      { provider: 'claude', skill: 'build-review-root-cause', model: 'opus', effort: 'medium' },
+      { provider: 'claude', skill: 'build-review-root-cause', model: 'sonnet', effort: 'medium' },
+      { provider: 'codex', skill: 'build-review-completeness', model: 'gpt-5.6-sol', effort: 'high' },
+      { provider: 'codex', skill: 'build-review-completeness', model: 'gpt-5.6-terra', effort: 'high' },
     ]));
     expect(JSON.parse(await readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).coverage).toEqual({
       tautology: 'judged', scope: 'judged', rootCause: 'judged', completeness: 'judged',

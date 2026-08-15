@@ -88,7 +88,7 @@ export interface BuildReviewSourceSnapshot {
   readonly repairContext: readonly TestSuiteRemediationRecord[];
   /** Accepted containment widenings sealed with the source read for Scope alone. */
   readonly acceptedWidenings: readonly AcceptedScopeWidening[];
-  /** Operator-authorized reseals frozen with the source read for Scope alone. */
+  /** Operator-authorized reseals frozen with the source read for Scope alone; excluded from shared identity. */
   readonly operatorReseals?: readonly BuildReviewOperatorResealSnapshot[];
   readonly removalContext: {
     readonly deletedFiles: readonly string[];
@@ -155,7 +155,8 @@ function projectRootForPlan(planPath: string): string {
 }
 
 function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest'>): string {
-  return `sha256:${createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}`;
+  const { operatorReseals: _scopeOnlyReseals, ...sharedSnapshot } = snapshot;
+  return `sha256:${createHash('sha256').update(JSON.stringify(sharedSnapshot)).digest('hex')}`;
 }
 
 function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): readonly AcceptedScopeWidening[] {
