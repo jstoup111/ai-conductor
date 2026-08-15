@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -400,6 +401,14 @@ export function resolveProviderCandidateNativeConfig({
 export interface InvokeProviderCandidateInput {
   providerKey: string;
   runtime: ProviderRuntime;
+  /**
+   * Retained for caller API stability and step-scoped diagnostics keying, but
+   * its ids are deliberately NEVER threaded into invocations. Provider session
+   * reuse was removed by design (fresh session per invocation): on 2026-08-14
+   * store-derived ids resurrected a ~1.28M-token resumed conversation shared
+   * across all four build_review rubric branches. Every invocation attempt —
+   * including each model-fallback-ladder attempt — mints its own randomUUID().
+   */
   sessions: Pick<ProviderSessionScope, 'prepare'>;
   resolved: ResolvedProviderNativeStepConfig;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
@@ -418,7 +427,6 @@ const sessionPolicyDiagnostics = new WeakMap<object, Set<string>>();
 export async function invokeProviderCandidate({
   providerKey,
   runtime,
-  sessions,
   resolved,
   options,
   modelFallbackLadder,
@@ -427,20 +435,23 @@ export async function invokeProviderCandidate({
   invokedModel?: string;
   sessionPolicySuppression?: SessionPolicySuppression;
 }> {
-  const session = await sessions.prepare(providerKey);
   const suppressForUnsupportedCapability =
     runtime.provider.supportsSessionResume !== true;
+  // Fresh session per invocation, never a store-derived id. Session reuse was
+  // removed by design; the 2026-08-14 incident (rubric branches appending to a
+  // shared ~1.28M-token conversation) proved a reused id resumes the prior
+  // conversation regardless of `resume: false`. The adapter boundary enforces
+  // the same invariant (enforceFreshSessionOptions); minting here keeps this
+  // caller honest too.
   const invocationOptions = {
     ...options,
-    sessionId: session.id,
+    sessionId: randomUUID(),
     resume: false,
     model: resolved.model,
     effort: resolved.effort,
   };
-  const prepareFallback = async () => {
-    const next = await sessions.prepare(providerKey);
-    return { sessionId: next.id, resume: next.resume };
-  };
+  // Each model-fallback-ladder attempt also gets its own fresh session.
+  const prepareFallback = async () => ({ sessionId: randomUUID(), resume: false });
   const invocation = modelFallbackLadder
     ? await new ModelAvailability(modelFallbackLadder).invokeWithLadderResolved(
         runtime.provider,

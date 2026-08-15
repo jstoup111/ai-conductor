@@ -509,20 +509,25 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         attempt: input.attempt,
         escalate: input.escalate,
       })),
-      sessions: invokeInteractive.mock.calls.map(([options]) => ({
-        sessionId: options.sessionId,
-        resume: options.resume,
-      })),
     }).toEqual({
       retryPolicy: [
         { attempt: 1, escalate: false },
         { attempt: 2, escalate: false },
       ],
-      sessions: [
-        { sessionId: "manual-claude-attempt-1", resume: false },
-        { sessionId: "manual-claude-attempt-2", resume: false },
-      ],
     });
+    // Fresh session per attempt: each retry mints its own unused UUID and
+    // never resumes — store-derived ids (removed by design) must not appear.
+    const attemptSessions = invokeInteractive.mock.calls.map(([options]) => ({
+      sessionId: options.sessionId,
+      resume: options.resume,
+    }));
+    expect(attemptSessions.map(({ resume }) => resume)).toEqual([false, false]);
+    expect(new Set(attemptSessions.map(({ sessionId }) => sessionId)).size).toBe(2);
+    for (const { sessionId } of attemptSessions) {
+      expect(sessionId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+    }
   });
 
   it("routes reversed concurrent members through provider-local branch scopes without mutating serial authority", async () => {

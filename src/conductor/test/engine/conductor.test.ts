@@ -10375,8 +10375,20 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       const targetSteps = new Set(['memory', 'explore']);
+      // Session reuse was removed by design: every dispatch — the stale
+      // attempt, its recovery, the budget-neutral retry, and each provider
+      // candidate — mints its own fresh, unused UUID (never a store id).
+      const freshSessionIdRe =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const sessionIds = calls.map(({ sessionId }) => sessionId);
+      expect(new Set(sessionIds).size).toBe(sessionIds.length);
+      for (const id of sessionIds) expect(id).toMatch(freshSessionIdRe);
       expect({
-        calls,
+        calls: calls.map(({ step, provider: providerKey, resume }) => ({
+          step,
+          provider: providerKey,
+          resume,
+        })),
         beginStepCalls: beginStep.mock.calls.filter(([step]) =>
           targetSteps.has(step)
         ),
@@ -10385,36 +10397,11 @@ describe('engine/conductor', () => {
         ),
       }).toEqual({
         calls: [
-          {
-            step: 'memory',
-            provider: 'codex',
-            sessionId: 'memory-codex-stale',
-            resume: false,
-          },
-          {
-            step: 'memory',
-            provider: 'codex',
-            sessionId: 'memory-codex-recovered',
-            resume: false,
-          },
-          {
-            step: 'memory',
-            provider: 'codex',
-            sessionId: 'memory-codex-retry',
-            resume: false,
-          },
-          {
-            step: 'explore',
-            provider: 'codex',
-            sessionId: 'explore-codex',
-            resume: false,
-          },
-          {
-            step: 'explore',
-            provider: 'claude',
-            sessionId: 'explore-claude',
-            resume: false,
-          },
+          { step: 'memory', provider: 'codex', resume: false },
+          { step: 'memory', provider: 'codex', resume: false },
+          { step: 'memory', provider: 'codex', resume: false },
+          { step: 'explore', provider: 'codex', resume: false },
+          { step: 'explore', provider: 'claude', resume: false },
         ],
         beginStepCalls: [['memory'], ['explore']],
         resetSessionCalls: [

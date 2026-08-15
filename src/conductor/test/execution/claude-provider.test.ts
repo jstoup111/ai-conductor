@@ -276,8 +276,14 @@ describe('ClaudeProvider', () => {
       expect(mockExeca).toHaveBeenCalledOnce();
       const [cmd, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(cmd).toBe('claude');
-      expect(args).toContain('--session-id');
-      expect(args).toContain('abc-123');
+      const sessionIndex = args.indexOf('--session-id');
+      expect(sessionIndex).toBeGreaterThanOrEqual(0);
+      // Boundary enforcement mints a fresh session id; the caller-supplied id
+      // never reaches the CLI (session reuse was removed by design).
+      expect(args[sessionIndex + 1]).not.toBe('abc-123');
+      expect(args[sessionIndex + 1]).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
       expect(args).not.toContain('--resume');
     });
 
@@ -341,7 +347,9 @@ describe('ClaudeProvider', () => {
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).toContain('--session-id');
       expect(args).not.toContain('--resume');
-      expect(args).toContain('abc-123');
+      // resume: true is suppressed AND the supplied id is replaced with a
+      // fresh one, so the CLI cannot resurrect the prior conversation.
+      expect(args).not.toContain('abc-123');
     });
 
     it('includes --dangerously-skip-permissions when specified', async () => {

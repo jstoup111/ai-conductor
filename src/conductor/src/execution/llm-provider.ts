@@ -211,6 +211,16 @@ export interface InvokeOptions {
   systemPrompt?: string;
   sessionId: string;
   resume: boolean;
+  /**
+   * Explicit override valve for the adapter-boundary fresh-session
+   * enforcement (`enforceFreshSessionOptions`). Provider session reuse was
+   * removed from this harness by design — every invocation gets a freshly
+   * minted session id and `resume: false` at the adapter entry. Nothing in
+   * production sets this field and no config key enables it; it exists only
+   * so a test can prove the enforcement valve itself. Default: permanently
+   * off.
+   */
+  dangerouslyReuseSession?: boolean;
   interactive?: boolean;
   dangerouslySkipPermissions?: boolean;
   stepCooldown?: number;

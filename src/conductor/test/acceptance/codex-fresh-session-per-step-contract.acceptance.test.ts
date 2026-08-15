@@ -238,15 +238,24 @@ describe('S1 — Codex dispatch never requests session resume', () => {
     const scopeWantsResume = (await sessions.prepare('codex')).resume;
     await dispatch(shared);
 
+    // Session reuse was removed by design: each dispatch mints its own fresh
+    // UUID — the scope's id never reaches the provider and no two dispatches
+    // may share a session.
+    const sessionIds = codex.calls.map((call) => call.sessionId);
     expect({
       scopeWantsResume,
       resumeFlags: codex.calls.map((call) => call.resume),
-      sessionIds: codex.calls.map((call) => call.sessionId),
+      uniqueSessionIds: new Set(sessionIds).size,
     }).toEqual({
       scopeWantsResume: false,
       resumeFlags: [false, false],
-      sessionIds: ['harness-minted-uuid', 'harness-minted-uuid'],
+      uniqueSessionIds: 2,
     });
+    for (const id of sessionIds) {
+      expect(id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+    }
   });
 
   it('fails closed for a provider that never declares the capability', async () => {
@@ -289,15 +298,22 @@ describe('S1 — Codex dispatch never requests session resume', () => {
     await dispatch(shared);
     await dispatch(shared);
 
+    // Cold means COLD: fresh unique session ids per retry, never the scope's.
+    const sessionIds = claude.calls.map((call) => call.sessionId);
     expect({
       resumeFlags: claude.calls.map((call) => call.resume),
-      sessionIds: claude.calls.map((call) => call.sessionId),
+      uniqueSessionIds: new Set(sessionIds).size,
       transitionTypes: transitions.map((transition) => transition.type),
     }).toEqual({
       resumeFlags: [false, false],
-      sessionIds: ['claude-session', 'claude-session'],
+      uniqueSessionIds: 2,
       transitionTypes: [],
     });
+    for (const id of sessionIds) {
+      expect(id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+    }
   });
 
   it('keeps isolated self-host dispatches fresh', async () => {
