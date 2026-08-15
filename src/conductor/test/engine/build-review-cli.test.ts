@@ -86,7 +86,7 @@ describe('build-review findings CLI', () => {
     const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!;
     const print = vi.fn();
     const store = { list: vi.fn(async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' }, finding: identity, sourceLapId: lapId, summary: 'accepted', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T12:00:00.000Z' }] })), append: vi.fn() };
-    const readFile = vi.fn(async () => JSON.stringify(aggregate));
+    const readFile = vi.fn(async (_path: string) => JSON.stringify(aggregate));
 
     await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
       cwd: '/main/.worktrees/review-rubrics', resolveMainRoot: async () => '/main', realpath: async (path) => path,
@@ -100,6 +100,49 @@ describe('build-review findings CLI', () => {
       feature: 'review-rubrics', lapId: 'lap-current', rawVerdict: 'FAIL', verdict: 'FAIL',
       acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['completeness'], infrastructureFailureRubrics: ['rootCause'],
     });
+  });
+
+  it('uses the live runner canonical identity for both findings reads and acceptance writes through an alternate main root', async () => {
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!;
+    const realpath = async (path: string) => path
+      .replace('/alternate-main', '/canonical-main');
+    const findingsStore = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append: vi.fn() };
+    const readFile = vi.fn(async (_path: string) => JSON.stringify(aggregate));
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/alternate-main', resolveMainRoot: async () => '/alternate-main', realpath,
+      readFile, createStore: () => findingsStore, print: vi.fn(),
+    })).resolves.toBe(0);
+    expect(readFile).toHaveBeenCalledWith('/canonical-main/.worktrees/review-rubrics/.pipeline/build-review.json');
+    expect(findingsStore.list).toHaveBeenCalledWith({ version: 'v1', repository: '/canonical-main', feature: 'review-rubrics' });
+
+    const append = vi.fn(async (input) => ({ ok: true as const, record: { version: 'v1' as const, ...input, acceptedAt: '2026-08-14T12:00:00.000Z' } }));
+    const acceptanceStore = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append };
+    await expect(dispatchBuildReviewAccept({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: identity.id, rationale: 'Known migration risk' }, {
+      cwd: '/alternate-main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/alternate-main', realpath,
+      readFile: async () => JSON.stringify(aggregate), createStore: () => acceptanceStore, print: vi.fn(), appendEvent: vi.fn(),
+    })).resolves.toBe(0);
+    expect(acceptanceStore.list).toHaveBeenCalledWith({ version: 'v1', repository: '/canonical-main', feature: 'review-rubrics' });
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      feature: { version: 'v1', repository: '/canonical-main', feature: 'review-rubrics' },
+    }));
+  });
+
+  it('rejects unavailable or mismatched canonical identities before reading or mutating disposition state', async () => {
+    const store = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append: vi.fn() };
+    const unavailable = { resolveMainRoot: async () => { throw new Error('no main root'); }, realpath: async (path: string) => path };
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', ...unavailable, createStore: () => store, readFile: async () => JSON.stringify(aggregate), print: vi.fn(),
+    })).resolves.toBe(1);
+    await expect(dispatchBuildReviewAccept({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: 'sha256:unknown', rationale: 'risk' }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', ...unavailable, createStore: () => store, readFile: async () => JSON.stringify(aggregate), print: vi.fn(), appendEvent: vi.fn(),
+    })).resolves.toBe(1);
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path.replace('review-rubrics', 'other-feature'),
+      createStore: () => store, readFile: async () => JSON.stringify(aggregate), print: vi.fn(),
+    })).resolves.toBe(1);
+    expect(store.list).not.toHaveBeenCalled();
+    expect(store.append).not.toHaveBeenCalled();
   });
 
   it('fails closed for absent, malformed, or mismatched current feature state without writing or booting a pipeline', async () => {

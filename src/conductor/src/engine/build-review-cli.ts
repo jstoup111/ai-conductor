@@ -6,6 +6,7 @@ import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggr
 import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { parseBuildReviewLapId } from './build-review-domain.js';
+import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
 
@@ -60,16 +61,38 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
   ].join('\n');
 }
 
+type ResolvedCliFeature = {
+  readonly worktree: string;
+  readonly feature: BuildReviewFeatureIdentity;
+};
+
+/** The CLI and live runner must address the same canonical feature state. */
+async function resolveCliFeature(
+  command: Pick<BuildReviewFindingsCommand, 'feature'>,
+  deps: Pick<BuildReviewFindingsDeps, 'cwd' | 'resolveMainRoot' | 'realpath'>,
+): Promise<ResolvedCliFeature | undefined> {
+  try {
+    const resolveMainRoot = deps.resolveMainRoot ?? resolveMainRepoRoot;
+    const realpath = deps.realpath ?? realpathDefault;
+    const root = await resolveMainRoot(deps.cwd ?? process.cwd());
+    const worktree = await realpath(join(root, '.worktrees', command.feature));
+    const feature = await resolveBuildReviewFeatureIdentity(worktree, { resolveMainRoot, realpath });
+    return feature?.feature === command.feature ? { worktree, feature } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Read only current feature artifacts; this deliberately never constructs a pipeline or state lease. */
 export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCommand, deps: BuildReviewFindingsDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
   try {
-    const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
-    const worktree = await (deps.realpath ?? realpathDefault)(join(root, '.worktrees', command.feature));
+    const resolved = await resolveCliFeature(command, deps);
+    if (!resolved) throw new Error('feature identity is unavailable');
+    const { worktree, feature } = resolved;
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate) throw new Error('aggregate is malformed');
-    const feature: BuildReviewFeatureIdentity = { version: 'v1', repository: root, feature: command.feature };
     const listed = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).list(feature);
     if (!listed.ok) throw new Error(listed.message);
     const records = listed.records;
@@ -92,12 +115,14 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
 export async function dispatchBuildReviewAccept(command: BuildReviewAcceptCommand, deps: BuildReviewAcceptDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
   let worktree: string | undefined;
+  let feature: BuildReviewFeatureIdentity | undefined;
   try {
     // Resolve the feature-owned external-event target before validating any
     // mutable review state. Every refusal can then be observed through the
     // existing same-schema writer, including argument and TTY failures.
-    const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
-    worktree = await (deps.realpath ?? realpathDefault)(join(root, '.worktrees', command.feature));
+    const resolved = await resolveCliFeature(command, deps);
+    if (!resolved) throw new Error('feature identity is unavailable');
+    ({ worktree, feature } = resolved);
   } catch {
     print(`build-review accept: refused for '${command.feature}'; the feature worktree could not be resolved.`);
     return 1;
@@ -122,7 +147,6 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     return refuse('invalid-lap-or-blank-rationale', 'build-review accept: requires an exact current lap and non-empty rationale.');
   }
   try {
-    const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');
@@ -134,9 +158,7 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
       : []).find((candidate) => candidate.identity?.id === command.findingId);
     if (!currentFinding?.identity) throw new Error('finding is not a current judged finding');
     const identity = currentFinding.identity;
-    const repository = (deps.resolveRepository ?? ((projectRoot: string) => projectRoot))(root);
-    if (!repository?.trim()) throw new Error('machine-scoped repository identity is unavailable');
-    const feature: BuildReviewFeatureIdentity = { version: 'v1', repository, feature: command.feature };
+    if (!feature) throw new Error('feature identity is unavailable');
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.finding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
     const appended = store.appendIfCurrent
