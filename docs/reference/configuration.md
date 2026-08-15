@@ -126,7 +126,6 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
-| `wiring` | object | none | [wiring](#wiring) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
@@ -1155,10 +1154,6 @@ test_suite:
   timeout_seconds: 1800
   environment:
     - CI
-
-wiring:
-  entry_points:
-    - src/index.ts
 
 markdown_viewer:
   preset: glow
