@@ -26,6 +26,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState, ConductorEvent } from '../../src/types/index.js';
+import { EVENT_SINKS, auditedEventTypes, persistedEventTypes } from '../../src/engine/event-sinks.js';
 import { writeState } from '../../src/engine/state.js';
 
 /**
@@ -586,11 +587,37 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
       }
     }
 
-    // The grading-provenance event is classified not-audited-by-design above,
-    // which is only coherent because the spine persists it instead — assert
-    // that runtime classification here so the pairing cannot drift apart.
-    const { persistedEventTypes } = await import('../../src/engine/event-sinks.js');
-    expect(persistedEventTypes()).toContain('build_review_repair_context');
+    // These variants are intentionally off the audit trail: their runtime sink
+    // declarations must agree with the writer observation above.  The engine
+    // rubric events stay durable; externally-owned disposition events do not
+    // re-enter events.jsonl when the closeout tail re-emits them.
+    const buildReviewSinkExpectations = {
+      build_review_rubric_started: { render: false, persist: true, audit: false },
+      build_review_rubric_result: { render: false, persist: true, audit: false },
+      build_review_rubric_skipped: { render: false, persist: true, audit: false },
+      build_review_cache_hit: { render: false, persist: true, audit: false },
+      build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false },
+      build_review_disposition_accepted: { render: false, persist: false, audit: false },
+      build_review_disposition_refused: { render: false, persist: false, audit: false },
+      build_review_outer_verdict: { render: false, persist: true, audit: false },
+    } satisfies Partial<Record<ConductorEvent['type'], { render: boolean; persist: boolean; audit: boolean }>>;
+    expect(Object.fromEntries(Object.keys(buildReviewSinkExpectations).map((type) => [
+      type,
+      EVENT_SINKS[type as ConductorEvent['type']],
+    ]))).toEqual(buildReviewSinkExpectations);
+    expect(persistedEventTypes()).toEqual(expect.arrayContaining([
+      'build_review_rubric_started',
+      'build_review_rubric_result',
+      'build_review_rubric_skipped',
+      'build_review_cache_hit',
+      'build_review_rubric_infrastructure_failure',
+      'build_review_outer_verdict',
+    ]));
+    expect(persistedEventTypes()).not.toEqual(expect.arrayContaining([
+      'build_review_disposition_accepted',
+      'build_review_disposition_refused',
+    ]));
+    expect(auditedEventTypes()).not.toEqual(expect.arrayContaining(Object.keys(buildReviewSinkExpectations)));
   });
 
   it('a UI-only event with no writer mapping produces no record and no error (allowlist, not a catch-all)', async () => {
