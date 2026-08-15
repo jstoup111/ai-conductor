@@ -40,7 +40,8 @@ export interface BuildReviewCacheLookup {
   snapshotDigest: string;
 }
 
-interface ParsedBuildReviewCacheEntry extends Omit<BuildReviewCacheEntry, "projectionVersion"> {
+/** Safely parsed persisted state, including legacy entries that must miss closed. */
+export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "projectionVersion"> {
   projectionVersion: "v1" | "v2";
 }
 
@@ -87,7 +88,7 @@ function isRubric(value: unknown): value is BuildReviewRubricId {
 }
 
 /** Strictly parses the cache boundary; unknown fields and non-judgements miss closed. */
-function parseBuildReviewCacheEntryCandidate(value: unknown): ParsedBuildReviewCacheEntry | undefined {
+function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEntryCandidate | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   const keys = [
@@ -128,9 +129,9 @@ export async function readBuildReviewCacheEntry(
   projectRoot: string,
   rubric: BuildReviewRubricId,
   fs: BuildReviewCacheFilesystem,
-): Promise<BuildReviewCacheEntry | undefined> {
+): Promise<BuildReviewCacheEntryCandidate | undefined> {
   try {
-    return parseBuildReviewCacheEntry(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
+    return parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
   } catch {
     return undefined;
   }

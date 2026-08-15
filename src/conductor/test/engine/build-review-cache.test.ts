@@ -62,7 +62,7 @@ describe("build-review semantic cache", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v1" })).toBeUndefined();
   });
 
-  it("rejects stored v1 entries against the current v2 projection identity", () => {
+  it("classifies stored v1 entries through the read seam against the current v2 projection identity", async () => {
     const currentLookup = {
       rubric: "scope",
       contractVersion: "v1",
@@ -72,9 +72,14 @@ describe("build-review semantic cache", () => {
       lapId: "lap-current",
       snapshotDigest: "snapshot-current",
     } as never;
+    const root = "/feature";
+    const path = cacheEntryPath(root, "scope");
+    const fs = memoryFilesystem({
+      [path]: JSON.stringify({ ...entry(), projectionVersion: "v1" }),
+    });
 
     expect([
-      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v1" }, currentLookup),
+      classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "scope", fs), currentLookup),
       classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v2", projectionDigest: "sha256:changed-input" }, currentLookup),
     ]).toEqual([
       { kind: "miss", reason: "projection-version-mismatch" },
