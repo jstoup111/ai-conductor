@@ -376,7 +376,7 @@ describe('CodexProvider', () => {
       const [command, args, options] = mockExeca.mock.calls[0];
       expect(command).toBe('/resolved/codex');
       expect(args).toEqual(expect.arrayContaining(['--config', 'project_doc_max_bytes=0']));
-      expect(options.env).toEqual({ CODEX_HOME: isolatedHome });
+      expect(options.env).toEqual({ CODEX_HOME: isolatedHome, CONDUCT_DAEMON_SESSION: '1' });
     } finally {
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
       else process.env.CODEX_API_KEY = priorKey;
@@ -470,7 +470,7 @@ describe('CodexProvider', () => {
         'shell_environment_policy.ignore_default_excludes=false',
       ]));
       expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
-      expect(options.env).toEqual({ CODEX_API_KEY: key });
+      expect(options.env).toEqual({ CODEX_API_KEY: key, CONDUCT_DAEMON_SESSION: '1' });
       expect(args).not.toContain(key);
     } finally {
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
@@ -1357,8 +1357,8 @@ describe('CodexProvider', () => {
       await boundProvider.invoke({ ...baseOptions, resume: true });
 
       expect(mockExeca.mock.calls.map(([, , options]) => options.env)).toEqual([
-        { CODEX_API_KEY: key },
-        { CODEX_API_KEY: key },
+        { CODEX_API_KEY: key, CONDUCT_DAEMON_SESSION: '1' },
+        { CODEX_API_KEY: key, CONDUCT_DAEMON_SESSION: '1' },
       ]);
     } finally {
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;

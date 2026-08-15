@@ -620,6 +620,11 @@ Each of these encodes a failure that has already corrupted daemon state.
 4. **A manual PR is not a harness finish.** Opening a PR by hand tells the daemon nothing, so it
    re-dispatches the feature forever and parking is the only stopgap. Record the ship instead —
    see the next section.
+5. **Dispatched sessions cannot run `conduct-ts`.** Every session the daemon dispatches carries
+   `CONDUCT_DAEMON_SESSION=1`, and `conduct-ts` refuses to run under it (exit 1) except for the
+   session-sanctioned worker commands its skills mandate — so a maker session can never park,
+   unpark, restart, or reseal the daemon that dispatched it. See the
+   [CLI reference](../reference/cli.md#daemon-session-refusal).
 
 ## Record a manual finish
 

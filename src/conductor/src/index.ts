@@ -9,6 +9,7 @@ export { classifyReleasePublication, runReleasePublisherAction } from './engine/
 
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
+import { guardDaemonSessionInvocation } from './execution/daemon-session.js';
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -458,6 +459,18 @@ export async function overlapScanCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  // Boundary enforcement, before any subcommand parsing: a conduct-ts
+  // invocation from inside an engine-dispatched provider session (daemon
+  // builds, reviews, self-host candidates — marked CONDUCT_DAEMON_SESSION=1)
+  // is refused, except for the session-sanctioned worker subcommands the
+  // harness's own skills/hooks mandate. See execution/daemon-session.ts.
+  const daemonSessionVerdict = guardDaemonSessionInvocation(process.argv);
+  if (!daemonSessionVerdict.allowed) {
+    console.error(`Error: ${daemonSessionVerdict.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
   const buildReviewAcceptCmd = detectBuildReviewAcceptCommand(process.argv);
   if (buildReviewAcceptCmd) {
     process.exitCode = await dispatchBuildReviewAccept(buildReviewAcceptCmd);
