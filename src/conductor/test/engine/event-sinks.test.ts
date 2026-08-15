@@ -92,8 +92,6 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_skipped',
   'build_review_cache_hit',
   'build_review_rubric_infrastructure_failure',
-  'build_review_disposition_accepted',
-  'build_review_disposition_refused',
   'build_review_outer_verdict',
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -303,6 +301,21 @@ describe('event sink subscriptions', () => {
       sinks: { render: true, persist: false, audit: false },
       rendered: true,
       persisted: false,
+    });
+  });
+
+  it('keeps externally-owned build-review dispositions off the engine ledger', () => {
+    expect({
+      accepted: EVENT_SINKS.build_review_disposition_accepted,
+      refused: EVENT_SINKS.build_review_disposition_refused,
+      persisted: persistedEventTypes(),
+    }).toEqual({
+      accepted: { render: false, persist: false, audit: false },
+      refused: { render: false, persist: false, audit: false },
+      persisted: expect.not.arrayContaining([
+        'build_review_disposition_accepted',
+        'build_review_disposition_refused',
+      ]),
     });
   });
 
