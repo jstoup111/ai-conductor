@@ -20,9 +20,17 @@ including `baseRef`/`mergeBase`/`headSha`). The fix:
 
 - **`build-review-inputs.ts`** — add a `contentDigest` field to
   `BuildReviewSourceSnapshot`: sha256 over the shared snapshot's content fields only
-  (diff, planBody, repairContext, acceptedWidenings, removalContext), excluding
-  `digest`, `baseRef`, `mergeBase`, `headSha`, and the scope-only `operatorReseals`.
+  (diff, planBody, repairContext, removalContext), excluding
+  `digest`, `baseRef`, `mergeBase`, `headSha`, and the scope-only fields
+  `acceptedWidenings` and `operatorReseals`.
   The existing `digest` (full identity) is unchanged and stays on the snapshot.
+  *(Operator ruling 2026-08-15, resolving the Task 5 stall: cache identity is
+  rubric-specific. `acceptedWidenings` is consumed only by the scope projection, so it
+  must not enter the shared `contentDigest`; it reaches scope's cache key through
+  `projectionDigest()` over `ScopeProjection`'s own fields — exactly like
+  `operatorReseals`. A newly accepted widening therefore invalidates only scope's
+  cache entry, preserving Task 5's selectivity criterion: scope misses and
+  re-dispatches while the other three rubrics still hit.)*
 - **`build-review-projections.ts`** — `common()` carries `contentDigest`;
   `projectionDigest()` digests the projection excluding `digest`, `lapId`,
   `snapshotDigest`, `mergeBase`, and `headSha`. Content sensitivity is preserved
