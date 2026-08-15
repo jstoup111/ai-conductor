@@ -89,7 +89,7 @@ function inputs(): BuildReviewFrozenInputs {
     removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
     testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" } as never,
     sourceSnapshot: {
-      digest: "sha256:snapshot", baseRef: "origin/main", mergeBase: "base", headSha: "head",
+      digest: "sha256:snapshot", contentDigest: "sha256:content", baseRef: "origin/main", mergeBase: "base", headSha: "head",
       diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
       planBody: "# Plan\n", repairContext: [], acceptedWidenings: [],
       removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },

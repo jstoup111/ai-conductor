@@ -80,6 +80,8 @@ export interface BuildReviewFrozenInputs extends BuildReviewInputs {
 /** One frozen source view. Rubric branches receive projections of this value, never live reads. */
 export interface BuildReviewSourceSnapshot {
   readonly digest: string;
+  /** Stable identity of review content, independent of the checked-out commit provenance. */
+  readonly contentDigest: string;
   readonly baseRef: string;
   readonly mergeBase: string;
   readonly headSha: string;
@@ -154,9 +156,23 @@ function projectRootForPlan(planPath: string): string {
     : dirname(planPath);
 }
 
-function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest'>): string {
+function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>): string {
   const { operatorReseals: _scopeOnlyReseals, ...sharedSnapshot } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify(sharedSnapshot)).digest('hex')}`;
+}
+
+function contentSnapshotDigest(snapshot: Pick<
+  BuildReviewSourceSnapshot,
+  'diff' | 'planBody' | 'repairContext' | 'acceptedWidenings' | 'removalContext'
+>): string {
+  const { diff, planBody, repairContext, acceptedWidenings, removalContext } = snapshot;
+  return `sha256:${createHash('sha256').update(JSON.stringify({
+    diff,
+    planBody,
+    repairContext,
+    acceptedWidenings,
+    removalContext,
+  })).digest('hex')}`;
 }
 
 function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): readonly AcceptedScopeWidening[] {
@@ -270,10 +286,11 @@ export async function assembleBuildReviewInputs(
       removedDeclarations: Object.freeze([...removalContext.removedDeclarations]),
       removedMembers: Object.freeze([...removalContext.removedMembers]),
     }),
-  } satisfies Omit<BuildReviewSourceSnapshot, 'digest'>;
+  } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,
     digest: snapshotDigest(snapshotWithoutDigest),
+    contentDigest: contentSnapshotDigest(snapshotWithoutDigest),
   });
 
   return {

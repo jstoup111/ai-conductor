@@ -105,6 +105,66 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs).not.toHaveProperty('acceptedDispositions');
     });
 
+    it('derives content identity from review content rather than git provenance or operator reseals', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/identity.md');
+
+      async function contentDigestFor({
+        baseRef = 'feature/first',
+        mergeBase = 'base-first',
+        headSha = 'head-first',
+        diff = 'diff --git a/a b/a\n+change\n',
+        planBody = '# Plan body\n\nSome plan content.\n',
+        resealReason = 'Operator approved the amendment.',
+      } = {}): Promise<string> {
+        await mkdir(join(dir, '.docs/plans'), { recursive: true });
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(scopedPlanPath, planBody, 'utf-8');
+        await writeFile(join(dir, '.pipeline/protected-artifact-seal.json'), JSON.stringify({
+          version: 2,
+          baselineCommit: 'baseline',
+          protectedArtifacts: [],
+          rebaselines: [{
+            trigger: 'operator-reseal', fromCommit: 'before', toCommit: 'after',
+            paths: ['.docs/stories/fixture.md'], reason: resealReason,
+          }],
+        }));
+        const { git } = fakeGit([
+          { match: ['remote'], result: { exitCode: 0, stdout: '' } },
+          { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: `${baseRef}\n` } },
+          { match: ['merge-base', baseRef, 'HEAD'], result: { stdout: `${mergeBase}\n` } },
+          { match: ['diff', `${mergeBase}..HEAD`], result: { stdout: diff } },
+        ]);
+
+        return (await assembleBuildReviewInputs(git, scopedPlanPath, {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { ...CURRENT_PROOF.evidence, provenanceHeadSha: headSha },
+          }),
+        })).sourceSnapshot.contentDigest;
+      }
+
+      const baseline = await contentDigestFor();
+      const changedProvenance = await contentDigestFor({
+          baseRef: 'feature/rebased', mergeBase: 'base-rebased', headSha: 'head-rebased',
+      });
+      const oneByteDiff = await contentDigestFor({ diff: 'diff --git a/a b/a\n+changed\n' });
+      const changedPlan = await contentDigestFor({ planBody: '# Plan body\n\nChanged plan content.\n' });
+      const changedReseal = await contentDigestFor({ resealReason: 'Operator approved the corrected amendment.' });
+
+      expect({
+        hasSha256Digest: /^sha256:[a-f0-9]{64}$/.test(baseline),
+        provenanceIsExcluded: changedProvenance === baseline,
+        diffIsIncluded: oneByteDiff !== baseline,
+        planIsIncluded: changedPlan !== baseline,
+        resealIsExcluded: changedReseal === baseline,
+      }).toEqual({
+        hasSha256Digest: true,
+        provenanceIsExcluded: true,
+        diffIsIncluded: true,
+        planIsIncluded: true,
+        resealIsExcluded: true,
+      });
+    });
+
     it.each([
       { status: 'FAILED', reason: 'nonzero_exit', message: 'suite failed' },
       { status: 'STALE', reason: 'source_changed' },
