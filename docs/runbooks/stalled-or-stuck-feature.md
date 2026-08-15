@@ -661,7 +661,19 @@ original assertion before BUILD starts again:
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-The note is additive: retain the original text and create no separate record. Re-author the plan
+The note is additive: retain the original text and create no separate record.
+
+**Annotate history-shaped artifacts; rewrite state-shaped ones.** The additive-note rule above is
+for artifacts that downstream machinery reads as *history* — a plan's executed tasks are the ledger
+the completeness grader matches landed commits against, so deleting one orphans its diff. But
+`prd_audit` and the as-built architecture review re-judge the PRD's functional requirements,
+stories' scenarios, and the component diagram as *current state*, comparing what the artifact
+states verbatim against the shipped implementation. An amendment note asking the reader to
+substitute new meaning leaves the stated requirement contradicting the code, and every downstream
+re-judgement risks a finding. For state-shaped artifacts, rewrite the statement outright and keep a
+one-line dated provenance marker. (Precedent: the 2026-08-14 wiring-rubric retirement — the
+rewritten FR-1 and diagram passed `prd_audit` all-ALIGNED on the first pass; the earlier
+annotation-only draft would have shipped an FR still claiming five rubrics.) Re-author the plan
 without a task targeting the other feature's sealed artifact, then run
 `conduct-ts plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
 `No protected-target violations found.`; each violation is reported as `Task <id>: <path> —
