@@ -134,6 +134,10 @@ describe('build_review copy equivalence', () => {
     await expect(subject.run('build_review', {})).resolves.toMatchObject({
       success: true,
     });
+    // Rebase fixture repair: the first run makes four malformed rubric
+    // responses, each with one bounded shape-repair turn (8 calls); the
+    // second run accepts four valid responses (4 calls). This expectation
+    // tracks the pre-existing repair-loop contract, not cache identity.
     expect(invoke).toHaveBeenCalledTimes(12);
     expect(runCopyEquivalence).not.toHaveBeenCalled();
   });
