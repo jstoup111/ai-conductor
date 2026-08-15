@@ -158,7 +158,7 @@ export interface ParkedEntry {
 
 export interface InheritedState {
   /** Optional read-only build-review summary; skipped coverage is never a pass. */
-  buildReviewMetrics?: { lapsToPass?: number; skipped: number; cacheHits: number; infrastructureFailures: number };
+  buildReviewMetrics?: { lapsToPass?: number; skipped: number; cacheHits: number; infrastructureFailures: number; rubricFailureRates?: Record<string, { failures: number; judged: number }>; skipReasons?: Record<string, number> };
   halted: HaltedEntry[];
   inProgress: InProgressEntry[];
   eligible: EligibleEntry[];
@@ -853,6 +853,11 @@ export function renderDashboard(
   if (state.buildReviewMetrics) {
     const metrics = state.buildReviewMetrics;
     lines.push(`BUILD REVIEW: laps-to-pass=${metrics.lapsToPass ?? 'not reached'}; reduced coverage (skipped, not pass)=${metrics.skipped}; cache-hits=${metrics.cacheHits}; infrastructure-failures=${metrics.infrastructureFailures}`);
+    for (const [rubric, rate] of Object.entries(metrics.rubricFailureRates ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push(`  raw ${rubric}: failures=${rate.failures}/${rate.judged}`);
+    }
+    const skipReasons = Object.entries(metrics.skipReasons ?? {});
+    if (skipReasons.length > 0) lines.push(`  skip reasons: ${skipReasons.map(([reason, count]) => `${reason}=${count}`).join(', ')}`);
   }
 
   // PARKED (FR-6) has ABSOLUTE precedence over every other group: it renders

@@ -25,6 +25,10 @@ import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispo
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeBuildReviewMetrics } from '../../src/engine/build-tail-rollup.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -126,7 +130,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     const { dir, planPath } = await fixtureRepo();
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
-        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        const projection = JSON.parse(options.prompt.slice(options.prompt.indexOf('{')));
         return {
           success: true,
           output: JSON.stringify({
@@ -164,26 +168,44 @@ describe('acceptance: independent build_review rubric execution', () => {
     expect(provider.invoke).toHaveBeenCalledTimes(4);
   });
 
-  it('uses each rubric\'s registered skill and resolved mixed model policy through the real runner', async () => {
+  it('uses provider-native runtimes, sessions, and policy for every mixed-provider rubric through the real runner', async () => {
     const { dir, planPath } = await fixtureRepo();
-    const calls: Array<{ prompt: string; model: string | undefined }> = [];
-    const provider: LLMProvider = {
+    const calls: Array<{ provider: string; prompt: string; model: string | undefined; sessionId: string | undefined }> = [];
+    const fake = (provider: string): LLMProvider => ({
+      lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn(async (options) => {
-        calls.push({ prompt: options.prompt, model: options.model });
-        const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+        calls.push({ provider, prompt: options.prompt, model: options.model, sessionId: options.sessionId });
+        const projection = JSON.parse(options.prompt.slice(options.prompt.indexOf('{')));
         return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
-    };
-    const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
-      providerKey: 'codex', planPath, pipelineDir: join(dir, '.pipeline'),
-      config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { scope: { model: 'gpt-5.6-sol', model_fallback_ladder: ['gpt-5.6-terra'] }, rootCause: { model: 'gpt-5.6-terra' } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+    });
+    const claude = fake('claude');
+    const codex = fake('codex');
+    const runtimes = new ProviderRuntimeSet([
+      { key: 'claude', provider: claude, lifecycleCapability: claude.lifecycleCapability, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) },
+      { key: 'codex', provider: codex, lifecycleCapability: codex.lifecycleCapability, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) },
+    ]);
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const runner = new DefaultStepRunner(codex, 'maker-session', dir, {
+      providerKey: 'codex', providerRuntimes: runtimes, sessionStore: new ProviderSessionStore({ createSessionId: (() => { let id = 0; return () => `review-session-${++id}`; })() }), events, planPath, pipelineDir: join(dir, '.pipeline'),
+      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { llm_provider: 'claude', model: 'opus' }, scope: { llm_provider: 'codex', model: 'gpt-5.6-sol' }, rootCause: { llm_provider: 'claude', model: 'sonnet' }, completeness: { llm_provider: 'codex', model: 'gpt-5.6-terra' } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) },
     });
-    await expect(runner.run('build_review', { complexity_tier: 'L', feature_desc: 'mixed-policy', track: 'product' })).resolves.toMatchObject({ success: true });
-    expect(calls.map(({ prompt, model }) => ({ skill: prompt.match(/^\$(build-review-[\w-]+)/m)?.[1], model }))).toEqual(expect.arrayContaining([
-      { skill: 'build-review-scope', model: 'gpt-5.6-sol' },
-      { skill: 'build-review-root-cause', model: 'gpt-5.6-terra' },
+    const result = await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'mixed-policy', track: 'product' });
+    expect(result.success, result.output).toBe(true);
+    expect(calls.map(({ provider, prompt, model, sessionId }) => ({ provider, skill: prompt.match(/^[/$](build-review-[\w-]+)/m)?.[1], model, sessionId }))).toEqual(expect.arrayContaining([
+      { provider: 'claude', skill: 'build-review-tautology', model: 'opus', sessionId: 'review-session-1' },
+      { provider: 'codex', skill: 'build-review-scope', model: 'gpt-5.6-sol', sessionId: 'review-session-2' },
+      { provider: 'claude', skill: 'build-review-root-cause', model: 'sonnet', sessionId: 'review-session-3' },
+      { provider: 'codex', skill: 'build-review-completeness', model: 'gpt-5.6-terra', sessionId: 'review-session-4' },
     ]));
+    expect(JSON.parse(await readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).coverage).toEqual({
+      tautology: 'judged', scope: 'judged', rootCause: 'judged', completeness: 'judged',
+    });
+    expect((await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8')).match(/build_review_rubric_result/g)).toHaveLength(4);
+    persister.stop();
   });
 
   it.each([

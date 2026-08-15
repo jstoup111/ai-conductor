@@ -3,16 +3,6 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseCostBlock, renderKpi } from '../../src/engine/kpi-report.js';
-import { computeBuildReviewMetrics } from '../../src/engine/build-tail-rollup.js';
-
-it('keeps a raw rubric failure in the enabled-judgement denominator after an effective pass', () => {
-  const metrics = computeBuildReviewMetrics([
-    { type: 'build_review_rubric_result', ts: 1, rubric: 'scope', lapId: 'one', verdict: 'FAIL' },
-    { type: 'build_review_outer_verdict', ts: 2, lapId: 'one', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
-  ]);
-  expect(metrics.rubricFailureRates.scope).toEqual({ failures: 1, judged: 1 });
-  expect(metrics.lapsToPass).toBe(1);
-});
 
 let root: string;
 
@@ -117,6 +107,19 @@ describe('parseCostBlock', () => {
 });
 
 describe('renderKpi', () => {
+  it('renders persisted raw build-review denominators and reduced coverage on the public KPI output', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(join(root, '.docs/shipped/feature.md'), record('feature', COST_LINES) + [
+      '', '## Build Review', 'laps_to_pass: 2', 'skipped: 1', 'cache_hits: 3',
+      'infrastructure_failures: 1', 'rubrics:', '  scope: failures: 1, judged: 2', '',
+    ].join('\n'));
+
+    const report = await renderKpi(root);
+
+    expect(report).toContain('build_review=laps_to_pass=2 skipped=1 cache_hits=3 infrastructure_failures=1');
+    expect(report).toContain('scope: raw_failures=1/2');
+  });
+
   it('reports historical and corrupt timing explicitly without polluting measured averages', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     const fixtures: Record<string, string> = {

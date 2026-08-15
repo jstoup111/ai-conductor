@@ -36,7 +36,7 @@ describe('report-renderer', () => {
       { event: { type: 'build_review_outer_verdict', lapId: 'lap-1', effectiveVerdict: 'PASS' }, ts: '2026-01-01T00:00:03.000Z' },
     ]), 'utf8');
 
-    expect(renderReport(eventsPath)).toContain('Effective laps-to-pass: 1\nReduced coverage (skipped, not pass): 1\nCache hits: 1\nRaw scope: FAIL');
+    expect(renderReport(eventsPath)).toContain('Effective laps-to-pass: 1\nReduced coverage (skipped, not pass): 1\nSkip reasons: missing-entry-points=1\nCache hits: 1\nRaw scope: failures=1/1');
   });
 
   it('renders absent build-review data safely', async () => {

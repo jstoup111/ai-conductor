@@ -14,15 +14,6 @@ export type TimingRollup =
   | { state: 'partial'; activeMs?: number }
   | { state: 'unavailable' };
 
-interface TimingEvidence {
-  activeIntervals: unknown[];
-  providerIntervals: unknown[];
-  openExecutions: Map<string, number>;
-  closedParallelExecutions: Set<string>;
-  activeEvidenceIncomplete: boolean;
-  providerEvidenceIncomplete: boolean;
-}
-
 function parseLedger(raw: string): Record<string, unknown>[] | null {
   const events: Record<string, unknown>[] = [];
   for (const line of raw.split('\n')) {
@@ -36,6 +27,23 @@ function parseLedger(raw: string): Record<string, unknown>[] | null {
     }
   }
   return events;
+}
+
+async function readTimingLedger(path: string): Promise<Record<string, unknown>[] | null> {
+  try {
+    return parseLedger(await readFile(path, 'utf8'));
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
+  }
+}
+
+interface TimingEvidence {
+  activeIntervals: unknown[];
+  providerIntervals: unknown[];
+  openExecutions: Map<string, number>;
+  closedParallelExecutions: Set<string>;
+  activeEvidenceIncomplete: boolean;
+  providerEvidenceIncomplete: boolean;
 }
 
 function collectExecutionEvidence(
@@ -183,12 +191,12 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
 export async function computeTimingRollup(
   worktreeDir: string,
 ): Promise<TimingRollup> {
-  const raw = await readFile(
-    join(worktreeDir, '.pipeline', 'events.jsonl'),
-    'utf8',
-  );
-  const events = parseLedger(raw);
-  return events === null
+  const pipelineDir = join(worktreeDir, '.pipeline');
+  const [events, pipelineEvents] = await Promise.all([
+    readTimingLedger(join(pipelineDir, 'events.jsonl')),
+    readTimingLedger(join(pipelineDir, 'pipeline-events.jsonl')),
+  ]);
+  return events === null || pipelineEvents === null
     ? { state: 'partial' }
-    : calculateTimingRollup(collectTimingEvidence(events));
+    : calculateTimingRollup(collectTimingEvidence([...events, ...pipelineEvents]));
 }

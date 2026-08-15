@@ -139,6 +139,20 @@ describe('intersectIntervalUnions', () => {
 });
 
 describe('computeTimingRollup', () => {
+  it('consumes provider intervals from the merged feature-event stream', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'step_completed', step: 'build', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+    ]);
+    await writeFile(join(directory, '.pipeline', 'pipeline-events.jsonl'), `${JSON.stringify({
+      type: 'provider_attempt', step: 'build', invoked: true,
+      observedIntervals: [{ startedAtMs: 20, durationMs: 40 }], ts: Date.now(),
+    })}\n`);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'measured', activeMs: 100, providerActiveMs: 40, noProviderActiveMs: 60,
+    });
+  });
+
   it('partitions overlapping active and provider intervals exactly', async () => {
     const directory = await writeFeatureEvents([
       {

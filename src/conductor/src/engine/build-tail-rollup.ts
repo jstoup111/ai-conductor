@@ -189,24 +189,28 @@ async function readOptionalLedger(path: string): Promise<BuildTailEvent[] | unde
   }
 }
 
+/** Read the feature's two event ledgers as one stable, timestamp-ordered stream. */
+export async function readMergedFeatureEvents(
+  worktreeDir: string,
+): Promise<readonly BuildTailEvent[] | undefined> {
+  const pipelineDir = join(worktreeDir, '.pipeline');
+  const engineEvents = await readOptionalLedger(join(pipelineDir, 'events.jsonl'));
+  const pipelineEvents = await readOptionalLedger(join(pipelineDir, 'pipeline-events.jsonl'));
+  if (engineEvents === undefined || pipelineEvents === undefined) return undefined;
+  return [...engineEvents, ...pipelineEvents]
+    .map((event, ordinal) => ({ event, ordinal }))
+    .sort((left, right) => left.event.ts - right.event.ts || left.ordinal - right.ordinal)
+    .map(({ event }) => event);
+}
+
 /**
  * Read both event ledgers, merge their shared event schema in stable timestamp
  * order, and return each completed build window.  Classification and degraded
  * result states are intentionally owned by later build-tail-rollup tasks.
  */
 export async function readBuildWindows(worktreeDir: string): Promise<BuildWindowsResult> {
-  const pipelineDir = join(worktreeDir, '.pipeline');
-  const engineEvents = await readOptionalLedger(
-    join(pipelineDir, 'events.jsonl'),
-  );
-  const pipelineEvents = await readOptionalLedger(
-    join(pipelineDir, 'pipeline-events.jsonl'),
-  );
-  if (engineEvents === undefined || pipelineEvents === undefined) return { state: 'partial' };
-  const events = [...engineEvents, ...pipelineEvents]
-    .map((event, ordinal) => ({ event, ordinal }))
-    .sort((left, right) => left.event.ts - right.event.ts || left.ordinal - right.ordinal)
-    .map(({ event }) => event);
+  const events = await readMergedFeatureEvents(worktreeDir);
+  if (events === undefined) return { state: 'partial' };
 
   const windows: BuildWindow[] = [];
   let current: { startedAt: number; events: BuildTailEvent[] } | undefined;
