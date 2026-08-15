@@ -61,6 +61,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - `remediate` now routes a build_review gap to `build` when an existing approved-plan task already admits the fix, instead of incorrectly halting for a needless re-plan. ([implementation PR #1571](https://github.com/jstoup111/ai-conductor/pull/1571)).
 - An operator-authorized protected-artifact reseal now survives later seal rebaselining, instead of halting the feature every time its base branch moves. ([implementation PR #1576](https://github.com/jstoup111/ai-conductor/pull/1576)).
 - build_review's tautology preflight counts a reverted-tree test collection failure as RED instead of infrastructure, and rubric sessions' JSON verdicts parse through prose or markdown wrapping. ([implementation PR #1593](https://github.com/jstoup111/ai-conductor/pull/1593)).
+- build_review rubric sessions receive the changed-file list and hunk line ranges instead of the full embedded diff, reading the worktree directly — cutting per-branch prompt size ~95% and stabilizing grader output on large diffs. ([implementation PR #1595](https://github.com/jstoup111/ai-conductor/pull/1595)).
 
 ## Migration
 
