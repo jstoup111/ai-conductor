@@ -58,7 +58,7 @@ export interface ChangedFileReference {
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
   readonly contractVersion: 'v1';
-  readonly projectionVersion: 'v1';
+  readonly projectionVersion: 'v2';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
   /** Stable identity of the source content, independent of commit provenance. */

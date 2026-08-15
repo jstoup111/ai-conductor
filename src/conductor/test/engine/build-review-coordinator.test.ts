@@ -167,7 +167,7 @@ describe("build-review coordinator: frozen fan-out", () => {
         revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
       }),
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
-        version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v1" as const,
+        version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v2" as const,
         projectionDigest: projection.digest, policyFingerprint,
         result: {
           kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
@@ -252,7 +252,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       scopedRun: { exitCode: 1 as number, runKind: "test-failure" as const, ranSelectors: ["test/a.test.ts"], failureExcerpt: "AssertionError: expected 2 to be 1" },
     }));
     const cachedScope = {
-      version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v1" as const,
+      version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v2" as const,
       projectionDigest: "", policyFingerprint: "", result: {
         kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
         snapshotDigest: "old", contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,

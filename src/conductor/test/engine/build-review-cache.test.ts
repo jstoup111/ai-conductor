@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cacheEntryPath,
   classifyBuildReviewCacheLookup,
+  parseBuildReviewCacheEntry,
   readBuildReviewCacheEntry,
   writeBuildReviewCacheEntry,
   type BuildReviewCacheEntry,
@@ -13,7 +14,7 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
     version: 1,
     rubric: "scope",
     contractVersion: "v1",
-    projectionVersion: "v1",
+    projectionVersion: "v2",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
     result: {
@@ -57,6 +58,30 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
+  it("rejects v1 entries at the current public parse boundary", () => {
+    expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v1" })).toBeUndefined();
+  });
+
+  it("rejects stored v1 entries against the current v2 projection identity", () => {
+    const currentLookup = {
+      rubric: "scope",
+      contractVersion: "v1",
+      projectionVersion: "v2",
+      projectionDigest: "sha256:projection-a",
+      policyFingerprint: "sha256:policy-a",
+      lapId: "lap-current",
+      snapshotDigest: "snapshot-current",
+    } as never;
+
+    expect([
+      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v1" }, currentLookup),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v2", projectionDigest: "sha256:changed-input" }, currentLookup),
+    ]).toEqual([
+      { kind: "miss", reason: "projection-version-mismatch" },
+      { kind: "miss", reason: "projection-digest-mismatch" },
+    ]);
+  });
+
   it("stores one versioned semantic judgement per feature-scoped rubric with atomic replacement", async () => {
     const fs = memoryFilesystem();
     const root = "/feature";
@@ -117,7 +142,7 @@ describe("build-review semantic cache", () => {
     const request = {
       rubric: "scope" as const,
       contractVersion: "v1" as const,
-      projectionVersion: "v1" as const,
+      projectionVersion: "v2" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       lapId: "lap-current" as never,
@@ -169,7 +194,7 @@ describe("build-review semantic cache", () => {
     const request = {
       rubric: "scope" as const,
       contractVersion: "v1" as const,
-      projectionVersion: "v1" as const,
+      projectionVersion: "v2" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       lapId: "lap-current" as never,
@@ -184,7 +209,7 @@ describe("build-review semantic cache", () => {
       classifyBuildReviewCacheLookup(undefined, request),
       classifyBuildReviewCacheLookup({ ...entry(), rubric: "completeness" }, request),
       classifyBuildReviewCacheLookup({ ...entry(), contractVersion: "v2" } as never, request),
-      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v2" } as never, request),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v1" } as never, request),
       classifyBuildReviewCacheLookup({ ...entry(), projectionDigest: "sha256:changed-input" }, request),
       classifyBuildReviewCacheLookup({ ...entry(), policyFingerprint: "sha256:changed-provider-model-effort-fallback-retry" }, request),
       classifyBuildReviewCacheLookup(unsafeInfrastructure, request),
@@ -192,7 +217,7 @@ describe("build-review semantic cache", () => {
       { kind: "miss", reason: "missing" },
       { kind: "miss", reason: "invalid-entry" },
       { kind: "miss", reason: "invalid-entry" },
-      { kind: "miss", reason: "invalid-entry" },
+      { kind: "miss", reason: "projection-version-mismatch" },
       { kind: "miss", reason: "projection-digest-mismatch" },
       { kind: "miss", reason: "policy-fingerprint-mismatch" },
       { kind: "miss", reason: "invalid-entry" },

@@ -88,7 +88,7 @@ describe('build-review rubric projections', () => {
       'projectionVersion', 'removalContext', 'rubric', 'snapshotDigest',
     ]);
     expect(projections.tautology).toMatchObject({
-      rubric: 'tautology', projectionVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
+      rubric: 'tautology', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
       mergeBase: 'base', headSha: 'head',
       changedFiles: [{
         path: 'src/a.ts', changeKind: 'modified',
@@ -142,7 +142,7 @@ describe('build-review rubric projections', () => {
 
     expect(second).toEqual(first);
     expect(projectionDigest(first.scope)).toBe(first.scope.digest);
-    expect(projectionDigest({ ...first.scope, projectionVersion: 'v2' } as unknown as typeof first.scope))
+    expect(projectionDigest({ ...first.scope, projectionVersion: 'v1' } as unknown as typeof first.scope))
       .not.toBe(first.scope.digest);
 
     const forbiddenSource = source();

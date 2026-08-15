@@ -15,7 +15,7 @@ export interface BuildReviewCacheEntry {
   version: typeof CACHE_VERSION;
   rubric: BuildReviewRubricId;
   contractVersion: "v1";
-  projectionVersion: "v1";
+  projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
   result: BuildReviewJudgedResult;
@@ -33,11 +33,15 @@ export interface BuildReviewCacheFilesystem {
 export interface BuildReviewCacheLookup {
   rubric: BuildReviewRubricId;
   contractVersion: "v1";
-  projectionVersion: "v1";
+  projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
   lapId: BuildReviewLapId;
   snapshotDigest: string;
+}
+
+interface ParsedBuildReviewCacheEntry extends Omit<BuildReviewCacheEntry, "projectionVersion"> {
+  projectionVersion: "v1" | "v2";
 }
 
 /** Explicit cache provenance accompanies a newly materialized current-lap result. */
@@ -83,7 +87,7 @@ function isRubric(value: unknown): value is BuildReviewRubricId {
 }
 
 /** Strictly parses the cache boundary; unknown fields and non-judgements miss closed. */
-export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
+function parseBuildReviewCacheEntryCandidate(value: unknown): ParsedBuildReviewCacheEntry | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   const keys = [
@@ -94,7 +98,7 @@ export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntr
     return undefined;
   }
   if (candidate.version !== CACHE_VERSION || !isRubric(candidate.rubric) ||
-    candidate.contractVersion !== "v1" || candidate.projectionVersion !== "v1" ||
+    candidate.contractVersion !== "v1" || (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2") ||
     !isNonEmptyString(candidate.projectionDigest) || !isNonEmptyString(candidate.policyFingerprint)) {
     return undefined;
   }
@@ -111,6 +115,12 @@ export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntr
     policyFingerprint: candidate.policyFingerprint,
     result,
   };
+}
+
+/** Strictly parses entries current code may persist or reuse. */
+export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
+  const entry = parseBuildReviewCacheEntryCandidate(value);
+  return entry?.projectionVersion === "v2" ? { ...entry, projectionVersion: "v2" } : undefined;
 }
 
 /** Reads a cached semantic judgement, treating every read/parse error as a miss. */
@@ -136,7 +146,7 @@ export function classifyBuildReviewCacheLookup(
   lookup: BuildReviewCacheLookup,
 ): BuildReviewCacheLookupResolution {
   if (candidate === undefined) return { kind: "miss", reason: "missing" };
-  const entry = parseBuildReviewCacheEntry(candidate);
+  const entry = parseBuildReviewCacheEntryCandidate(candidate);
   if (!entry) return { kind: "miss", reason: "invalid-entry" };
   if (entry.rubric !== lookup.rubric) return { kind: "miss", reason: "rubric-mismatch" };
   if (entry.contractVersion !== lookup.contractVersion) {
