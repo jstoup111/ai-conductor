@@ -111,7 +111,7 @@ describe('renderKpi', () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     await writeFile(join(root, '.docs/shipped/feature.md'), record('feature', COST_LINES) + [
       '', '## Build Review', 'laps_to_pass: 2', 'skipped: 1', 'cache_hits: 3',
-      'infrastructure_failures: 1', 'rubrics:', '  scope: failures: 1, judged: 2', '',
+      'infrastructure_failures: 1', 'rubrics:', '  scope: failures: 1, judged: 2', 'skip_reasons:', '  disabled: 1', '',
     ].join('\n'));
 
     const report = await renderKpi(root);

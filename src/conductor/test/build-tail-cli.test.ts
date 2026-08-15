@@ -16,7 +16,7 @@ it('projects effective laps while retaining raw failures and excluding skipped r
     { type: 'build_review_rubric_skipped', ts: 3, rubric: 'tautology', lapId: 'lap-1', reason: 'disabled' },
     { type: 'build_review_cache_hit', ts: 4, rubric: 'scope', lapId: 'lap-1' },
     { type: 'build_review_outer_verdict', ts: 5, lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
-  ])).toEqual({ lapsToPass: 1, rubricFailureRates: { scope: { failures: 1, judged: 1 } }, skipped: 1, cacheHits: 1, infrastructureFailures: 1 });
+  ])).toEqual({ lapsToPass: 1, rubricFailureRates: { scope: { failures: 1, judged: 1 } }, skipped: 1, cacheHits: 1, infrastructureFailures: 1, skipReasons: { disabled: 1 } });
 });
 
 it('counts skip-only and infrastructure-only review laps before a later passing lap', () => {
@@ -24,7 +24,7 @@ it('counts skip-only and infrastructure-only review laps before a later passing 
     { type: 'build_review_rubric_skipped', ts: 1, rubric: 'scope', lapId: 'lap-skipped', reason: 'disabled' },
     { type: 'build_review_rubric_infrastructure_failure', ts: 2, rubric: 'scope', lapId: 'lap-infrastructure', reason: 'artifact-read-failed' },
     { type: 'build_review_outer_verdict', ts: 3, lapId: 'lap-passed', rawVerdict: 'PASS', effectiveVerdict: 'PASS' },
-  ])).toMatchObject({ lapsToPass: 3, skipped: 1, infrastructureFailures: 1 });
+  ])).toMatchObject({ lapsToPass: 3, skipped: 1, infrastructureFailures: 1, skipReasons: { disabled: 1 } });
 });
 
 const temporaryDirectories: string[] = [];

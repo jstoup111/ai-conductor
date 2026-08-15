@@ -52,9 +52,15 @@ function parseBuildReviewBlock(content: string): BuildReviewMetrics | undefined 
   };
   const laps = /^laps_to_pass:\s*(\d+|not reached)\s*$/m.exec(body)?.[1];
   const rubricFailureRates: Record<string, { failures: number; judged: number }> = {};
+  const skipReasons: Record<string, number> = {};
+  let section: 'rubrics' | 'skip_reasons' | undefined;
   for (const line of body.split('\n')) {
+    if (line === 'rubrics:') { section = 'rubrics'; continue; }
+    if (line === 'skip_reasons:') { section = 'skip_reasons'; continue; }
     const entry = /^  ([^:]+): failures: (\d+), judged: (\d+)$/.exec(line);
-    if (entry) rubricFailureRates[entry[1]] = { failures: Number(entry[2]), judged: Number(entry[3]) };
+    if (section === 'rubrics' && entry) rubricFailureRates[entry[1]] = { failures: Number(entry[2]), judged: Number(entry[3]) };
+    const skipReason = /^  ([^:]+): (\d+)$/.exec(line);
+    if (section === 'skip_reasons' && skipReason) skipReasons[skipReason[1]] = Number(skipReason[2]);
   }
   const skipped = number('skipped');
   const cacheHits = number('cache_hits');
@@ -66,6 +72,7 @@ function parseBuildReviewBlock(content: string): BuildReviewMetrics | undefined 
     skipped,
     cacheHits,
     infrastructureFailures,
+    skipReasons,
   };
 }
 

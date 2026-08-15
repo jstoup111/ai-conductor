@@ -20,6 +20,7 @@ export interface BuildReviewFindingsDeps {
   readonly resolveMainRoot?: (cwd: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<string>;
+  readonly createStore?: (worktree: string) => DispositionStore;
   readonly print?: (output: string) => void;
 }
 
@@ -46,16 +47,6 @@ export interface BuildReviewAcceptDeps extends BuildReviewFindingsDeps {
   readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_disposition_accepted' | 'build_review_disposition_refused' }>) => void;
 }
 
-function recordsForFeature(value: unknown, slug: string): readonly BuildReviewDispositionRecord[] | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const state = value as { version?: unknown; records?: unknown };
-  if (state.version !== 'v1' || !Array.isArray(state.records)) return undefined;
-  return state.records.filter((entry): entry is BuildReviewDispositionRecord =>
-    typeof entry === 'object' && entry !== null && !Array.isArray(entry) &&
-    (entry as { feature?: { feature?: unknown } }).feature?.feature === slug,
-  );
-}
-
 function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>): string {
   return [
     `Build review findings: ${feature}`,
@@ -78,16 +69,10 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate) throw new Error('aggregate is malformed');
-    let records: readonly BuildReviewDispositionRecord[] = [];
-    try {
-      const parsed = recordsForFeature(JSON.parse(await readFile(join(worktree, '.pipeline/build-review-dispositions.json'))), command.feature);
-      if (!parsed) throw new Error('dispositions are malformed');
-      records = parsed;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    const repository = records[0]?.feature.repository ?? 'unknown';
-    const feature: BuildReviewFeatureIdentity = { version: 'v1', repository, feature: command.feature };
+    const feature: BuildReviewFeatureIdentity = { version: 'v1', repository: root, feature: command.feature };
+    const listed = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).list(feature);
+    if (!listed.ok) throw new Error(listed.message);
+    const records = listed.records;
     const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records);
     if (!effective) throw new Error('current findings are invalid');
     const output = { feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...effective };

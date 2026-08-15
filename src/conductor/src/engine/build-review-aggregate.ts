@@ -153,8 +153,6 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   const carriedRetiredWiring = !!raw && (
     (['results', 'coverage', 'rubric', 'findings'] as const)
       .some((key) => { const memberMap = record(raw[key]); return !!memberMap && 'wiring' in memberMap; })
-    || (Array.isArray(raw.reasons)
-      && raw.reasons.some((reason) => typeof reason === 'string' && reason.startsWith('[wiring]')))
   );
   const source = raw && Object.fromEntries(Object.entries(raw).map(([key, entry]) => {
     const memberMap = key === 'results' || key === 'coverage' || key === 'rubric' || key === 'findings'
@@ -162,9 +160,9 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
       : undefined;
     // A retired Wiring member also contributed legacy reason strings.  Drop
     // those alongside its derived maps before validating the four-rubric view.
-    return [key, key === 'reasons' && Array.isArray(entry)
+    return [key, carriedRetiredWiring && key === 'reasons' && Array.isArray(entry)
       ? entry.filter((reason) => typeof reason !== 'string' || !reason.startsWith('[wiring]'))
-      : memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => member !== 'wiring')) : entry];
+      : carriedRetiredWiring && memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => member !== 'wiring')) : entry];
   }));
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',

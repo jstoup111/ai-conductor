@@ -198,6 +198,12 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate({ ...aggregate, verdict: 'FAIL' })).toBeUndefined();
   });
 
+  it('does not let a standalone retired wiring reason authorize a mismatched four-rubric verdict', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results() });
+
+    expect(parseBuildReviewAggregate({ ...aggregate, verdict: 'FAIL', reasons: ['[wiring] historical reason'] })).toBeUndefined();
+  });
+
   it('derives effective state only after strict raw judgement, without changing raw findings', () => {
     const finding = { concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({

@@ -26,6 +26,7 @@ import { execa } from 'execa';
 import {
   appendTimingSection,
   appendBuildReviewAcceptedRisk,
+  appendBuildReviewMetrics,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -38,6 +39,7 @@ import { computeTimingRollup } from './timing-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import { resolveMainRepoRoot } from './park-marker.js';
+import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 
 export type ShippedRecordDispatch =
   | { kind: 'write'; slug: string; pr: string }
@@ -170,6 +172,18 @@ export async function dispatchShippedRecord(
         }`,
       );
       recordBody = appendTimingSection(recordBody, { state: 'unavailable' });
+    }
+    try {
+      recordBody = appendBuildReviewMetrics(
+        recordBody,
+        computeBuildReviewMetrics(await readMergedFeatureEvents(cwd) ?? []),
+      );
+    } catch (err) {
+      console.error(
+        `build-review rollup failed — shipped record written without a Build Review block for ${identity.slug}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
     }
     // The feature worktree owns its disposition ledger; repository identity
     // is deliberately canonical so a linked checkout cannot forge a separate

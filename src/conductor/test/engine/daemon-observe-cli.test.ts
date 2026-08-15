@@ -74,7 +74,7 @@ describe('engine/daemon-observe-cli', () => {
     });
 
     expect(renderDashboard(state)).toContain(
-      'BUILD REVIEW: laps-to-pass=2; reduced coverage (skipped, not pass)=1; cache-hits=1; infrastructure-failures=1\n  raw scope: failures=1/2',
+      'BUILD REVIEW: laps-to-pass=2; reduced coverage (skipped, not pass)=1; cache-hits=1; infrastructure-failures=1\n  raw scope: failures=1/2\n  skip reasons: disabled=1',
     );
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain('broken-ledger');
