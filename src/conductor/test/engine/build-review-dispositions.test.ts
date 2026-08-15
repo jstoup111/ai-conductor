@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -138,5 +138,41 @@ describe('build-review dispositions', () => {
 
     expect(matchesBuildReviewDisposition(feature, finding, [accepted])).toBe(true);
     expect(matchesBuildReviewDisposition(feature, { ...changed, id: finding.id }, [accepted])).toBe(false);
+  });
+
+  it('serializes aggregate publication and current-lap acceptance on one bounded lease', async () => {
+    const filesystem = new MemoryFilesystem();
+    let occupied = false;
+    let notifyAvailable: (() => void) | undefined;
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        while (occupied) await new Promise<void>((resolve) => { notifyAvailable = resolve; });
+        occupied = true;
+        return { ok: true, handle: { release: async () => {
+          occupied = false;
+          notifyAvailable?.();
+          return { ok: true };
+        } } };
+      },
+    };
+    const store = new BuildReviewDispositionStore('/repo', { filesystem, lock: lease });
+    let releasePublication: (() => void) | undefined;
+    let publicationStarted: (() => void) | undefined;
+    const publication = store.withLease(async () => {
+      publicationStarted?.();
+      await new Promise<void>((resolve) => { releasePublication = resolve; });
+    });
+    await new Promise<void>((resolve) => { publicationStarted = resolve; });
+    const validate = vi.fn(async () => true);
+    const acceptance = store.appendIfCurrent({
+      feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james',
+    }, validate);
+
+    await Promise.resolve();
+    expect(validate).not.toHaveBeenCalled();
+    releasePublication?.();
+    await expect(publication).resolves.toMatchObject({ ok: true });
+    await expect(acceptance).resolves.toMatchObject({ ok: true });
+    expect(validate).toHaveBeenCalledOnce();
   });
 });

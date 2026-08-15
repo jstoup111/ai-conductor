@@ -27,6 +27,8 @@ export type BuildReviewFindingAnchor =
 
 export interface BuildReviewFinding {
   readonly concernKind: string;
+  readonly summary: string;
+  readonly evidenceLocations: readonly string[];
   readonly anchor: BuildReviewFindingAnchor;
 }
 
@@ -76,6 +78,10 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function evidenceLocation(value: unknown): value is string {
+  return nonEmptyString(value) && /^(?:[^\n:]+\/)*[^\n:]+:\d+(?::\d+)?$/.test(value);
+}
+
 function rubricId(value: unknown): value is BuildReviewRubricId {
   return typeof value === 'string' && RUBRICS.has(value as BuildReviewRubricId);
 }
@@ -117,8 +123,10 @@ function parseFindings(value: unknown, rubric: BuildReviewRubricId): readonly Bu
   for (const candidate of value) {
     const source = record(candidate);
     const anchor = source && parseAnchor(source.anchor);
-    if (!source || !nonEmptyString(source.concernKind) || !anchor || anchor.rubric !== rubric) return undefined;
-    findings.push({ concernKind: source.concernKind, anchor });
+    if (!source || !nonEmptyString(source.concernKind) || !nonEmptyString(source.summary) ||
+      !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 ||
+      source.evidenceLocations.some((location) => !evidenceLocation(location)) || !anchor || anchor.rubric !== rubric) return undefined;
+    findings.push({ concernKind: source.concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations]), anchor });
   }
   return findings;
 }

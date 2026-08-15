@@ -30,11 +30,47 @@ describe('build-review domain', () => {
     expect(anchors).toHaveLength(4);
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
-      findings: [{ concernKind: 'unplanned-surface', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' } }],
+      findings: [{ concernKind: 'unplanned-surface', summary: 'src/a.ts is outside the approved plan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' } }],
     })).toMatchObject({ verdict: 'FAIL', findings: [{ concernKind: 'unplanned-surface' }] });
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{ concernKind: 'wrong-anchor', anchor: { rubric: 'retired', entryPoint: 'bin/tool', target: 'src/main.ts', relation: 'unreachable' } }],
+    })).toBeUndefined();
+  });
+
+  it('retains each finding actionable summary and concrete evidence locations at the grader boundary', () => {
+    const parsed = parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [{
+        concernKind: 'unplanned-surface',
+        summary: 'src/a.ts is outside the approved plan.',
+        evidenceLocations: ['src/a.ts:8', '.docs/plans/feature.md:21'],
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      }],
+    }) as unknown as { findings: readonly [{ summary: string; evidenceLocations: readonly string[] }] } | undefined;
+
+    expect(parsed?.findings[0]).toEqual({
+      concernKind: 'unplanned-surface',
+      summary: 'src/a.ts is outside the approved plan.',
+      evidenceLocations: ['src/a.ts:8', '.docs/plans/feature.md:21'],
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+    });
+  });
+
+  it.each([
+    ['missing actionable summary', { evidenceLocations: ['src/a.ts:8'] }],
+    ['empty actionable summary', { summary: ' ', evidenceLocations: ['src/a.ts:8'] }],
+    ['missing evidence locations', { summary: 'src/a.ts is outside the approved plan.' }],
+    ['empty evidence locations', { summary: 'src/a.ts is outside the approved plan.', evidenceLocations: [] }],
+    ['non-concrete evidence location', { summary: 'src/a.ts is outside the approved plan.', evidenceLocations: [' '] }],
+  ])('rejects a finding with %s', (_caseName, payload) => {
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [{
+        concernKind: 'unplanned-surface',
+        ...payload,
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      }],
     })).toBeUndefined();
   });
 

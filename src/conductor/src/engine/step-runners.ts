@@ -52,6 +52,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
+import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import { parseBuildReviewLapId, parseBuildReviewJudgedResult, type BuildReviewRubricResult } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
@@ -1803,8 +1804,16 @@ export class DefaultStepRunner implements StepRunner {
       results,
     });
     const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
-    await mkdir(effectivePipelineDir, { recursive: true });
-    await writeFile(join(effectivePipelineDir, 'build-review.json'), JSON.stringify(aggregate, null, 2), 'utf-8');
+    const aggregatePath = join(effectivePipelineDir, 'build-review.json');
+    const publication = await new BuildReviewDispositionStore(this.projectDir).withLease(async () => {
+      await mkdir(effectivePipelineDir, { recursive: true });
+      const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
+      await writeFile(temporaryPath, `${JSON.stringify(aggregate, null, 2)}\n`, 'utf-8');
+      await rename(temporaryPath, aggregatePath);
+    });
+    if (!publication.ok) {
+      return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
+    }
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate);
     await this.events?.emit({
       type: 'build_review_outer_verdict',
@@ -1828,7 +1837,7 @@ export class DefaultStepRunner implements StepRunner {
     };
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
-        `Use only this closed projection and return one JSON judged result for rubric ${branch.rubric}.`,
+        `Use only this closed projection and return one JSON judged result for rubric ${branch.rubric}. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
         JSON.stringify(projection),
       ].join('\n\n');
     if (this.providerRuntimes && this.sessionStore) {
@@ -2015,8 +2024,10 @@ export class DefaultStepRunner implements StepRunner {
     let inputs;
     try {
       inputs = {
-        ...await assembleBuildReviewInputs(this.gitRunner, planPath, this.buildReviewInputOptions),
-        acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
+        ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
+          ...this.buildReviewInputOptions,
+          acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
+        }),
       };
     } catch (err) {
       return {

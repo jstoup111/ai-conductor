@@ -30,6 +30,7 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       sourceSnapshot: {
         digest: 'sha256:snapshot', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head',
         diff: 'diff --git a/src/a.ts b/src/a.ts\n+change\n', planBody: '# Approved plan\n', repairContext: [],
+        acceptedWidenings: [{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }],
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
         operatorReseals: [{
           paths: ['.docs/stories/resealed-story.md'],
@@ -153,6 +154,31 @@ describe('build-review rubric projections', () => {
     expect(second.tautology.digest).toBe(first.tautology.digest);
     expect(second.rootCause.digest).toBe(first.rootCause.digest);
     expect(second.completeness.digest).toBe(first.completeness.digest);
+  });
+
+  it('derives Scope widenings solely from the frozen source snapshot and isolates them from the other rubric payloads', () => {
+    const original = source();
+    const first = deriveBuildReviewRubricProjections(original);
+    const changed = source({
+      inputs: {
+        ...original.inputs,
+        // This live input is deliberately stale: it must not be able to alter
+        // a projection after input assembly has sealed the source snapshot.
+        acceptedWidenings: [{ path: 'src/live-only.ts', rationale: 'must not leak', taskId: '99', sha: 'live' }],
+        sourceSnapshot: {
+          ...original.inputs.sourceSnapshot,
+          acceptedWidenings: [{ path: 'src/b.ts', rationale: 'new frozen widening', taskId: '2', sha: 'b' }],
+        },
+      },
+    });
+    const second = deriveBuildReviewRubricProjections(changed);
+
+    expect(first.scope.acceptedWidenings).toEqual([{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }]);
+    expect(second.scope.acceptedWidenings).toEqual([{ path: 'src/b.ts', rationale: 'new frozen widening', taskId: '2', sha: 'b' }]);
+    expect(second.scope.digest).not.toBe(first.scope.digest);
+    expect(second.tautology).toEqual(first.tautology);
+    expect(second.rootCause).toEqual(first.rootCause);
+    expect(second.completeness).toEqual(first.completeness);
   });
 
   it('parses an explicit empty reseal channel but rejects malformed Scope reseal evidence', () => {

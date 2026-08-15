@@ -86,6 +86,8 @@ export interface BuildReviewSourceSnapshot {
   readonly diff: string;
   readonly planBody: string;
   readonly repairContext: readonly TestSuiteRemediationRecord[];
+  /** Accepted containment widenings sealed with the source read for Scope alone. */
+  readonly acceptedWidenings: readonly AcceptedScopeWidening[];
   /** Operator-authorized reseals frozen with the source read for Scope alone. */
   readonly operatorReseals?: readonly BuildReviewOperatorResealSnapshot[];
   readonly removalContext: {
@@ -106,6 +108,7 @@ export interface BuildReviewOperatorResealSnapshot {
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
 export interface BuildReviewInputOptions {
   readonly inspectTestSuite?: () => Promise<FullSuiteInspectionResult>;
+  readonly acceptedWidenings?: readonly AcceptedScopeWidening[];
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -153,6 +156,15 @@ function projectRootForPlan(planPath: string): string {
 
 function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest'>): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(snapshot)).digest('hex')}`;
+}
+
+function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): readonly AcceptedScopeWidening[] {
+  return Object.freeze(widenings.map((widening) => Object.freeze({
+    path: widening.path,
+    rationale: widening.rationale,
+    taskId: widening.taskId,
+    sha: widening.sha,
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
 }
 
 /**
@@ -245,6 +257,7 @@ export async function assembleBuildReviewInputs(
     diff: diffResult.stdout,
     planBody,
     repairContext: Object.freeze([...repairContext]),
+    acceptedWidenings: freezeAcceptedWidenings(options.acceptedWidenings ?? []),
     operatorReseals: Object.freeze(operatorReseals.map((reseal) => Object.freeze({
       fromCommit: reseal.fromCommit,
       toCommit: reseal.toCommit,
@@ -273,6 +286,7 @@ export async function assembleBuildReviewInputs(
     fresh: resolution.fresh,
     removalContext,
     repairContext,
+    acceptedWidenings: [...sourceSnapshot.acceptedWidenings],
     operatorReseals,
     repairProvenance,
     testSuiteProof: inspection.evidence,

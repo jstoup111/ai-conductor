@@ -44,7 +44,7 @@ describe('build-review raw aggregate', () => {
   });
 
   it('retains complete named findings and derives FAIL without folding the rubric result', () => {
-    const finding = { concernKind: 'unplanned change', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+    const finding = { concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [finding]) }),
     });
@@ -58,7 +58,7 @@ describe('build-review raw aggregate', () => {
       kind: 'infrastructure-failure', rubric: 'completeness' as const, reason: 'provider-error', detail: 'provider unavailable',
     };
     const finding = {
-      concernKind: 'unplanned change', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' },
+      concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' },
     };
     const cases = [
       {
@@ -127,7 +127,7 @@ describe('build-review raw aggregate', () => {
   });
 
   it('derives effective state only after strict raw judgement, without changing raw findings', () => {
-    const finding = { concernKind: 'unplanned change', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+    const finding = { concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [finding]) }),
     });
@@ -143,8 +143,8 @@ describe('build-review raw aggregate', () => {
   });
 
   it('matches only a feature-scoped full canonical payload after raw grading', () => {
-    const first = { concernKind: 'unplanned change', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
-    const second = { concernKind: 'missing approval', anchor: { rubric: 'scope' as const, path: 'src/b.ts', relation: 'outside-plan' } };
+    const first = { concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+    const second = { concernKind: 'missing approval', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/b.ts', relation: 'outside-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [first, second]) }),
     });

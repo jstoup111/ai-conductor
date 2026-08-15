@@ -131,7 +131,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
   const scope = seal({
     ...common(source, 'scope'), planBody: inputs.sourceSnapshot.planBody,
     repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
-    acceptedWidenings: canonicalArray((inputs.acceptedWidenings ?? []) as unknown as readonly BuildReviewProjectionJson[]),
+    acceptedWidenings: canonicalArray(inputs.sourceSnapshot.acceptedWidenings as unknown as readonly BuildReviewProjectionJson[]),
     operatorReseals: inputs.sourceSnapshot.operatorReseals ?? [],
   }) as ScopeProjection;
   const rootCause = seal({

@@ -6,7 +6,7 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings } from '../../src/engine/build-review-cli.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
-const finding = { concernKind: 'outside plan', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+const finding = { concernKind: 'outside plan', summary: 'src/a.ts is outside the plan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
 const aggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:snapshot',
   results: {

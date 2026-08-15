@@ -213,7 +213,12 @@ describe('acceptance: independent build_review rubric execution', () => {
         providerCalls += 1;
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
         const findings = projection.rubric === 'scope'
-          ? [{ concernKind: 'outside approved plan', anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'outside-plan' } }]
+          ? [{
+            concernKind: 'outside approved plan',
+            summary: 'src/feature.ts changes behavior outside the approved plan.',
+            evidenceLocations: ['src/feature.ts:1', '.docs/plans/fixture.md:3'],
+            anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'outside-plan' },
+          }]
           : [];
         return {
           success: true,
@@ -243,6 +248,10 @@ describe('acceptance: independent build_review rubric execution', () => {
     const aggregate = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8'));
     const scope = aggregate.results.scope;
     const finding = scope.kind === 'judged' ? scope.findings[0] : undefined;
+    const retainedFinding = finding as (typeof finding & {
+      readonly summary: string;
+      readonly evidenceLocations: readonly string[];
+    });
     const identity = finding && canonicalizeBuildReviewFindingIdentity({
       rubric: 'scope', contractVersion: scope.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
     });
@@ -250,16 +259,20 @@ describe('acceptance: independent build_review rubric execution', () => {
       feature: { version: 'v1', repository: await realpath(join(dir, '..', '..')), feature: 'rubric-fanout' },
       finding: identity,
       sourceLapId: aggregate.lapId,
-      summary: finding.concernKind,
+      summary: retainedFinding.summary,
       rationale: 'The operator accepts this explicitly bounded finding.',
       operator: 'acceptance-operator',
     });
     const second = await runner.run('build_review', state);
     const completion = await checkStepCompletion(dir, 'build_review', { sessionStartedAt: Date.now() - 1_000 });
 
+    expect(retainedFinding).toMatchObject({
+      summary: 'src/feature.ts changes behavior outside the approved plan.',
+      evidenceLocations: ['src/feature.ts:1', '.docs/plans/fixture.md:3'],
+    });
     expect({ first: first.success, accepted, second: second.success, completion: completion.done, calls: providerCalls }).toMatchObject({
       first: false,
-      accepted: { ok: true },
+      accepted: { ok: true, record: { summary: 'src/feature.ts changes behavior outside the approved plan.' } },
       second: true,
       completion: true,
       calls: 4,

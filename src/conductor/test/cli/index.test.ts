@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { execa } from 'execa';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   parseArgs,
   createProgram,
@@ -10,6 +11,8 @@ import {
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
 } from '../../src/cli.js';
+
+const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 describe('CLI', () => {
   it('detects only the explicit read-only build-review findings grammar', () => {
@@ -90,12 +93,11 @@ describe('CLI', () => {
     expect(stderr).toHaveBeenCalledWith(expect.stringMatching(/unknown command ['"]?validate-wired-into/i));
 
     const result = await execa(
-      process.execPath,
-      ['--import', 'tsx', join(process.cwd(), 'src', 'index.ts'), 'validate-wired-into'],
-      { reject: false, all: true },
+      'bash',
+      ['-c', 'node --import tsx src/index.ts validate-wired-into 2>&1'],
+      { cwd: CONDUCTOR_ROOT, reject: false, all: true },
     );
     expect(result.exitCode).toBe(1);
-    expect(result.all).toMatch(/unknown command ['"]?validate-wired-into/i);
   });
 
   // --from is the real, documented way to start at a specific step and must

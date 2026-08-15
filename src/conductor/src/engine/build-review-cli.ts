@@ -123,15 +123,19 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');
-    const identity = [...Object.values(aggregate.results)].flatMap((result) => result.kind === 'judged'
-      ? result.findings.map((finding) => canonicalizeBuildReviewFindingIdentity({ rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor }))
-      : []).find((candidate) => candidate?.id === command.findingId);
-    if (!identity) throw new Error('finding is not a current judged finding');
+    const currentFinding = [...Object.values(aggregate.results)].flatMap((result) => result.kind === 'judged'
+      ? result.findings.map((finding) => ({
+        finding,
+        identity: canonicalizeBuildReviewFindingIdentity({ rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor }),
+      }))
+      : []).find((candidate) => candidate.identity?.id === command.findingId);
+    if (!currentFinding?.identity) throw new Error('finding is not a current judged finding');
+    const identity = currentFinding.identity;
     const repository = (deps.resolveRepository ?? ((projectRoot: string) => projectRoot))(root);
     if (!repository?.trim()) throw new Error('machine-scoped repository identity is unavailable');
     const feature: BuildReviewFeatureIdentity = { version: 'v1', repository, feature: command.feature };
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
-    const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: identity.canonicalPayload.concernKind, rationale: command.rationale.trim(), operator: operator.trim() };
+    const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.finding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
     const appended = store.appendIfCurrent
       ? await store.appendIfCurrent(appendInput, async (records) => {
         const current = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree!, '.pipeline/build-review.json'))));

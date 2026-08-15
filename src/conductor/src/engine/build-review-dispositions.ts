@@ -70,6 +70,10 @@ export type BuildReviewDispositionListResult =
   | { readonly ok: true; readonly records: readonly BuildReviewDispositionRecord[] }
   | BuildReviewDispositionStoreFailure;
 
+export type BuildReviewDispositionLeaseResult<Value> =
+  | { readonly ok: true; readonly value: Value }
+  | BuildReviewDispositionStoreFailure;
+
 interface BuildReviewDispositionState {
   readonly version: typeof STORE_VERSION;
   readonly records: readonly BuildReviewDispositionRecord[];
@@ -230,6 +234,24 @@ export class BuildReviewDispositionStore {
     }
   }
 
+  /**
+   * One feature-local bounded transaction for the raw aggregate and durable
+   * accepted-risk state.  Aggregate publishers and finding acceptance share
+   * this exact lease, so a lap replacement cannot pass between acceptance's
+   * current-lap reread and its append.
+   */
+  async withLease<Value>(operation: () => Promise<Value>): Promise<BuildReviewDispositionLeaseResult<Value>> {
+    const acquired = await this.acquire();
+    if (!acquired.ok) return acquired;
+    try {
+      return { ok: true, value: await operation() };
+    } catch (error) {
+      return { ok: false, kind: 'filesystem', message: `build-review lease operation failed: ${errorMessage(error)}` };
+    } finally {
+      await acquired.release();
+    }
+  }
+
   async list(featureInput: unknown): Promise<BuildReviewDispositionListResult> {
     const feature = parseFeatureIdentity(featureInput);
     if (!feature) return { ok: false, kind: 'invalid', message: 'build-review feature identity is invalid' };
@@ -286,9 +308,7 @@ export class BuildReviewDispositionStore {
     if (!feature || !finding || !sourceLapId || !nonEmptyString(input.summary) || !nonEmptyString(input.rationale) || !nonEmptyString(input.operator)) {
       return { ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' };
     }
-    const acquired = await this.acquire();
-    if (!acquired.ok) return acquired;
-    try {
+    const transaction = await this.withLease(async (): Promise<BuildReviewDispositionAppendResult> => {
       const loaded = await this.load();
       if (!loaded.ok) return loaded;
       const records = loaded.state.records.filter((entry) => sameFeature(entry.feature, feature));
@@ -300,8 +320,7 @@ export class BuildReviewDispositionStore {
       };
       const replaced = await this.replace({ version: STORE_VERSION, records: [...loaded.state.records, disposition] });
       return replaced.ok ? { ok: true, record: disposition } : replaced;
-    } finally {
-      await acquired.release();
-    }
+    });
+    return transaction.ok ? transaction.value : transaction;
   }
 }

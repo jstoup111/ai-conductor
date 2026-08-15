@@ -108,6 +108,8 @@ describe("build-review semantic cache", () => {
         ...entry().result,
         findings: [{
           concernKind: "missing approved outcome",
+          summary: "The approved outcome is missing from src/a.ts.",
+          evidenceLocations: ["src/a.ts:1"],
           anchor: { rubric: "scope" as const, path: "src/a.ts", relation: "outside-plan" },
         }],
         verdict: "FAIL" as const,

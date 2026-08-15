@@ -164,7 +164,7 @@ describe('engine/build-review verdict wiring contract', () => {
 
   it('completes a fresh raw failure when its one finding is exactly accepted', async () => {
     const lapId = parseBuildReviewLapId('lap-accepted')!;
-    const finding = { concernKind: 'unplanned', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+    const finding = { concernKind: 'unplanned', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
     const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness', findings = rubric === 'scope' ? [finding] : []) => ({
       kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
       findings, verdict: findings.length ? 'FAIL' as const : 'PASS' as const,
