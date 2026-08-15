@@ -376,7 +376,8 @@ export function createProductionFinishPublicationCoordinator(
           },
           createShippedRecord: async () => {
             if (!state.feature_desc || !state.pr_url) throw new Error('missing shipment identity');
-            await writeShippedRecord({ kind: 'write', slug: state.feature_desc, pr: state.pr_url }, deps.projectRoot);
+            const status = await writeShippedRecord({ kind: 'write', slug: state.feature_desc, pr: state.pr_url }, deps.projectRoot);
+            if (status !== 0) throw new Error('required shipped-record accepted-risk evidence could not be published');
           },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');

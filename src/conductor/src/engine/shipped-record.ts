@@ -5,7 +5,6 @@ import type { BacklogTreeSource } from './backlog-tree-source.js';
 import type { CostRollup } from './cost-rollup.js';
 import { versionIdFromEngineDir } from './engine-version-id.js';
 import type { TimingRollup } from './timing-rollup.js';
-import type { BuildReviewMetrics } from './build-tail-rollup.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
 
@@ -240,27 +239,6 @@ export function appendTimingSection(
     activeLine +
     measuredLines
   );
-}
-
-/** Persist raw build-review coverage separately from the effective verdict. */
-export function appendBuildReviewMetricsSection(
-  existingContent: string,
-  metrics: BuildReviewMetrics,
-): string {
-  const separator = existingContent.endsWith('\n') ? '\n' : '\n\n';
-  const rates = Object.entries(metrics.rubricFailureRates)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([rubric, rate]) =>
-      `  ${rubric}: failures: ${rate.failures}, judged: ${rate.judged}\n`,
-    )
-    .join('');
-  return existingContent + separator +
-    `## Build Review\n` +
-    `laps_to_pass: ${metrics.lapsToPass ?? 'not reached'}\n` +
-    `skipped: ${metrics.skipped}\n` +
-    `cache_hits: ${metrics.cacheHits}\n` +
-    `infrastructure_failures: ${metrics.infrastructureFailures}\n` +
-    (rates ? `rubrics:\n${rates}` : 'rubrics: none\n');
 }
 
 /** Appends the same validated accepted-risk section used by retained PRs. */

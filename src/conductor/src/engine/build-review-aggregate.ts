@@ -66,7 +66,7 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
   const candidate = record(value);
   if (!candidate) return undefined;
   const keys = candidate.kind === 'judged'
-    ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', 'verdict']
+    ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', ...(candidate.relocationAudit === undefined ? [] : ['relocationAudit']), 'verdict']
     : candidate.kind === 'skipped'
       ? ['kind', 'rubric', 'reason']
       : candidate.kind === 'infrastructure-failure'
@@ -98,7 +98,7 @@ function coverageFor(result: BuildReviewRubricResult): Coverage {
 
 function legacyFindingDetails(result: BuildReviewRubricResult): string[] {
   switch (result.kind) {
-    case 'judged': return result.findings.map((finding) => finding.concernKind);
+    case 'judged': return [...result.findings.map((finding) => finding.concernKind), ...(result.relocationAudit ?? [])];
     case 'skipped': return [`skipped: ${result.reason}`];
     case 'infrastructure-failure': return [`infrastructure failure: ${result.detail}`];
   }
@@ -124,7 +124,7 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
     coverage[name] = coverageFor(result);
     rubric[name] = legacyFailure(result);
     findings[name] = legacyFindingDetails(result);
-    reasons.push(...findings[name].map((detail) => `[${name}] ${detail}`));
+    reasons.push(...findings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
   }
   const aggregate: BuildReviewAggregate = {
     aggregateVersion: AGGREGATE_VERSION, lapId: input.lapId, snapshotDigest: input.snapshotDigest,
@@ -189,7 +189,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     expectedCoverage[name] = coverageFor(results[name]);
     expectedRubric[name] = legacyFailure(results[name]);
     expectedFindings[name] = legacyFindingDetails(results[name]);
-    expectedReasons.push(...expectedFindings[name].map((detail) => `[${name}] ${detail}`));
+    expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
   }
   const verdict = aggregateVerdict(results);
   const verdictTolerated = carriedRetiredWiring && (source.verdict === 'PASS' || source.verdict === 'FAIL');

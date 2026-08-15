@@ -45,6 +45,14 @@ measured normally. A fixture relocation requires both the test-path move and a p
 handling/classification change that makes the former path lose its prior meaning; a move alone is
 not an exception.
 
+For every changed test evaluated under the fixture-relocation exception, return exactly one
+audit-only `relocationAudit` entry on PASS or FAIL:
+`[relocation-audit] (EXEMPTED|MEASURED): old path → new path; production hunk(s) (do|do not) force the move`.
+`EXEMPTED` proves the complete exception qualified; `MEASURED` proves it did not and the test was
+judged normally. This is not a finding: it must name both paths and whether production forces the
+move, which distinguishes relocation from deletion or masking. Unevaluated tests and non-Tautology
+results must not manufacture relocation-audit evidence.
+
 ## Result contract (v1)
 
 Return one `judged` result for rubric `tautology` with contract version `v1` and a `findings` array.

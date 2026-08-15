@@ -38,20 +38,28 @@ describe('build-review findings CLI', () => {
     });
   });
 
-  it('refuses piped, unidentified, stale, or unknown acceptance before mutating state', async () => {
+  it('emits the refusal event for piped, unidentified, invalid-input, and stale acceptance attempts before mutating state', async () => {
     const append = vi.fn();
     const store = { list: vi.fn(), append };
+    const appendEvent = vi.fn();
     for (const deps of [
       { isInteractive: false, resolveOperator: () => 'local-operator' },
       { isInteractive: true, resolveOperator: () => undefined },
       { isInteractive: true, resolveOperator: () => 'local-operator', readFile: async () => JSON.stringify(aggregate) },
+      { isInteractive: true, resolveOperator: () => 'local-operator', readFile: async () => JSON.stringify(aggregate), lapId: 'not a lap' },
+      { isInteractive: true, resolveOperator: () => 'local-operator', readFile: async () => JSON.stringify(aggregate), rationale: ' ' },
     ]) {
-      await expect(dispatchBuildReviewAccept({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-stale', findingId: 'sha256:unknown', rationale: 'risk' }, {
-        cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path, createStore: () => store, print: vi.fn(), ...deps,
+      const { lapId = 'lap-stale', rationale = 'risk', ...overrides } = deps;
+      await expect(dispatchBuildReviewAccept({ kind: 'accept', feature: 'review-rubrics', lapId, findingId: 'sha256:unknown', rationale }, {
+        cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path, createStore: () => store, print: vi.fn(), appendEvent, ...overrides,
       })).resolves.toBe(1);
     }
     expect(append).not.toHaveBeenCalled();
     expect(store.list).not.toHaveBeenCalled();
+    expect(appendEvent).toHaveBeenCalledTimes(5);
+    expect(appendEvent).toHaveBeenNthCalledWith(1, '/main/.worktrees/review-rubrics', expect.objectContaining({
+      type: 'build_review_disposition_refused', feature: 'review-rubrics', ts: expect.any(String),
+    }));
   });
 
   it('refuses malformed state, lock failure, and a replacement lap observed after waiting for the shared store', async () => {

@@ -25,7 +25,6 @@ import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
   appendTimingSection,
-  appendBuildReviewMetricsSection,
   appendBuildReviewAcceptedRisk,
   specHash,
   renderShippedRecord,
@@ -36,7 +35,6 @@ import {
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { computeCostRollup } from './cost-rollup.js';
 import { computeTimingRollup } from './timing-rollup.js';
-import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 import { resolveMainRepoRoot } from './park-marker.js';
@@ -173,28 +171,28 @@ export async function dispatchShippedRecord(
       );
       recordBody = appendTimingSection(recordBody, { state: 'unavailable' });
     }
-    try {
-      const events = await readMergedFeatureEvents(cwd);
-      recordBody = appendBuildReviewMetricsSection(
-        recordBody,
-        computeBuildReviewMetrics(events ?? []),
-      );
-    } catch (err) {
-      console.error(
-        `build-review metrics failed — shipped record keeps its other evidence for ${identity.slug}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
     // The feature worktree owns its disposition ledger; repository identity
     // is deliberately canonical so a linked checkout cannot forge a separate
     // accepted-risk namespace.
-    const repository = await resolveMainRepoRoot(cwd);
-    const dispositions = await new BuildReviewDispositionStore(cwd).list({
-      version: 'v1', repository, feature: identity.slug,
-    });
-    if (!dispositions.ok) throw new Error(dispositions.message);
-    recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);
+    // Accepted-risk evidence is part of the retained shipment contract.  It
+    // therefore deliberately differs from the legacy Cost/Time best-effort
+    // rollups above: unreadable or unrenderable disposition state must stop
+    // FINISH rather than silently produce an incomplete record.
+    try {
+      const repository = await resolveMainRepoRoot(cwd);
+      const dispositions = await new BuildReviewDispositionStore(cwd).list({
+        version: 'v1', repository, feature: identity.slug,
+      });
+      if (!dispositions.ok) throw new Error(dispositions.message);
+      recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);
+    } catch (err) {
+      console.error(
+        `shipped-record accepted-risk evidence failed for ${identity.slug}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return 1;
+    }
     await writeShippedRecord(join(cwd, relPath), recordBody);
 
     await execa('git', ['add', relPath], { cwd });

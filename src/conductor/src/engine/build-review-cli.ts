@@ -107,19 +107,37 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
 export async function dispatchBuildReviewAccept(command: BuildReviewAcceptCommand, deps: BuildReviewAcceptDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
   let worktree: string | undefined;
+  try {
+    // Resolve the feature-owned external-event target before validating any
+    // mutable review state. Every refusal can then be observed through the
+    // existing same-schema writer, including argument and TTY failures.
+    const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
+    worktree = await (deps.realpath ?? realpathDefault)(join(root, '.worktrees', command.feature));
+  } catch {
+    print(`build-review accept: refused for '${command.feature}'; the feature worktree could not be resolved.`);
+    return 1;
+  }
+  const refuse = (reason: string, message: string): number => {
+    try {
+      (deps.appendEvent ?? appendCloseoutEvent)(worktree!, {
+        type: 'build_review_disposition_refused', feature: command.feature, reason, ts: new Date().toISOString(),
+      });
+    } catch {
+      // The refusal remains authoritative when best-effort external telemetry cannot append.
+    }
+    print(message);
+    return 1;
+  };
   const operator = (deps.resolveOperator ?? (() => userInfo().username))();
   if (!(deps.isInteractive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true)) || !operator?.trim()) {
-    print('build-review accept: requires an interactive terminal and a verified local operator identity.');
-    return 1;
+    return refuse('non-interactive-or-unidentified-operator', 'build-review accept: requires an interactive terminal and a verified local operator identity.');
   }
   const requestedLap = parseBuildReviewLapId(command.lapId);
   if (!requestedLap || !command.rationale.trim()) {
-    print('build-review accept: requires an exact current lap and non-empty rationale.');
-    return 1;
+    return refuse('invalid-lap-or-blank-rationale', 'build-review accept: requires an exact current lap and non-empty rationale.');
   }
   try {
     const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
-    worktree = await (deps.realpath ?? realpathDefault)(join(root, '.worktrees', command.feature));
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');

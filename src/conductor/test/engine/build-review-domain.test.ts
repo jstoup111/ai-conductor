@@ -88,6 +88,20 @@ describe('build-review domain', () => {
     })).toBeUndefined();
   });
 
+  it('retains a validated fixture-relocation audit entry on a zero-finding Tautology PASS', () => {
+    const relocationAudit = '[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move';
+
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [], relocationAudit: [relocationAudit],
+    })).toMatchObject({ verdict: 'PASS', relocationAudit: [relocationAudit] });
+
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [], relocationAudit: ['[relocation-audit] EXEMPTED: old → new'],
+    })).toBeUndefined();
+  });
+
   it('keeps skips and infrastructure failures explicit closed outcomes', () => {
     expect(parseBuildReviewSkip({ kind: 'skipped', rubric: 'wiring', reason: 'missing-entry-points' })).toBeUndefined();
     expect(parseBuildReviewSkip({ kind: 'skipped', rubric: 'scope', reason: 'missing-entry-points' })).toBeUndefined();

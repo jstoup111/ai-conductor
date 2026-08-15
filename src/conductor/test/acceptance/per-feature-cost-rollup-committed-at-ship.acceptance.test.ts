@@ -105,6 +105,14 @@ afterEach(async () => {
 });
 
 describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #537)', () => {
+  it('blocks shipment when accepted-risk disposition evidence is unreadable, while legacy rollups remain best-effort', async () => {
+    await writeEventsLedger([{ type: 'step_completed', step: 'build', status: 'done' }]);
+    await writeFile(join(repo, '.pipeline', 'build-review-dispositions.json'), '{ malformed');
+
+    await expect(runShippedRecord()).resolves.toBe(1);
+    await expect(shippedRecordBody()).rejects.toThrow();
+  });
+
   it('renders each invoked provider attempt beside the causally deduplicated aggregate cost totals', async () => {
     await writeEventsLedger([
       {
@@ -188,14 +196,7 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
         `state: measured\n` +
         `active_ms: 100\n` +
         `provider_active_ms: 50\n` +
-        `no_provider_active_ms: 50\n` +
-        `\n` +
-        `## Build Review\n` +
-        `laps_to_pass: not reached\n` +
-        `skipped: 0\n` +
-        `cache_hits: 0\n` +
-        `infrastructure_failures: 0\n` +
-        `rubrics: none\n`,
+        `no_provider_active_ms: 50\n`,
     );
 
     const commitCount = await git(['rev-list', '--count', 'HEAD']);

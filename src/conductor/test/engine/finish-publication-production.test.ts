@@ -75,6 +75,38 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it('refuses FINISH publication when the shipped-record dispatch reports required-evidence failure', async () => {
+    const advanceFinishPublication = vi.fn(async (input: { effects: { createShippedRecord?: () => Promise<void> } }) => {
+      await input.effects.createShippedRecord!();
+      return { kind: 'advanced' as const, transition: 'write_shipped_record' as const };
+    });
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const writeShippedRecord = vi.fn(async () => 1);
+      const coordinator = createCoordinator({
+        projectRoot: '/project', stateFilePath: '/project/.pipeline/conduct-state.json', baseBranch: 'main',
+        git: async () => commandResult, gh: async () => commandResult, writeShippedRecord,
+      });
+
+      await expect(coordinator.advance({
+        state: { feature_desc: 'feature', pr_url: 'https://example.test/pr/1' } as ConductState,
+        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+      })).rejects.toThrow('required shipped-record accepted-risk evidence');
+      expect(writeShippedRecord).toHaveBeenCalledOnce();
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+    }
+  });
+
   it('passes a genuine establish-PR verification failure through as a FINISH retry', async () => {
     const advanceFinishPublication = vi.fn(async () => ({
       kind: 'publication_retry' as const,

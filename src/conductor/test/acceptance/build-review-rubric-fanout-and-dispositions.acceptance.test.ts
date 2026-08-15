@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderFullHelp } from '../../src/cli.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { dispatchBuildReviewAccept } from '../../src/engine/build-review-cli.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
@@ -74,6 +75,21 @@ afterEach(async () => {
 });
 
 describe('acceptance: independent build_review rubric execution', () => {
+  it('persists an early disposition refusal through the same-schema external event ledger', async () => {
+    const { dir } = await fixtureRepo();
+    await expect(dispatchBuildReviewAccept({
+      kind: 'accept', feature: 'rubric-fanout', lapId: 'lap-current', findingId: 'sha256:missing', rationale: 'risk',
+    }, {
+      cwd: dir, isInteractive: false, resolveOperator: () => 'operator', print: () => {},
+    })).resolves.toBe(1);
+
+    const ledger = await readFile(join(dir, '.pipeline', 'pipeline-events.jsonl'), 'utf8');
+    expect(JSON.parse(ledger.trim())).toMatchObject({
+      type: 'build_review_disposition_refused', feature: 'rubric-fanout',
+      reason: 'non-interactive-or-unidentified-operator',
+    });
+  });
+
   it('dispatches four isolated rubric sessions from one immutable review lap by default', async () => {
     const { dir, planPath } = await fixtureRepo();
     const prompts: string[] = [];
@@ -292,7 +308,12 @@ describe('acceptance: independent build_review rubric execution', () => {
       invoke: vi.fn(async (options) => {
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
         if (projection.rubric === 'scope' && !returnFinding) return { success: false, output: 'fake provider outage', exitCode: 1 };
-        const findings = projection.rubric === 'scope' && returnFinding ? [{ concernKind: 'unresolved surface', anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'outside-plan' } }] : [];
+        const findings = projection.rubric === 'scope' && returnFinding ? [{
+          concernKind: 'unresolved surface',
+          summary: 'src/feature.ts changes an unresolved surface.',
+          evidenceLocations: ['src/feature.ts:1'],
+          anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'outside-plan' },
+        }] : [];
         return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings, verdict: findings.length ? 'FAIL' : 'PASS' }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
