@@ -163,14 +163,13 @@ function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'co
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'acceptedWidenings' | 'removalContext'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext'
 >): string {
-  const { diff, planBody, repairContext, acceptedWidenings, removalContext } = snapshot;
+  const { diff, planBody, repairContext, removalContext } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff,
     planBody,
     repairContext,
-    acceptedWidenings,
     removalContext,
   })).digest('hex')}`;
 }

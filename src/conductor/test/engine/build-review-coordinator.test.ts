@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
   classifyBuildReviewRubricBranches,
   coordinateBuildReviewRubrics,
@@ -81,6 +82,12 @@ describe("build-review coordinator: pre-dispatch classification", () => {
 });
 
 function inputs(): BuildReviewFrozenInputs {
+  const sourceContent = {
+    diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
+    planBody: "# Plan\n",
+    repairContext: [],
+    removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+  };
   return {
     diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
     planBody: "# Plan\n",
@@ -89,12 +96,25 @@ function inputs(): BuildReviewFrozenInputs {
     removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
     testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" } as never,
     sourceSnapshot: {
-      digest: "sha256:snapshot", contentDigest: "sha256:content", baseRef: "origin/main", mergeBase: "base", headSha: "head",
-      diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
-      planBody: "# Plan\n", repairContext: [], acceptedWidenings: [],
-      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+      digest: "sha256:snapshot", contentDigest: contentDigestFor(sourceContent), baseRef: "origin/main", mergeBase: "base", headSha: "head",
+      ...sourceContent, acceptedWidenings: [],
     },
   };
+}
+
+function contentDigestFor(content: {
+  readonly diff: string;
+  readonly planBody: string;
+  readonly repairContext: readonly unknown[];
+  readonly removalContext: unknown;
+}): string {
+  const { diff, planBody, repairContext, removalContext } = content;
+  return `sha256:${createHash("sha256").update(JSON.stringify({
+    diff,
+    planBody,
+    repairContext,
+    removalContext,
+  })).digest("hex")}`;
 }
 
 describe("build-review coordinator: frozen fan-out", () => {
@@ -255,12 +275,16 @@ describe("build-review coordinator: frozen fan-out", () => {
 
     dispatchModel.mockClear();
     emit.mockClear();
+    const widenedSourceSnapshot = {
+      ...rebased.sourceSnapshot,
+      digest: "sha256:widened-snapshot",
+      acceptedWidenings: [{ path: "src/widened.ts", rationale: "required coordination", taskId: "5", sha: "widened-sha" }],
+    };
     const widened = {
       ...rebased,
       sourceSnapshot: {
-        ...rebased.sourceSnapshot,
-        digest: "sha256:widened-snapshot",
-        acceptedWidenings: [{ path: "src/widened.ts", rationale: "required coordination", taskId: "5", sha: "widened-sha" }],
+        ...widenedSourceSnapshot,
+        contentDigest: contentDigestFor(widenedSourceSnapshot),
       },
     };
 

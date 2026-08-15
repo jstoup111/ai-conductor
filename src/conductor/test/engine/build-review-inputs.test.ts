@@ -115,6 +115,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         diff = 'diff --git a/a b/a\n+change\n',
         planBody = '# Plan body\n\nSome plan content.\n',
         resealReason = 'Operator approved the amendment.',
+        acceptedWidenings = [] as BuildReviewInputOptions['acceptedWidenings'],
       } = {}): Promise<string> {
         await mkdir(join(dir, '.docs/plans'), { recursive: true });
         await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -136,6 +137,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         ]);
 
         return (await assembleBuildReviewInputs(git, scopedPlanPath, {
+          acceptedWidenings,
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { ...CURRENT_PROOF.evidence, provenanceHeadSha: headSha },
           }),
@@ -149,6 +151,9 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const oneByteDiff = await contentDigestFor({ diff: 'diff --git a/a b/a\n+changed\n' });
       const changedPlan = await contentDigestFor({ planBody: '# Plan body\n\nChanged plan content.\n' });
       const changedReseal = await contentDigestFor({ resealReason: 'Operator approved the corrected amendment.' });
+      const changedWidening = await contentDigestFor({
+        acceptedWidenings: [{ path: 'src/widened.ts', rationale: 'required coordination', taskId: '5', sha: 'widened-sha' }],
+      });
 
       expect({
         hasSha256Digest: /^sha256:[a-f0-9]{64}$/.test(baseline),
@@ -156,12 +161,14 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         diffIsIncluded: oneByteDiff !== baseline,
         planIsIncluded: changedPlan !== baseline,
         resealIsExcluded: changedReseal === baseline,
+        wideningIsExcluded: changedWidening === baseline,
       }).toEqual({
         hasSha256Digest: true,
         provenanceIsExcluded: true,
         diffIsIncluded: true,
         planIsIncluded: true,
         resealIsExcluded: true,
+        wideningIsExcluded: true,
       });
     });
 
