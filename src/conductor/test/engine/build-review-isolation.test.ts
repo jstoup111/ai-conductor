@@ -6,7 +6,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import {
+  assembleBuildReviewInputs,
+  TestSuiteProofError,
+  type BuildReviewFrozenInputs,
+  type BuildReviewInputOptions,
+} from '../../src/engine/build-review-inputs.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
@@ -130,6 +135,10 @@ describe('build_review input isolation', () => {
     ]) {
       expect(assembledContent).not.toContain(sentinel);
     }
+
+    await expect(assembleBuildReviewInputs(realGit(), planPath, {
+      inspectTestSuite: async () => ({ status: 'MISSING' } as never),
+    })).rejects.toBeInstanceOf(TestSuiteProofError);
   });
 
   it('admits only git, plan, and proof inspection / inputs at the type level — no state parameter exists', () => {
@@ -137,13 +146,21 @@ describe('build_review input isolation', () => {
     // functions' parameter lists are exactly as narrow as documented. If a
     // future maintainer adds a `state`/`summary` parameter, this file fails
     // to compile (tsc), not just fails at runtime.
-    type AssembleParams = Parameters<typeof assembleBuildReviewInputs>;
+    type Equal<Left, Right> =
+      (<T>() => T extends Left ? 1 : 2) extends (<T>() => T extends Right ? 1 : 2) ? true : false;
+    type Expect<Value extends true> = Value;
     type PromptParams = Parameters<typeof buildGraderPrompt>;
 
-    const assembleArity: AssembleParams extends [unknown, unknown, unknown?] ? true : false = true;
+    // Exact equality makes a merge-base-era `(git, planPath)` signature fail
+    // the typecheck: proof inspection is now a required supported seam.
+    type _AssembleSignature = Expect<Equal<
+      typeof assembleBuildReviewInputs,
+      (git: GitRunner, planPath: string, options?: BuildReviewInputOptions) => Promise<BuildReviewFrozenInputs>
+    >>;
     const promptArity: PromptParams extends [unknown] ? true : false = true;
 
-    expect(assembleArity).toBe(true);
+    const assembleSignature: _AssembleSignature = true;
+    expect(assembleSignature).toBe(true);
     expect(promptArity).toBe(true);
   });
 

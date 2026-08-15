@@ -558,6 +558,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     await seedToBuildReview(statePath, repo, { markRemainingStepsDone: true });
 
     const calls: StepName[] = [];
+    let proofInspections = 0;
     const runner: StepRunner = {
       run: async (step: StepName): Promise<StepRunResult> => {
         calls.push(step);
@@ -571,14 +572,18 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             makeGitRunner(repo),
             join(repo, '.docs/plans/feat.md'),
             {
-              inspectTestSuite: async () => ({
-                status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
-              } as never),
+              inspectTestSuite: async () => {
+                proofInspections += 1;
+                return {
+                  status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+                } as never;
+              },
             },
           );
           expect(inputs.baseKind).toBe('local');
           expect(inputs.fresh).toBe(false);
           expect(inputs.remoteHeadSha).toBeNull();
+          expect(inputs.testSuiteProof).toMatchObject({ provenanceHeadSha: 'fixture-head', outcome: 'PASS' });
 
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
@@ -613,6 +618,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     await conductor.run();
 
     expect(calls.filter((s) => s === 'build_review').length).toBeGreaterThanOrEqual(1);
+    expect(proofInspections).toBeGreaterThanOrEqual(1);
     const finalVerdict = JSON.parse(
       await readFile(join(repo, '.pipeline/build-review.json'), 'utf-8'),
     );
@@ -694,9 +700,9 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
   }, 30000);
 
   it.each([
-    ['a malformed four-rubric completeness flag', /rubric\.completeness.*boolean/, {
+    ['a retired four-rubric result without the wiring member', /rubric\.wiring.*boolean/, {
       verdict: 'PASS', reasons: [],
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: 'false' },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
     }],
   ])('fails closed for %s before any retry can dispatch wiring_check', async (_label, expectedHalt, invalidVerdict) => {
     const fixture = await setupStaleTrackingRefFixture(dir);

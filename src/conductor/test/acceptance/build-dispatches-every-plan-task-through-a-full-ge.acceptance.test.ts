@@ -157,6 +157,7 @@ describe('Story 4: build_review blocks a copy that differs beyond the rename map
   it('drives the real runner, refuses the mismatch before grading, and names the target', async () => {
     const { root, planPath } = await makeMismatchFixture();
     const { provider, calls } = passingProvider();
+    let proofInspections = 0;
     const runner = new DefaultStepRunner(provider, 'acceptance-session', root, {
       featureDesc: 'replicate-gate',
       planPath,
@@ -166,9 +167,12 @@ describe('Story 4: build_review blocks a copy that differs beyond the rename map
         build_review: { per_task_floor: false },
       } as HarnessConfig,
       buildReviewInputOptions: {
-        inspectTestSuite: async () => ({
+        inspectTestSuite: async () => {
+          proofInspections += 1;
+          return {
           status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
-        } as never),
+          } as never;
+        },
       },
     });
 
@@ -179,6 +183,21 @@ describe('Story 4: build_review blocks a copy that differs beyond the rename map
     expect(result.success).toBe(false);
     expect(result.output ?? '').toMatch(/copy|equivalen|mismatch/i);
     expect(result.output ?? '').toContain('src/target-gate.ts');
+    // The request boundary must consume a CURRENT aggregate proof before it
+    // can reach the copy-equivalence guard (and therefore before grading).
+    expect(proofInspections).toBe(1);
+    expect(calls).toHaveLength(0);
+
+    const staleRunner = new DefaultStepRunner(provider, 'stale-proof-session', root, {
+      featureDesc: 'replicate-gate', planPath, modelOverride: 'fable',
+      config: { model_fallback_ladder: ['fable'], build_review: { per_task_floor: false } } as HarnessConfig,
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({ status: 'STALE' } as never),
+      },
+    });
+    const stale = await staleRunner.run('build_review', { feature_desc: 'replicate-gate' } as ConductState);
+    expect(stale.success).toBe(false);
+    expect(stale.output ?? '').toMatch(/CURRENT test_suite proof.*STALE/i);
     expect(calls).toHaveLength(0);
   });
 });

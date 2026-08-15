@@ -75,8 +75,19 @@ describe('engine/build-review-inputs — provenance isolation (Task 25)', () => 
   }
 
   it('a provenance classification failure still produces grader inputs, while classification itself stays live', async () => {
-    const { assembleBuildReviewInputs } = await import('../../src/engine/build-review-inputs.js');
+    const { assembleBuildReviewInputs, TestSuiteProofError } = await import('../../src/engine/build-review-inputs.js');
     const { buildGraderPrompt } = await import('../../src/engine/build-review-prompt.js');
+
+    // Proof refusal happens before any provenance fallback, so neither
+    // provenance path can accidentally bypass the current-proof gate.
+    let gitCalls = 0;
+    await expect(assembleBuildReviewInputs(async () => {
+      gitCalls += 1;
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }, planPath, {
+      inspectTestSuite: async () => ({ status: 'FAILED' } as never),
+    })).rejects.toBeInstanceOf(TestSuiteProofError);
+    expect(gitCalls).toBe(0);
 
     // Failure half: history read throws mid-classification. Assembly must
     // resolve anyway, leaving the grading unattributed — and the prompt must

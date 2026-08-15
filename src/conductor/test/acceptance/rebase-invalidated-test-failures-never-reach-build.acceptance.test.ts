@@ -29,7 +29,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import { assembleBuildReviewInputs, TestSuiteProofError } from '../../src/engine/build-review-inputs.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
@@ -272,11 +272,23 @@ describe('rebase-invalidated failures reach build_review as bounded repair conte
         observedAt: observedAt + 1,
       });
 
+      // An invalidated aggregate proof is a BUILD boundary: repair context
+      // cannot dispatch to grading until the current replacement exists.
+      let proofInspections = 0;
+      await expect(assembleBuildReviewInputs(buildReviewGit(), planPath, {
+        inspectTestSuite: async () => {
+          proofInspections += 1;
+          return { status: 'STALE' } as never;
+        },
+      })).rejects.toBeInstanceOf(TestSuiteProofError);
+
       const inputs = await assembleBuildReviewInputs(buildReviewGit(), planPath, {
         inspectTestSuite: async () => ({
           status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
         } as never),
       });
+      expect(proofInspections).toBe(1);
+      expect(inputs.testSuiteProof).toMatchObject({ provenanceHeadSha: 'fixture-head', outcome: 'PASS' });
       const prompt = buildGraderPrompt(inputs);
 
       expect(inputs.repairContext).toHaveLength(2);
