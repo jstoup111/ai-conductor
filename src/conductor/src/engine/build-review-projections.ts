@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewLapId } from './build-review-domain.js';
-import type { BuildReviewFrozenInputs } from './build-review-inputs.js';
+import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
 
 export type BuildReviewProjectionJson =
@@ -27,6 +27,26 @@ export interface BuildReviewProjectionSource {
   readonly tautology: BuildReviewTautologyProjectionInput;
 }
 
+/** One hunk's line-range header from a unified diff (`@@ -old +new @@`). */
+export interface DiffHunkRange {
+  readonly oldStart: number;
+  readonly oldCount: number;
+  readonly newStart: number;
+  readonly newCount: number;
+}
+
+/**
+ * Compact by-reference identity of one changed file in the graded diff.
+ * The grader session runs inside the feature worktree, so it reads the file
+ * contents and per-path diffs itself instead of receiving embedded diff text.
+ */
+export interface ChangedFileReference {
+  readonly path: string;
+  readonly changeKind: 'added' | 'modified' | 'deleted' | 'renamed';
+  readonly previousPath?: string;
+  readonly hunks: readonly DiffHunkRange[];
+}
+
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
   readonly contractVersion: 'v1';
@@ -34,7 +54,13 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
   readonly digest: string;
-  readonly diff: string;
+  /** Anchors for by-reference reads: `git diff <mergeBase>..HEAD -- <path>`. */
+  readonly mergeBase: string;
+  readonly headSha: string;
+  /** The graded diff by reference — paths, change kinds, and hunk line ranges. */
+  readonly changedFiles: readonly ChangedFileReference[];
+  /** Diff-derived removal evidence (never an exemption), kept inline because it is compact. */
+  readonly removalContext: BuildReviewSourceSnapshot['removalContext'];
 }
 
 export interface TautologyProjection extends CommonProjection<'tautology'> {
@@ -94,7 +120,7 @@ export function canonicalJson(value: BuildReviewProjectionJson): string {
 /** Version-bound digest of a closed projection (with its digest field excluded). */
 export function projectionDigest(projection: Omit<BuildReviewRubricProjection, 'digest'> | BuildReviewRubricProjection): string {
   const { digest: _ignored, ...withoutDigest } = projection as BuildReviewRubricProjection;
-  return `sha256:${createHash('sha256').update(canonicalJson(withoutDigest as BuildReviewProjectionJson)).digest('hex')}`;
+  return `sha256:${createHash('sha256').update(canonicalJson(withoutDigest as unknown as BuildReviewProjectionJson)).digest('hex')}`;
 }
 
 function json(value: unknown): BuildReviewProjectionJson {
@@ -105,15 +131,60 @@ function canonicalArray(value: readonly BuildReviewProjectionJson[]): readonly B
   return canonicalize([...value]) as readonly BuildReviewProjectionJson[];
 }
 
+/**
+ * Derive the per-file references from the frozen diff text. Purely mechanical
+ * and deterministic: the same diff always yields the same references, and the
+ * projection still carries `snapshotDigest` (which digests the full diff), so
+ * cache identity changes iff the underlying diff changes even when two diffs
+ * would produce identical line ranges.
+ */
+export function deriveChangedFileReferences(diff: string): readonly ChangedFileReference[] {
+  const references: ChangedFileReference[] = [];
+  const chunks = diff.split(/^diff --git /m);
+  for (const chunk of chunks) {
+    const header = /^a\/(.+) b\/(.+)$/m.exec(chunk);
+    if (!header) continue;
+    const renameFrom = /^rename from (.+)$/m.exec(chunk);
+    const renameTo = /^rename to (.+)$/m.exec(chunk);
+    const changeKind: ChangedFileReference['changeKind'] = /^new file mode /m.test(chunk)
+      ? 'added'
+      : /^deleted file mode /m.test(chunk)
+        ? 'deleted'
+        : renameFrom && renameTo
+          ? 'renamed'
+          : 'modified';
+    const hunks: DiffHunkRange[] = [];
+    for (const match of chunk.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+      hunks.push({
+        oldStart: Number(match[1]),
+        oldCount: match[2] === undefined ? 1 : Number(match[2]),
+        newStart: Number(match[3]),
+        newCount: match[4] === undefined ? 1 : Number(match[4]),
+      });
+    }
+    references.push({
+      path: renameTo ? renameTo[1]! : changeKind === 'deleted' ? header[1]! : header[2]!,
+      changeKind,
+      ...(renameFrom ? { previousPath: renameFrom[1]! } : {}),
+      hunks: Object.freeze(hunks),
+    });
+  }
+  return Object.freeze(references);
+}
+
 function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectionSource, rubric: Rubric): Omit<CommonProjection<Rubric>, 'digest'> {
   const descriptor = getBuildReviewRubricDescriptor(rubric);
+  const snapshot = source.inputs.sourceSnapshot;
   return {
     rubric,
     contractVersion: descriptor.contractVersion,
     projectionVersion: descriptor.projectionVersion,
     lapId: source.lapId,
-    snapshotDigest: source.inputs.sourceSnapshot.digest,
-    diff: source.inputs.sourceSnapshot.diff,
+    snapshotDigest: snapshot.digest,
+    mergeBase: snapshot.mergeBase,
+    headSha: snapshot.headSha,
+    changedFiles: deriveChangedFileReferences(snapshot.diff),
+    removalContext: snapshot.removalContext,
   };
 }
 

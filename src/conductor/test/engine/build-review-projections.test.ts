@@ -3,17 +3,29 @@ import { describe, expect, it } from 'vitest';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import {
   deriveBuildReviewRubricProjections,
+  deriveChangedFileReferences,
   projectionDigest,
   type BuildReviewProjectionSource,
 } from '../../src/engine/build-review-projections.js';
 
 const lapId = parseBuildReviewLapId('lap-1')!;
 
+const FIXTURE_DIFF = [
+  'diff --git a/src/a.ts b/src/a.ts',
+  'index 1111111..2222222 100644',
+  '--- a/src/a.ts',
+  '+++ b/src/a.ts',
+  '@@ -1,2 +1,3 @@',
+  ' context',
+  '+embedded-diff-body-line',
+  '',
+].join('\n');
+
 function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildReviewProjectionSource {
   return {
     lapId,
     inputs: {
-      diff: 'diff --git a/src/a.ts b/src/a.ts\n+change\n',
+      diff: FIXTURE_DIFF,
       planBody: '# Approved plan\n',
       mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
       repairContext: [{ id: 'repair-b', reason: 'command_failed', diagnostic: 'b', observedAt: 2 }, { id: 'repair-a', reason: 'command_failed', diagnostic: 'a', observedAt: 1 }],
@@ -28,7 +40,7 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       }],
       sourceSnapshot: {
         digest: 'sha256:snapshot', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head',
-        diff: 'diff --git a/src/a.ts b/src/a.ts\n+change\n', planBody: '# Approved plan\n', repairContext: [],
+        diff: FIXTURE_DIFF, planBody: '# Approved plan\n', repairContext: [],
         acceptedWidenings: [{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }],
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
         operatorReseals: [{
@@ -57,24 +69,32 @@ describe('build-review rubric projections', () => {
 
     expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness']);
     expect(Object.keys(projections.tautology).sort()).toEqual([
-      'changedTestSelectors', 'contractVersion', 'diff', 'digest', 'lapId', 'preflightEvidence',
-      'projectionVersion', 'repairContext', 'revertedProductionPatch', 'rubric', 'snapshotDigest', 'testSuiteProof',
+      'changedFiles', 'changedTestSelectors', 'contractVersion', 'digest', 'headSha', 'lapId',
+      'mergeBase', 'preflightEvidence', 'projectionVersion', 'removalContext', 'repairContext',
+      'revertedProductionPatch', 'rubric', 'snapshotDigest', 'testSuiteProof',
     ]);
     expect(Object.keys(projections.scope).sort()).toEqual([
-      'acceptedWidenings', 'contractVersion', 'diff', 'digest', 'lapId', 'operatorReseals', 'planBody', 'projectionVersion',
+      'acceptedWidenings', 'changedFiles', 'contractVersion', 'digest', 'headSha', 'lapId',
+      'mergeBase', 'operatorReseals', 'planBody', 'projectionVersion', 'removalContext',
       'repairContext', 'rubric', 'snapshotDigest',
     ]);
     expect(Object.keys(projections.rootCause).sort()).toEqual([
-      'contractVersion', 'diff', 'digest', 'lapId', 'planBody', 'projectionVersion', 'repairContext',
-      'rubric', 'snapshotDigest',
+      'changedFiles', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
+      'projectionVersion', 'removalContext', 'repairContext', 'rubric', 'snapshotDigest',
     ]);
     expect(Object.keys(projections.completeness).sort()).toEqual([
-      'contractVersion', 'diff', 'digest', 'lapId', 'planBody', 'projectionVersion', 'rubric',
-      'snapshotDigest',
+      'changedFiles', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
+      'projectionVersion', 'removalContext', 'rubric', 'snapshotDigest',
     ]);
     expect(projections.tautology).toMatchObject({
       rubric: 'tautology', projectionVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot',
-      diff: expect.any(String), changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
+      mergeBase: 'base', headSha: 'head',
+      changedFiles: [{
+        path: 'src/a.ts', changeKind: 'modified',
+        hunks: [{ oldStart: 1, oldCount: 2, newStart: 1, newCount: 3 }],
+      }],
+      removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
+      changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
       revertedProductionPatch: 'revert patch', preflightEvidence: expect.any(Object), repairContext: expect.any(Array),
     });
     expect(projections.tautology.preflightEvidence).toMatchObject({
@@ -89,7 +109,11 @@ describe('build-review rubric projections', () => {
       }],
     });
     expect(projections.rootCause).toMatchObject({ planBody: '# Approved plan\n', repairContext: expect.any(Array) });
-    expect(projections.completeness).toMatchObject({ planBody: '# Approved plan\n', diff: expect.any(String) });
+    expect(projections.completeness).toMatchObject({ planBody: '# Approved plan\n', changedFiles: expect.any(Array) });
+    // The raw diff body must never travel inside a projection — only references do.
+    for (const projection of Object.values(projections)) {
+      expect(JSON.stringify(projection)).not.toContain('embedded-diff-body-line');
+    }
     for (const projection of [projections.tautology, projections.rootCause, projections.completeness]) {
       expect(projection).not.toHaveProperty('operatorReseals');
     }
@@ -178,6 +202,65 @@ describe('build-review rubric projections', () => {
     expect(second.tautology).toEqual(first.tautology);
     expect(second.rootCause).toEqual(first.rootCause);
     expect(second.completeness).toEqual(first.completeness);
+  });
+
+  it('derives per-file references with change kinds and hunk line ranges from the diff text', () => {
+    const diff = [
+      'diff --git a/src/kept.ts b/src/kept.ts',
+      'index 1111111..2222222 100644',
+      '--- a/src/kept.ts',
+      '+++ b/src/kept.ts',
+      '@@ -10,4 +10,6 @@ export function kept() {',
+      ' context',
+      '+added line',
+      '@@ -40 +42,0 @@',
+      '-removed line',
+      'diff --git a/src/new.ts b/src/new.ts',
+      'new file mode 100644',
+      'index 0000000..3333333',
+      '--- /dev/null',
+      '+++ b/src/new.ts',
+      '@@ -0,0 +1,2 @@',
+      '+export const created = true;',
+      '+export const alsoCreated = true;',
+      'diff --git a/src/gone.ts b/src/gone.ts',
+      'deleted file mode 100644',
+      'index 4444444..0000000',
+      '--- a/src/gone.ts',
+      '+++ /dev/null',
+      '@@ -1,1 +0,0 @@',
+      '-export const gone = true;',
+      'diff --git a/src/old-name.ts b/src/new-name.ts',
+      'similarity index 90%',
+      'rename from src/old-name.ts',
+      'rename to src/new-name.ts',
+      'index 5555555..6666666 100644',
+      '--- a/src/old-name.ts',
+      '+++ b/src/new-name.ts',
+      '@@ -3,2 +3,2 @@',
+      '-before',
+      '+after',
+      '',
+    ].join('\n');
+
+    expect(deriveChangedFileReferences(diff)).toEqual([
+      {
+        path: 'src/kept.ts', changeKind: 'modified',
+        hunks: [
+          { oldStart: 10, oldCount: 4, newStart: 10, newCount: 6 },
+          { oldStart: 40, oldCount: 1, newStart: 42, newCount: 0 },
+        ],
+      },
+      { path: 'src/new.ts', changeKind: 'added', hunks: [{ oldStart: 0, oldCount: 0, newStart: 1, newCount: 2 }] },
+      { path: 'src/gone.ts', changeKind: 'deleted', hunks: [{ oldStart: 1, oldCount: 1, newStart: 0, newCount: 0 }] },
+      {
+        path: 'src/new-name.ts', changeKind: 'renamed', previousPath: 'src/old-name.ts',
+        hunks: [{ oldStart: 3, oldCount: 2, newStart: 3, newCount: 2 }],
+      },
+    ]);
+    // Deterministic: the same diff text always yields the same references.
+    expect(deriveChangedFileReferences(diff)).toEqual(deriveChangedFileReferences(diff));
+    expect(deriveChangedFileReferences('')).toEqual([]);
   });
 
   it('derives an explicit empty reseal channel into a canonical Scope projection', () => {

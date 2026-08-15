@@ -16,15 +16,20 @@ finding identity, dispositions, and the outer gate verdict.
 Use only the supplied projection version `v1`. Its closed input contains:
 
 - the lap ID and snapshot digest;
-- the changed diff and changed-test selectors;
+- the changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
+  ranges, anchored by `mergeBase` and `headSha`) and changed-test selectors;
+- diff-derived removal evidence (`removalContext`), never an exemption;
 - the current code-valid `test_suite` PASS;
 - the reverted-production patch; and
 - typed preflight evidence, including source identities, the scoped command, bounded output, and
   its result classification.
 - engine-recorded rebase-repair context, when a changed test repairs stale base-state expectations.
 
-Do not infer facts from a prior review, a maker transcript, task-status narrative, or any state not
-present in this projection.
+The session runs inside the feature worktree. The diff content is not embedded: read the
+referenced files and obtain any per-path diff yourself with `git diff <mergeBase>..HEAD -- <path>`
+(or `git show <mergeBase>:<path>` for the pre-change form). Those reads are part of this closed
+input. Do not infer facts from a prior review, a maker transcript, task-status narrative, or any
+state not present in this projection and its referenced content.
 
 ## Judgement
 
@@ -55,7 +60,9 @@ results must not manufacture relocation-audit evidence.
 
 ## Result contract (v1)
 
-Return one `judged` result for rubric `tautology` with contract version `v1` and a `findings` array.
+Return exactly one JSON `judged` result for rubric `tautology`: its top-level `kind` field is
+exactly the string `judged` (never `result` or any other field name), carrying contract version `v1`.
+It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means no Tautology concern was found. Each finding
 contains:
 
