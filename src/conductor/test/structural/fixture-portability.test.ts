@@ -444,7 +444,6 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
     { file: 'engine/autoheal.test.ts', line: 1570 },
     { file: 'engine/autoheal.test.ts', line: 1814 },
     { file: 'engine/push-evidence.test.ts', line: 281 },
-    { file: 'engine/task-progress.test.ts', line: 88 },
   ];
 
   it('scans real test tree and reports violations', async () => {
