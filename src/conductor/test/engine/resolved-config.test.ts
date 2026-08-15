@@ -115,7 +115,7 @@ describe('engine/resolved-config', () => {
         scope: resolved.rubrics.scope.effort,
         rootCause: resolved.rubrics.rootCause.effort,
         completeness: resolved.rubrics.completeness.effort,
-      }).toEqual({ tautology: 'high', scope: 'high', rootCause: 'medium', completeness: 'high' });
+      }).toEqual({ tautology: 'high', scope: 'medium', rootCause: 'medium', completeness: 'high' });
     });
 
     it('lets an authored step effort override every rubric default', () => {
@@ -285,7 +285,7 @@ describe('engine/resolved-config', () => {
         scope: {
           llm_provider: 'codex',
           model: 'gpt-5.6-sol',
-          effort: 'high',
+          effort: 'medium',
           model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
         },
       });

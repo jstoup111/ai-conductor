@@ -299,8 +299,8 @@ describe('acceptance: independent build_review rubric execution', () => {
     expect(observed).toEqual(expect.arrayContaining([
       { provider: 'claude', skill: 'build-review-tautology', model: 'opus', effort: 'high' },
       { provider: 'claude', skill: 'build-review-tautology', model: 'sonnet', effort: 'high' },
-      { provider: 'codex', skill: 'build-review-scope', model: 'gpt-5.6-sol', effort: 'high' },
-      { provider: 'codex', skill: 'build-review-scope', model: 'gpt-5.6-terra', effort: 'high' },
+      { provider: 'codex', skill: 'build-review-scope', model: 'gpt-5.6-sol', effort: 'medium' },
+      { provider: 'codex', skill: 'build-review-scope', model: 'gpt-5.6-terra', effort: 'medium' },
       { provider: 'claude', skill: 'build-review-root-cause', model: 'opus', effort: 'medium' },
       { provider: 'claude', skill: 'build-review-root-cause', model: 'sonnet', effort: 'medium' },
       { provider: 'codex', skill: 'build-review-completeness', model: 'gpt-5.6-sol', effort: 'high' },

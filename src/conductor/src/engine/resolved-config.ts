@@ -740,7 +740,7 @@ export interface ResolvedBuildReviewConfig {
 /** Per-rubric default efforts; explicit rubric or step config overrides. */
 const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'high'>> = {
   tautology: 'high',
-  scope: 'high',
+  scope: 'medium',
   rootCause: 'medium',
   completeness: 'high',
 };

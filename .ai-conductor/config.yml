@@ -60,7 +60,6 @@ build_review:
     scope:
       llm_provider: codex
       model: gpt-5.6-sol
-      effort: high
     rootCause:
       llm_provider: codex
       model: gpt-5.6-sol
