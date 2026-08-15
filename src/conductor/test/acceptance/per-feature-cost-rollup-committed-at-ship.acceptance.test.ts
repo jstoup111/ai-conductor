@@ -188,7 +188,14 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
         `state: measured\n` +
         `active_ms: 100\n` +
         `provider_active_ms: 50\n` +
-        `no_provider_active_ms: 50\n`,
+        `no_provider_active_ms: 50\n` +
+        `\n` +
+        `## Build Review\n` +
+        `laps_to_pass: not reached\n` +
+        `skipped: 0\n` +
+        `cache_hits: 0\n` +
+        `infrastructure_failures: 0\n` +
+        `rubrics: none\n`,
     );
 
     const commitCount = await git(['rev-list', '--count', 'HEAD']);
