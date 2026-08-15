@@ -24,12 +24,10 @@
 > **Amended 2026-08-14 by the operator after PR #1577 merged:**
 > `adr-2026-08-14-retire-build-review-wiring-rubric` retires the Wiring rubric repository-wide,
 > superseding the Wiring item of `adr-2026-08-11-wiring-judged-in-build-review`. This feature ships
-> a FOUR-member fan-out — Tautology, Scope, Root Cause, Completeness. Where earlier task text
-> enumerates five rubrics or names the Wiring member, read four; Task 9's `build-review-wiring`
-> skill and the Wiring-only `missing-entry-points` skip reason are removed by appended Task
-> rem-build-review-10. rem-build-review-8's reference to
-> `wiring-judged-in-build-review.acceptance.test.ts` resolves to main's renamed
-> `build-review-no-longer-judges-wiring.acceptance.test.ts` after the finish-time rebase.
+> a FOUR-member fan-out — Tautology, Scope, Root Cause, Completeness. Task 9 (the
+> `build-review-wiring` skill) is removed from this plan: appended Task rem-build-review-10 deletes
+> its code, so its landed commits net out of the `base...HEAD` diff. The Wiring-only
+> `missing-entry-points` skip reason is retired with it.
 
 ## Summary
 
@@ -56,7 +54,7 @@ digest and participates in conservative cache invalidation.
 The operator-reseal records landed by #1556 join that frozen source after the normal seal reader has
 filtered them to literal `operator-reseal` lineage. They enter only the Scope projection, including
 their named paths, verbatim rationale, and commit range. The Scope digest therefore invalidates when
-that evidence changes, while Tautology, Root Cause, Completeness, and Wiring remain byte-insulated
+that evidence changes, while Tautology, Root Cause, and Completeness remain byte-insulated
 from it. The Scope skill judges whether the rationale authorizes the named amendment and treats
 unmatched paths normally; no deterministic bypass or standing `.docs/` permission is introduced.
 
@@ -290,23 +288,6 @@ implementation branches do not edit release artifacts.
 4. Re-run the test; confirm GREEN and preserve plan-vs-full-diff judgement.
 5. Commit `feat(skills): add build review completeness policy`.
 
-### Task 9: Author the Wiring rubric skill contract
-
-**Story:** 1
-**Story:** 3
-**Story:** 8
-**Story:** 9
-**Type:** happy
-**Files:** `skills/build-review-wiring/SKILL.md`, `src/conductor/test/engine/build-review-rubric-skills.test.ts`
-**Dependencies:** Task 8
-
-1. Extend the contract test with failing Wiring cases for production surface/entry-point/reachability
-   anchors and the engine-owned `missing-entry-points` prerequisite skip.
-2. Run the focused test; confirm RED and review that the skill cannot manufacture a skip or pass.
-3. Add the Wiring skill over its closed projection.
-4. Re-run the test; confirm GREEN and preserve removal/relocation and scaffolding exceptions.
-5. Commit `feat(skills): add build review wiring policy`.
-
 ### Task 10: Register rubric skills in generated model and installation metadata
 
 **Story:** 1
@@ -515,8 +496,8 @@ implementation branches do not edit release artifacts.
 **Files:** `src/conductor/src/engine/build-review-coordinator.ts`, `src/conductor/test/engine/build-review-coordinator.test.ts`
 **Dependencies:** Tasks 3, 4, 11
 
-1. Write failing coordinator tests for `skipped: disabled`, Wiring-only
-   `skipped: missing-entry-points`, all-disabled refusal, whole-gate disable, and zero model/cache calls.
+1. Write failing coordinator tests for `skipped: disabled`, all-disabled refusal, whole-gate
+   disable, and zero model/cache calls.
 2. Run the new test; confirm RED and domain-review skip versus pass/failure.
 3. Implement registry selection and prerequisite classification before cache/provider layers.
 4. Re-run the test; confirm GREEN and a lap with no valid judgement cannot pass.
@@ -1115,15 +1096,15 @@ implementation branches do not edit release artifacts.
 
 | Story | Primary tasks |
 |---:|---|
-| 1 | 4-11, 20, 23, 27, 40, rem-build-review-2, rem-build-review-8, rem-build-review-9, rem-build-review-10 |
+| 1 | 4-8, 10, 11, 20, 23, 27, 40, rem-build-review-2, rem-build-review-8, rem-build-review-9, rem-build-review-10 |
 | 2 | 1, 3, 20, 21, 23, 40, rem-build-review-2, rem-build-review-8 |
-| 3 | 1, 2, 8, 9, 22, 40, rem-build-review-5, rem-build-review-8, rem-build-review-10 |
+| 3 | 1, 2, 8, 22, 40, rem-build-review-5, rem-build-review-8, rem-build-review-10 |
 | 4 | 2, 22, 40 |
 | 5 | 1-4, 10, 21, 23, 40, rem-build-review-2, rem-build-review-8 |
 | 6 | 12, 13, 18, 23, 24, 40, rem-build-review-2, rem-build-review-3, rem-build-review-9 |
 | 7 | 11, 22, 27, 28, 30, 40, rem-build-review-5 through rem-build-review-8 |
 | 8 | 11, 16, 19, 21, 24, 26-28, 40, rem-build-review-3, rem-build-review-5, rem-build-review-7, rem-build-review-8 |
-| 9 | 5-9, 11, 25, 26, 40 |
+| 9 | 5-8, 11, 25, 26, 40 |
 | 10 | 31, 40 |
 | 11 | 30, 32, 40, rem-build-review-6 through rem-build-review-8 |
 | 12 | 13, 25, 30, 40, rem-build-review-6, rem-build-review-8 |

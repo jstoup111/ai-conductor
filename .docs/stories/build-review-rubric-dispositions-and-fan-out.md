@@ -16,12 +16,8 @@ can see which kind of review passed or failed without losing the authoritative o
 #### Happy Path
 
 - Given `build_review` is enabled with all default rubrics, when one review lap completes, then the
-  result contains separately attributable Tautology, Scope, Root Cause, Completeness, and Wiring
+  result contains separately attributable Tautology, Scope, Root Cause, and Completeness
   outcomes plus one authoritative outer verdict.
-
-> **Amended 2026-08-14 by PR #1577:** the Wiring rubric is retired by
-> `adr-2026-08-14-retire-build-review-wiring-rubric`; the default set is the remaining FOUR
-> rubrics and the lap result carries four separately attributable outcomes.
 
 #### Negative Paths
 
@@ -82,13 +78,10 @@ so that an intentional omission is never mistaken for successful judgement.
 - Given a rubric is disabled, when the lap runs, then no provider session is dispatched for it and
   its skipped outcome cannot increment either the pass or failure count.
 
-> **Amended 2026-08-13 by #1542 conflict resolution:** skip reasons are closed and explicit.
-> `disabled` applies to any rubric selected off by the operator;
-> `missing-entry-points` applies only to an enabled Wiring rubric whose production-entry premise is
-> absent. Neither dispatches, passes, fails, or enters judged-rate denominators.
->
-> **Amended 2026-08-14 by PR #1577:** with the Wiring rubric retired, `missing-entry-points` is
-> retired with it; `disabled` is the only remaining closed skip reason.
+> **Amended 2026-08-13 by #1542 conflict resolution, re-amended 2026-08-14 by PR #1577:** skip
+> reasons are closed and explicit. `disabled` — the only skip reason — applies to any rubric
+> selected off by the operator. It never dispatches, passes, fails, or enters judged-rate
+> denominators.
 
 ### Done When
 
@@ -707,11 +700,8 @@ re-dispatches and disposition-only laps do not repeatedly spend tokens.
 - Given a cache hit exists, when completion is checked, then the engine still requires freshly
   materialized current-lap branch and aggregate artifacts; an old aggregate verdict cannot satisfy
   freshness.
-- Given a rubric is disabled or Wiring lacks entry points, when the branch is classified, then the
-  deterministic skip short-circuits before cache lookup and consumes no model session.
-
-> **Amended 2026-08-14 by PR #1577:** the Wiring-lacks-entry-points clause is retired with the
-> Wiring rubric; the deterministic skip short-circuit remains for `disabled`.
+- Given a rubric is disabled, when the branch is classified, then the deterministic skip
+  short-circuits before cache lookup and consumes no model session.
 
 ### Done When
 

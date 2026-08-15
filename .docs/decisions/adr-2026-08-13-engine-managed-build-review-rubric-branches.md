@@ -76,7 +76,7 @@ Choose **Option C**.
 ### 1. Preserve one public engine gate
 
 `build_review` remains one `StepName`, one completion predicate, and one failure-routing source.
-Tautology, Scope, Root Cause, Completeness, and Wiring are internal rubric identifiers, never new
+Tautology, Scope, Root Cause, and Completeness are internal rubric identifiers, never new
 top-level steps and never synthetic `StepName` casts. Whole-gate disablement remains separate from
 rubric membership.
 
@@ -139,7 +139,6 @@ Add five consumer-facing skills under the shipped `skills/` catalog:
 - `build-review-scope`
 - `build-review-root-cause`
 - `build-review-completeness`
-- `build-review-wiring`
 
 Each skill declares a versioned, rubric-specific result contract. The scope-check verdict is
 consumer-facing and provider-agnostic: installed projects execute these policies, while host syntax
@@ -180,7 +179,7 @@ conduct-state keys and does not cast rubric IDs to `StepName`.
 
 The build-review coordinator owns a rubric-specific outcome union:
 
-- `skipped` — deterministically not dispatched, with the closed reason `disabled` or, for Wiring,
+- `skipped` — deterministically not dispatched, with the closed reason `disabled` or, for Wiring (retired 2026-08-14),
   `missing-entry-points` when its existing production-entry premise is absent;
 - `judged` — a valid result, containing zero or more findings; or
 - `infrastructure-failure` — no valid result after the branch's own recovery policy.
