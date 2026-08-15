@@ -19,6 +19,7 @@ import {
   type IntervalClock,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import { enforceFreshSessionOptions } from './fresh-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
@@ -212,6 +213,11 @@ export class CodexProvider implements LLMProvider {
   }
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
+    // Boundary enforcement: session reuse was removed by design — a fresh
+    // session per invocation. Codex `exec` is one-shot and never receives the
+    // session id, but the invariant is enforced uniformly at every adapter
+    // entry so no future arg-building change can resurrect reuse.
+    options = enforceFreshSessionOptions(options, 'codex');
     const readiness = await this.readiness(options.spawnPermit);
     this.logReadinessDiagnostic(readiness, options.diagnosticLog);
     if (readiness.state === 'missing' || readiness.state === 'unusable') {
@@ -288,6 +294,8 @@ export class CodexProvider implements LLMProvider {
    * usable for conductor's collaborative calls by streaming that one-shot run.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
+    // Boundary enforcement: fresh session per invocation (see invoke()).
+    options = enforceFreshSessionOptions(options, 'codex');
     // A real interactive session leaves authorization to the operator. Auto
     // streaming still uses this method, but is explicitly marked noninteractive
     // by the runner and must prove readiness for every dispatch.

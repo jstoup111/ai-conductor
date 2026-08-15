@@ -67,6 +67,18 @@ function interactiveRuntime(
 
 const emptyState: ConductState = {};
 
+// Session reuse was removed by design: every provider invocation mints its
+// own fresh UUID (never a store-derived id) and never resumes. Tests assert
+// uniqueness + UUID shape instead of pinning store-supplied session names.
+const FRESH_SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefined>): void {
+  expect(sessionIds.length).toBeGreaterThan(0);
+  expect(new Set(sessionIds).size).toBe(sessionIds.length);
+  for (const id of sessionIds) expect(id).toMatch(FRESH_SESSION_ID_RE);
+}
+
 describe('DefaultStepRunner', () => {
   it.each([
     {
@@ -761,6 +773,10 @@ describe('DefaultStepRunner', () => {
     const claudeSkillPrompts = claudeSkillInvoke.mock.calls.map(
       ([options]) => options.prompt,
     );
+    const codexSessionIds = codexInvoke.mock.calls.map(
+      ([options]) => options.sessionId,
+    );
+    expectUniqueFreshSessionIds(codexSessionIds);
 
     expect({
       capturedCalls: {
@@ -812,7 +828,7 @@ describe('DefaultStepRunner', () => {
       codexCalls: [
         {
           prompt: '$conduct complexity',
-          sessionId: 'complexity-codex-session',
+          sessionId: codexSessionIds[0],
           resume: false,
           cwd: '/tmp/project',
           model: 'gpt-5.6-terra',
@@ -820,7 +836,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: '$remediate',
-          sessionId: 'remediate-codex-session',
+          sessionId: codexSessionIds[1],
           resume: false,
           cwd: '/tmp/project',
           model: 'gpt-5.6-terra',
@@ -828,7 +844,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: '$rebase',
-          sessionId: 'rebase-codex-session',
+          sessionId: codexSessionIds[2],
           resume: false,
           cwd: '/wt/rebase',
           model: 'gpt-5.6-terra',
@@ -836,7 +852,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: expect.stringContaining('install failed'),
-          sessionId: 'setup-codex-session',
+          sessionId: codexSessionIds[3],
           resume: false,
           cwd: '/wt/setup',
           model: 'gpt-5.6-luna',
@@ -844,7 +860,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: expect.stringContaining('typecheck failed'),
-          sessionId: 'ci-codex-session',
+          sessionId: codexSessionIds[4],
           resume: false,
           cwd: '/wt/ci',
           model: 'gpt-5.6-terra',
@@ -852,7 +868,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: 'Judge attribution exactly as supplied.\nTask: runtime-07',
-          sessionId: 'attribution-codex-session',
+          sessionId: codexSessionIds[5],
           resume: false,
           cwd: '/wt/attribution',
           model: 'gpt-5.6-sol',
@@ -860,7 +876,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: 'Grade this assembled plan and diff exactly as supplied.',
-          sessionId: 'build-review-codex-session',
+          sessionId: codexSessionIds[6],
           resume: false,
           cwd: '/wt/build-review',
           model: 'gpt-5.6-sol',
@@ -1014,6 +1030,17 @@ describe('DefaultStepRunner', () => {
     await runner.resetSession('explore');
     const explore = await runner.run('explore', emptyState);
 
+    // Each dispatch mints its own fresh session id; the store's ids are never
+    // consulted and the step scope records nothing. The zero-arg mock typing
+    // hides the real (options) call shape, so recover it explicitly.
+    const buildSessionId = (
+      codexInvoke.mock.calls as unknown as Array<[InvokeOptions]>
+    )[0]?.[0]?.sessionId;
+    const exploreSessionId = (
+      claudeInteractive.mock.calls as unknown as Array<[InvokeOptions]>
+    )[0]?.[0]?.sessionId;
+    expectUniqueFreshSessionIds([buildSessionId, exploreSessionId]);
+
     expect({
       legacyCalls: {
         invoke: legacyInvoke.mock.calls,
@@ -1034,7 +1061,7 @@ describe('DefaultStepRunner', () => {
           expect.objectContaining({
             cwd: '/tmp/project',
             dangerouslySkipPermissions: true,
-            sessionId: 'build-codex-session',
+            sessionId: buildSessionId,
             resume: false,
             model: 'gpt-5.6-terra',
             effort: 'medium',
@@ -1046,7 +1073,7 @@ describe('DefaultStepRunner', () => {
           expect.objectContaining({
             cwd: '/tmp/project',
             dangerouslySkipPermissions: false,
-            sessionId: 'explore-claude-session',
+            sessionId: exploreSessionId,
             resume: false,
             interactive: true,
             model: 'opus',
@@ -1054,8 +1081,8 @@ describe('DefaultStepRunner', () => {
           }),
         ],
       ],
-      buildSession: { id: 'build-codex-session' },
-      exploreSession: { id: 'explore-claude-session' },
+      buildSession: undefined,
+      exploreSession: undefined,
       build: {
         success: true,
         output: 'codex built',
@@ -1156,7 +1183,8 @@ describe('DefaultStepRunner', () => {
         fallbackReason: 'codex executable missing',
         invoked: false,
       },
-      cachedSession: { id: 'cached-3' },
+      // The store is never consulted: no session is recorded for the scope.
+      cachedSession: undefined,
     });
   });
 
@@ -1198,25 +1226,24 @@ describe('DefaultStepRunner', () => {
     expect({
       failed,
       afterFailure,
-      retryInvocations: throwingInteractive.mock.calls.map(
-        ([options]) => ({
-          sessionId: options.sessionId,
-          resume: options.resume,
-        }),
-      ),
       retriedActualProvider: retried.actualProvider,
     }).toEqual({
       failed: {
         success: false,
         output: 'Session for explore exited with error: interactive process rejected',
       },
-      afterFailure: { id: 'retry-claude-session' },
-      retryInvocations: [
-        { sessionId: 'retry-claude-session', resume: false },
-        { sessionId: 'retry-claude-session', resume: false },
-      ],
+      // The store is never consulted: no session is recorded for the scope.
+      afterFailure: undefined,
       retriedActualProvider: 'claude',
     });
+    // The retry cold-starts with its OWN fresh session id — never the store's
+    // 'retry-claude-session' and never the first attempt's id.
+    const retryInvocations = throwingInteractive.mock.calls.map(([options]) => ({
+      sessionId: options.sessionId,
+      resume: options.resume,
+    }));
+    expect(retryInvocations.map(({ resume }) => resume)).toEqual([false, false]);
+    expectUniqueFreshSessionIds(retryInvocations.map(({ sessionId }) => sessionId));
   });
 
   it('routes interactive recovery through the selected provider candidates', async () => {
@@ -1274,6 +1301,13 @@ describe('DefaultStepRunner', () => {
       ) => Promise<void>
     )('explore', { step: 'explore', reason: failureReason });
 
+    // Each recovery candidate mints its own fresh session id; the store's
+    // 'recovery-N' ids never reach a provider.
+    const recoverySessionIds = [
+      ...unavailableCodex.mock.calls,
+      ...claudeFallback.mock.calls,
+    ].map(([options]) => options.sessionId);
+    expectUniqueFreshSessionIds(recoverySessionIds);
     expect({
       capturedCalls: capturedInteractive.mock.calls,
       codexCalls: unavailableCodex.mock.calls.map(([options]) => ({
@@ -1296,7 +1330,7 @@ describe('DefaultStepRunner', () => {
       codexCalls: [
         {
           prompt: expect.stringContaining(failureReason),
-          sessionId: 'recovery-1',
+          sessionId: recoverySessionIds[0],
           resume: false,
           interactive: true,
         },
@@ -1304,7 +1338,7 @@ describe('DefaultStepRunner', () => {
       claudeCalls: [
         {
           prompt: expect.stringContaining(failureReason),
-          sessionId: 'recovery-2',
+          sessionId: recoverySessionIds[1],
           resume: false,
           interactive: true,
         },

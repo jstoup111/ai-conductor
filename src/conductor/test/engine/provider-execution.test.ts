@@ -24,6 +24,31 @@ import {
   formatProviderCapabilityGapMessages,
 } from '../../src/engine/provider-execution.js';
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Provider session reuse was removed by design: every invocation attempt —
+ * across branches, providers, retries, and model-fallback-ladder rungs — must
+ * carry a freshly minted, previously-unused session id with resume: false,
+ * never a store-derived id. (2026-08-14 incident: store-derived ids resumed a
+ * shared ~1.28M-token conversation across all four build_review branches.)
+ * The seen-set is module-level so uniqueness holds across every test in this
+ * file, not merely within one invocation list.
+ */
+const seenSessionIds = new Set<string>();
+function expectFreshSessions(
+  invocations: ReadonlyArray<Pick<InvokeOptions, 'sessionId' | 'resume'>>,
+): void {
+  expect(invocations.length).toBeGreaterThan(0);
+  for (const { sessionId, resume } of invocations) {
+    expect(sessionId).toMatch(UUID_RE);
+    expect(seenSessionIds.has(sessionId)).toBe(false);
+    seenSessionIds.add(sessionId);
+    expect(resume).toBe(false);
+  }
+}
+
 interface PreferredExecutionResult extends InvokeResult {
   preferredProvider: string;
   actualProvider?: string;
@@ -122,16 +147,16 @@ describe('executeProviderCandidates', () => {
     expect({
       result: { success: result.success, actualProvider: result.actualProvider, model: result.resolvedModel },
       models: codexInvoke.mock.calls.map(([options]) => options.model),
-      sessions: codexInvoke.mock.calls.map(([options]) => ({ id: options.sessionId, resume: options.resume })),
       claudeCalls: claudeInvoke.mock.calls.length,
       attribution: attempts.mock.calls.map(([, metadata]) => metadata.auxiliaryMember),
     }).toEqual({
       result: { success: true, actualProvider: 'codex', model: 'gpt-5.6-terra' },
       models: ['gpt-5.6-sol', 'gpt-5.6-terra'],
-      sessions: [{ id: 'scope-1', resume: false }, { id: 'scope-2', resume: false }],
       claudeCalls: 0,
       attribution: ['scope'],
     });
+    // Fresh session per ladder attempt, never the injected store's ids.
+    expectFreshSessions(codexInvoke.mock.calls.map(([options]) => options));
   });
   it('keeps native model fallback on the active lifecycle permit without using a replacement', async () => {
     const fallbackPermit = vi.fn(() => ({ permitted: false as const, reason: 'revoked' as const }));
@@ -1082,6 +1107,11 @@ describe('executeProviderCandidates', () => {
       },
     });
 
+    // The store's ids are never consulted: the invocation mints a fresh UUID
+    // and the scope records no session for either provider.
+    expectFreshSessions(codexInvoke.mock.calls.map(([options]) => options));
+    const codexSessionId = codexInvoke.mock.calls[0]?.[0]?.sessionId;
+    expect(codexSessionId).not.toBe('review-codex-session');
     expect({
       executorDefined: execute !== undefined,
       claudeCalls: claudeInvoke.mock.calls,
@@ -1102,7 +1132,7 @@ describe('executeProviderCandidates', () => {
             prompt: 'Judge this implementation.',
             systemPrompt: 'Return a verdict.',
             cwd: '/workspace/feature',
-            sessionId: 'review-codex-session',
+            sessionId: codexSessionId,
             resume: false,
             model: 'gpt-step/verbatim',
             effort: 'high',
@@ -1111,7 +1141,7 @@ describe('executeProviderCandidates', () => {
       ],
       sessions: {
         claude: undefined,
-        codex: { id: 'review-codex-session' },
+        codex: undefined,
       },
       result: {
         success: true,
@@ -1441,6 +1471,17 @@ describe('executeProviderCandidates', () => {
       sessions: noNextSessions,
     });
 
+    // Fresh, unique session ids per invocation; the injected stores are never
+    // consulted and record nothing. The zero-arg mock typing hides the real
+    // (options) call shape, so recover it explicitly.
+    const codexOptions = (codexInvoke.mock.calls as unknown as Array<[InvokeOptions]>)
+      .map(([options]) => options);
+    const claudeOptions = (claudeInvoke.mock.calls as unknown as Array<[InvokeOptions]>)
+      .map(([options]) => options);
+    expectFreshSessions([...codexOptions, ...claudeOptions]);
+    const codexSessionId = codexOptions[0]?.sessionId;
+    const [liveClaudeSessionId, cachedClaudeSessionId] =
+      claudeOptions.map((options) => options.sessionId);
     expect({
       codexCalls: codexInvoke.mock.calls,
       claudeCalls: claudeInvoke.mock.calls,
@@ -1466,7 +1507,7 @@ describe('executeProviderCandidates', () => {
           {
             prompt: 'Build the feature.',
             cwd: '/workspace/feature',
-            sessionId: 'live-codex-session',
+            sessionId: codexSessionId,
             resume: false,
             model: 'gpt-cli-primary',
             effort: 'max',
@@ -1478,7 +1519,7 @@ describe('executeProviderCandidates', () => {
           {
             prompt: 'Build the feature.',
             cwd: '/workspace/feature',
-            sessionId: 'live-claude-session',
+            sessionId: liveClaudeSessionId,
             resume: false,
             model: 'opus',
             effort: 'high',
@@ -1488,7 +1529,7 @@ describe('executeProviderCandidates', () => {
           {
             prompt: 'Build the feature.',
             cwd: '/workspace/feature',
-            sessionId: 'cached-claude-session',
+            sessionId: cachedClaudeSessionId,
             resume: false,
             model: 'opus',
             effort: 'high',
@@ -1497,16 +1538,16 @@ describe('executeProviderCandidates', () => {
       ],
       thirdCalls: [],
       firstSessions: {
-        codex: { id: 'live-codex-session' },
-        claude: { id: 'live-claude-session' },
+        codex: undefined,
+        claude: undefined,
         third: undefined,
       },
       cachedSessions: {
-        codex: { id: 'cached-codex-session' },
-        claude: { id: 'cached-claude-session' },
+        codex: undefined,
+        claude: undefined,
         third: undefined,
       },
-      noNextCodex: { id: 'no-next-codex-session' },
+      noNextCodex: undefined,
       warnings: [
         {
           message:
@@ -1732,6 +1773,16 @@ describe('executeProviderCandidates', () => {
       ),
     });
 
+    // Every attempt — ladder rungs, cross-provider fallback, later step —
+    // mints its own fresh session; the injected stores are never consulted.
+    expectFreshSessions([
+      ...partialCodex.calls,
+      ...fullCodex.calls,
+      ...fullClaude.calls,
+    ]);
+    const [solSessionId, terraSessionId, lunaSessionId, laterSessionId] =
+      fullCodex.calls.map(({ sessionId }) => sessionId);
+    const claudeSessionId = fullClaude.calls[0]?.sessionId;
     expect({
       partial: {
         codexModels: partialCodex.calls.map(({ model }) => model),
@@ -1789,23 +1840,23 @@ describe('executeProviderCandidates', () => {
       },
       exhausted: {
         codexCalls: [
-          { model: 'gpt-5.6-sol', sessionId: 'full-codex-sol-session', resume: false },
-          { model: 'gpt-5.6-terra', sessionId: 'full-codex-terra-session', resume: false },
-          { model: 'gpt-5.6-luna', sessionId: 'full-codex-luna-session', resume: false },
+          { model: 'gpt-5.6-sol', sessionId: solSessionId, resume: false },
+          { model: 'gpt-5.6-terra', sessionId: terraSessionId, resume: false },
+          { model: 'gpt-5.6-luna', sessionId: lunaSessionId, resume: false },
         ],
         claudeCalls: [
           {
             prompt: 'Execute the step.',
             cwd: '/workspace/feature',
-            sessionId: 'full-claude-session',
+            sessionId: claudeSessionId,
             resume: false,
             model: 'sonnet',
             effort: 'high',
           },
         ],
         sessions: {
-          codex: { id: 'full-codex-luna-session' },
-          claude: { id: 'full-claude-session' },
+          codex: undefined,
+          claude: undefined,
         },
         result: {
           success: true,
@@ -1838,7 +1889,7 @@ describe('executeProviderCandidates', () => {
         codexCall: {
           prompt: 'Execute the step.',
           cwd: '/workspace/feature',
-          sessionId: 'later-codex-session',
+          sessionId: laterSessionId,
           resume: false,
           model: 'gpt-5.6-sol',
           effort: 'high',
@@ -2200,10 +2251,11 @@ describe('executeProviderCandidates', () => {
       options: { prompt: 'Execute the step.', cwd: '/workspace/feature' },
     });
 
-    expect(calls).toEqual([
-      { model: 'fable', sessionId: 'fable-session-id', resume: false },
-      { model: 'opus', sessionId: 'opus-session-id', resume: false },
-    ]);
+    // Both the initial attempt and the Fable->Opus ladder fallback mint their
+    // own fresh session ids; the injected store's ids never reach the provider.
+    expectFreshSessions(calls);
+    expect(calls.map(({ model }) => model)).toEqual(['fable', 'opus']);
+    expect(calls[0]!.sessionId).not.toBe(calls[1]!.sessionId);
   });
 
   it('keeps provider intervals scoped to each retry result', async () => {

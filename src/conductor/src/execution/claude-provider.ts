@@ -7,6 +7,7 @@ import {
   type ObservedInterval,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import { enforceFreshSessionOptions } from './fresh-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
@@ -538,6 +539,11 @@ export class ClaudeProvider implements LLMProvider {
    * Used only for truly non-interactive one-shot queries.
    */
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
+    // Boundary enforcement: session reuse was removed by design — a fresh
+    // session per invocation, regardless of what the caller supplied. See
+    // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
+    // deterministically prevents.
+    options = enforceFreshSessionOptions(options, 'claude');
     const args = this.buildArgs(options);
 
     // Deliver the prompt on STDIN, never as a `-p <prompt>` command-line
@@ -598,6 +604,8 @@ export class ClaudeProvider implements LLMProvider {
    * the user can debug with Claude manually.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
+    // Boundary enforcement: fresh session per invocation (see invoke()).
+    options = enforceFreshSessionOptions(options, 'claude');
     const args = this.buildArgs(options);
 
     if (options.prompt) {

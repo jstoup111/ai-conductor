@@ -424,7 +424,11 @@ describe('engine/engineer-store', () => {
         codexInteractiveCalls: 0,
         codexInvocations: [
           {
-            sessionId: 'feature-retro-codex-session',
+            // Fresh session per invocation, never the injected store's id
+            // (session reuse was removed by design).
+            sessionId: expect.stringMatching(
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+            ),
             resume: false,
             cwd: projectDir,
           },
