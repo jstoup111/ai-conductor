@@ -344,7 +344,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
   });
 
   it('passes on a fresh valid PASS verdict', async () => {
-    await verdict({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } });
+    await verdict({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false } });
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
     expect(r.done).toBe(true);
@@ -354,7 +354,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
   it('fails when the verdict file predates the session (stale)', async () => {
     const full = await verdict({
       verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
     });
     const old = new Date(Date.now() - 60 * 60 * 1000);
     await utimes(full, old, old);
@@ -369,7 +369,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
     await verdict({
       verdict: 'FAIL',
       reasons: ['tautological assertion in test', 'scope creep beyond acceptance criteria'],
-      rubric: { tautology: true, scope: true, rootCause: false, completeness: false, wiring: false },
+      rubric: { tautology: true, scope: true, rootCause: false, completeness: false },
     });
     const sessionStartedAt = Date.now() - 1000;
     const r = await checkGateCompletion(dir, 'build_review', { sessionStartedAt });
@@ -400,12 +400,12 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
   it.each(['tautology', 'scope', 'rootCause', 'completeness'] as const)(
     'fails closed when the PASS rubric omits %s',
     async (missing) => {
-      const rubric: Partial<Record<'tautology' | 'scope' | 'rootCause' | 'completeness', boolean>> = {
+      const rubric: Partial<Record<'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring', boolean>> = {
         tautology: false,
         scope: false,
         rootCause: false,
         completeness: false,
-      };
+        };
       delete rubric[missing];
       await verdict({ verdict: 'PASS', rubric });
 
@@ -422,7 +422,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
   it('reuses no stale PASS across attempts (mtime < attemptStartedAt)', async () => {
     const full = await verdict({
       verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
     });
     const S = Date.now() - 60_000;
     const T = Date.now();
@@ -437,7 +437,7 @@ describe('engine/artifacts — build_review predicate (fail-closed)', () => {
   it('passes a fresh PASS verdict rewritten this attempt', async () => {
     const full = await verdict({
       verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
     });
     const T = Date.now();
     await utimes(full, new Date(T + 1000), new Date(T + 1000));
@@ -515,7 +515,7 @@ describe('engine/artifacts — verdict-freshness floor regression/fallback', () 
   async function buildReviewPass() {
     return write(
       '.pipeline/build-review.json',
-      JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }),
+      JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false } }),
     );
   }
 

@@ -3794,7 +3794,7 @@ Task 1 → Task 2
         scope: false,
         rootCause: false,
         completeness: false,
-      };
+        };
       const missing = { ...completeRubric } as Record<string, unknown>;
       delete missing[member];
       const nonBoolean = { ...completeRubric, [member]: 'false' };
@@ -3879,7 +3879,7 @@ Task 1 → Task 2
     it('rejects lowercase "pass" as invalid-or-FAIL (fail-closed, exact match only)', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'pass',
-        rubric: { wiring: false },
+        rubric: { completeness: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3887,7 +3887,7 @@ Task 1 → Task 2
     it('rejects unrecognized string "APPROVED" as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'APPROVED',
-        rubric: { wiring: false },
+        rubric: { completeness: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -3895,7 +3895,7 @@ Task 1 → Task 2
     it('rejects an empty string verdict as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: '',
-        rubric: { wiring: false },
+        rubric: { completeness: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -4666,7 +4666,7 @@ Task 1 → Task 2
 
   describe('removeBuildReviewVerdict (build-review-grades-plan-vs-diff-against-a-stale-o, Task 7)', () => {
     it('deletes an existing build_review verdict artifact', async () => {
-      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: { wiring: false } }));
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: { completeness: false } }));
       await removeBuildReviewVerdict(dir);
       await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf-8')).rejects.toThrow();
     });
@@ -4685,7 +4685,7 @@ Task 1 → Task 2
       // read "missing verdict" — never a preserved/reconstructed prior PASS.
       await createFile(
         BUILD_REVIEW_VERDICT,
-        JSON.stringify({ verdict: 'PASS', rubric: { wiring: false }, codeStamp: 'deadbeef' }),
+        JSON.stringify({ verdict: 'PASS', rubric: { completeness: false }, codeStamp: 'deadbeef' }),
       );
       await removeBuildReviewVerdict(dir);
       const result = await checkStepCompletion(dir, 'build_review');
