@@ -90,26 +90,41 @@ describe('report-renderer', () => {
     expect(halts).toEqual([{ reason: 'retry budget exhausted' }]);
   });
 
-  it('uses unknown for loop_halt records with a missing reason', () => {
-    const halts = aggregateHalts(parseEvents(makeLines([
-      { event: { type: 'loop_halt' }, ts: '2026-01-01T00:00:00.000Z' },
-    ])));
+  async function persistHaltLedger(): Promise<string> {
+    const ledgerPath = join(tempDir, 'halted-feature', '.pipeline', 'events.jsonl');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(ledgerPath, events);
+    persister.start();
+    await events.emit({ type: 'loop_halt', step: 'build', reason: 'retry budget exhausted' });
+    persister.stop();
+    return ledgerPath;
+  }
+
+  it('uses unknown for persisted loop_halt records with a missing reason', async () => {
+    const ledgerPath = await persistHaltLedger();
+    const persisted = await readFile(ledgerPath, 'utf-8');
+    await writeFile(ledgerPath, persisted.replace(',"reason":"retry budget exhausted"', ''), 'utf-8');
+
+    const halts = aggregateHalts(parseEvents(await readFile(ledgerPath, 'utf-8')));
 
     expect(halts).toEqual([{ reason: 'unknown' }]);
   });
 
-  it('uses unknown for loop_halt records with a non-string reason', () => {
-    const halts = aggregateHalts(parseEvents(makeLines([
-      { event: { type: 'loop_halt', reason: 42 }, ts: '2026-01-01T00:00:00.000Z' },
-    ])));
+  it('uses unknown for persisted loop_halt records with a non-string reason', async () => {
+    const ledgerPath = await persistHaltLedger();
+    const persisted = await readFile(ledgerPath, 'utf-8');
+    await writeFile(ledgerPath, persisted.replace('"retry budget exhausted"', '42'), 'utf-8');
+
+    const halts = aggregateHalts(parseEvents(await readFile(ledgerPath, 'utf-8')));
 
     expect(halts).toEqual([{ reason: 'unknown' }]);
   });
 
-  it('skips malformed JSONL while retaining well-formed loop_halt records', () => {
-    const events = parseEvents(`not valid JSON\n${makeLines([
-      { event: { type: 'loop_halt', reason: 'retry budget exhausted' }, ts: '2026-01-01T00:00:00.000Z' },
-    ])}`);
+  it('skips malformed JSONL while retaining persisted loop_halt records', async () => {
+    const ledgerPath = await persistHaltLedger();
+    const persisted = await readFile(ledgerPath, 'utf-8');
+    await writeFile(ledgerPath, `not valid JSON\n${persisted}`, 'utf-8');
+    const events = parseEvents(await readFile(ledgerPath, 'utf-8'));
 
     expect(events).toHaveLength(1);
     expect(aggregateHalts(events)).toEqual([{ reason: 'retry budget exhausted' }]);

@@ -6,6 +6,22 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
+import { createLiveRegion } from '../../src/ui/live-region.js';
+import { Writable } from 'node:stream';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+
+class CaptureStream extends Writable {
+  chunks: string[] = [];
+
+  _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    this.chunks.push(chunk.toString());
+    callback();
+  }
+
+  output(): string {
+    return this.chunks.join('');
+  }
+}
 
 const { mockExeca } = vi.hoisted(() => ({
   mockExeca: vi.fn<
@@ -286,5 +302,29 @@ describe('registerBuiltins — Codex readiness timeout', () => {
       Number.MAX_VALUE,
     )).toThrow(/codex_doctor_timeout_seconds.*milliseconds/i);
     expect(mockExeca).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerBuiltins — terminal halt-marker sink', () => {
+  it('routes halt_marker_write_failed to TerminalRenderer without a Conductor run', async () => {
+    const registry = new PluginRegistry();
+    const events = new ConductorEventEmitter();
+    const stream = new CaptureStream();
+    const subscriber = registerBuiltins(registry, events, () => {}, {
+      stateFilePath: '/tmp/conduct-state.json',
+      steps: ALL_STEPS,
+      readStateFn: async () => ({ ok: true, value: {} }),
+      liveRegion: createLiveRegion({ stream, forceTTY: false }),
+    });
+    subscriber.start();
+
+    await events.emit({
+      type: 'halt_marker_write_failed',
+      path: '/tmp/.pipeline/HALT',
+      reason: 'permission denied',
+    });
+    subscriber.stop();
+
+    expect(stream.output()).toContain('halt marker write failed: /tmp/.pipeline/HALT — permission denied');
   });
 });

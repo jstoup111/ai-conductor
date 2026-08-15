@@ -7465,10 +7465,13 @@ export class Conductor {
                     `build_review cumulative kickback cap exceeded (cumulative ` +
                     `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
                     `${kickback.entry.lastReason || 'no reasons recorded'}`;
-                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+                  const markerResult = await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  if (markerResult.status === 'failed') {
+                    this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
+                  }
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;

@@ -277,9 +277,6 @@ export async function writeStallHalt(
   detail: string,
   events?: ConductorEventEmitter,
 ): Promise<HaltMarkerWriteResult> {
-  const pipelineDir = join(projectRoot, '.pipeline');
-  await mkdir(pipelineDir, { recursive: true });
-
   const effectiveQuestion =
     question === null || (typeof question === 'string' && question.trim() === '')
       ? '(agent wrote no reason into halt-user-input-required)'

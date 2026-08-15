@@ -36,6 +36,8 @@ import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
+import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
+import { ALL_STEPS } from './engine/steps.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
@@ -841,6 +843,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // This global subscriber renders anything emitted directly on the
   // daemon-wide bus (untagged) so those events keep reaching daemon.log
   // exactly as they did before per-feature tagging was introduced.
+  const rendererOpts: TerminalRendererOptions = {
+    stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+    steps: ALL_STEPS,
+    readStateFn: readState,
+    projectRoot,
+  };
   const subscriber = registerBuiltins(registry, events, (event) => {
     // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
     // are already rendered, tagged, by that feature's own listeners
@@ -849,7 +857,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // untagged.
     if (isForwardedFromFeature(event)) return;
     renderDaemonEvent(event, log);
-  }, undefined, config?.codex_doctor_timeout_seconds);
+  }, rendererOpts, config?.codex_doctor_timeout_seconds);
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
