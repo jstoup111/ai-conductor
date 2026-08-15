@@ -170,19 +170,6 @@ export function classifyBuildReviewCacheLookup(
   };
 }
 
-/**
- * Returns a fresh current-lap semantic result only when every cache identity
- * field matches. Branch and aggregate artifacts never cross this boundary;
- * only the validated judgement payload and explicit provenance do.
- */
-export function resolveBuildReviewCacheHit(
-  entry: BuildReviewCacheEntry | undefined,
-  lookup: BuildReviewCacheLookup,
-): BuildReviewCacheHit | undefined {
-  const resolution = classifyBuildReviewCacheLookup(entry, lookup);
-  return resolution.kind === "hit" ? resolution.hit : undefined;
-}
-
 /** Atomically replaces the rubric's single bounded entry after validating it. */
 export async function writeBuildReviewCacheEntry(
   projectRoot: string,

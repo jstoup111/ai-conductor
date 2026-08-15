@@ -3,7 +3,6 @@ import {
   cacheEntryPath,
   classifyBuildReviewCacheLookup,
   readBuildReviewCacheEntry,
-  resolveBuildReviewCacheHit,
   writeBuildReviewCacheEntry,
   type BuildReviewCacheEntry,
   type BuildReviewCacheFilesystem,
@@ -126,37 +125,43 @@ describe("build-review semantic cache", () => {
     };
 
     expect({
-      hit: resolveBuildReviewCacheHit(cached, request),
-      pass: resolveBuildReviewCacheHit(entry(), request),
-      changedPolicy: resolveBuildReviewCacheHit(cached, { ...request, policyFingerprint: "sha256:other" }),
-      changedProjection: resolveBuildReviewCacheHit(cached, { ...request, projectionDigest: "sha256:other" }),
+      hit: classifyBuildReviewCacheLookup(cached, request),
+      pass: classifyBuildReviewCacheLookup(entry(), request),
+      changedPolicy: classifyBuildReviewCacheLookup(cached, { ...request, policyFingerprint: "sha256:other" }),
+      changedProjection: classifyBuildReviewCacheLookup(cached, { ...request, projectionDigest: "sha256:other" }),
     }).toEqual({
       hit: {
-        result: {
-          ...cached.result,
-          lapId: "lap-current",
-          snapshotDigest: "snapshot-current",
-        },
-        provenance: {
-          kind: "cache-hit",
-          cachedLapId: "lap-a",
-          cachedSnapshotDigest: "snapshot-a",
-          projectionDigest: "sha256:projection-a",
-          policyFingerprint: "sha256:policy-a",
+        kind: "hit",
+        hit: {
+          result: {
+            ...cached.result,
+            lapId: "lap-current",
+            snapshotDigest: "snapshot-current",
+          },
+          provenance: {
+            kind: "cache-hit",
+            cachedLapId: "lap-a",
+            cachedSnapshotDigest: "snapshot-a",
+            projectionDigest: "sha256:projection-a",
+            policyFingerprint: "sha256:policy-a",
+          },
         },
       },
       pass: {
-        result: { ...entry().result, lapId: "lap-current", snapshotDigest: "snapshot-current" },
-        provenance: {
-          kind: "cache-hit",
-          cachedLapId: "lap-a",
-          cachedSnapshotDigest: "snapshot-a",
-          projectionDigest: "sha256:projection-a",
-          policyFingerprint: "sha256:policy-a",
+        kind: "hit",
+        hit: {
+          result: { ...entry().result, lapId: "lap-current", snapshotDigest: "snapshot-current" },
+          provenance: {
+            kind: "cache-hit",
+            cachedLapId: "lap-a",
+            cachedSnapshotDigest: "snapshot-a",
+            projectionDigest: "sha256:projection-a",
+            policyFingerprint: "sha256:policy-a",
+          },
         },
       },
-      changedPolicy: undefined,
-      changedProjection: undefined,
+      changedPolicy: { kind: "miss", reason: "policy-fingerprint-mismatch" },
+      changedProjection: { kind: "miss", reason: "projection-digest-mismatch" },
     });
   });
 

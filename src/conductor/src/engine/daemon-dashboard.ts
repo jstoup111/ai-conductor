@@ -14,6 +14,7 @@ import {
   readStepHeartbeat,
 } from './step-heartbeat.js';
 import { readFullSuiteEvidence } from './full-suite-evidence.js';
+import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -500,6 +501,22 @@ export async function scanInheritedState(
   const processedSlugs = new Set(processed.map((p) => p.slug));
   const processedBySlug = new Map(processed.map((entry) => [entry.slug, entry]));
   const slugs = await listWorktreeSlugs(deps.worktreeBase);
+  const featureEvents = await Promise.all(slugs.map(async (slug) => {
+    try {
+      return await readMergedFeatureEvents(join(deps.worktreeBase, slug));
+    } catch (err) {
+      deps.log?.(
+        `dashboard: skipped build-review metrics for ${slug} (${err instanceof Error ? err.message : String(err)})`,
+      );
+      return undefined;
+    }
+  }));
+  const mergedFeatureEvents = featureEvents.flatMap((events) => events ?? []);
+  const buildReviewMetrics = mergedFeatureEvents.some((event) =>
+    typeof event.type === 'string' && event.type.startsWith('build_review_'),
+  )
+    ? computeBuildReviewMetrics(mergedFeatureEvents)
+    : undefined;
 
   const halted: HaltedEntry[] = [];
   const haltedSlugs = new Set<string>();
@@ -695,6 +712,7 @@ export async function scanInheritedState(
   }
 
   return {
+    buildReviewMetrics,
     halted,
     inProgress,
     eligible,

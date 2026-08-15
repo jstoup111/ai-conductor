@@ -149,39 +149,3 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
   }) as CompletenessProjection;
   return Object.freeze({ tautology, scope, rootCause, completeness });
 }
-
-const KEYS: Record<BuildReviewRubricId, readonly string[]> = {
-  tautology: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'changedTestSelectors', 'testSuiteProof', 'revertedProductionPatch', 'preflightEvidence', 'repairContext'],
-  scope: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext', 'acceptedWidenings', 'operatorReseals'],
-  rootCause: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext'],
-  completeness: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody'],
-};
-
-/** Strict parser for persisted/cached projections: unknown fields fail closed. */
-export function parseBuildReviewRubricProjection(value: unknown): BuildReviewRubricProjection | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as Record<string, unknown>;
-  const rubric = candidate.rubric;
-  if (typeof rubric !== 'string' || !(rubric in KEYS)) return undefined;
-  const expected = KEYS[rubric as BuildReviewRubricId];
-  if (Object.keys(candidate).length !== expected.length || Object.keys(candidate).some((key) => !expected.includes(key))) return undefined;
-  if (candidate.contractVersion !== 'v1' || candidate.projectionVersion !== 'v1' ||
-    typeof candidate.lapId !== 'string' || typeof candidate.snapshotDigest !== 'string' || typeof candidate.diff !== 'string' ||
-    typeof candidate.digest !== 'string') return undefined;
-  if (rubric === 'scope' && !isOperatorReseals(candidate.operatorReseals)) return undefined;
-  const projection = candidate as unknown as BuildReviewRubricProjection;
-  return projection.digest === projectionDigest(projection) ? projection : undefined;
-}
-
-function isOperatorReseals(value: unknown): boolean {
-  return Array.isArray(value) && value.every((reseal) => {
-    if (typeof reseal !== 'object' || reseal === null || Array.isArray(reseal)) return false;
-    const candidate = reseal as Record<string, unknown>;
-    return Object.keys(candidate).length === 4 &&
-      ['fromCommit', 'toCommit', 'paths', 'reason'].every((key) => key in candidate) &&
-      typeof candidate.fromCommit === 'string' &&
-      typeof candidate.toCommit === 'string' &&
-      typeof candidate.reason === 'string' &&
-      Array.isArray(candidate.paths) && candidate.paths.every((path: unknown) => typeof path === 'string');
-  });
-}

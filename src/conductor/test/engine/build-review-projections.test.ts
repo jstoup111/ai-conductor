@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import {
   deriveBuildReviewRubricProjections,
-  parseBuildReviewRubricProjection,
   projectionDigest,
   type BuildReviewProjectionSource,
 } from '../../src/engine/build-review-projections.js';
@@ -128,12 +127,6 @@ describe('build-review rubric projections', () => {
     expect(deriveBuildReviewRubricProjections(changedForbiddenProse)).toEqual(first);
   });
 
-  it('rejects any undeclared field rather than widening a rubric contract', () => {
-    const projection = deriveBuildReviewRubricProjections(source()).scope;
-    expect(parseBuildReviewRubricProjection(projection)).toEqual(projection);
-    expect(parseBuildReviewRubricProjection({ ...projection, makerNarrative: 'trust me' })).toBeUndefined();
-  });
-
   it.each([
     ['rationale', { reason: 'Operator approved revised protected-artifact scope.' }],
     ['named path', { paths: ['.docs/plans/also-resealed.md'] }],
@@ -188,19 +181,14 @@ describe('build-review rubric projections', () => {
     expect(second.completeness).toEqual(first.completeness);
   });
 
-  it('parses an explicit empty reseal channel but rejects malformed Scope reseal evidence', () => {
+  it('derives an explicit empty reseal channel into a canonical Scope projection', () => {
     const empty = deriveBuildReviewRubricProjections(source({
       inputs: {
         ...source().inputs,
         sourceSnapshot: { ...source().inputs.sourceSnapshot, operatorReseals: [] },
       },
     })).scope;
-    expect(parseBuildReviewRubricProjection(empty)).toEqual(empty);
-
-    const malformed = {
-      ...empty,
-      operatorReseals: [{ paths: ['.docs/stories/resealed-story.md'], reason: '', fromCommit: 'base' }],
-    };
-    expect(parseBuildReviewRubricProjection({ ...malformed, digest: projectionDigest(malformed as never) })).toBeUndefined();
+    expect(empty.operatorReseals).toEqual([]);
+    expect(projectionDigest(empty)).toBe(empty.digest);
   });
 });
