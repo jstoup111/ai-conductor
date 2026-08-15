@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  describeBuildReviewJudgedResultRejection,
+  makeBuildReviewDispatchFailure,
+  parseBuildReviewDispatchFailure,
   parseBuildReviewInfrastructureFailure,
   parseBuildReviewJudgedResult,
   parseBuildReviewLapId,
   parseBuildReviewRubricContractVersion,
   parseBuildReviewSkip,
+  renderBuildReviewJudgedResultShape,
   type BuildReviewFindingAnchor,
 } from '../../src/engine/build-review-domain.js';
 
@@ -124,5 +128,99 @@ describe('build-review domain', () => {
     expect(parseBuildReviewInfrastructureFailure({
       kind: 'infrastructure-failure', rubric: 'tautology', reason: 'ignored', detail: 'provider unavailable',
     })).toBeUndefined();
+  });
+});
+
+describe('build-review judged-result contract rendering and rejection diagnosis', () => {
+  const expected = { lapId: 'lap-a237', snapshotDigest: 'sha256:snap' };
+
+  it('renders the exact per-rubric anchor schema', () => {
+    expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
+      '"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<string>"}',
+    );
+    expect(renderBuildReviewJudgedResultShape('scope')).toContain(
+      '"anchor": {"rubric": "scope", "path": "<string>", "relation": "<string>"}',
+    );
+    expect(renderBuildReviewJudgedResultShape('rootCause')).toContain(
+      '"anchor": {"rubric": "rootCause", "statedDefect": "<string>", "locus": "<string>", "relation": "<string>"}',
+    );
+    expect(renderBuildReviewJudgedResultShape('completeness')).toContain(
+      '"anchor": {"rubric": "completeness", "planTask": "<string>", "missingOutcome": "<string>"}',
+    );
+  });
+
+  it('names the missing anchor when a finding flattens anchor fields to its top level (2026-08-15 tautology incident shape)', () => {
+    const rejection = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'assertion-cannot-fail',
+        changedTest: { path: 't.test.ts', name: 'case' },
+        exercisedBehavior: { productionSymbol: 'EVENT_SINKS' },
+        violationKind: 'assertion-over-test-local-construct',
+        summary: 'cannot fail', evidenceLocations: ['t.test.ts:519'],
+      }],
+    }, 'tautology', expected);
+
+    expect(rejection).toContain('findings[0].anchor is required');
+    expect(rejection).toContain('"changedTest": "<string>"');
+    expect(rejection).toContain('never flattened');
+  });
+
+  it('names concernKind and anchor for the completeness kind/planAnchor drift (2026-08-15 completeness incident shape)', () => {
+    const rejection = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'completeness', contractVersion: 'v1', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        kind: 'missing_deliverable',
+        planAnchor: { type: 'task', id: 'Task 11' },
+        deliverableAnchor: { type: 'documentation', id: 'docs/x.md' },
+        summary: 'doc still stale', evidenceLocations: ['docs/x.md:648'],
+      }],
+    }, 'completeness', expected);
+
+    expect(rejection).toContain('findings[0].concernKind must be a non-empty string (never "kind")');
+    expect(rejection).toContain('findings[0].anchor is required');
+    expect(rejection).toContain('"planTask": "<string>"');
+  });
+
+  it('rejects the plural anchors variant by naming the required singular anchor object', () => {
+    const rejection = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'vacuous-assertion',
+        anchors: { changedTest: 'a > b', exercisedBehavior: 'x', violationKind: 'y' },
+        summary: 'never observes production', evidenceLocations: ['t.test.ts:519'],
+      }],
+    }, 'tautology', expected);
+
+    expect(rejection).toContain('never an alternate name such as "anchors"');
+  });
+
+  it('diagnoses non-object results, identity mismatches, and verdict contradictions without throwing', () => {
+    expect(describeBuildReviewJudgedResultRejection('just prose', 'scope', expected)).toContain('not a single JSON object');
+    expect(describeBuildReviewJudgedResultRejection({ verdict: 'PASS' }, 'scope', expected)).toContain('"kind" must be exactly the string "judged"');
+    expect(describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'scope', contractVersion: 'v1', lapId: 'lap-other', snapshotDigest: expected.snapshotDigest, findings: [],
+    }, 'scope', expected)).toContain('must echo the projection\'s lapId "lap-a237" verbatim');
+    expect(describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'scope', contractVersion: 'v1', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [], verdict: 'FAIL',
+    }, 'scope', expected)).toContain('contradicts the findings array');
+  });
+
+  it('bounds the diagnosis to a fixed number of named problems', () => {
+    const findings = Array.from({ length: 10 }, () => ({}));
+    const rejection = describeBuildReviewJudgedResultRejection(
+      { kind: 'judged', rubric: 'scope', contractVersion: 'v1', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest, findings },
+      'scope', expected,
+    );
+    expect(rejection).toMatch(/and \d+ more problem\(s\)$/);
+  });
+
+  it('round-trips a dispatch-failure report and rejects other shapes', () => {
+    const report = makeBuildReviewDispatchFailure('contract not satisfied; excerpt: ...');
+    expect(parseBuildReviewDispatchFailure(report)).toEqual(report);
+    expect(parseBuildReviewDispatchFailure({ kind: 'dispatch-failure', detail: '' })).toBeUndefined();
+    expect(parseBuildReviewDispatchFailure({ kind: 'judged' })).toBeUndefined();
+    expect(parseBuildReviewDispatchFailure(undefined)).toBeUndefined();
   });
 });

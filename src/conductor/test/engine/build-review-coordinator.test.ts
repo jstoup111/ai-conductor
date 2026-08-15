@@ -351,3 +351,62 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(result.branches).toHaveLength(4);
   });
 });
+
+describe("build-review coordinator: dispatch-failure detail carry-through", () => {
+  const noTautology = () =>
+    config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } });
+
+  it("settles a dispatch-failure report as invalid-provider-result carrying its bounded detail", async () => {
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const coordination = await coordinateBuildReviewRubrics({
+      config: noTautology(),
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async (branch, projection) =>
+        branch.rubric === "scope"
+          ? { kind: "dispatch-failure", detail: "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric..." }
+          : {
+              kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+              contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+            },
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+      emit,
+    });
+
+    expect(coordination.kind).toBe("ready");
+    const scope = coordination.kind === "ready"
+      ? coordination.branches.find((branch) => branch.rubric === "scope")
+      : undefined;
+    expect(scope).toEqual({
+      kind: "infrastructure-failure",
+      rubric: "scope",
+      reason: "invalid-provider-result",
+      detail: "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric...",
+    });
+    // The event-spine occurrence stays a short reason; the detail travels on the branch only.
+    expect(emit).toHaveBeenCalledWith({
+      type: "build_review_rubric_infrastructure_failure", rubric: "scope", lapId: "lap-current", reason: "invalid-provider-result",
+    });
+  });
+
+  it("settles an undefined dispatch result as invalid-provider-result with no detail (unchanged behavior)", async () => {
+    const coordination = await coordinateBuildReviewRubrics({
+      config: noTautology(),
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async (branch, projection) =>
+        branch.rubric === "rootCause" ? undefined : {
+          kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+          contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+        },
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+
+    const rootCause = coordination.kind === "ready"
+      ? coordination.branches.find((branch) => branch.rubric === "rootCause")
+      : undefined;
+    expect(rootCause).toEqual({ kind: "infrastructure-failure", rubric: "rootCause", reason: "invalid-provider-result" });
+  });
+});
