@@ -56,6 +56,7 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }],
       preflightEvidence: {
         classification: 'red',
+        sourceIdentities: { mergeBase: 'base', headSha: 'head' },
         eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
         scopedRun: { exitCode: 1, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
       },
@@ -175,6 +176,15 @@ describe('build-review rubric projections', () => {
           headSha: 'rebased-head',
         },
       },
+      tautology: {
+        ...original.tautology,
+        preflightEvidence: {
+          classification: 'red',
+          sourceIdentities: { mergeBase: 'rebased-merge-base', headSha: 'rebased-head' },
+          eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
+          scopedRun: { exitCode: 1, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
+        },
+      },
     }));
 
     for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
@@ -186,6 +196,9 @@ describe('build-review rubric projections', () => {
         headSha: 'rebased-head',
       });
     }
+    expect(rebased.tautology.preflightEvidence).toMatchObject({
+      sourceIdentities: { mergeBase: 'rebased-merge-base', headSha: 'rebased-head' },
+    });
 
     const contentMutations: readonly {
       readonly name: string;

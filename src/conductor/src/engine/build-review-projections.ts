@@ -135,6 +135,14 @@ function withoutEvidenceProvenanceHeadSha(value: BuildReviewProjectionJson): Bui
   return evidenceContent;
 }
 
+/** Tautology preflight records these anchors for readable provenance, not cache identity. */
+function withoutPreflightSourceIdentities(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') return value;
+  const evidence = value as { readonly [key: string]: BuildReviewProjectionJson };
+  const { sourceIdentities: _ignoredSourceIdentities, ...evidenceContent } = evidence;
+  return evidenceContent;
+}
+
 /** Version-bound digest of a closed projection, excluding rebase-only provenance. */
 export function projectionDigest(projection: Omit<BuildReviewRubricProjection, 'digest'> | BuildReviewRubricProjection): string {
   const {
@@ -145,9 +153,15 @@ export function projectionDigest(projection: Omit<BuildReviewRubricProjection, '
     headSha: _ignoredHeadSha,
     ...digestibleProjection
   } = projection as BuildReviewRubricProjection;
-  const contentIdentity = 'testSuiteProof' in digestibleProjection
-    ? { ...digestibleProjection, testSuiteProof: withoutEvidenceProvenanceHeadSha(digestibleProjection.testSuiteProof) }
-    : digestibleProjection;
+  const contentIdentity = {
+    ...digestibleProjection,
+    ...('testSuiteProof' in digestibleProjection
+      ? { testSuiteProof: withoutEvidenceProvenanceHeadSha(digestibleProjection.testSuiteProof) }
+      : {}),
+    ...('preflightEvidence' in digestibleProjection
+      ? { preflightEvidence: withoutPreflightSourceIdentities(digestibleProjection.preflightEvidence) }
+      : {}),
+  };
   return `sha256:${createHash('sha256').update(canonicalJson(contentIdentity as unknown as BuildReviewProjectionJson)).digest('hex')}`;
 }
 

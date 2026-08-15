@@ -216,10 +216,11 @@ describe("build-review coordinator: frozen fan-out", () => {
       contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
     }));
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    let preflightSourceIdentities = { mergeBase: "base", headSha: "head" };
     const preflight = async () => ({
       classification: "approved-exception" as const, exception: "empty-test-set" as const,
       cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-      revertedProductionPatch: [], sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+      revertedProductionPatch: [], sourceIdentities: preflightSourceIdentities, output: { stdout: "", stderr: "" },
     });
     const initial = inputs();
     const rebased: BuildReviewFrozenInputs = {
@@ -247,6 +248,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     dispatchModel.mockClear();
     writeArtifact.mockClear();
     emit.mockClear();
+    preflightSourceIdentities = { mergeBase: "rebased-base", headSha: "rebased-head" };
 
     const rebasedResult = await run("lap-rebased", rebased);
 
