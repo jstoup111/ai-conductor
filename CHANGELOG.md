@@ -26,6 +26,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Unattended runs now use the daemon while foreground auto mode exits with migration guidance. ([implementation PR #1509](https://github.com/jstoup111/ai-conductor/pull/1509)).
 - The daemon dashboard now shows dispatch elapsed time, last test outcome, and acceptance-spec RED-evidence status for in-progress features, and acceptance-spec RED evidence records failing-test identity and provenance so remediations can be verified or explicitly waived. ([implementation PR #1485](https://github.com/jstoup111/ai-conductor/pull/1485)).
+- build_review rubric branches now carry weighted default efforts (rootCause medium, others high); explicit rubric or step config overrides. ([implementation PR #1591](https://github.com/jstoup111/ai-conductor/pull/1591)).
 
 ### Deprecated
 
