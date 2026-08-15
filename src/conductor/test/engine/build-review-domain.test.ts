@@ -102,6 +102,14 @@ describe('build-review domain', () => {
     })).toBeUndefined();
   });
 
+  it('preserves omission of the optional relocation audit', () => {
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1', findings: [],
+    })).toEqual({
+      kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1', findings: [], verdict: 'PASS',
+    });
+  });
+
   it('keeps skips and infrastructure failures explicit closed outcomes', () => {
     expect(parseBuildReviewSkip({ kind: 'skipped', rubric: 'wiring', reason: 'missing-entry-points' })).toBeUndefined();
     expect(parseBuildReviewSkip({ kind: 'skipped', rubric: 'scope', reason: 'missing-entry-points' })).toBeUndefined();

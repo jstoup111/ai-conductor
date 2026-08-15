@@ -49,7 +49,6 @@ export interface BuildReviewJudgedResult {
 const RELOCATION_AUDIT = /^\[relocation-audit\] (EXEMPTED|MEASURED): .+ → .+; production hunk\(s\) (do|do not) force the move$/;
 
 function parseRelocationAudit(value: unknown, rubric: BuildReviewRubricId): readonly string[] | undefined {
-  if (value === undefined) return [];
   if (!Array.isArray(value) || (rubric !== 'tautology' && value.length > 0) ||
     value.some((entry) => typeof entry !== 'string' || !RELOCATION_AUDIT.test(entry))) return undefined;
   return Object.freeze([...value]);
@@ -155,12 +154,17 @@ export function parseBuildReviewJudgedResult(value: unknown): BuildReviewJudgedR
   const contractVersion = parseBuildReviewRubricContractVersion(source.contractVersion);
   if (!lapId || !contractVersion || !nonEmptyString(source.snapshotDigest)) return undefined;
   const findings = parseFindings(source.findings, source.rubric);
-  const relocationAudit = parseRelocationAudit(source.relocationAudit, source.rubric);
-  if (!findings || !relocationAudit) return undefined;
+  const relocationAudit = source.relocationAudit === undefined
+    ? undefined
+    : parseRelocationAudit(source.relocationAudit, source.rubric);
+  if (!findings || (source.relocationAudit !== undefined && !relocationAudit)) return undefined;
   const verdict = findings.length === 0 ? 'PASS' : 'FAIL';
   if (source.verdict !== undefined && source.verdict !== verdict) return undefined;
   if (source.passed !== undefined && source.passed !== (verdict === 'PASS')) return undefined;
-  return { kind: 'judged', rubric: source.rubric, lapId, snapshotDigest: source.snapshotDigest, contractVersion, findings, relocationAudit, verdict };
+  return {
+    kind: 'judged', rubric: source.rubric, lapId, snapshotDigest: source.snapshotDigest, contractVersion, findings,
+    ...(relocationAudit === undefined ? {} : { relocationAudit }), verdict,
+  };
 }
 
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined {
