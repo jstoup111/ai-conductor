@@ -19,17 +19,11 @@ export interface BuildReviewTautologyProjectionInput {
   readonly preflightEvidence: BuildReviewProjectionJson;
 }
 
-export interface BuildReviewWiringProjectionInput {
-  readonly relocationEvidence: readonly BuildReviewProjectionJson[];
-  readonly scaffoldingDeclarations: readonly BuildReviewProjectionJson[];
-}
-
-/** The complete engine-owned source from which the five closed projections are derived. */
+/** The complete engine-owned source from which the four closed projections are derived. */
 export interface BuildReviewProjectionSource {
   readonly lapId: BuildReviewLapId;
   readonly inputs: BuildReviewFrozenInputs;
   readonly tautology: BuildReviewTautologyProjectionInput;
-  readonly wiring: BuildReviewWiringProjectionInput;
 }
 
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
@@ -65,27 +59,17 @@ export interface CompletenessProjection extends CommonProjection<'completeness'>
   readonly planBody: string;
 }
 
-export interface WiringProjection extends CommonProjection<'wiring'> {
-  readonly planBody: string;
-  readonly entryPoints: readonly string[];
-  readonly removalContext: BuildReviewProjectionJson;
-  readonly relocationEvidence: readonly BuildReviewProjectionJson[];
-  readonly scaffoldingDeclarations: readonly BuildReviewProjectionJson[];
-}
-
 export type BuildReviewRubricProjection =
   | TautologyProjection
   | ScopeProjection
   | RootCauseProjection
-  | CompletenessProjection
-  | WiringProjection;
+  | CompletenessProjection;
 
 export type BuildReviewRubricProjections = {
   readonly tautology: TautologyProjection;
   readonly scope: ScopeProjection;
   readonly rootCause: RootCauseProjection;
   readonly completeness: CompletenessProjection;
-  readonly wiring: WiringProjection;
 };
 
 function canonicalize(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
@@ -157,14 +141,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
   const completeness = seal({
     ...common(source, 'completeness'), planBody: inputs.sourceSnapshot.planBody,
   }) as CompletenessProjection;
-  const wiring = seal({
-    ...common(source, 'wiring'), planBody: inputs.sourceSnapshot.planBody,
-    entryPoints: canonicalArray(inputs.entryPoints ?? []) as readonly string[],
-    removalContext: canonicalize(json(inputs.sourceSnapshot.removalContext)),
-    relocationEvidence: canonicalArray(source.wiring.relocationEvidence),
-    scaffoldingDeclarations: canonicalArray(source.wiring.scaffoldingDeclarations),
-  }) as WiringProjection;
-  return Object.freeze({ tautology, scope, rootCause, completeness, wiring });
+  return Object.freeze({ tautology, scope, rootCause, completeness });
 }
 
 const KEYS: Record<BuildReviewRubricId, readonly string[]> = {
@@ -172,7 +149,6 @@ const KEYS: Record<BuildReviewRubricId, readonly string[]> = {
   scope: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext', 'acceptedWidenings', 'operatorReseals'],
   rootCause: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext'],
   completeness: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody'],
-  wiring: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'entryPoints', 'removalContext', 'relocationEvidence', 'scaffoldingDeclarations'],
 };
 
 /** Strict parser for persisted/cached projections: unknown fields fail closed. */

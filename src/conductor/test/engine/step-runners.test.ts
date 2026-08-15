@@ -3205,14 +3205,13 @@ TIER: M`,
 
       await runner.run('build_review', emptyState);
 
-      expect(provider.invoke).toHaveBeenCalledTimes(5);
+      expect(provider.invoke).toHaveBeenCalledTimes(4);
       expect((provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => options.prompt)).toEqual(
         expect.arrayContaining([
           expect.stringContaining('Build Review Tautology rubric'),
           expect.stringContaining('Build Review Scope rubric'),
           expect.stringContaining('Build Review Root Cause rubric'),
           expect.stringContaining('Build Review Completeness rubric'),
-          expect.stringContaining('Build Review Wiring rubric'),
         ]),
       );
     });

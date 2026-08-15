@@ -1861,7 +1861,7 @@ complexity:
         build_review: { enabled: 'not-a-boolean', perTaskFloor: 'not-a-boolean' },
       });
       const rubricPolicy = validateConfig({
-        build_review: { rubrics: { wiring: { max_retries: 'many' } } },
+        build_review: { rubrics: { completeness: { max_retries: 'many' } } },
       });
 
       expect({
@@ -1880,7 +1880,7 @@ complexity:
             expect.stringMatching(/build_review\.perTaskFloor/),
           ],
         },
-        rubricPolicy: expect.stringMatching(/build_review\.rubrics\.wiring\.max_retries/),
+        rubricPolicy: expect.stringMatching(/build_review\.rubrics\.completeness\.max_retries/),
       });
     });
 
@@ -1932,7 +1932,7 @@ complexity:
         enabled: true,
         perTaskFloor: false,
         scopeContainmentEnforced: false,
-        maxParallel: 5,
+        maxParallel: 4,
         rubrics: expect.objectContaining({ scope: expect.objectContaining({ enabled: true }) }),
       }));
     });

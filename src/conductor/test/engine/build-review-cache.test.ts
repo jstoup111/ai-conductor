@@ -175,11 +175,7 @@ describe("build-review semantic cache", () => {
 
     expect([
       classifyBuildReviewCacheLookup(undefined, request),
-      classifyBuildReviewCacheLookup({
-        ...entry(),
-        rubric: "wiring",
-        result: { ...entry().result, rubric: "wiring" },
-      }, request),
+      classifyBuildReviewCacheLookup({ ...entry(), rubric: "completeness" }, request),
       classifyBuildReviewCacheLookup({ ...entry(), contractVersion: "v2" } as never, request),
       classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v2" } as never, request),
       classifyBuildReviewCacheLookup({ ...entry(), projectionDigest: "sha256:changed-input" }, request),
@@ -187,7 +183,7 @@ describe("build-review semantic cache", () => {
       classifyBuildReviewCacheLookup(unsafeInfrastructure, request),
     ]).toEqual([
       { kind: "miss", reason: "missing" },
-      { kind: "miss", reason: "rubric-mismatch" },
+      { kind: "miss", reason: "invalid-entry" },
       { kind: "miss", reason: "invalid-entry" },
       { kind: "miss", reason: "invalid-entry" },
       { kind: "miss", reason: "projection-digest-mismatch" },

@@ -79,7 +79,7 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
   return value === "tautology" || value === "scope" || value === "rootCause" ||
-    value === "completeness" || value === "wiring";
+    value === "completeness";
 }
 
 /** Strictly parses the cache boundary; unknown fields and non-judgements miss closed. */

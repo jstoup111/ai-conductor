@@ -44,19 +44,15 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       revertedProductionPatch: 'revert patch',
       preflightEvidence: { classification: 'red', command: 'npm test' },
     },
-    wiring: {
-      relocationEvidence: [{ from: 'src/old.ts', to: 'src/new.ts' }],
-      scaffoldingDeclarations: [{ taskId: '4', surface: 'src/future.ts' }],
-    },
     ...overrides,
   };
 }
 
 describe('build-review rubric projections', () => {
-  it('derives the five closed projections with every skill dependency and a v1 digest', () => {
+  it('derives the four closed projections with every skill dependency and a v1 digest', () => {
     const projections = deriveBuildReviewRubricProjections(source());
 
-    expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness', 'wiring']);
+    expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness']);
     expect(Object.keys(projections.tautology).sort()).toEqual([
       'changedTestSelectors', 'contractVersion', 'diff', 'digest', 'lapId', 'preflightEvidence',
       'projectionVersion', 'revertedProductionPatch', 'rubric', 'snapshotDigest', 'testSuiteProof',
@@ -73,10 +69,6 @@ describe('build-review rubric projections', () => {
       'contractVersion', 'diff', 'digest', 'lapId', 'planBody', 'projectionVersion', 'rubric',
       'snapshotDigest',
     ]);
-    expect(Object.keys(projections.wiring).sort()).toEqual([
-      'contractVersion', 'diff', 'digest', 'entryPoints', 'lapId', 'planBody', 'projectionVersion',
-      'relocationEvidence', 'removalContext', 'rubric', 'scaffoldingDeclarations', 'snapshotDigest',
-    ]);
     expect(projections.tautology).toMatchObject({
       rubric: 'tautology', projectionVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot',
       diff: expect.any(String), changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
@@ -92,8 +84,7 @@ describe('build-review rubric projections', () => {
     });
     expect(projections.rootCause).toMatchObject({ planBody: '# Approved plan\n', repairContext: expect.any(Array) });
     expect(projections.completeness).toMatchObject({ planBody: '# Approved plan\n', diff: expect.any(String) });
-    expect(projections.wiring).toMatchObject({ entryPoints: expect.any(Array), removalContext: expect.any(Object), relocationEvidence: expect.any(Array), scaffoldingDeclarations: expect.any(Array) });
-    for (const projection of [projections.tautology, projections.rootCause, projections.completeness, projections.wiring]) {
+    for (const projection of [projections.tautology, projections.rootCause, projections.completeness]) {
       expect(projection).not.toHaveProperty('operatorReseals');
     }
     for (const projection of Object.values(projections)) {
@@ -162,7 +153,6 @@ describe('build-review rubric projections', () => {
     expect(second.tautology.digest).toBe(first.tautology.digest);
     expect(second.rootCause.digest).toBe(first.rootCause.digest);
     expect(second.completeness.digest).toBe(first.completeness.digest);
-    expect(second.wiring.digest).toBe(first.wiring.digest);
   });
 
   it('parses an explicit empty reseal channel but rejects malformed Scope reseal evidence', () => {

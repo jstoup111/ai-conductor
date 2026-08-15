@@ -1822,7 +1822,7 @@ export class DefaultStepRunner implements StepRunner {
     projection: BuildReviewRubricProjection,
   ): Promise<unknown> {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
-      tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness', wiring: 'Wiring',
+      tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness',
     };
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,

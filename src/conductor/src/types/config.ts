@@ -640,8 +640,7 @@ export type BuildReviewRubricId =
   | 'tautology'
   | 'scope'
   | 'rootCause'
-  | 'completeness'
-  | 'wiring';
+  | 'completeness';
 
 /** Optional execution overrides for one build-review rubric branch. */
 export interface BuildReviewRubricConfig {

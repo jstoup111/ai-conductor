@@ -30,14 +30,13 @@ function config(overrides: Partial<ResolvedBuildReviewConfig> = {}): ResolvedBui
       scope: policy,
       rootCause: policy,
       completeness: policy,
-      wiring: policy,
     },
     ...overrides,
   };
 }
 
 describe("build-review coordinator: pre-dispatch classification", () => {
-  it("classifies disabled and Wiring-only missing-entry-point branches before any cache or model call", () => {
+  it("classifies disabled branches before any cache or model call", () => {
     const resolved = config({
       rubrics: {
         ...config().rubrics,
@@ -56,7 +55,6 @@ describe("build-review coordinator: pre-dispatch classification", () => {
         { rubric: "scope", skillName: "build-review-scope", policy: resolved.rubrics.scope },
         { rubric: "rootCause", skillName: "build-review-root-cause", policy: resolved.rubrics.rootCause },
         { rubric: "completeness", skillName: "build-review-completeness", policy: resolved.rubrics.completeness },
-        { kind: "skipped", rubric: "wiring", reason: "missing-entry-points" },
       ],
     });
     expect(hooks.lookupCache).not.toHaveBeenCalled();
@@ -121,7 +119,6 @@ describe("build-review coordinator: frozen fan-out", () => {
       { type: "build_review_rubric_started", rubric: "scope", lapId: "lap-current" },
       { type: "build_review_rubric_started", rubric: "rootCause", lapId: "lap-current" },
       { type: "build_review_rubric_started", rubric: "completeness", lapId: "lap-current" },
-      { type: "build_review_rubric_skipped", rubric: "wiring", lapId: "lap-current", reason: "missing-entry-points" },
       { type: "build_review_rubric_result", rubric: "scope", lapId: "lap-current", verdict: "PASS" },
       { type: "build_review_rubric_result", rubric: "rootCause", lapId: "lap-current", verdict: "PASS" },
       { type: "build_review_rubric_result", rubric: "completeness", lapId: "lap-current", verdict: "PASS" },
@@ -149,8 +146,8 @@ describe("build-review coordinator: frozen fan-out", () => {
       writeCache,
     });
 
-    expect(writeArtifact).toHaveBeenCalledTimes(5);
-    expect(writeCache).toHaveBeenCalledTimes(5);
+    expect(writeArtifact).toHaveBeenCalledTimes(4);
+    expect(writeCache).toHaveBeenCalledTimes(4);
     expect(writeArtifact.mock.calls.every(([artifact]) => artifact.provenance.kind === "fresh")).toBe(true);
     expect(writeCache.mock.calls.every(([entry]) => entry.result.kind === "judged")).toBe(true);
   });
@@ -181,7 +178,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
 
     expect(result).toMatchObject({ kind: "ready" });
-    expect(writeCache).toHaveBeenCalledTimes(4);
+    expect(writeCache).toHaveBeenCalledTimes(3);
     expect(writeArtifact.mock.calls.find(([artifact]) => artifact.rubric === "scope")?.[0]).toMatchObject({
       lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "cache-hit", cachedLapId: "cached" },
     });
@@ -273,9 +270,9 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(preflight).toHaveBeenCalledOnce();
     if (result.kind !== "ready") throw new Error("expected a settled review lap");
     expect(active.peak).toBeLessThanOrEqual(2);
-    expect(dispatchModel).toHaveBeenCalledTimes(4);
+    expect(dispatchModel).toHaveBeenCalledTimes(3);
     expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("scope");
-    expect(result.branches.map((branch) => branch.rubric)).toEqual(["tautology", "scope", "rootCause", "completeness", "wiring"]);
+    expect(result.branches.map((branch) => branch.rubric)).toEqual(["tautology", "scope", "rootCause", "completeness"]);
     expect(result.branches.find((branch) => branch.rubric === "scope")).toMatchObject({ kind: "cache-hit" });
     expect(dispatchModel.mock.calls.every(([, projection]) => !("dispositions" in projection) && !("siblings" in projection))).toBe(true);
   });
@@ -299,6 +296,6 @@ describe("build-review coordinator: frozen fan-out", () => {
     if (result.kind !== "ready") throw new Error("expected a settled review lap");
     expect(result.branches[0]).toMatchObject({ rubric: "tautology", kind: "infrastructure-failure" });
     expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("tautology");
-    expect(result.branches).toHaveLength(5);
+    expect(result.branches).toHaveLength(4);
   });
 });

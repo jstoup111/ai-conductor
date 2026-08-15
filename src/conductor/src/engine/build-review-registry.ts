@@ -4,7 +4,7 @@ import type { BuildReviewRubricId } from '../types/config.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 
 export type BuildReviewRubricCachePolicy = 'content-addressed';
-export type BuildReviewRubricPrerequisite = 'none' | 'entry-points';
+export type BuildReviewRubricPrerequisite = 'none';
 
 export interface BuildReviewRubricDescriptor {
   readonly skillName: string;
@@ -50,13 +50,6 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
     projectionVersion: 'v1',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
-  }),
-  wiring: Object.freeze({
-    skillName: 'build-review-wiring',
-    contractVersion: 'v1',
-    projectionVersion: 'v1',
-    cachePolicy: 'content-addressed',
-    prerequisite: 'entry-points',
   }),
 });
 

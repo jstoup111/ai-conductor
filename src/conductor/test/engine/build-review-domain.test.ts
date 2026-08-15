@@ -25,17 +25,16 @@ describe('build-review domain', () => {
       { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
       { rubric: 'rootCause', statedDefect: 'does not save', locus: 'handler', relation: 'symptom-only' },
       { rubric: 'completeness', planTask: '11', missingOutcome: 'writes state' },
-      { rubric: 'wiring', entryPoint: 'bin/tool', target: 'src/main.ts', relation: 'unreachable' },
     ];
 
-    expect(anchors).toHaveLength(5);
+    expect(anchors).toHaveLength(4);
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{ concernKind: 'unplanned-surface', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' } }],
     })).toMatchObject({ verdict: 'FAIL', findings: [{ concernKind: 'unplanned-surface' }] });
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
-      findings: [{ concernKind: 'wrong-anchor', anchor: { rubric: 'wiring', entryPoint: 'bin/tool', target: 'src/main.ts', relation: 'unreachable' } }],
+      findings: [{ concernKind: 'wrong-anchor', anchor: { rubric: 'retired', entryPoint: 'bin/tool', target: 'src/main.ts', relation: 'unreachable' } }],
     })).toBeUndefined();
   });
 
@@ -54,8 +53,7 @@ describe('build-review domain', () => {
   });
 
   it('keeps skips and infrastructure failures explicit closed outcomes', () => {
-    expect(parseBuildReviewSkip({ kind: 'skipped', rubric: 'wiring', reason: 'missing-entry-points' }))
-      .toEqual({ kind: 'skipped', rubric: 'wiring', reason: 'missing-entry-points' });
+    expect(parseBuildReviewSkip({ kind: 'skipped', rubric: 'wiring', reason: 'missing-entry-points' })).toBeUndefined();
     expect(parseBuildReviewSkip({ kind: 'skipped', rubric: 'scope', reason: 'missing-entry-points' })).toBeUndefined();
     expect(parseBuildReviewSkip({ kind: 'skipped', rubric: 'scope', reason: 'operator-choice' })).toBeUndefined();
 

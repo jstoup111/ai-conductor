@@ -8,7 +8,7 @@ import {
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 
 describe('engine/build-review-registry', () => {
-  it('registers each of the five closed rubrics with its versioned execution descriptor', () => {
+  it('registers each of the four closed rubrics with its versioned execution descriptor', () => {
     expect(BUILD_REVIEW_RUBRIC_REGISTRY).toEqual({
       tautology: {
         skillName: 'build-review-tautology',
@@ -38,19 +38,12 @@ describe('engine/build-review-registry', () => {
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
       },
-      wiring: {
-        skillName: 'build-review-wiring',
-        contractVersion: 'v1',
-        projectionVersion: 'v1',
-        cachePolicy: 'content-addressed',
-        prerequisite: 'entry-points',
-      },
     });
     expect(Object.isFrozen(BUILD_REVIEW_RUBRIC_REGISTRY)).toBe(true);
     expect(Object.values(BUILD_REVIEW_RUBRIC_REGISTRY).every(Object.isFrozen)).toBe(true);
   });
 
-  it.each(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const)(
+  it.each(['tautology', 'scope', 'rootCause', 'completeness'] as const)(
     'looks up the %s descriptor exhaustively and independently of registry ordering',
     (rubric) => {
       expect(getBuildReviewRubricDescriptor(rubric)).toBe(BUILD_REVIEW_RUBRIC_REGISTRY[rubric]);

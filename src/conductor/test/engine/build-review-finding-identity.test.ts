@@ -24,10 +24,6 @@ describe('build-review finding identity', () => {
       rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-outcome',
       anchor: { rubric: 'completeness', planTask: '11', missingOutcome: 'writes state' },
     },
-    {
-      rubric: 'wiring', contractVersion: 'v1', concernKind: 'unreachable',
-      anchor: { rubric: 'wiring', entryPoint: 'bin/tool', target: 'src/main.ts', relation: 'unreachable' },
-    },
   ];
 
   it('canonicalizes every rubric-specific typed anchor into a version-bound identity', () => {

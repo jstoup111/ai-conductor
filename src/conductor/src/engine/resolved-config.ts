@@ -704,7 +704,6 @@ const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = [
   'scope',
   'rootCause',
   'completeness',
-  'wiring',
 ];
 
 /** Concrete execution policy for one independently-dispatched review rubric. */

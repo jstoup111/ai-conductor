@@ -17,7 +17,7 @@ const feature: BuildReviewFeatureIdentity = {
 };
 
 function judged(
-  rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness' | 'wiring',
+  rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness',
   findings: readonly BuildReviewFinding[] = [],
 ): BuildReviewJudgedResult {
   return {
@@ -29,7 +29,7 @@ function judged(
 function results(overrides: Record<string, unknown> = {}) {
   return {
     tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'),
-    completeness: judged('completeness'), wiring: judged('wiring'), ...overrides,
+    completeness: judged('completeness'), ...overrides,
   };
 }
 
@@ -38,7 +38,7 @@ describe('build-review raw aggregate', () => {
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results(), codeStamp: 'head' });
     expect(aggregate).toMatchObject({
       aggregateVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot', verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false }, codeStamp: 'head',
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false }, codeStamp: 'head',
     });
     expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
   });
@@ -55,7 +55,7 @@ describe('build-review raw aggregate', () => {
   it('uses exhaustive neutral-skip coverage while retaining raw result evidence', () => {
     const skip = { kind: 'skipped', rubric: 'tautology' as const, reason: 'disabled' };
     const infrastructureFailure = {
-      kind: 'infrastructure-failure', rubric: 'wiring' as const, reason: 'provider-error', detail: 'provider unavailable',
+      kind: 'infrastructure-failure', rubric: 'completeness' as const, reason: 'provider-error', detail: 'provider unavailable',
     };
     const finding = {
       concernKind: 'unplanned change', anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' },
@@ -73,14 +73,13 @@ describe('build-review raw aggregate', () => {
           scope: { kind: 'skipped', rubric: 'scope', reason: 'disabled' },
           rootCause: { kind: 'skipped', rubric: 'rootCause', reason: 'disabled' },
           completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
-          wiring: { kind: 'skipped', rubric: 'wiring', reason: 'disabled' },
         }),
-        verdict: 'FAIL', skipped: ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'], failedRubrics: [] as string[],
+        verdict: 'FAIL', skipped: ['tautology', 'scope', 'rootCause', 'completeness'], failedRubrics: [] as string[],
       },
       {
         name: 'a clean judgement, skip, and infrastructure failure',
-        outcomes: results({ tautology: skip, wiring: infrastructureFailure }),
-        verdict: 'FAIL', skipped: ['tautology'], failedRubrics: ['wiring'],
+        outcomes: results({ tautology: skip, completeness: infrastructureFailure }),
+        verdict: 'FAIL', skipped: ['tautology'], failedRubrics: ['completeness'],
       },
       {
         name: 'a finding and a skip',
@@ -111,18 +110,18 @@ describe('build-review raw aggregate', () => {
       lapId, snapshotDigest: 'sha256:snapshot',
       results: results({
         tautology: { kind: 'skipped', rubric: 'tautology', reason: 'disabled' },
-        wiring: { kind: 'infrastructure-failure', rubric: 'wiring', reason: 'provider-error', detail: 'provider unavailable' },
+        completeness: { kind: 'infrastructure-failure', rubric: 'completeness', reason: 'provider-error', detail: 'provider unavailable' },
       }),
     });
     expect(aggregate).toMatchObject({
-      verdict: 'FAIL', coverage: { tautology: 'skipped', wiring: 'infrastructure-failure' },
-      rubric: { tautology: false, wiring: true },
+      verdict: 'FAIL', coverage: { tautology: 'skipped', completeness: 'infrastructure-failure' },
+      rubric: { tautology: false, completeness: true },
     });
   });
 
   it('rejects missing, malformed, stale, or identity-mismatched branch results', () => {
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: results() });
-    expect(parseBuildReviewAggregate({ ...aggregate, results: { ...aggregate.results, wiring: undefined } })).toBeUndefined();
+    expect(parseBuildReviewAggregate({ ...aggregate, results: { ...aggregate.results, completeness: undefined } })).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, results: { ...aggregate.results, scope: { ...aggregate.results.scope, lapId: parseBuildReviewLapId('lap-old')! } } })).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, extra: true })).toBeUndefined();
   });
@@ -171,7 +170,7 @@ describe('build-review raw aggregate', () => {
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ tautology: { kind: 'skipped', rubric: 'tautology', reason: 'disabled' } }),
     });
     const infra = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest: 'sha256:snapshot', results: results({ wiring: { kind: 'infrastructure-failure', rubric: 'wiring', reason: 'provider-error', detail: 'provider unavailable' } }),
+      lapId, snapshotDigest: 'sha256:snapshot', results: results({ completeness: { kind: 'infrastructure-failure', rubric: 'completeness', reason: 'provider-error', detail: 'provider unavailable' } }),
     });
 
     expect(deriveEffectiveBuildReviewVerdict(cacheHitCurrentLap)).toMatchObject({ verdict: 'PASS' });
@@ -184,7 +183,7 @@ describe('build-review raw aggregate', () => {
   it('keeps infrastructure failures blocking even when a stored disposition exists', () => {
     const infrastructure = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot',
-      results: results({ wiring: { kind: 'infrastructure-failure', rubric: 'wiring', reason: 'provider-error', detail: 'provider unavailable' } }),
+      results: results({ completeness: { kind: 'infrastructure-failure', rubric: 'completeness', reason: 'provider-error', detail: 'provider unavailable' } }),
     });
     const stored: BuildReviewDispositionRecord = {
       version: 'v1', feature,
@@ -196,6 +195,6 @@ describe('build-review raw aggregate', () => {
     };
 
     expect(deriveEffectiveBuildReviewVerdictWithDispositions(infrastructure, feature, [stored]))
-      .toMatchObject({ rawVerdict: 'FAIL', verdict: 'FAIL', infrastructureFailureRubrics: ['wiring'] });
+      .toMatchObject({ rawVerdict: 'FAIL', verdict: 'FAIL', infrastructureFailureRubrics: ['completeness'] });
   });
 });

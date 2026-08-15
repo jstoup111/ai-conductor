@@ -36,7 +36,6 @@ const BUILD_REVIEW_RUBRICS: readonly BuildReviewRubricId[] = [
   "scope",
   "rootCause",
   "completeness",
-  "wiring",
 ];
 
 /** A rubric that passed deterministic pre-dispatch classification. */
@@ -157,7 +156,7 @@ function validWrittenArtifact(
 export async function coordinateBuildReviewRubrics(
   input: BuildReviewCoordinationInput,
 ): Promise<BuildReviewCoordination> {
-  const classification = classifyBuildReviewRubricBranches(input.config, input.inputs.entryPoints ?? []);
+  const classification = classifyBuildReviewRubricBranches(input.config, []);
   if (classification.kind !== "ready") return classification;
 
   const tautologyEnabled = classification.branches.some(
@@ -181,7 +180,6 @@ export async function coordinateBuildReviewRubrics(
     tautology: preflight ? preflightProjection(preflight) : {
       changedTestSelectors: [], revertedProductionPatch: "[]", preflightEvidence: { classification: "not-requested" },
     },
-    wiring: { relocationEvidence: [], scaffoldingDeclarations: [] },
   });
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
@@ -302,7 +300,7 @@ export async function coordinateBuildReviewRubrics(
  */
 export function classifyBuildReviewRubricBranches(
   config: ResolvedBuildReviewConfig,
-  entryPoints: readonly string[],
+  _entryPoints: readonly string[],
   _hooks: BuildReviewCoordinatorHooks = {},
 ): BuildReviewClassification {
   if (!config.enabled) return { kind: "gate-disabled" };
@@ -315,9 +313,6 @@ export function classifyBuildReviewRubricBranches(
     if (!policy.enabled) return { kind: "skipped", rubric, reason: "disabled" };
 
     const descriptor = getBuildReviewRubricDescriptor(rubric);
-    if (descriptor.prerequisite === "entry-points" && entryPoints.length === 0) {
-      return { kind: "skipped", rubric, reason: "missing-entry-points" };
-    }
     return { rubric, skillName: descriptor.skillName, policy };
   });
 

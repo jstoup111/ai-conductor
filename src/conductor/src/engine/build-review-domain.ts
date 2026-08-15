@@ -7,7 +7,7 @@ export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' }
 export type BuildReviewRubricContractVersion = 'v1' & { readonly __brand: 'BuildReviewRubricContractVersion' };
 
 /** The only intentional non-judgement outcomes. */
-export type BuildReviewSkipReason = 'disabled' | 'missing-entry-points';
+export type BuildReviewSkipReason = 'disabled';
 
 /** Failures of execution or artifact integrity, deliberately distinct from findings. */
 export type BuildReviewInfrastructureFailureReason =
@@ -23,8 +23,7 @@ export type BuildReviewFindingAnchor =
   | { rubric: 'tautology'; changedTest: string; exercisedBehavior: string; violationKind: string }
   | { rubric: 'scope'; path: string; relation: string }
   | { rubric: 'rootCause'; statedDefect: string; locus: string; relation: string }
-  | { rubric: 'completeness'; planTask: string; missingOutcome: string }
-  | { rubric: 'wiring'; entryPoint: string; target: string; relation: string };
+  | { rubric: 'completeness'; planTask: string; missingOutcome: string };
 
 export interface BuildReviewFinding {
   readonly concernKind: string;
@@ -61,7 +60,7 @@ export type BuildReviewRubricResult =
   | BuildReviewSkip
   | BuildReviewInfrastructureFailure;
 
-const RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness', 'wiring']);
+const RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness']);
 const INFRASTRUCTURE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
   'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact', 'identity-mismatch', 'preflight-failed',
 ]);
@@ -109,10 +108,6 @@ function parseAnchor(value: unknown): BuildReviewFindingAnchor | undefined {
       return nonEmptyString(source.planTask) && nonEmptyString(source.missingOutcome)
         ? { rubric: source.rubric, planTask: source.planTask, missingOutcome: source.missingOutcome }
         : undefined;
-    case 'wiring':
-      return nonEmptyString(source.entryPoint) && nonEmptyString(source.target) && nonEmptyString(source.relation)
-        ? { rubric: source.rubric, entryPoint: source.entryPoint, target: source.target, relation: source.relation }
-        : undefined;
   }
 }
 
@@ -150,7 +145,7 @@ export function parseBuildReviewJudgedResult(value: unknown): BuildReviewJudgedR
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined {
   const source = record(value);
   if (!source || source.kind !== 'skipped' || !rubricId(source.rubric)) return undefined;
-  if (source.reason === 'disabled' || (source.rubric === 'wiring' && source.reason === 'missing-entry-points')) {
+  if (source.reason === 'disabled') {
     return { kind: 'skipped', rubric: source.rubric, reason: source.reason };
   }
   return undefined;

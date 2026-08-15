@@ -22,7 +22,7 @@ export interface BuildReviewFindingIdentity {
   readonly canonicalJson: string;
 }
 
-const RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness', 'wiring']);
+const RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness']);
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -60,10 +60,6 @@ function parseAnchor(value: unknown, rubric: BuildReviewRubricId): BuildReviewFi
     case 'completeness':
       return nonEmptyString(source.planTask) && nonEmptyString(source.missingOutcome)
         ? { rubric, planTask: source.planTask, missingOutcome: source.missingOutcome }
-        : undefined;
-    case 'wiring':
-      return nonEmptyString(source.entryPoint) && nonEmptyString(source.target) && nonEmptyString(source.relation)
-        ? { rubric, entryPoint: source.entryPoint, target: source.target, relation: source.relation }
         : undefined;
   }
 }

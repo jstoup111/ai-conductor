@@ -67,7 +67,7 @@ afterEach(async () => {
 });
 
 describe('acceptance: independent build_review rubric execution', () => {
-  it('dispatches five isolated rubric sessions from one immutable review lap by default', async () => {
+  it('dispatches four isolated rubric sessions from one immutable review lap by default', async () => {
     const { dir, planPath } = await fixtureRepo();
     const prompts: string[] = [];
     let active = 0;
@@ -104,10 +104,10 @@ describe('acceptance: independent build_review rubric execution', () => {
       track: 'product',
     });
 
-    expect(provider.invoke).toHaveBeenCalledTimes(5);
-    expect(peak).toBe(5);
-    expect(prompts).toHaveLength(5);
-    for (const rubric of ['Tautology', 'Scope', 'Root Cause', 'Completeness', 'Wiring']) {
+    expect(provider.invoke).toHaveBeenCalledTimes(4);
+    expect(peak).toBe(4);
+    expect(prompts).toHaveLength(4);
+    for (const rubric of ['Tautology', 'Scope', 'Root Cause', 'Completeness']) {
       expect(prompts.filter((prompt) => prompt.includes(rubric))).toHaveLength(1);
     }
   });
@@ -161,7 +161,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     await runner.run('build_review', state);
     await runner.run('build_review', state);
 
-    expect(provider.invoke).toHaveBeenCalledTimes(5);
+    expect(provider.invoke).toHaveBeenCalledTimes(4);
   });
 
   it('uses each rubric\'s registered skill and resolved mixed model policy through the real runner', async () => {
@@ -262,7 +262,7 @@ describe('acceptance: independent build_review rubric execution', () => {
       accepted: { ok: true },
       second: true,
       completion: true,
-      calls: 5,
+      calls: 4,
     });
   });
 
@@ -291,7 +291,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     const aggregate = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8'));
 
     expect({ success: result.success, calls: providerCalls, coverage: aggregate.coverage, metrics: computeBuildReviewMetrics(ledger) }).toMatchObject({
-      success: true, calls: 3, coverage: { tautology: 'skipped', wiring: 'skipped' }, metrics: { skipped: 2, cacheHits: 0 },
+      success: true, calls: 3, coverage: { tautology: 'skipped' }, metrics: { skipped: 1, cacheHits: 0 },
     });
   });
 

@@ -1266,7 +1266,7 @@ describe('integration/gate-loop', () => {
         verdict: 'FAIL' | 'PASS';
         reasons: string[];
         findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[]; wiring: string[] }>;
-        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
+        rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean; wiring: boolean };
       }>,
       remediationDispositions?: unknown[],
     ): Promise<{
@@ -1422,19 +1422,19 @@ describe('integration/gate-loop', () => {
       expect(result.ran).not.toContain('wiring_check');
     });
 
-    it('routes a completeness finding through build_review\'s ordinary FAIL kickback, without dispatching wiring_check', async () => {
+    it('routes a Scope finding through build_review\'s ordinary FAIL kickback, without dispatching wiring_check', async () => {
       const result = await runWithGraderVerdicts([
         {
           verdict: 'FAIL',
-          reasons: ['declared daemon entry point does not reach the new gate'],
-          findings: { completeness: ['daemon entry point does not reach the new gate'] },
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+          reasons: ['declared daemon surface exceeds the approved scope'],
+          findings: { scope: ['daemon surface exceeds the approved scope'] },
+          rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
         },
         { verdict: 'PASS', reasons: [] },
       ]);
 
       expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
-      expect(result.retryReasons.join('\n')).toContain('[completeness] daemon entry point does not reach the new gate');
+      expect(result.retryReasons.join('\n')).toContain('[scope] daemon surface exceeds the approved scope');
       expect(result.ran).not.toContain('wiring_check');
       expect(result.completed).toBe(true);
     });

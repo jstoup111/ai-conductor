@@ -13,13 +13,13 @@ import {
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
-const RUBRICS = ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const;
+const RUBRICS = ['tautology', 'scope', 'rootCause', 'completeness'] as const;
 
 type Coverage = 'judged' | 'skipped' | 'infrastructure-failure';
 type RubricFlags = Record<BuildReviewRubricId, boolean>;
 type LegacyFindings = Record<BuildReviewRubricId, string[]>;
 
-/** The sole raw join: five attributable outcomes plus legacy gate fields. */
+/** The sole raw join: four attributable outcomes plus legacy gate fields. */
 export interface BuildReviewAggregate {
   readonly aggregateVersion: typeof AGGREGATE_VERSION;
   readonly lapId: BuildReviewLapId;
@@ -133,13 +133,22 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
     ...(input.codeStamp !== undefined ? { codeStamp: input.codeStamp } : {}),
   };
   const validated = parseBuildReviewAggregate(aggregate);
-  if (!validated) throw new Error('build-review aggregate requires five current, valid rubric results');
+  if (!validated) throw new Error('build-review aggregate requires four current, valid rubric results');
   return validated;
 }
 
 /** Strict parser for the aggregate boundary; legacy top-level fields are cross-checked, never trusted. */
 export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate | undefined {
-  const source = record(value);
+  const raw = record(value);
+  // In-flight v1 aggregates may still carry the retired branch.  It was
+  // informational only, so read it tolerantly while projecting the closed
+  // four-rubric contract to every current consumer.
+  const source = raw && Object.fromEntries(Object.entries(raw).map(([key, entry]) => {
+    const memberMap = key === 'results' || key === 'coverage' || key === 'rubric' || key === 'findings'
+      ? record(entry)
+      : undefined;
+    return [key, memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => member !== 'wiring')) : entry];
+  }));
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
