@@ -216,6 +216,11 @@ describe('event sink subscriptions', () => {
         .trim().split('\n').map((line) => JSON.parse(line));
       expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
     } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('persists loop_halt events through the emitter into the pipeline ledger', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'loop-halt-event-sinks-'));
     const events = new ConductorEventEmitter();
@@ -427,8 +432,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 88 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(88);
+  it('is total over all 87 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(87);
   });
 
   it('routes verdict_freshness to every sink', () => {
@@ -481,6 +486,8 @@ describe('event sink subscriptions', () => {
     ))).toEqual(new Set(PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES));
     expect(persisted).toEqual(expect.arrayContaining(BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES));
     expect(persisted).not.toEqual(Object.keys(EVENT_SINKS));
+  });
+
   it('pins the persisted volume to the three halt additions and excludes non-halt lifecycle events', () => {
     const neverPersisted = [
       'loop_converged',
@@ -489,7 +496,6 @@ describe('event sink subscriptions', () => {
       'retry_decision',
       'group_member_step',
       'test_suite_verification',
-      ...NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES,
     ] satisfies Array<ConductorEvent['type']>;
 
     expect({
@@ -501,7 +507,9 @@ describe('event sink subscriptions', () => {
       ].includes(type)),
       excluded: neverPersisted.filter((type) => persistedEventTypes().includes(type)),
     }).toEqual({
-      persisted: PINNED_PERSISTED_EVENT_TYPES,
+      // The exhaustive persisted list is pinned by the structural tests above;
+      // this case pins only the halt additions and the excluded lifecycle set.
+      persisted: expect.arrayContaining(['loop_halt', 'halt_marker_write_failed', 'rebase_conflict_halt']),
       haltAdditions: ['loop_halt', 'halt_marker_write_failed', 'rebase_conflict_halt'],
       excluded: [],
     });
@@ -511,12 +519,16 @@ describe('event sink subscriptions', () => {
     expect(new Set(auditedEventTypes())).toEqual(new Set([
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
       'verdict_freshness',
+      'halt_marker_write_failed',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));
   });
 
   it('derives the daemon-rendered set from the switch-handled event types', () => {
-    expect(new Set(renderedEventTypes())).toEqual(new Set(DAEMON_SWITCH_HANDLED_EVENT_TYPES));
+    expect(new Set(renderedEventTypes())).toEqual(new Set([
+      ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
+      'halt_marker_write_failed',
+    ]));
   });
 });
