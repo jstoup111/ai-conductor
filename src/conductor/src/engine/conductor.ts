@@ -6248,6 +6248,12 @@ export class Conductor {
                 await captureKickbackToBuildContext('finish');
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
+                // `navigateBack` only stales downstream `done` steps. A
+                // FINISH implementation-evidence rejection must re-run the
+                // entire BUILD verification chain even when its prior state
+                // was failed, already stale, or absent.
+                (state as Record<string, unknown>).test_suite = 'stale';
+                (state as Record<string, unknown>).build_review = 'stale';
                 // The failing FINISH step is not part of the done-only stale
                 // cascade, so explicitly restage it for the post-BUILD tail.
                 (state as Record<string, unknown>).finish = 'stale';
