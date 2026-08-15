@@ -185,6 +185,107 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("scope");
   });
 
+  it("serves rebased cache hits with current-lap provenance and re-dispatches only widened scope", async () => {
+    const cache = new Map<BuildReviewCacheEntry["rubric"], BuildReviewCacheEntry>();
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
+    const writeCache = vi.fn(async (entry: BuildReviewCacheEntry) => {
+      cache.set(entry.rubric, entry);
+    });
+    const dispatchModel = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+    }));
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const preflight = async () => ({
+      classification: "approved-exception" as const, exception: "empty-test-set" as const,
+      cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
+      revertedProductionPatch: [], sourceIdentities: { mergeBase: "base", headSha: "head" }, output: { stdout: "", stderr: "" },
+    });
+    const initial = inputs();
+    const rebased: BuildReviewFrozenInputs = {
+      ...initial,
+      mergeBase: "rebased-base",
+      baseRef: "origin/rebased-main",
+      sourceSnapshot: {
+        ...initial.sourceSnapshot,
+        digest: "sha256:rebased-snapshot",
+        mergeBase: "rebased-base",
+        headSha: "rebased-head",
+        baseRef: "origin/rebased-main",
+      },
+    };
+    const run = (lapId: string, snapshot: BuildReviewFrozenInputs) => coordinateBuildReviewRubrics({
+      config: config(), inputs: snapshot, lapId: parseBuildReviewLapId(lapId)!, preflight,
+      readCache: async (branch) => cache.get(branch.rubric), dispatchModel, writeArtifact, writeCache, emit,
+    });
+
+    await run("lap-cached", initial);
+    dispatchModel.mockClear();
+    writeArtifact.mockClear();
+    emit.mockClear();
+
+    const rebasedResult = await run("lap-rebased", rebased);
+
+    expect({
+      cacheHits: emit.mock.calls.map(([event]) => event).filter((event) => event.type === "build_review_cache_hit"),
+      dispatches: dispatchModel.mock.calls.length,
+      branches: rebasedResult.kind === "ready" ? rebasedResult.branches : [],
+      artifacts: writeArtifact.mock.calls.map(([artifact]) => artifact),
+    }).toMatchObject({
+      cacheHits: [
+        { rubric: "tautology", lapId: "lap-rebased" },
+        { rubric: "scope", lapId: "lap-rebased" },
+        { rubric: "rootCause", lapId: "lap-rebased" },
+        { rubric: "completeness", lapId: "lap-rebased" },
+      ],
+      dispatches: 0,
+      branches: [
+        { kind: "cache-hit", rubric: "tautology", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
+        { kind: "cache-hit", rubric: "scope", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
+        { kind: "cache-hit", rubric: "rootCause", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
+        { kind: "cache-hit", rubric: "completeness", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
+      ],
+      artifacts: [
+        { rubric: "tautology", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
+        { rubric: "scope", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
+        { rubric: "rootCause", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
+        { rubric: "completeness", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
+      ],
+    });
+
+    dispatchModel.mockClear();
+    emit.mockClear();
+    const widened = {
+      ...rebased,
+      sourceSnapshot: {
+        ...rebased.sourceSnapshot,
+        digest: "sha256:widened-snapshot",
+        acceptedWidenings: [{ path: "src/widened.ts", rationale: "required coordination", taskId: "5", sha: "widened-sha" }],
+      },
+    };
+
+    const widenedResult = await run("lap-widened", widened);
+
+    expect({
+      cacheHits: emit.mock.calls.map(([event]) => event).filter((event) => event.type === "build_review_cache_hit"),
+      dispatched: dispatchModel.mock.calls.map(([branch]) => branch.rubric),
+      branches: widenedResult.kind === "ready" ? widenedResult.branches : [],
+    }).toMatchObject({
+      cacheHits: [
+        { rubric: "tautology", lapId: "lap-widened" },
+        { rubric: "rootCause", lapId: "lap-widened" },
+        { rubric: "completeness", lapId: "lap-widened" },
+      ],
+      dispatched: ["scope"],
+      branches: [
+        { kind: "cache-hit", rubric: "tautology" },
+        { kind: "dispatched", rubric: "scope" },
+        { kind: "cache-hit", rubric: "rootCause" },
+        { kind: "cache-hit", rubric: "completeness" },
+      ],
+    });
+  });
+
   it("turns artifact write failure into an owning infrastructure result and never caches skips", async () => {
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
     const result = await coordinateBuildReviewRubrics({
