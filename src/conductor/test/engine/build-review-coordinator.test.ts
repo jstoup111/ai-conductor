@@ -220,7 +220,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     const preflight = async () => ({
       classification: "approved-exception" as const, exception: "empty-test-set" as const,
       cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-      revertedProductionPatch: [], sourceIdentities: preflightSourceIdentities, output: { stdout: "", stderr: "" },
+      revertedProductionManifest: [], revertedProductionPatch: [], sourceIdentities: preflightSourceIdentities, output: { stdout: "", stderr: "" },
     });
     const initial = inputs();
     const rebased: BuildReviewFrozenInputs = {
