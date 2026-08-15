@@ -63,6 +63,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review's tautology preflight counts a reverted-tree test collection failure as RED instead of infrastructure, and rubric sessions' JSON verdicts parse through prose or markdown wrapping. ([implementation PR #1593](https://github.com/jstoup111/ai-conductor/pull/1593)).
 - build_review rubric sessions receive the changed-file list and hunk line ranges instead of the full embedded diff, reading the worktree directly — cutting per-branch prompt size ~95% and stabilizing grader output on large diffs. ([implementation PR #1595](https://github.com/jstoup111/ai-conductor/pull/1595)).
 - Provider sessions are always fresh — the adapters replace any supplied session id and strip resume flags unconditionally, so no call path can resume a prior conversation. ([implementation PR #1596](https://github.com/jstoup111/ai-conductor/pull/1596)).
+- build_review tautology prompts are bounded by construction (path manifest + closed run verdict instead of embedded file contents and raw test output), fixing prompt-too-long failures on large features. ([implementation PR #1600](https://github.com/jstoup111/ai-conductor/pull/1600)).
 
 ## Migration
 
