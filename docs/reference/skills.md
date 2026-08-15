@@ -527,8 +527,9 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 `test-suite` and `wiring-check` have no `SKILL.md` — both `test_suite` (index 14) and `wiring_check`
 (index 13) are **engine-native** BUILD steps. `test_suite` obtains a current result from the
-repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility;
-wiring reachability is judged by `build_review`. The two names remain in `build_verification` (see
+repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility.
+`build_review` fans out to the engine-managed Tautology, Scope, Root Cause, and Completeness rubric
+skills; their raw verdicts are joined before effective dispositions are applied. The two names remain in `build_verification` (see
 [The build verification group](steps.md#the-build-verification-group)); it fans out after `build` and
 joins before `build_review`.
 

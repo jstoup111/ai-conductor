@@ -130,6 +130,7 @@ function createFixtureAgentFake(
   fixtureOptions: {
     omitTaskTrailer?: boolean;
     touchUnrelatedPath?: boolean;
+    includeBuildReviewProduction?: boolean;
   } = {},
 ) {
   return createCodexProviderFake((options) => {
@@ -139,7 +140,7 @@ function createFixtureAgentFake(
         success: true,
         output: JSON.stringify({
           kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [],
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS',
         }),
         exitCode: 0,
       };
@@ -172,7 +173,13 @@ function createFixtureAgentFake(
       : 'test/fixtures/daemon-e2e/touched.txt';
     mkdirSync(join(worktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
     writeFileSync(join(worktreeDir, touchedPath), `fixture task ${taskId}\n`, 'utf-8');
-    execFileSync('git', ['add', touchedPath], { cwd: worktreeDir });
+    if (fixtureOptions.includeBuildReviewProduction) {
+      mkdirSync(join(worktreeDir, 'src'), { recursive: true });
+      writeFileSync(join(worktreeDir, 'src/fixture-build-review.ts'), `export const task = '${taskId}';\n`, 'utf-8');
+      execFileSync('git', ['add', touchedPath, 'src/fixture-build-review.ts'], { cwd: worktreeDir });
+    } else {
+      execFileSync('git', ['add', touchedPath], { cwd: worktreeDir });
+    }
     try {
       execFileSync('git', ['diff', '--cached', '--quiet'], { cwd: worktreeDir });
     } catch {
@@ -278,6 +285,8 @@ describe('daemon E2E fixture', () => {
         fixtureTouchedPath,
         join(worktreeDir, 'test/fixtures/daemon-e2e/touched.txt'),
       );
+      await mkdir(join(worktreeDir, 'src'), { recursive: true });
+      await writeFile(join(worktreeDir, 'src/fixture-build-review.ts'), "export const task = 'seed';\n");
       await execa('git', ['add', '-A'], { cwd: worktreeDir });
       await execa(
         'git',
@@ -308,7 +317,7 @@ describe('daemon E2E fixture', () => {
         }),
       );
 
-      const fake = createFixtureAgentFake(worktreeDir);
+      const fake = createFixtureAgentFake(worktreeDir, { includeBuildReviewProduction: true });
       const buildReviewEffectiveResolver = async (_root: string, aggregate: unknown) => {
         const effective = deriveEffectiveBuildReviewVerdict(aggregate);
         return effective
@@ -324,10 +333,10 @@ describe('daemon E2E fixture', () => {
           pipelineDir,
           planPath,
           providerKey: 'codex',
-          config: { build_review: { rubrics: { tautology: { enabled: false } } } },
+          config: { build_review: { maxParallel: 4 } },
           buildReviewInputOptions: {
             inspectTestSuite: async () => ({
-              status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+              status: 'CURRENT', evidence: { provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(), outcome: 'PASS' },
             } as never),
           },
           buildReviewEffectiveResolver,
@@ -403,7 +412,7 @@ describe('daemon E2E fixture', () => {
       }).toEqual({
         claimed: true,
         processed: [slug],
-        providerCalls: 5,
+        providerCalls: 6,
         build: 'done',
         buildReview: 'done',
         finish: 'done',

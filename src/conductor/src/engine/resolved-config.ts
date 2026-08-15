@@ -698,7 +698,7 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
 const DEFAULT_BUILD_REVIEW_ENABLED = true;
 const DEFAULT_PER_TASK_FLOOR_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
-const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 5;
+const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 4;
 const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = [
   'tautology',
   'scope',

@@ -694,7 +694,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
   }, 30000);
 
   it.each([
-    ['a non-boolean completeness flag', /rubric\.completeness.*boolean/, {
+    ['a malformed four-rubric completeness flag', /rubric\.completeness.*boolean/, {
       verdict: 'PASS', reasons: [],
       rubric: { tautology: false, scope: false, rootCause: false, completeness: 'false' },
     }],

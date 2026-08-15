@@ -145,7 +145,6 @@ describe('build_review rubric validation', () => {
             scope: { enabled: false },
             rootCause: { enabled: false },
             completeness: { enabled: false },
-            wiring: { enabled: false },
           },
         },
       },
@@ -156,6 +155,11 @@ describe('build_review rubric validation', () => {
     const diagnostic = result.ok ? 'accepted invalid build review rubric configuration' : result.error.message;
 
     expect(diagnostic).toMatch(new RegExp(path, 'i'));
+  });
+
+  it('rejects retired wiring policy and clamps concurrency at four rubrics', () => {
+    expect(validateConfig({ build_review: { rubrics: { wiring: {} } } })).toMatchObject({ ok: false });
+    expect(validateConfig({ build_review: { maxParallel: 5 } })).toMatchObject({ ok: false });
   });
 });
 

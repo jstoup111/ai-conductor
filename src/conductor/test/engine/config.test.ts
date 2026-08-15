@@ -1800,7 +1800,7 @@ complexity:
   });
 
   describe('build_review config field', () => {
-    it('materializes the closed five-rubric configuration with default and per-rubric execution policy fields', () => {
+    it('materializes the closed four-rubric configuration with default and per-rubric execution policy fields', () => {
       const defaults = validateConfig({ build_review: {} });
       const configured = validateConfig({
         build_review: {
@@ -1825,13 +1825,12 @@ complexity:
       }).toEqual({
         defaults: {
           enabled: true,
-          maxParallel: 5,
+          maxParallel: 4,
           rubrics: {
             tautology: { enabled: true },
             scope: { enabled: true },
             rootCause: { enabled: true },
             completeness: { enabled: true },
-            wiring: { enabled: true },
           },
         },
         configured: {
@@ -1850,7 +1849,6 @@ complexity:
             scope: { enabled: true },
             rootCause: { enabled: true },
             completeness: { enabled: true },
-            wiring: { enabled: true },
           },
         },
       });

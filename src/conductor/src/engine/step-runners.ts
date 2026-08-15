@@ -1910,6 +1910,8 @@ export class DefaultStepRunner implements StepRunner {
       mergeBase: inputs.sourceSnapshot.mergeBase,
       headSha: inputs.sourceSnapshot.headSha,
       diff: inputs.diff,
+      scopedCommand: this.config?.test_suite?.scoped_command ?? null,
+      currentGreenProofIdentity: `${inputs.testSuiteProof.provenanceHeadSha}:${inputs.testSuiteProof.fingerprint}`,
       createCheckout: async (path, headSha) => {
         const result = await this.gitRunner(['worktree', 'add', '--detach', path, headSha]);
         if (result.exitCode !== 0) throw new Error(result.stderr);

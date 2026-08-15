@@ -198,10 +198,10 @@ describe('CLI', () => {
   // not just the bare-pipeline flags. Regression — `--help` rendered the base
   // program (no Commands section), so register/create/engineer/daemon were
   // invisible. createProgram() is the program index.ts routes top-level help to.
-  it('--help lists all subcommands (inline, register, create, engineer, daemon)', () => {
+  it('--help lists all subcommands including build-review', () => {
     const help = createProgram().helpInformation();
     expect(help).toMatch(/^Commands:/m);
-    for (const cmd of ['inline', 'register', 'create', 'engineer', 'daemon']) {
+    for (const cmd of ['inline', 'register', 'create', 'engineer', 'daemon', 'build-review']) {
       expect(help).toContain(cmd);
     }
   });
@@ -218,6 +218,9 @@ describe('CLI', () => {
         'conduct create',
         'conduct engineer',
         'conduct daemon',
+        'conduct build-review',
+        'conduct build-review findings',
+        'conduct build-review accept',
       ]) {
         expect(help).toContain(path);
       }

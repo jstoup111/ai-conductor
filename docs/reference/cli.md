@@ -84,6 +84,20 @@ already-applied=<n>`.
 Commands that are advisory by contract always exit 0 regardless of outcome: `overlap-scan`, `kpi`,
 `shipped-record`, `shipment-evidence audit`, and `render-diagrams` in its default (non-`--check`) mode.
 
+## `conduct-ts build-review`
+
+```bash
+conduct-ts build-review findings --feature <slug> [--json]
+conduct-ts build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+```
+
+`findings` is read-only and renders the current feature's raw and effective build-review findings;
+`--json` selects machine-readable output. `accept` changes state only from an interactive terminal with
+a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
+and a non-empty rationale. Stale, unknown, unauthorized, or non-interactive requests are refused
+without changing artifacts and exit 1; successful findings inspection and accepted exact-current
+findings exit 0.
+
 ## `conduct-ts scope-check`
 
 ```bash

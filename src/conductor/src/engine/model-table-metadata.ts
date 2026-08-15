@@ -185,15 +185,6 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     codexEffort: RESOLVED_RUBRIC_POLICY,
     why: 'Judges the approved plan holistically against the full implementation diff.',
   },
-  {
-    name: 'build-review-wiring',
-    executionPath: 'engine-managed auxiliary rubric',
-    claudeModel: RESOLVED_RUBRIC_POLICY,
-    claudeEffort: RESOLVED_RUBRIC_POLICY,
-    codexModel: RESOLVED_RUBRIC_POLICY,
-    codexEffort: RESOLVED_RUBRIC_POLICY,
-    why: 'Judges static reachability from changed production surfaces to configured entry points.',
-  },
 ];
 
 const INTERACTIVE_EXECUTION_PATH = 'supported-host interactive' as const;

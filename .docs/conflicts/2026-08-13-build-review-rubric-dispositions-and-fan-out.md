@@ -174,48 +174,9 @@ was found in the current corpus. #1542 reserves typed stable finding identities 
 post-judgement resolution seam only; it does not pre-authorize or define that future mechanism, so
 there is no present behavioral conflict to resolve.
 
-## Conflict 6: Operator-reseal evidence terminates at the scalar prompt retired by fan-out
-
-**Stories involved:** #1502 Stories 3-4 vs #1542 Stories 1 and 6
-**Files:** `.docs/stories/an-operator-s-protected-artifact-reseal-is-invisib.md` vs
-`.docs/stories/build-review-rubric-dispositions-and-fan-out.md`
-**Type:** behavioral-overlap
-**Severity:** blocking
-**Confidence:** 100% (verified from merged #1556 at `bdd239ac7` and #1563 source)
-
-**Description:** #1556 makes operator-reseal paths, rationale, and commit range available on
-`BuildReviewInputs` and renders them through `buildGraderPrompt`. #1563 makes the five closed rubric
-projections and registered skills the production judgement path; its Scope projection contains
-only plan, repair context, and accepted widenings, and its Scope skill recognizes only those three
-authorization sources. A textual merge therefore compiles after two import/test resolutions but
-silently removes #1556's evidence from production whenever fan-out runs. After
-`rem-build-review-1`, fan-out is the default for every enabled review, so the defect becomes
-unconditional rather than configuration-dependent.
-
-This is not an inherent requirements contradiction or oscillation: both accepted behaviors hold
-when the landed reseal records are frozen with the lap and projected only to Scope. It is a missing
-composition seam between two compatible designs.
-
-**Resolution Options:**
-
-1. Carry the landed records into the immutable source snapshot and closed Scope projection, include
-   them in the Scope digest/parser, and update the Scope skill plus both-direction acceptance proof.
-2. Keep the scalar prompt alive as a second production Scope grader, violating the one-gate/five-
-   branch topology and spending a duplicate judgement.
-3. Drop the reseal channel when fan-out is enabled, reintroducing #1502's halt-forever behavior.
-
-**Recommendation:** Option 1. It preserves one production topology, makes cache invalidation
-complete, keeps reseals falsifiable and path-scoped, and leaves all non-Scope projections unchanged.
-
-**Selected resolution:** Option 1, approved by the operator after #1556 merged on 2026-08-14.
-Task `rem-build-review-9` was appended to the #1563 plan. Neither story nor ADR needs amendment:
-`adr-2026-08-12-operator-reseal-as-second-scope-justification` already requires this evidence, and
-`adr-2026-08-13-engine-managed-build-review-rubric-branches` already requires every permitted skill
-input to enter its closed projection and digest.
-
 ## Clean Recheck
 
-The full comparison was repeated after amendment. All six conflicts are resolved, zero blocking or
+The full comparison was repeated after amendment. All five conflicts are resolved, zero blocking or
 degrading conflicts remain, and no pair forms an oscillation:
 
 - Fan-out reuses the existing group core without creating lifecycle `StepName`s.
@@ -236,8 +197,6 @@ degrading conflicts remain, and no pair forms an oscillation:
 - The external CLI writer reuses the same-schema external event ledger and merged reader; no parallel
   telemetry channel exists.
 - Accepted-risk publication uses the existing resumable finish coordinator and remains idempotent.
-- Operator-reseal evidence is frozen and cache-visible only for Scope; it neither becomes a bypass
-  nor disappears when scalar grading is retired.
 
 ## Appendix A: Repo-wide ADR Corpus
 

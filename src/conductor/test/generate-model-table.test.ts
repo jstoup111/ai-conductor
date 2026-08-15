@@ -403,10 +403,9 @@ describe('build-review auxiliary rubric rows', () => {
     'build-review-scope',
     'build-review-root-cause',
     'build-review-completeness',
-    'build-review-wiring',
   ];
 
-  it('renders five distinct engine-managed rubric skills with inherited resolved policy', () => {
+  it('renders four retained engine-managed rubric skills with inherited resolved policy', () => {
     expect(buildAuxiliaryRows()).toEqual(
       rubricSkills.map((name) => expect.objectContaining({
         name,

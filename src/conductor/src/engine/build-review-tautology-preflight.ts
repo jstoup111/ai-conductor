@@ -30,6 +30,12 @@ export interface TautologyPreflightDependencies {
   readonly readCache?: (key: string) => Promise<TautologyCompletedPreflight | undefined>;
   readonly writeCache?: (key: string, evidence: TautologyCompletedPreflight) => Promise<void>;
   readonly approvedException?: 'empty-test-set' | 'removal-maintenance';
+  /** Changed test selectors individually eligible for removal-maintenance. */
+  readonly removalMaintenanceSelectors?: readonly string[];
+  /** Exact scoped-command template used for the counterfactual. */
+  readonly scopedCommand?: string | null;
+  /** Identity of the CURRENT aggregate green proof this preflight relies on. */
+  readonly currentGreenProofIdentity?: string | null;
   /** Cancels the isolated command only; the disposable checkout is still cleaned up. */
   readonly abortSignal?: AbortSignal;
 }
@@ -88,7 +94,11 @@ function failure(
 
 function cacheKey(deps: TautologyPreflightDependencies, paths: readonly string[]): string {
   return `sha256:${createHash('sha256').update(JSON.stringify({
-    version: 1, mergeBase: deps.mergeBase, headSha: deps.headSha, paths, diff: deps.diff, approvedException: deps.approvedException ?? null,
+    version: 2, mergeBase: deps.mergeBase, headSha: deps.headSha, paths, diff: deps.diff,
+    approvedException: deps.approvedException ?? null,
+    removalMaintenanceSelectors: [...(deps.removalMaintenanceSelectors ?? [])].sort(),
+    scopedCommand: deps.scopedCommand ?? null,
+    currentGreenProofIdentity: deps.currentGreenProofIdentity ?? null,
   })).digest('hex')}`;
 }
 
@@ -130,7 +140,12 @@ export async function materializeTautologyPreflight(
     return failure('cache-read-failed', paths, classified.tests, sourceIdentities);
   }
   if (cached) return { ...cached, cacheProvenance: 'hit' };
-  if (deps.approvedException && (classified.tests.length === 0 || deps.approvedException === 'removal-maintenance')) {
+  const eligibleRemovalSelectors = new Set(deps.removalMaintenanceSelectors ?? []);
+  if (classified.tests.length === 0) return failure('no-changed-tests', paths, classified.tests, sourceIdentities);
+  const counterfactualSelectors = deps.approvedException === 'removal-maintenance'
+    ? classified.tests.filter((selector) => !eligibleRemovalSelectors.has(selector))
+    : classified.tests;
+  if (deps.approvedException === 'empty-test-set' && classified.tests.length === 0) {
     const completed: TautologyCompletedPreflight = {
       classification: 'approved-exception', exception: deps.approvedException, cacheable: true, cacheProvenance: 'miss',
       changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionPatch: [], sourceIdentities,
@@ -143,7 +158,14 @@ export async function materializeTautologyPreflight(
       return failure('cache-write-failed', paths, classified.tests, sourceIdentities);
     }
   }
-  if (classified.tests.length === 0) return failure('no-changed-tests', paths, classified.tests, sourceIdentities);
+  if (deps.approvedException === 'removal-maintenance' && counterfactualSelectors.length === 0) {
+    const completed: TautologyCompletedPreflight = {
+      classification: 'approved-exception', exception: 'removal-maintenance', cacheable: true, cacheProvenance: 'miss',
+      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionPatch: [], sourceIdentities,
+      output: { stdout: '', stderr: '' },
+    };
+    try { await deps.writeCache?.(key, completed); return completed; } catch { return failure('cache-write-failed', paths, classified.tests, sourceIdentities); }
+  }
   if (classified.production.length === 0) return failure('no-production-changes', paths, classified.tests, sourceIdentities);
 
   const checkout = join(deps.scopedWorkingDirectory, '.pipeline', 'build-review-preflight', deps.headSha);
@@ -173,7 +195,7 @@ export async function materializeTautologyPreflight(
     }
     if (!result) {
       try {
-        const execution = await deps.runScoped(checkout, classified.tests, signal);
+        const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
         if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else if ('kind' in execution) result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
         else {

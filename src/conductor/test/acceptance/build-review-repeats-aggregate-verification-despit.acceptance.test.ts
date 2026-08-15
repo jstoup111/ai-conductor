@@ -92,12 +92,12 @@ describe('Story 7: npm scripts preserve scoped test selection', () => {
     expect(result.stdout).not.toContain('AGGREGATE_TEST_SUITE_PASS');
   });
 
-  it('keeps a fresh legacy scalar PASS verdict compatible with the build-review completion predicate', async () => {
+  it('keeps a fresh four-rubric scalar PASS verdict compatible with the build-review completion predicate', async () => {
     const verdictPath = join(fixtureRoot, '.pipeline', 'build-review.json');
     await mkdir(join(fixtureRoot, '.pipeline'), { recursive: true });
     await writeFile(verdictPath, JSON.stringify({
       verdict: 'PASS',
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
     }));
 
     const completion = await checkStepCompletion(fixtureRoot, 'build_review', {

@@ -71,7 +71,7 @@ describe('build-review Tautology preflight', () => {
     };
     const red = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ exitCode: 1, stdout: 'failed', stderr: '' }) });
     const stayedGreen = await materializeTautologyPreflight({ ...base, runScoped: async () => ({ exitCode: 0, stdout: 'passed', stderr: '' }) });
-    const exception = await materializeTautologyPreflight({ ...base, approvedException: 'removal-maintenance', runScoped: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
+    const exception = await materializeTautologyPreflight({ ...base, approvedException: 'removal-maintenance', removalMaintenanceSelectors: ['test/a.test.ts'], runScoped: async () => ({ exitCode: 0, stdout: '', stderr: '' }) });
 
     expect(red).toMatchObject({ classification: 'red', cacheable: true });
     expect(stayedGreen).toMatchObject({ classification: 'stayed-green', cacheable: true });
@@ -92,6 +92,32 @@ describe('build-review Tautology preflight', () => {
     expect(result).toMatchObject({ classification: 'red', cacheProvenance: 'hit' });
     expect(createCheckout).not.toHaveBeenCalled();
     expect(runScoped).not.toHaveBeenCalled();
+  });
+
+  it('invalidates cache reuse when the scoped command or CURRENT proof identity changes', async () => {
+    const keys: string[] = [];
+    const base = {
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }), removeCheckout: async () => {},
+      readCache: async (key: string) => { keys.push(key); return undefined; },
+    };
+    await materializeTautologyPreflight({ ...base, scopedCommand: 'run {selectors}', currentGreenProofIdentity: 'proof-a' });
+    await materializeTautologyPreflight({ ...base, scopedCommand: 'other {selectors}', currentGreenProofIdentity: 'proof-a' });
+    await materializeTautologyPreflight({ ...base, scopedCommand: 'run {selectors}', currentGreenProofIdentity: 'proof-b' });
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it('runs the counterfactual for every changed test not individually eligible for removal maintenance', async () => {
+    const runScoped = vi.fn(async () => ({ exitCode: 1, stdout: 'RED', stderr: '' }));
+    await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts\ndiff --git a/test/b.test.ts b/test/b.test.ts',
+      approvedException: 'removal-maintenance', removalMaintenanceSelectors: ['test/a.test.ts'],
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {}, runScoped, removeCheckout: async () => {},
+    });
+    expect(runScoped).toHaveBeenCalledWith(expect.any(String), ['test/b.test.ts'], expect.any(AbortSignal));
   });
 
   it.each([
