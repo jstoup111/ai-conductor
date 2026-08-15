@@ -7,6 +7,8 @@ import {
   runWithConcurrency,
   runGroupBranch,
   runNativeGroupBranch,
+  runAuxiliaryGroupBranch,
+  runAuxiliaryGroupBranches,
   type BranchOutcome,
   type GroupMember,
   type GroupMemberStepEvent,
@@ -15,6 +17,8 @@ import {
 } from "../../src/engine/group-core.js";
 import type { StepRunResult, StepRunOptions } from "../../src/engine/conductor.js";
 import type { StepName, ConductState } from "../../src/types/index.js";
+import type { BuildReviewRubricResult } from "../../src/engine/build-review-domain.js";
+import type { ResolvedBuildReviewRubricPolicy } from "../../src/engine/resolved-config.js";
 import { mkdtemp, writeFile, mkdir, stat, utimes, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -332,6 +336,85 @@ describe("group-core: runNativeGroupBranch", () => {
         { member: "wiring_check", phase: "result", outcome: "no-verdict" },
       ],
     });
+  });
+});
+
+describe("group-core: runAuxiliaryGroupBranch", () => {
+  it("dispatches string member IDs through typed policy and outcome callbacks without lifecycle state", async () => {
+    const policy: ResolvedBuildReviewRubricPolicy = {
+      enabled: true,
+      llm_provider: "claude",
+      model: "sonnet",
+      effort: "medium",
+      model_fallback_ladder: ["sonnet"],
+      max_retries: 2,
+      escalate: false,
+    };
+    const outcome: BuildReviewRubricResult = {
+      kind: "skipped",
+      rubric: "tautology",
+      reason: "disabled",
+    };
+    const execute = vi.fn(async (
+      memberId: "tautology",
+      receivedPolicy: ResolvedBuildReviewRubricPolicy,
+    ): Promise<BuildReviewRubricResult> => {
+      expect(memberId).toBe("tautology");
+      expect(receivedPolicy).toBe(policy);
+      return outcome;
+    });
+
+    await expect(runAuxiliaryGroupBranch("tautology", policy, execute)).resolves.toBe(outcome);
+    expect(execute).toHaveBeenCalledWith("tautology", policy);
+  });
+
+  it("caps auxiliary fan-out while preserving each member's policy and attributed outcome", async () => {
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    };
+    const first = deferred<BuildReviewRubricResult>();
+    const second = deferred<BuildReviewRubricResult>();
+    const third = deferred<BuildReviewRubricResult>();
+    const thirdStarted = deferred<void>();
+    const started: string[] = [];
+    const policies: Record<"tautology" | "scope" | "rootCause", ResolvedBuildReviewRubricPolicy> = {
+      tautology: { enabled: true, llm_provider: "claude", model: "sonnet", effort: "medium", model_fallback_ladder: ["sonnet", "opus"], max_retries: 2, escalate: false },
+      scope: { enabled: true, llm_provider: "codex", model: "gpt-5.6-terra", effort: "high", model_fallback_ladder: ["gpt-5.6-terra"], max_retries: 3, escalate: true },
+      rootCause: { enabled: true, llm_provider: "claude", model: "opus", effort: "xhigh", model_fallback_ladder: ["opus"], max_retries: 1, escalate: true },
+    };
+    const pending = { tautology: first, scope: second, rootCause: third };
+
+    const outcomesPromise = runAuxiliaryGroupBranches(
+      Object.entries(policies).map(([memberId, policy]) => ({ memberId, policy })),
+      2,
+      async (memberId, policy) => {
+        started.push(memberId);
+        expect(policy).toBe(policies[memberId as keyof typeof policies]);
+        if (memberId === "rootCause") thirdStarted.resolve();
+        return pending[memberId as keyof typeof pending].promise;
+      },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["tautology", "scope"]);
+
+    first.resolve({ kind: "skipped", rubric: "tautology", reason: "disabled" });
+    await thirdStarted.promise;
+    expect(started).toEqual(["tautology", "scope", "rootCause"]);
+
+    second.resolve({ kind: "infrastructure-failure", rubric: "scope", reason: "retry-exhausted", detail: "codex exhausted" });
+    third.resolve({ kind: "judged", rubric: "rootCause", lapId: "lap-1" as never, snapshotDigest: "digest", contractVersion: "v1" as never, findings: [], verdict: "PASS" });
+
+    await expect(outcomesPromise).resolves.toEqual([
+      { kind: "skipped", rubric: "tautology", reason: "disabled" },
+      { kind: "infrastructure-failure", rubric: "scope", reason: "retry-exhausted", detail: "codex exhausted" },
+      { kind: "judged", rubric: "rootCause", lapId: "lap-1", snapshotDigest: "digest", contractVersion: "v1", findings: [], verdict: "PASS" },
+    ]);
   });
 });
 

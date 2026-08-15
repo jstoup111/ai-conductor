@@ -459,6 +459,57 @@ export async function runNativeGroupBranch(
 }
 
 /**
+ * Typed execution seam for a branch that belongs to a concurrent group but
+ * is not a lifecycle step. The caller retains ownership of its string member
+ * identity, policy, and domain outcome; this core deliberately never coerces
+ * the member ID to `StepName` or writes it into `ConductState`.
+ *
+ * Auxiliary callers can compose this with `runWithConcurrency` and supply an
+ * executor backed by the same provider/session and rate-limit primitives as
+ * lifecycle branches, while preserving their own closed outcome union.
+ */
+export type AuxiliaryBranchExecutor<MemberId extends string, Policy, Outcome> = (
+  memberId: MemberId,
+  policy: Policy,
+) => Promise<Outcome>;
+
+/** A policy-bearing auxiliary member, deliberately separate from `GroupMember`. */
+export interface AuxiliaryGroupMember<MemberId extends string, Policy> {
+  memberId: MemberId;
+  policy: Policy;
+}
+
+/**
+ * Runs one typed auxiliary branch without inventing a lifecycle-step identity
+ * or mutable conductor state for it.
+ */
+export async function runAuxiliaryGroupBranch<MemberId extends string, Policy, Outcome>(
+  memberId: MemberId,
+  policy: Policy,
+  execute: AuxiliaryBranchExecutor<MemberId, Policy, Outcome>,
+): Promise<Outcome> {
+  return execute(memberId, policy);
+}
+
+/**
+ * Schedules auxiliary branches through the shared capped semaphore. Each
+ * branch receives its own resolved policy unchanged, leaving provider
+ * fallback, retry, fresh-session, rate-limit, and actual-provider outcome
+ * attribution to the injected provider-aware executor rather than inventing
+ * a lifecycle `StepName` for the auxiliary member.
+ */
+export function runAuxiliaryGroupBranches<MemberId extends string, Policy, Outcome>(
+  members: readonly AuxiliaryGroupMember<MemberId, Policy>[],
+  maxParallel: number,
+  execute: AuxiliaryBranchExecutor<MemberId, Policy, Outcome>,
+): Promise<Outcome[]> {
+  return runWithConcurrency(
+    members.map(({ memberId, policy }) => () => runAuxiliaryGroupBranch(memberId, policy, execute)),
+    maxParallel,
+  );
+}
+
+/**
  * Runs a single concurrent-group branch to completion: creates one detached
  * provider-session scope when the runner supports provider routing, otherwise
  * mints the legacy scalar session id. Neither path uses the shared

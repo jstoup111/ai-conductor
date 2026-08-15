@@ -25,16 +25,21 @@ import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
   appendTimingSection,
+  appendBuildReviewAcceptedRisk,
+  appendBuildReviewMetrics,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
   resolveEngineVersion,
   writeShippedRecord,
 } from './shipped-record.js';
+import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { computeCostRollup } from './cost-rollup.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
+import { resolveMainRepoRoot } from './park-marker.js';
+import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 
 export type ShippedRecordDispatch =
   | { kind: 'write'; slug: string; pr: string }
@@ -167,6 +172,40 @@ export async function dispatchShippedRecord(
         }`,
       );
       recordBody = appendTimingSection(recordBody, { state: 'unavailable' });
+    }
+    try {
+      recordBody = appendBuildReviewMetrics(
+        recordBody,
+        computeBuildReviewMetrics(await readMergedFeatureEvents(cwd) ?? []),
+      );
+    } catch (err) {
+      console.error(
+        `build-review rollup failed — shipped record written without a Build Review block for ${identity.slug}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    // The feature worktree owns its disposition ledger; repository identity
+    // is deliberately canonical so a linked checkout cannot forge a separate
+    // accepted-risk namespace.
+    // Accepted-risk evidence is part of the retained shipment contract.  It
+    // therefore deliberately differs from the legacy Cost/Time best-effort
+    // rollups above: unreadable or unrenderable disposition state must stop
+    // FINISH rather than silently produce an incomplete record.
+    try {
+      const repository = await resolveMainRepoRoot(cwd);
+      const dispositions = await new BuildReviewDispositionStore(cwd).list({
+        version: 'v1', repository, feature: identity.slug,
+      });
+      if (!dispositions.ok) throw new Error(dispositions.message);
+      recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);
+    } catch (err) {
+      console.error(
+        `shipped-record accepted-risk evidence failed for ${identity.slug}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return 1;
     }
     await writeShippedRecord(join(cwd, relPath), recordBody);
 

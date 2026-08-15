@@ -16,7 +16,7 @@ can see which kind of review passed or failed without losing the authoritative o
 #### Happy Path
 
 - Given `build_review` is enabled with all default rubrics, when one review lap completes, then the
-  result contains separately attributable Tautology, Scope, Root Cause, Completeness, and Wiring
+  result contains separately attributable Tautology, Scope, Root Cause, and Completeness
   outcomes plus one authoritative outer verdict.
 
 #### Negative Paths
@@ -27,7 +27,7 @@ can see which kind of review passed or failed without losing the authoritative o
 
 ### Done When
 
-- [ ] A five-rubric fixture produces five named outcomes and one outer verdict.
+- [ ] A four-rubric fixture produces four named outcomes and one outer verdict.
 - [ ] A missing-rubric fixture remains blocking and identifies the absent rubric.
 
 ## Story 2: Bound concurrent rubric evaluation
@@ -41,7 +41,7 @@ latency can improve without exceeding the project's parallel-session budget.
 
 #### Happy Path
 
-- Given five eligible rubrics and no explicit concurrency setting, when a lap runs, then up to five
+- Given four eligible rubrics and no explicit concurrency setting, when a lap runs, then up to four
   rubric evaluations may be active concurrently; given a lower positive ceiling, active evaluations
   never exceed that ceiling and the joined result is unchanged.
 
@@ -55,7 +55,7 @@ latency can improve without exceeding the project's parallel-session budget.
 
 ### Done When
 
-- [ ] A controlled scheduler fixture observes peak concurrency five by default and the configured
+- [ ] A controlled scheduler fixture observes peak concurrency four by default and the configured
   lower peak when overridden.
 - [ ] Invalid ceilings fail validation before provider dispatch.
 
@@ -78,10 +78,10 @@ so that an intentional omission is never mistaken for successful judgement.
 - Given a rubric is disabled, when the lap runs, then no provider session is dispatched for it and
   its skipped outcome cannot increment either the pass or failure count.
 
-> **Amended 2026-08-13 by #1542 conflict resolution:** skip reasons are closed and explicit.
-> `disabled` applies to any rubric selected off by the operator;
-> `missing-entry-points` applies only to an enabled Wiring rubric whose production-entry premise is
-> absent. Neither dispatches, passes, fails, or enters judged-rate denominators.
+> **Amended 2026-08-13 by #1542 conflict resolution, re-amended 2026-08-14 by PR #1577:** skip
+> reasons are closed and explicit. `disabled` — the only skip reason — applies to any rubric
+> selected off by the operator. It never dispatches, passes, fails, or enters judged-rate
+> denominators.
 
 ### Done When
 
@@ -104,7 +104,7 @@ feature can appear reviewed when every rubric was disabled.
 
 #### Negative Paths
 
-- Given the outer gate is enabled and all five rubrics are disabled, when configuration is resolved,
+- Given the outer gate is enabled and all four rubrics are disabled, when configuration is resolved,
   then startup is refused with an explanation that names the empty rubric set and the separate
   whole-gate disable choice.
 - Given the entire gate is disabled and all rubrics retain their defaults, when configuration is
@@ -581,7 +581,7 @@ that intentional omissions cannot improve or worsen the reported failure rate.
 
 **Requirement:** FR-22
 
-As an existing project operator, I want the enabled outer gate to retain full five-rubric coverage
+As an existing project operator, I want the enabled outer gate to retain full four-rubric coverage
 without new configuration so that adopting the extension does not silently narrow review.
 
 ### Acceptance Criteria
@@ -589,7 +589,7 @@ without new configuration so that adopting the extension does not silently narro
 #### Happy Path
 
 - Given `build_review` is enabled and has no rubric-specific settings, when configuration resolves,
-  then all five rubrics are enabled, inherit the outer execution policy, and use a maximum of five
+  then all four surviving rubrics are enabled, inherit the outer execution policy, and use a maximum of four
   concurrent sessions.
 
 #### Negative Paths
@@ -600,8 +600,8 @@ without new configuration so that adopting the extension does not silently narro
 
 ### Done When
 
-- [ ] Absent and partially specified rubric configuration fixtures resolve all five closed entries.
-- [ ] The resolved default maximum is exactly five.
+- [ ] Absent and partially specified rubric configuration fixtures resolve all four closed entries.
+- [ ] The resolved default maximum is exactly four.
 
 ## Story 23: Disable the whole gate without a false review success
 
@@ -700,8 +700,8 @@ re-dispatches and disposition-only laps do not repeatedly spend tokens.
 - Given a cache hit exists, when completion is checked, then the engine still requires freshly
   materialized current-lap branch and aggregate artifacts; an old aggregate verdict cannot satisfy
   freshness.
-- Given a rubric is disabled or Wiring lacks entry points, when the branch is classified, then the
-  deterministic skip short-circuits before cache lookup and consumes no model session.
+- Given a rubric is disabled, when the branch is classified, then the deterministic skip
+  short-circuits before cache lookup and consumes no model session.
 
 ### Done When
 

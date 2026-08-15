@@ -1,7 +1,7 @@
 # Components: build_review rubric fan-out and operator dispositions
 
 **Last updated:** 2026-08-13
-**Scope:** The proposed `build_review` boundary: five independently configured rubric skills,
+**Scope:** The proposed `build_review` boundary: four independently configured rubric skills,
 one engine-owned evidence snapshot and join, durable per-finding operator dispositions, the
 existing event spine, reporting, and publication evidence. Issue #1542.
 
@@ -17,7 +17,6 @@ graph TD
     SC["build-review-scope"]
     RC["build-review-root-cause"]
     CO["build-review-completeness"]
-    WI["build-review-wiring"]
   end
 
   subgraph Engine["Conductor engine — deterministic authority"]
@@ -123,7 +122,7 @@ graph TD
   results, creates finding IDs, applies dispositions, joins the outer verdict, and routes failures.
   A rubric skill supplies judgement policy only; it cannot choose inputs, accept a risk, or publish
   the gate verdict.
-- **Rubric policy moves out of the inline prompt.** The five shipped skills are consumer-facing,
+- **Rubric policy moves out of the inline prompt.** The four surviving shipped skills are consumer-facing,
   provider-agnostic policy modules. Their model-table rows provide defaults, while project config
   may independently override provider, model, reasoning effort, fallback order, retry budget, and
   retry escalation for each rubric.
@@ -199,6 +198,7 @@ cache hits themselves are occurrences on the event spine.
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-08-13 | Confirmed plan wiring and exact-input preflight cache | Post-plan architecture-diagram/review pass |
+| 2026-08-14 | Removed the build-review-wiring skill node; fan-out is four rubric branches | Wiring rubric retired repository-wide by adr-2026-08-14-retire-build-review-wiring-rubric (PR #1577) |
 | 2026-08-13 | Reserved a typed post-judgement resolution seam | Account for future Tautology/Scope claims without designing them in #1542 |
 | 2026-08-13 | Added isolated Tautology RED preflight and per-rubric semantic-result cache | Reuse upstream green proof and bound repeat token spend |
 | 2026-08-13 | Reused the existing external-process event ledger | Architecture review found the approved same-schema sibling pattern already exists |

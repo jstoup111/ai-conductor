@@ -863,6 +863,8 @@ export interface ConductorOptions {
   log?: (message: string) => void;
   /** Injectable native aggregate-suite verifier; production uses FullSuiteVerifier. */
   fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
+  /** Test seam for the disposition-aware build_review completion join. */
+  buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -1240,6 +1242,7 @@ export class Conductor {
    */
   private readonly remediationDecideReentryTargets = new Set<StepName>();
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
+  private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
@@ -1568,6 +1571,7 @@ export class Conductor {
       projectRoot: this.projectRoot,
       planPath,
       gh: this.gh,
+      buildReviewEffectiveResolver: this.buildReviewEffectiveResolver,
       repairFinishPr,
       releaseMetadataPreservationRequired: this.releaseDispositionFlowActive(),
       fullSuiteInspect: async () => {
@@ -1947,6 +1951,7 @@ export class Conductor {
     this.log = opts.log;
     this.fullSuiteVerifier =
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
+    this.buildReviewEffectiveResolver = opts.buildReviewEffectiveResolver;
     this.featureDesc = opts.featureDesc;
     this.worktreeBranch = opts.worktreeBranch;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
@@ -6243,6 +6248,12 @@ export class Conductor {
                 await captureKickbackToBuildContext('finish');
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
+                // `navigateBack` only stales downstream `done` steps. A
+                // FINISH implementation-evidence rejection must re-run the
+                // entire BUILD verification chain even when its prior state
+                // was failed, already stale, or absent.
+                (state as Record<string, unknown>).test_suite = 'stale';
+                (state as Record<string, unknown>).build_review = 'stale';
                 // The failing FINISH step is not part of the done-only stale
                 // cascade, so explicitly restage it for the post-BUILD tail.
                 (state as Record<string, unknown>).finish = 'stale';

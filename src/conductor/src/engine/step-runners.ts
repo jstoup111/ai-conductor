@@ -1,4 +1,6 @@
-import { writeFile, access, readFile, mkdir } from 'node:fs/promises';
+import { writeFile, access, readFile, mkdir, rename, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
@@ -28,12 +30,13 @@ import {
   findArtifactFiles,
   resolveFeaturePlanPath,
   BUILD_REVIEW_VERDICT,
-  canonicalizeBuildReviewGraderVerdict,
 } from './artifacts.js';
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import {
   assembleBuildReviewInputs,
+  type BuildReviewFrozenInputs,
+  type BuildReviewInputOptions,
   type BuildReviewRepairProvenance,
 } from './build-review-inputs.js';
 import {
@@ -44,7 +47,16 @@ import {
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
-import { buildGraderPrompt } from './build-review-prompt.js';
+import { coordinateBuildReviewRubrics, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
+import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
+import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
+import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
+import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
+import { parseBuildReviewLapId, parseBuildReviewJudgedResult, type BuildReviewRubricResult } from './build-review-domain.js';
+import type { BuildReviewRubricProjection } from './build-review-projections.js';
+import { classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -55,6 +67,7 @@ import type {
 } from './provider-session.js';
 import {
   executeProviderCandidates,
+  executeAuxiliaryProviderCandidates,
   type ExecuteProviderCandidatesInput,
   type ProviderExecutionResult,
   type ProviderExecutionContext,
@@ -68,6 +81,7 @@ import { normalizeProviderSelection } from './provider-selection.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
 import {
   renderSkillInvocation,
+  renderAuxiliarySkillInvocation,
   STEP_SKILL_INVOCATIONS,
 } from './skill-invocation.js';
 import {
@@ -140,6 +154,27 @@ function isProviderLifecycleHalted(
   result: ProviderExecutionResult | ProviderLifecycleHaltedResult,
 ): result is ProviderLifecycleHaltedResult {
   return 'kind' in result && result.kind === 'halted';
+}
+
+/**
+ * A non-zero scoped command is counterfactual RED evidence only when its
+ * output shows that a selected test actually ran and failed an assertion.
+ * Discovery and collection failures must stop the rubric rather than being
+ * mistaken for a test proving the reverted production is wrong.
+ */
+export function classifyTautologyScopedFailure(
+  exitCode: number,
+  stdout: string,
+  stderr: string,
+): TautologyScopedRunResult {
+  const output = `${stdout}\n${stderr}`;
+  if (/\b(?:no test files found|no tests? (?:found|collected)|no test suite found|did not match any test files)\b/i.test(output)) {
+    return { kind: 'no-tests', exitCode, stdout, stderr };
+  }
+  if (/\b(?:assertionerror|assertion failed|tests?\s+\d+\s+failed|test files?\s+\d+\s+failed)\b/i.test(output)) {
+    return { kind: 'test-failure', exitCode, stdout, stderr };
+  }
+  return { kind: 'collection-failure', exitCode, stdout, stderr };
 }
 
 /**
@@ -317,6 +352,22 @@ export interface StepRunnerOptions {
    */
   gitRunner?: GitRunner;
   planPath?: string;
+  /** Process-free test-suite-proof seam retained by the public build_review step. */
+  buildReviewInputOptions?: BuildReviewInputOptions;
+  /**
+   * Engine-owned rubric fan-out seam. It receives the single frozen snapshot
+   * and resolved policy, and returns only after every branch has settled.
+   */
+  buildReviewCoordinator?: (
+    inputs: BuildReviewFrozenInputs,
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ) => Promise<StepRunResult>;
+  /** Shared raw-aggregate/disposition join. Tests inject a bounded fake store. */
+  buildReviewEffectiveResolver?: typeof resolveEffectiveBuildReviewVerdict;
+  /** Test seam for a missing or malformed current-lap branch artifact. */
+  buildReviewArtifactReader?: typeof readBuildReviewBranchArtifact;
+  /** Shared event spine for engine-owned build-review occurrences. */
+  events?: ConductorEventEmitter;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
@@ -390,6 +441,11 @@ export class DefaultStepRunner implements StepRunner {
   private modelAvailability: ModelAvailability;
   private gitRunner: GitRunner;
   private planPathOverride?: string;
+  private buildReviewInputOptions?: BuildReviewInputOptions;
+  private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
+  private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
+  private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
+  private events?: ConductorEventEmitter;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
   private providerKey: string;
@@ -408,6 +464,8 @@ export class DefaultStepRunner implements StepRunner {
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
+  /** Bounded per-run evidence cache; failed preflights never enter it. */
+  private readonly tautologyPreflightCache = new Map<string, import('./build-review-tautology-preflight.js').TautologyCompletedPreflight>();
   callCount = 0;
 
   constructor(
@@ -437,6 +495,11 @@ export class DefaultStepRunner implements StepRunner {
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
     this.planPathOverride = options?.planPath;
+    this.buildReviewInputOptions = options?.buildReviewInputOptions;
+    this.buildReviewCoordinator = options?.buildReviewCoordinator;
+    this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
+    this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
+    this.events = options?.events;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerKey = options?.providerKey ?? 'claude';
@@ -1682,6 +1745,274 @@ export class DefaultStepRunner implements StepRunner {
    * completion gate (artifacts.ts) stays unsatisfied; it is never reported
    * as a PASS.
    */
+  private async runRubricBuildReview(
+    inputs: BuildReviewFrozenInputs,
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ): Promise<StepRunResult> {
+    const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
+    if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
+
+    const coordination = await coordinateBuildReviewRubrics({
+      config,
+      inputs,
+      lapId,
+      preflight: async () => this.runTautologyPreflight(inputs),
+      readCache: async (branch) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
+      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection),
+      writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
+      writeCache: async (entry) => writeBuildReviewCacheEntry(this.projectDir, entry, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
+      emit: async (event) => { await this.events?.emit(event); },
+    });
+
+    if (coordination.kind === 'gate-disabled') {
+      return { success: true, output: 'build_review disabled' };
+    }
+    if (coordination.kind === 'refused') {
+      return { success: false, output: `build_review refused: ${coordination.reason}` };
+    }
+
+    const writeFailure = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
+      branch.kind === 'infrastructure-failure' && /(?:artifact|cache)-write-failed/.test(branch.reason),
+    );
+    if (writeFailure) {
+      return { success: false, output: `build_review evidence write failed for ${writeFailure.rubric}: ${writeFailure.reason}` };
+    }
+
+    const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
+      if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
+        const artifact = await this.buildReviewArtifactReader(
+          this.projectDir,
+          branch.rubric,
+          lapId,
+          inputs.sourceSnapshot.digest,
+          {
+            readFile: async (path) => readFile(path, 'utf-8'),
+            mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+            writeFile,
+            rename,
+          },
+        );
+        return [branch.rubric, artifact?.result ?? {
+          kind: 'infrastructure-failure' as const,
+          rubric: branch.rubric,
+          reason: 'artifact-read-failed' as const,
+          detail: 'missing or invalid current-lap branch artifact',
+        }];
+      }
+      return [branch.rubric, branch.kind === 'skipped'
+        ? branch
+        : {
+            kind: 'infrastructure-failure' as const,
+            rubric: branch.rubric,
+            reason: 'provider-error' as const,
+            detail: branch.reason,
+          }];
+    }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: inputs.sourceSnapshot.digest,
+      results,
+    });
+    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const aggregatePath = join(effectivePipelineDir, 'build-review.json');
+    const publication = await new BuildReviewDispositionStore(this.projectDir).withLease(async () => {
+      await mkdir(effectivePipelineDir, { recursive: true });
+      const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
+      await writeFile(temporaryPath, `${JSON.stringify(aggregate, null, 2)}\n`, 'utf-8');
+      await rename(temporaryPath, aggregatePath);
+    });
+    if (!publication.ok) {
+      return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
+    }
+    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate);
+    await this.events?.emit({
+      type: 'build_review_outer_verdict',
+      lapId,
+      rawVerdict: aggregate.verdict,
+      effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
+    });
+    if (!effective.ok) {
+      return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
+    }
+    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
+    return { success: effective.effective.verdict === 'PASS', output: JSON.stringify(aggregate) };
+  }
+
+  private async dispatchBuildReviewRubric(
+    branch: BuildReviewDispatchableRubric,
+    projection: BuildReviewRubricProjection,
+  ): Promise<unknown> {
+    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
+      tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness',
+    };
+    const rubricPrompt = [
+        `Build Review ${label[branch.rubric]} rubric.`,
+        `Use only this closed projection and return one JSON judged result for rubric ${branch.rubric}. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        JSON.stringify(projection),
+      ].join('\n\n');
+    if (this.providerRuntimes && this.sessionStore) {
+      const safety = this.candidateSafetyFor('build_review');
+      const result = await this.dispatchProviderWithLifecycleSupervision(
+        'build_review',
+        this.withFeatureDiagnosticLog({
+          prompt: rubricPrompt,
+          cwd: this.projectDir,
+          dangerouslySkipPermissions: true,
+        }),
+        (options) => executeAuxiliaryProviderCandidates({
+          step: 'build_review',
+          memberId: branch.rubric,
+          policy: branch.policy,
+          runtimes: this.providerRuntimes!,
+          sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
+          config: this.config,
+          runId: this.runId,
+          taskAttribution: this.taskAttribution,
+          withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
+          prepareCandidateSelfHost:
+            this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+          onAttempt: this.providerAttempt,
+          warn: this.providerWarn,
+          options,
+          optionsForCandidate: (providerKey) => ({
+            ...options,
+            prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${rubricPrompt}`,
+          }),
+        }),
+      );
+      const verified = safety?.verify(result) ?? result;
+      this.callCount++;
+      if (!verified.success || typeof verified.output !== 'string') return undefined;
+      try {
+        return parseBuildReviewJudgedResult(JSON.parse(verified.output));
+      } catch {
+        return undefined;
+      }
+    }
+    const result = await this.provider.invoke({
+      prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${rubricPrompt}`,
+      sessionId: randomUUID(),
+      resume: false,
+      dangerouslySkipPermissions: true,
+      cwd: this.projectDir,
+      model: branch.policy.model,
+      effort: branch.policy.effort,
+    });
+    this.callCount++;
+    if (!result.success || typeof result.output !== 'string') return undefined;
+    try {
+      return parseBuildReviewJudgedResult(JSON.parse(result.output));
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {
+    const paths = [...inputs.diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+    const classified = classifyTautologyPaths(paths);
+    // There is no empty selector fallback: a rubric still receives an
+    // explicit, engine-authored exception projection and decides whether the
+    // absence of changed tests is a concern.
+    if (classified.tests.length === 0) {
+      return {
+        classification: 'approved-exception' as const,
+        exception: 'empty-test-set' as const,
+        cacheable: true as const,
+        cacheProvenance: 'miss' as const,
+        changedPaths: paths,
+        changedTestSelectors: [],
+        revertedProductionPatch: [],
+        sourceIdentities: { mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha },
+        output: { stdout: '', stderr: '' },
+      };
+    }
+    const controller = new AbortController();
+    const timeoutMs = (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+    const removalMaintenanceSelectors = deriveRemovalMaintenanceSelectors(
+      inputs.diff,
+      classified.tests,
+      inputs.sourceSnapshot.removalContext,
+    );
+    return await materializeTautologyPreflight({
+      scopedWorkingDirectory: this.projectDir,
+      mergeBase: inputs.sourceSnapshot.mergeBase,
+      headSha: inputs.sourceSnapshot.headSha,
+      diff: inputs.diff,
+      scopedCommand: this.config?.test_suite?.scoped_command ?? null,
+      currentGreenProofIdentity: `${inputs.testSuiteProof.provenanceHeadSha}:${inputs.testSuiteProof.fingerprint}`,
+      ...(removalMaintenanceSelectors.length > 0
+        ? { approvedException: 'removal-maintenance' as const, removalMaintenanceSelectors }
+        : {}),
+      createCheckout: async (path, headSha) => {
+        const result = await this.gitRunner(['worktree', 'add', '--detach', path, headSha]);
+        if (result.exitCode !== 0) throw new Error(result.stderr);
+      },
+      readMergeBaseFile: async (path) => {
+        const result = await this.gitRunner(['show', `${inputs.sourceSnapshot.mergeBase}:${path}`]);
+        return result.exitCode === 0 ? result.stdout : undefined;
+      },
+      writeFile,
+      removeFile: async (path) => { await rm(path, { force: true }); },
+      runScoped: async (cwd, selectors, signal) => this.runScopedTautologyCommand(cwd, selectors, signal),
+      removeCheckout: async (path) => {
+        await this.gitRunner(['worktree', 'remove', '--force', path]);
+      },
+      abortSignal: controller.signal,
+      readCache: async (key) => this.tautologyPreflightCache.get(key),
+      writeCache: async (key, evidence) => {
+        if (this.tautologyPreflightCache.size >= 32) this.tautologyPreflightCache.delete(this.tautologyPreflightCache.keys().next().value!);
+        this.tautologyPreflightCache.set(key, evidence);
+      },
+    });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async runScopedTautologyCommand(cwd: string, selectors: readonly string[], signal: AbortSignal): Promise<TautologyScopedRunResult> {
+    const template = this.config?.test_suite?.scoped_command;
+    if (!template || selectors.length === 0) return { kind: 'launch-error' as const, stdout: '', stderr: '' };
+    const command = template.replace('{selectors}', selectors.map((selector) => JSON.stringify(selector)).join(' '));
+    return new Promise<TautologyScopedRunResult>((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const child = spawn('sh', ['-c', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const finish = (value: TautologyScopedRunResult) => {
+        if (!settled) { settled = true; resolve(value); }
+      };
+      child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+      child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+      child.once('error', () => finish({ kind: 'launch-error', stdout, stderr }));
+      child.once('close', (code, receivedSignal) => {
+        if (receivedSignal) finish({ kind: 'signal', signal: receivedSignal, stdout, stderr });
+        else if (code === 0) finish({ exitCode: 0, stdout, stderr });
+        else finish(classifyTautologyScopedFailure(code ?? 1, stdout, stderr));
+      });
+      signal.addEventListener('abort', () => {
+        child.kill('SIGTERM');
+        finish({ kind: 'timeout', stdout, stderr });
+      }, { once: true });
+    });
+  }
+
   private async runBuildReview(): Promise<StepRunResult> {
     // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
     // sort()[last] guess (#407): with several features in flight the shared plans
@@ -1708,7 +2039,10 @@ export class DefaultStepRunner implements StepRunner {
       };
     }
 
-    const buildReviewConfig = resolveBuildReviewConfig(this.config);
+    const buildReviewConfig = resolveBuildReviewConfig(this.config, this.modelPolicy, {
+      modelCliOverride: this.modelOverride,
+      effortCliOverride: this.effortOverride,
+    });
     let containmentReport: ContainmentFloorReport | undefined;
     if (buildReviewConfig.perTaskFloor) {
       try {
@@ -1724,8 +2058,10 @@ export class DefaultStepRunner implements StepRunner {
     let inputs;
     try {
       inputs = {
-        ...await assembleBuildReviewInputs(this.gitRunner, planPath),
-        acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
+        ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
+          ...this.buildReviewInputOptions,
+          acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
+        }),
       };
     } catch (err) {
       return {
@@ -1813,9 +2149,6 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
-    const prependFloorAdvisory = (output: string): string =>
-      floorAdvisoryLines.length > 0 ? `${floorAdvisoryLines.join('\n')}\n\n${output}` : output;
-
     // A declared replication is mechanically verified at the build_review
     // gate. Unlike the advisory floors above, a mismatch is a blocking gate
     // result and is never used to derive RED evidence.
@@ -1850,172 +2183,60 @@ export class DefaultStepRunner implements StepRunner {
       if (!equivalence.success) return withBaseFreshness(equivalence);
     }
 
-    const prompt = buildGraderPrompt(inputs);
-
-    // Track every model attempted during the ladder walk so a full-ladder
-    // exhaustion failure names every model tried.
-    const attemptedModels: string[] = [];
-    const providerResult = await this.executeProviderAwareOneShot(
-      'build_review',
-      {
-        prompt,
-        dangerouslySkipPermissions: true,
-        cwd: this.projectDir,
-      },
-    );
-    const result =
-      providerResult ??
-      (await (async () => {
-        // Legacy scalar-provider adapter: retain the grader's internal native
-        // model ladder and fresh one-shot session contract.
-        const resolved = this.resolvedConfigFor('build_review');
-        const { v4: uuidv4 } = await import('uuid');
-        const trackingProvider: LLMProvider = {
-          invoke: (invokeOpts) => {
-            attemptedModels.push(invokeOpts.model ?? '');
-            return this.provider.invoke(invokeOpts);
-          },
-          invokeInteractive: (invokeOpts) =>
-            this.provider.invokeInteractive(invokeOpts),
-        };
-        return this.modelAvailability.invokeWithLadder(trackingProvider, {
-          prompt,
-          sessionId: uuidv4(),
-          resume: false,
-          dangerouslySkipPermissions: true,
-          model: this.modelAvailability.effectiveModel(resolved.model).model,
-          effort: resolved.effort,
-          cwd: this.projectDir,
-        }, async () => ({ sessionId: uuidv4(), resume: false }));
-      })());
-    if (providerResult) {
-      attemptedModels.push(
-        ...providerResult.attempts.flatMap((attempt) =>
-          attempt.invoked && attempt.model ? [attempt.model] : [],
-        ),
-      );
-    }
-    this.callCount++;
-    const withProviderMetadata = (r: StepRunResult): StepRunResult =>
-      ({
-        ...r,
-        ...(result.observedIntervals
-          ? { observedIntervals: result.observedIntervals }
-          : {}),
-        ...(providerResult
-          ? {
-            ...this.providerAttribution(providerResult),
-            ...(providerResult.resolvedModel
-              ? { model: providerResult.resolvedModel }
-              : {}),
-            ...(providerResult.tokenUsage
-              ? { tokenUsage: providerResult.tokenUsage }
-              : {}),
-          }
-          : {}),
-      });
-    const finalize = (r: StepRunResult): StepRunResult =>
-      withBaseFreshness(withProviderMetadata({
-        ...r,
-        ...(typeof r.output === 'string'
-          ? { output: prependFloorAdvisory(r.output) }
-          : {}),
-      }));
-
-    if (result.authFailure) {
-      return finalize({ success: false, output: result.output, authFailure: true });
-    }
-    if (result.permissionDenied) {
-      return finalize({
-        success: false,
-        output: result.output,
-        permissionDenied: true,
-        ...(result.authentication
-          ? { authentication: result.authentication }
-          : {}),
-      });
-    }
-    if (result.rateLimited) {
-      return finalize({
-        success: false,
-        output: result.output,
-        rateLimited: true,
-        waitSeconds: result.waitSeconds ?? 300,
-      });
-    }
-    if (result.sessionExpired) {
-      return finalize({ success: false, output: result.output, sessionExpired: true });
-    }
-    if (result.success) {
-      const finalized = await this.finalizeBuildReviewVerdict();
-      if (!finalized.ok) return finalize({ success: false, output: finalized.reason });
-      return finalize({ success: true, output: result.output });
+    // The deterministic floor and declared-copy checks deliberately precede
+    // this dispatch: they are gate-owned preconditions, and must remain
+    // observable even when configuration activates the rubric fan-out.
+    // An explicit whole-gate opt-out is the only route that avoids the
+    // coordinator. The resolved config defaults an absent raw block to
+    // enabled, so raw config shape can never select the retired scalar grader.
+    if (!buildReviewConfig.enabled) {
+      return withBaseFreshness({ success: true, output: 'build_review disabled' });
     }
 
-    // Full-ladder exhaustion: every attempted model reported unavailable.
-    // Name them all so the eventual HALT is diagnosable from daemon.log alone.
-    // #814: this is a grader-DISPATCH failure (no model could run the grader),
-    // not a returned FAIL — flag it so the conductor backs off and names it.
-    if (result.modelUnavailable && attemptedModels.length > 1) {
-      return finalize({
-        success: false,
-        output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
-        graderDispatchFailed: true,
-      });
+    // The lifecycle still exposes one public build_review step. Its
+    // coordinator owns the bounded auxiliary fan-out and receives the one
+    // frozen snapshot. The injectable coordinator remains a narrow test seam.
+    const withFloorAdvisory = (result: StepRunResult): StepRunResult => ({
+      ...result,
+      ...(typeof result.output === 'string' && floorAdvisoryLines.length > 0
+        ? { output: `${floorAdvisoryLines.join('\n')}\n\n${result.output}` }
+        : {}),
+    });
+    if (this.buildReviewCoordinator) {
+      return withBaseFreshness(withFloorAdvisory(
+        await this.buildReviewCoordinator(inputs, buildReviewConfig),
+      ));
     }
 
-    // #814: generic grader-dispatch failure — the grader session ended without
-    // success (subprocess crashed / exited non-zero / died at startup) and never
-    // wrote a PASS/FAIL verdict. A fast empty-output death here is exactly what
-    // collapsed the retry ladder in ~118ms with "no reason recorded". Never
-    // return an empty output (it renders blank), and flag it as a dispatch
-    // failure so the conductor backs off between re-dispatches and the HALT
-    // names an infrastructure cause rather than a code-quality rejection.
-    const graderOutput =
-      typeof result.output === 'string' && result.output.trim().length > 0
-        ? result.output
-        : 'build_review grader session ended without a result — it failed to start or exited before writing a PASS/FAIL verdict';
-    return finalize({ success: false, output: graderOutput, graderDispatchFailed: true });
+    return withBaseFreshness(withFloorAdvisory(
+      await this.runRubricBuildReview(inputs, buildReviewConfig),
+    ));
   }
 
-  /**
-   * Replace the grader-authored judgement with the engine-owned canonical
-   * public verdict and attach its code stamp when enabled. This is the
-   * deterministic seam that converts an explicit failed-rubric list into the
-   * legacy `true means failed` booleans consumed by existing gate readers.
-   */
-  private async finalizeBuildReviewVerdict(): Promise<{ ok: true } | { ok: false; reason: string }> {
+  private async stampBuildReviewVerdict(): Promise<void> {
+    if (!resolveGateCodeValidityConfig(this.config).enabled) {
+      // gate_code_validity disabled: restore pre-feature behavior exactly —
+      // no read-back, no codeStamp field, no git-diff calls.
+      return;
+    }
     const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
     let parsed: unknown;
     try {
       const raw = await readFile(verdictPath, 'utf-8');
       parsed = JSON.parse(raw);
     } catch {
-      return {
-        ok: false,
-        reason: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must record a complete PASS/FAIL verdict`,
-      };
+      return;
     }
-    const validation = canonicalizeBuildReviewGraderVerdict(parsed);
-    if (!validation.ok) return validation;
-    const canonical: Record<string, unknown> = {
-      verdict: validation.verdict,
-      ...(validation.reasons !== undefined ? { reasons: validation.reasons } : {}),
-      ...(validation.findings !== undefined ? { findings: validation.findings } : {}),
-      rubric: validation.rubric,
-    };
-    if (resolveGateCodeValidityConfig(this.config).enabled) {
-      canonical.codeStamp = await currentCommitSha(this.projectDir).catch(() => null);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return;
     }
+    const codeStamp = await currentCommitSha(this.projectDir).catch(() => null);
+    const stamped = { ...(parsed as Record<string, unknown>), codeStamp };
     try {
-      await writeFile(verdictPath, JSON.stringify(canonical, null, 2), 'utf-8');
+      await writeFile(verdictPath, JSON.stringify(stamped, null, 2), 'utf-8');
     } catch {
-      return {
-        ok: false,
-        reason: `${BUILD_REVIEW_VERDICT} could not be finalized by the engine`,
-      };
+      // Best-effort augmentation only — never fail the step over a write error.
     }
-    return { ok: true };
   }
 
   private async fileExists(path: string): Promise<boolean> {

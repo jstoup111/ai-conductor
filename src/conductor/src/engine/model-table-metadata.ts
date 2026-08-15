@@ -131,6 +131,62 @@ export interface ExtraModelTableRow {
   why: string;
 }
 
+/**
+ * Rows for engine-managed auxiliary judgements. These are intentionally not
+ * `StepName`s: each row inherits its independently resolved rubric policy
+ * from the public build_review gate rather than inventing a lifecycle step.
+ */
+export interface AuxiliaryModelTableRow {
+  name: string;
+  executionPath: 'engine-managed auxiliary rubric';
+  claudeModel: 'inherits resolved rubric policy';
+  claudeEffort: 'inherits resolved rubric policy';
+  codexModel: 'inherits resolved rubric policy';
+  codexEffort: 'inherits resolved rubric policy';
+  why: string;
+}
+
+const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
+
+export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
+  {
+    name: 'build-review-tautology',
+    executionPath: 'engine-managed auxiliary rubric',
+    claudeModel: RESOLVED_RUBRIC_POLICY,
+    claudeEffort: RESOLVED_RUBRIC_POLICY,
+    codexModel: RESOLVED_RUBRIC_POLICY,
+    codexEffort: RESOLVED_RUBRIC_POLICY,
+    why: 'Judges mutation sensitivity from the engine-owned green proof and reverted-production preflight.',
+  },
+  {
+    name: 'build-review-scope',
+    executionPath: 'engine-managed auxiliary rubric',
+    claudeModel: RESOLVED_RUBRIC_POLICY,
+    claudeEffort: RESOLVED_RUBRIC_POLICY,
+    codexModel: RESOLVED_RUBRIC_POLICY,
+    codexEffort: RESOLVED_RUBRIC_POLICY,
+    why: 'Judges changed paths and surfaces against the approved plan and accepted widening context.',
+  },
+  {
+    name: 'build-review-root-cause',
+    executionPath: 'engine-managed auxiliary rubric',
+    claudeModel: RESOLVED_RUBRIC_POLICY,
+    claudeEffort: RESOLVED_RUBRIC_POLICY,
+    codexModel: RESOLVED_RUBRIC_POLICY,
+    codexEffort: RESOLVED_RUBRIC_POLICY,
+    why: 'Judges whether the implementation addresses the stated defect rather than only a symptom.',
+  },
+  {
+    name: 'build-review-completeness',
+    executionPath: 'engine-managed auxiliary rubric',
+    claudeModel: RESOLVED_RUBRIC_POLICY,
+    claudeEffort: RESOLVED_RUBRIC_POLICY,
+    codexModel: RESOLVED_RUBRIC_POLICY,
+    codexEffort: RESOLVED_RUBRIC_POLICY,
+    why: 'Judges the approved plan holistically against the full implementation diff.',
+  },
+];
+
 const INTERACTIVE_EXECUTION_PATH = 'supported-host interactive' as const;
 const CODEX_MODEL_INHERITANCE =
   'inherits model from the Codex session or spawned-agent configuration';

@@ -1,5 +1,5 @@
 export * from './types/index.js';
-export { parseArgs, createProgram, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
 export { runReleasePrAction } from './engine/release-pr-action.js';
@@ -54,6 +54,8 @@ import {
   renderFullHelp,
   renderDaemonHelp,
   detectInline,
+  detectBuildReviewFindingsCommand,
+  detectBuildReviewAcceptCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
   detectPlanProtectedTargetsCommand,
@@ -67,6 +69,7 @@ import {
   userConfigSetCommand,
   type CLIOptions,
 } from './cli.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings } from './engine/build-review-cli.js';
 import type { ConductState, StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
@@ -455,6 +458,18 @@ export async function overlapScanCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  const buildReviewAcceptCmd = detectBuildReviewAcceptCommand(process.argv);
+  if (buildReviewAcceptCmd) {
+    process.exitCode = await dispatchBuildReviewAccept(buildReviewAcceptCmd);
+    return;
+  }
+
+  const buildReviewFindingsCmd = detectBuildReviewFindingsCommand(process.argv);
+  if (buildReviewFindingsCmd) {
+    process.exitCode = await dispatchBuildReviewFindings(buildReviewFindingsCmd);
+    return;
+  }
+
   const buildTailCmd = detectBuildTailCommand(process.argv);
   if (buildTailCmd) {
     process.exitCode = await dispatchBuildTailCommand(buildTailCmd);
@@ -1246,6 +1261,7 @@ async function main(): Promise<void> {
     modelPolicy: compatibilityRuntime.policy,
     mode,
     providerExecution,
+    events,
   });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and

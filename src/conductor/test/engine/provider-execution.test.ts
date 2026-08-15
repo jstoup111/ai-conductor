@@ -18,7 +18,11 @@ import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import { createProviderLifecycleSupervisor } from '../../src/engine/provider-lifecycle.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import { createCandidateSafetyBoundary, formatProviderCapabilityGapMessages } from '../../src/engine/provider-execution.js';
+import {
+  createCandidateSafetyBoundary,
+  executeAuxiliaryProviderCandidates,
+  formatProviderCapabilityGapMessages,
+} from '../../src/engine/provider-execution.js';
 
 interface PreferredExecutionResult extends InvokeResult {
   preferredProvider: string;
@@ -91,6 +95,44 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('executes an auxiliary rubric through its own provider, fallback ladder, retries, and attribution label', async () => {
+    const codexInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
+      options.model === 'gpt-5.6-sol'
+        ? { success: false, output: 'sol unavailable', exitCode: 1, modelUnavailable: true }
+        : { success: true, output: 'terra settled', exitCode: 0 },
+    );
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'must not run', exitCode: 0 }));
+    const attempts = vi.fn();
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'scope',
+      policy: {
+        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'xhigh',
+        model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'], max_retries: 2, escalate: true,
+      },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: codexInvoke, invokeInteractive: vi.fn(async (): Promise<void> => {}) }),
+        runtime('claude', { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: claudeInvoke, invokeInteractive: vi.fn(async (): Promise<void> => {}) }),
+      ]),
+      sessions: new ProviderSessionScope((() => { let id = 0; return () => `scope-${++id}`; })()),
+      options: { prompt: '$build-review-scope', cwd: '/workspace' },
+      onAttempt: attempts,
+    });
+
+    expect({
+      result: { success: result.success, actualProvider: result.actualProvider, model: result.resolvedModel },
+      models: codexInvoke.mock.calls.map(([options]) => options.model),
+      sessions: codexInvoke.mock.calls.map(([options]) => ({ id: options.sessionId, resume: options.resume })),
+      claudeCalls: claudeInvoke.mock.calls.length,
+      attribution: attempts.mock.calls.map(([, metadata]) => metadata.auxiliaryMember),
+    }).toEqual({
+      result: { success: true, actualProvider: 'codex', model: 'gpt-5.6-terra' },
+      models: ['gpt-5.6-sol', 'gpt-5.6-terra'],
+      sessions: [{ id: 'scope-1', resume: false }, { id: 'scope-2', resume: false }],
+      claudeCalls: 0,
+      attribution: ['scope'],
+    });
+  });
   it('keeps native model fallback on the active lifecycle permit without using a replacement', async () => {
     const fallbackPermit = vi.fn(() => ({ permitted: false as const, reason: 'revoked' as const }));
     const consumedPermits: InvokeOptions['spawnPermit'][] = [];

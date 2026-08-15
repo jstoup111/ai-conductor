@@ -1,6 +1,5 @@
 /**
- * Acceptance coverage for build_review's retired wiring rubric and for
- * ST-1496-3 in
+ * Acceptance coverage for ST-1496-1 and ST-1496-3 in
  * `.docs/stories/per-task-wired-into-contracts-cost-build-cycles-th.md`.
  *
  * These specs drive the real production boundaries. The first crosses config
@@ -51,9 +50,14 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe('acceptance: build_review no longer judges wiring', () => {
-  it('passes a production surface that no configured entry point reaches', async () => {
-    const dir = await initRepo('build-review-no-wiring-');
+describe('acceptance: build_review routes a rubric finding to build', () => {
+  it('runs the named build_review-to-build kickback for a scope-only grader FAIL', async () => {
+    const mainRoot = await initRepo('build-review-wiring-');
+    await writeFile(join(mainRoot, 'README.md'), '# fixture\n');
+    await git(mainRoot, 'add', 'README.md');
+    await git(mainRoot, 'commit', '-qm', 'base');
+    const dir = join(mainRoot, '.worktrees', 'wiring-review');
+    await git(mainRoot, 'worktree', 'add', '-qb', 'feature/wiring-review', dir);
     const planPath = join(dir, '.docs', 'plans', 'fixture.md');
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -70,8 +74,7 @@ describe('acceptance: build_review no longer judges wiring', () => {
     );
     await writeFile(join(dir, 'src', 'entry.ts'), 'export function main(): void {}\n');
     await git(dir, 'add', '.');
-    await git(dir, 'commit', '-qm', 'base');
-    await git(dir, 'checkout', '-qb', 'feature/no-wiring-review');
+    await git(dir, 'commit', '-qm', 'add wiring-review fixture');
     await writeFile(
       join(dir, 'src', 'orphan.ts'),
       'export function orphanedProductionSurface(): string { return "unreached"; }\n',
@@ -79,40 +82,107 @@ describe('acceptance: build_review no longer judges wiring', () => {
     await git(dir, 'add', 'src/orphan.ts');
     await git(dir, 'commit', '-qm', 'add unwired production surface');
 
-    let capturedPrompt = '';
+    const prompts: string[] = [];
     const invoke = vi.fn<LLMProvider['invoke']>().mockImplementation(async (options) => {
-      capturedPrompt = options.prompt;
-      await writeFile(
-        join(dir, '.pipeline', 'build-review.json'),
-        JSON.stringify({
-          verdict: 'PASS',
-          reasons: [],
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      prompts.push(options.prompt);
+      const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as {
+        rubric: string; lapId: string; snapshotDigest: string;
+      };
+      return {
+        success: true,
+        output: JSON.stringify({
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v1',
+        findings: projection.rubric === 'scope'
+          ? [{
+                concernKind: 'orphanedProductionSurface is outside the approved plan',
+                summary: 'src/orphan.ts adds production behavior outside the approved plan.',
+                evidenceLocations: ['src/orphan.ts:1'],
+                anchor: {
+                  rubric: 'scope', path: 'src/orphan.ts', relation: 'outside-plan',
+                },
+              }]
+            : [],
         }),
-      );
-      return { success: true, output: 'graded', exitCode: 0 };
+        exitCode: 0,
+      };
     });
     const provider: LLMProvider = {
       invoke,
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
-    // A stale consumer config still carrying the retired key must neither fail
-    // validation nor reach the grader.
-    const config = { wiring: { entry_points: ['src/entry.ts'] } } as unknown as HarnessConfig;
+    const config: HarnessConfig = {
+      build_review: { enabled: true, perTaskFloor: false },
+    };
     const buildReviewRunner = new DefaultStepRunner(provider, 'maker-session', dir, {
       config,
       planPath,
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
     });
 
-    const result = await buildReviewRunner.run('build_review', { complexity_tier: 'S' });
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build_review') break;
+      state[step.name] = 'done';
+    }
+    state.build_review = 'pending';
+    state.complexity_tier = 'S';
+    state.feature_desc = 'wiring-review-fixture';
+    state.track = 'technical';
+    const stateFilePath = join(dir, 'conduct-state.json');
+    await writeState(stateFilePath, state as ConductState);
 
-    expect(result.success).toBe(true);
-    expect(capturedPrompt.toLowerCase()).not.toContain('wiring');
-    expect(capturedPrompt).not.toContain('src/entry.ts');
-    expect(capturedPrompt).toMatch(/exactly these four rubric items/i);
+    const calls: StepName[] = [];
+    let buildStateAtDispatch: ConductState['build'];
+    const runner: StepRunner = {
+      run: async (step) => {
+        calls.push(step);
+        if (step === 'build_review') {
+          return buildReviewRunner.run(step, { complexity_tier: 'S' });
+        }
+        // The assertion target is the named-route transition. A bounded
+        // unsuccessful build dispatch stops subsequent retries after the
+        // conductor has returned the failed review to BUILD.
+        if (step === 'build') {
+          const persisted = await readState(stateFilePath);
+          if (!persisted.ok) throw new Error(persisted.error.message);
+          buildStateAtDispatch = persisted.value.build;
+          return { success: false, output: 'stop after named-route observation' };
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      config,
+      maxRetries: 1,
+    } as never);
 
+    await conductor.run();
+
+    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(prompts).toHaveLength(4);
+    expect(prompts.filter((prompt) => prompt.includes('Build Review Scope rubric'))).toHaveLength(1);
+    expect(prompts.find((prompt) => prompt.includes('Build Review Scope rubric'))).toContain('src/orphan.ts');
+    expect(calls).toContain('build_review');
+    expect(calls).toContain('build');
+    expect(buildStateAtDispatch).toBe('in_progress');
     const completion = await checkStepCompletion(dir, 'build_review', { config });
-    expect(completion.done).toBe(true);
+    expect(completion.done).toBe(false);
+    expect(completion.routeClass).toBe('named-route');
+    expect(completion.reason).toContain('unresolved findings');
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8'))
+      .resolves.toContain('orphanedProductionSurface');
   });
 });
 

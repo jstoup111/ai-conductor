@@ -66,8 +66,8 @@ Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 5, SHIP 6.
 
 `wiring_check` is deprecated. It remains a gating, engine-native no-op solely for compatibility: it
 always succeeds, dispatches no agent, produces no evidence, and emits a deprecation notice. Static
-static reachability is no longer judged in BUILD: the `build_review` wiring rubric item was retired
-by `adr-2026-08-14-retire-build-review-wiring-rubric`, leaving four rubric items.
+wiring reachability is retired. `build_review` fans out to Tautology, Scope, Root Cause, and
+Completeness, then computes effective dispositions from their raw verdicts.
 
 ### Retiring a step safely
 
@@ -236,7 +236,7 @@ detail.
 | `coherence_check` | `.docs/coherence/*.md` | yes | At least one matching file, named with the plan's filename stem |
 | `acceptance_specs` | spec files in the project's test dirs, plus `.pipeline/acceptance-specs-red.json` | specs yes, evidence no | At least one spec file **and** RED evidence proving the feature's own specs ran and failed. A spec that was skipped, deselected, or hit a collection error does not establish RED |
 | `build` | `.pipeline/task-status.json` | no | No `.pipeline/halt-user-input-required` marker, every task completed or skipped, **and** a clean working tree whenever the status probe establishes one. The post-rebase closure applies the same conjunct: a reapplied autostash blocks BUILD until the named paths are committed or discarded. An absent or failed probe fails open to the legacy behavior. Task status is re-seeded and re-derived on each evaluation, so forged rows fail |
-| `build_review` | `.pipeline/build-review.json` | no | A fresh, valid `PASS` verdict. Missing, prior-session, malformed, or `FAIL` all block, and a `FAIL` surfaces the grader's reasons into the kickback. The kickback target is derived from the failing rubric item, not fixed at `build` — see [gates](../explanation/gates.md#where-a-build_review-fail-goes) |
+| `build_review` | `.pipeline/build-review.json` | no | A fresh, valid four-rubric `PASS` verdict. Missing, prior-session, malformed, or effective `FAIL` all block. Raw outcomes remain recorded; effective dispositions control routing. |
 | `wiring_check` | — | no | Deprecated no-op; always satisfied for compatibility and emits a deprecation notice. It does not inspect plans, diffs, or evidence. |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | no | A live re-inspection returning `CURRENT`. File presence alone can never satisfy this gate |
 | `manual_test` | `.pipeline/manual-test-results.md` | no | The latest attempt section has no FAIL rows and is fresh. After a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
@@ -283,7 +283,7 @@ Dispatch reads a single map keyed by step name. That map is the authority for wh
 
 Four steps dispatch no skill at all and run entirely in the engine: `build_review`, `wiring_check`,
 `test_suite`, and `attribution_verify`. Of these, `build_review` and `attribution_verify` dispatch a
-one-shot model call from engine code; `test_suite` is a deterministic aggregate verifier; and
+four rubric branches from engine code; `test_suite` is a deterministic aggregate verifier; and
 `wiring_check` is a deprecated compatibility no-op.
 
 Two steps dispatch the `conduct` skill with an argument rather than a skill of their own name:

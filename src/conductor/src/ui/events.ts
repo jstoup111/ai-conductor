@@ -8,6 +8,9 @@ import type { ConductorEvent } from '../types/index.js';
  */
 export type EventHandler = (event: ConductorEvent) => void | Promise<void>;
 
+// Build-review lifecycle events use this same typed bus; no secondary ledger
+// or special-purpose UI channel is permitted.
+
 type HandlerMap = Map<ConductorEvent['type'], Set<EventHandler>>;
 
 export class ConductorEventEmitter {

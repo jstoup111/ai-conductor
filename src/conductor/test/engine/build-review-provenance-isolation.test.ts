@@ -24,6 +24,12 @@ vi.mock('../../src/engine/test-suite-remediation.js', async (importOriginal) => 
 
 const execFileAsync = promisify(execFile);
 
+const currentBuildReviewProof = {
+  inspectTestSuite: async () => ({
+    status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+  } as never),
+};
+
 describe('engine/build-review-inputs — provenance isolation (Task 25)', () => {
   let dir: string;
   let planPath: string;
@@ -69,8 +75,19 @@ describe('engine/build-review-inputs — provenance isolation (Task 25)', () => 
   }
 
   it('a provenance classification failure still produces grader inputs, while classification itself stays live', async () => {
-    const { assembleBuildReviewInputs } = await import('../../src/engine/build-review-inputs.js');
+    const { assembleBuildReviewInputs, TestSuiteProofError } = await import('../../src/engine/build-review-inputs.js');
     const { buildGraderPrompt } = await import('../../src/engine/build-review-prompt.js');
+
+    // Proof refusal happens before any provenance fallback, so neither
+    // provenance path can accidentally bypass the current-proof gate.
+    let gitCalls = 0;
+    await expect(assembleBuildReviewInputs(async () => {
+      gitCalls += 1;
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }, planPath, {
+      inspectTestSuite: async () => ({ status: 'FAILED' } as never),
+    })).rejects.toBeInstanceOf(TestSuiteProofError);
+    expect(gitCalls).toBe(0);
 
     // Failure half: history read throws mid-classification. Assembly must
     // resolve anyway, leaving the grading unattributed — and the prompt must
@@ -79,7 +96,7 @@ describe('engine/build-review-inputs — provenance isolation (Task 25)', () => 
     historyImpl = async () => {
       throw new Error('simulated provenance read failure');
     };
-    const degraded = await assembleBuildReviewInputs(realGit(), planPath);
+    const degraded = await assembleBuildReviewInputs(realGit(), planPath, currentBuildReviewProof);
     expect(degraded.repairProvenance).toBeUndefined();
     expect(degraded.repairContext).toEqual([]);
     const prompt = buildGraderPrompt(degraded);
@@ -93,7 +110,7 @@ describe('engine/build-review-inputs — provenance isolation (Task 25)', () => 
     // the same assembly with a readable history and no joined repair classifies
     // as no_join instead of staying silent.
     historyImpl = async () => [{ paths: ['src/base.ts'], ts: new Date(100).toISOString() }];
-    const attributed = await assembleBuildReviewInputs(realGit(), planPath);
+    const attributed = await assembleBuildReviewInputs(realGit(), planPath, currentBuildReviewProof);
     expect(attributed.repairProvenance).toEqual({ disposition: 'no_join' });
   });
 });

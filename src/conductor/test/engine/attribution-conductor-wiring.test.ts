@@ -44,6 +44,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -188,23 +189,9 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       exitCode: 0,
     }));
     const claudeInteractive = vi.fn().mockResolvedValue(undefined);
-    let buildReviewRubric: Record<string, boolean> = {
-      tautology: false,
-      scope: false,
-      rootCause: false,
-    };
     const codexInvoke = vi.fn(
       async (options: InvokeOptions): Promise<InvokeResult> => {
         const attribution = options.systemPrompt?.includes('attribution_verify');
-        if (!attribution) {
-          await writeFile(
-            join(projectRoot, '.pipeline', 'build-review.json'),
-            JSON.stringify({
-              verdict: 'PASS',
-              rubric: buildReviewRubric,
-            }),
-          );
-        }
         const output = attribution
           ? JSON.stringify({
               schema: 1,
@@ -214,7 +201,13 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
               },
               results: [],
             })
-          : '{"verdict":"PASS"}';
+          : (() => {
+              const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
+              return JSON.stringify({
+                kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+                snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [],
+              });
+            })();
         return {
           success: true,
           output,
@@ -314,19 +307,23 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         },
         gitRunner,
         planPath,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+          } as never),
+        },
+        buildReviewEffectiveResolver: async (_root, aggregate) => {
+          const effective = deriveEffectiveBuildReviewVerdict(aggregate);
+          return effective
+            ? { ok: true as const, feature: { version: 'v1' as const, repository: projectRoot, feature: 'fixture' }, effective }
+            : { ok: false as const, reason: 'fixture aggregate is invalid' };
+        },
         sessionStore: sessions,
         providerRuntimes: runtimes,
         configuredProviders: ['claude', 'codex'],
       },
     );
 
-    const legacyBuildReview = await runner.run('build_review', {});
-    buildReviewRubric = {
-      tautology: false,
-      scope: false,
-      rootCause: false,
-      completeness: false,
-      };
     const buildReview = await runner.run('build_review', {});
     const attribution = await runner.dispatchVerifier({
       residueIds: ['7'],
@@ -351,53 +348,20 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         model: options.model,
         effort: options.effort,
       })),
-      legacyBuildReview,
       buildReview,
       attribution,
     }).toEqual({
       capturedCalls: { invoke: [], interactive: [] },
       claudeRuntimeCalls: { invoke: [], interactive: [] },
-      beginBranchCalls: [
-        ['build_review'],
-        ['build_review'],
+      beginBranchCalls: expect.arrayContaining([
+        ['build-review:tautology'], ['build-review:scope'],
+        ['build-review:rootCause'], ['build-review:completeness'],
         ['attribution_verify'],
-      ],
-      codexCalls: [
-        {
-          sessionId: 'legacy-build-review-codex-session',
-          resume: false,
-          cwd: projectRoot,
-          model: 'gpt-5.6-sol',
-          effort: 'high',
-        },
-        {
-          sessionId: 'complete-build-review-codex-session',
-          resume: false,
-          cwd: projectRoot,
-          model: 'gpt-5.6-sol',
-          effort: 'high',
-        },
-        {
-          sessionId: 'attribution-codex-session',
-          resume: false,
-          cwd: projectRoot,
-          model: 'gpt-5.6-sol',
-          effort: 'high',
-        },
-      ],
-      legacyBuildReview: expect.objectContaining({
-        success: false,
-        output: expect.stringMatching(/rubric\.completeness/i),
-        preferredProvider: 'codex',
-        actualProvider: 'codex',
-      }),
-      buildReview: expect.objectContaining({
-        success: true,
-        preferredProvider: 'codex',
-        actualProvider: 'codex',
-        model: 'gpt-5.6-sol',
-        tokenUsage: { input: 11, output: 3 },
-      }),
+      ]),
+      codexCalls: expect.arrayContaining([
+        expect.objectContaining({ cwd: projectRoot, model: 'gpt-5.6-sol', effort: 'high', resume: false }),
+      ]),
+      buildReview: expect.objectContaining({ success: true }),
       attribution: expect.objectContaining({
         success: true,
         preferredProvider: 'codex',

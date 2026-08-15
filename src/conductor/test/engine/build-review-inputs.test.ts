@@ -6,15 +6,35 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import {
-  assembleBuildReviewInputs,
+  assembleBuildReviewInputs as assembleInputs,
   MACHINERY_AUTHORED_PATHS,
   MergeBaseError,
+  TestSuiteProofError,
 } from '../../src/engine/build-review-inputs.js';
-import type { BuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import type { BuildReviewFrozenInputs, BuildReviewInputOptions } from '../../src/engine/build-review-inputs.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
+import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+
+const CURRENT_PROOF = {
+  status: 'CURRENT',
+  evidence: { provenanceHeadSha: 'head123', outcome: 'PASS' },
+} as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>;
+
+function assembleBuildReviewInputs(
+  git: GitRunner,
+  planPath: string,
+  options: BuildReviewInputOptions = {},
+): Promise<BuildReviewFrozenInputs> {
+  return assembleInputs(git, planPath, {
+    inspectTestSuite: async () => CURRENT_PROOF,
+    ...options,
+  });
+}
 
 // A scripted GitRunner: matches argv prefixes to canned results (same pattern
 // as test/engine/rebase.test.ts's fakeGit).
@@ -63,6 +83,39 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       { match: ['rev-parse', 'refs/remotes/origin/main'], result: { exitCode: 0, stdout: 'abc1234\n' } },
       { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 0, stdout: 'abc1234\trefs/heads/main\n' } },
     ];
+
+    it('freezes one source snapshot and admits only an injected CURRENT test-suite proof', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
+      ]);
+      const inspectTestSuite = vi.fn(async () => CURRENT_PROOF);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath, { inspectTestSuite });
+
+      expect(inspectTestSuite).toHaveBeenCalledOnce();
+      expect(inputs.testSuiteProof).toBe(CURRENT_PROOF.evidence);
+      expect(inputs.sourceSnapshot).toMatchObject({
+        mergeBase: 'base123', headSha: 'head123', diff: inputs.diff, planBody: inputs.planBody,
+        operatorReseals: inputs.operatorReseals,
+      });
+      expect(inputs.sourceSnapshot.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(JSON.stringify(inputs)).not.toMatch(/makerNarrative/i);
+      expect(inputs).not.toHaveProperty('acceptedDispositions');
+    });
+
+    it.each([
+      { status: 'FAILED', reason: 'nonzero_exit', message: 'suite failed' },
+      { status: 'STALE', reason: 'source_changed' },
+    ] as const)('refuses a non-current test-suite proof before reading git ($status)', async (inspection) => {
+      const { git, calls } = fakeGit([]);
+
+      await expect(assembleBuildReviewInputs(git, planPath, {
+        inspectTestSuite: async () => inspection,
+      })).rejects.toBeInstanceOf(TestSuiteProofError);
+      expect(calls).toEqual([]);
+    });
 
     it('merge-base failure raises a typed MergeBaseError', async () => {
       const { git } = fakeGit([
@@ -301,6 +354,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           toCommit: 'after',
           paths: ['.docs/stories/fixture.md'],
           reason: 'Operator approved the amendment.',
+        }, {
+          trigger: 'proactive-rebase', fromCommit: 'after', toCommit: 'rotation', paths: ['.docs/stories/fixture.md'],
+        }, {
+          trigger: 'future-machinery-trigger', fromCommit: 'rotation', toCommit: 'future', paths: ['.docs/stories/fixture.md'],
         }],
       }));
 
@@ -321,6 +378,49 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         }],
         loose: [],
       });
+      expect(featureInputs.sourceSnapshot.operatorReseals).toEqual(featureInputs.operatorReseals);
+
+      await writeFile(join(dir, '.pipeline/protected-artifact-seal.json'), '{ unusable');
+      expect((await assembleBuildReviewInputs(realGit(), scopedPlanPath)).sourceSnapshot.operatorReseals).toEqual([]);
+    });
+
+    it('keeps shared rubric snapshot identity stable while a real operator reseal invalidates Scope only', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const writeSeal = (reason: string) => writeFile(
+        join(dir, '.pipeline/protected-artifact-seal.json'),
+        JSON.stringify({
+          version: 2,
+          baselineCommit: 'baseline',
+          protectedArtifacts: [],
+          rebaselines: [{
+            trigger: 'operator-reseal', fromCommit: 'before', toCommit: 'after',
+            paths: ['.docs/stories/fixture.md'], reason,
+          }],
+        }),
+      );
+      const project = (inputs: BuildReviewFrozenInputs) => deriveBuildReviewRubricProjections({
+        lapId: parseBuildReviewLapId('lap-input-assembly')!,
+        inputs,
+        tautology: {
+          changedTestSelectors: [], revertedProductionPatch: '[]', preflightEvidence: { classification: 'not-requested' },
+        },
+      });
+
+      await writeSeal('Operator approved the amendment.');
+      const firstInputs = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+      const first = project(firstInputs);
+      await writeSeal('Operator approved the corrected amendment rationale.');
+      const secondInputs = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+      const second = project(secondInputs);
+
+      expect(secondInputs.sourceSnapshot.digest).toBe(firstInputs.sourceSnapshot.digest);
+      expect(second.scope.digest).not.toBe(first.scope.digest);
+      expect(second.tautology).toEqual(first.tautology);
+      expect(second.rootCause).toEqual(first.rootCause);
+      expect(second.completeness).toEqual(first.completeness);
     });
 
     it('renders a #1502 sealed-artifact amendment only when its operator reseal is persisted', async () => {

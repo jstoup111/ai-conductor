@@ -11,6 +11,7 @@ import {
   runDaemonLogs,
   detectDaemonObserveCommand,
 } from '../../src/engine/daemon-observe-cli.js';
+import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 
 // Liveness probes: ALIVE = no throw; DEAD = throw ESRCH.
 const ALIVE: KillProbe = () => {};
@@ -40,6 +41,51 @@ async function writePidfile(
 }
 
 describe('engine/daemon-observe-cli', () => {
+  it('renders BUILD REVIEW aggregate and per-rubric metrics from merged feature event ledgers', async () => {
+    const worktreeBase = join(root, '.worktrees');
+    const featurePipeline = join(worktreeBase, 'build-review-metrics', '.pipeline');
+    await mkdir(featurePipeline, { recursive: true });
+    await writeFile(
+      join(featurePipeline, 'events.jsonl'),
+      [
+        { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL', ts: 1 },
+        { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-2', verdict: 'PASS', ts: 4 },
+        { type: 'build_review_outer_verdict', lapId: 'lap-2', effectiveVerdict: 'PASS', ts: 5 },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf8',
+    );
+    await writeFile(
+      join(featurePipeline, 'pipeline-events.jsonl'),
+      [
+        { type: 'build_review_rubric_skipped', rubric: 'tautology', lapId: 'lap-1', reason: 'disabled', ts: 2 },
+        { type: 'build_review_cache_hit', rubric: 'scope', lapId: 'lap-2', ts: 3 },
+        { type: 'build_review_rubric_infrastructure_failure', rubric: 'rootCause', lapId: 'lap-2', ts: 6 },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf8',
+    );
+    await mkdir(join(worktreeBase, 'broken-ledger', '.pipeline', 'events.jsonl'), { recursive: true });
+    const logs: string[] = [];
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir: join(root, '.daemon', 'processed'),
+      discover: async () => [],
+      log: (line) => logs.push(line),
+    });
+
+    expect(renderDashboard(state)).toContain(
+      'BUILD REVIEW: laps-to-pass=2; reduced coverage (skipped, not pass)=1; cache-hits=1; infrastructure-failures=1\n  raw scope: failures=1/2\n  skip reasons: disabled=1',
+    );
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('broken-ledger');
+  });
+
+  it('renders present build-review dashboard metrics with skipped coverage explicitly not called pass, and omits absent metrics safely', () => {
+    const base = { generatedAt: '2026-08-14T00:00:00.000Z', daemons: [], worktrees: [], halted: [], inProgress: [], pending: [], parked: [], processed: [], gated: [], waiting: [], eligible: [], ownerGate: { enabled: false, summary: 'off' } } as any;
+    expect(renderDashboard({ ...base, buildReviewMetrics: { lapsToPass: 2, skipped: 1, cacheHits: 3, infrastructureFailures: 0, rubricFailureRates: { scope: { failures: 1, judged: 2 } }, skipReasons: { disabled: 1 } } }))
+      .toContain('BUILD REVIEW: laps-to-pass=2; reduced coverage (skipped, not pass)=1; cache-hits=3; infrastructure-failures=0\n  raw scope: failures=1/2\n  skip reasons: disabled=1');
+    expect(renderDashboard(base)).not.toContain('BUILD REVIEW:');
+  });
   let root: string;
 
   beforeEach(async () => {

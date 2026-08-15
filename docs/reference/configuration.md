@@ -126,7 +126,6 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
-| `wiring` | object | none | [wiring](#wiring) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
@@ -693,31 +692,6 @@ Kill-switch for classifying a retry as a rerun versus a route to another step. V
 
 Consumed at `src/conductor/src/engine/conductor.ts:4149`.
 
-## wiring
-
-Production roots supplied to `build_review`'s static wiring rubric. The engine does not run an
-import-graph probe or create a wiring-evidence artifact.
-
-| Key | Type | Validation | Default |
-| --- | --- | --- | --- |
-| `wiring` | object | Must be an object, else hard error | absent |
-| `wiring.entry_points` | string[] | Array of non-empty strings, else hard error | absent |
-
-> **Known limitation.** `wiring` carries no inner allow-list: keys other than `entry_points` pass
-> validation silently (`config.ts:747-765`), so a typo such as `entrypoints` is accepted and the
-> wiring rubric receives no configured roots. This is looser than `retry_routing` and `conductor`,
-> which reject an unknown key outright. Tracked in
-> [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
-
-When `entry_points` is absent or empty, the grader is instructed to mark the wiring item as
-not judged rather than infer roots. A configured root is rendered verbatim into the review prompt.
-
-```yaml
-wiring:
-  entry_points:
-    - src/index.ts
-```
-
 ## harness_self_host
 
 Guardrails that apply when the build target is the harness checkout itself. Validated by
@@ -861,6 +835,8 @@ is written back (`config.ts:898-927`).
 | `build_review.enabled` | boolean | `true` | Works |
 | `build_review.perTaskFloor` | boolean | `true` | Works |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
+| `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
+| `build_review.rubrics` | object | all four enabled | Closed map: `tautology`, `scope`, `rootCause`, `completeness` |
 
 Normalization contract:
 
@@ -881,6 +857,11 @@ is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved o
 
 `perTaskFloor` reaches the build-review resolver (`resolved-config.ts:633-636`) and controls its
 per-task floor telemetry (`step-runners.ts:1569-1584`).
+
+Each retained rubric accepts `enabled`, `llm_provider`, `model`, `effort`,
+`model_fallback_ladder`, `max_retries`, and `escalate`. Unknown rubric IDs, including the retired
+`wiring` member, are rejected before dispatch. The resolved configuration always contains exactly
+the four retained policies.
 
 `scopeContainmentEnforced` is resolved through the same block and read by the real
 `conduct-ts scope-check` command. It defaults to `false`, so verified violations are reported while
@@ -1173,10 +1154,6 @@ test_suite:
   timeout_seconds: 1800
   environment:
     - CI
-
-wiring:
-  entry_points:
-    - src/index.ts
 
 markdown_viewer:
   preset: glow

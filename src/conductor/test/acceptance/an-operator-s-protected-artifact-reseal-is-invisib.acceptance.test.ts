@@ -30,6 +30,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
+import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCallback);
@@ -117,6 +118,14 @@ function operatorReseals(inputs: unknown): unknown {
   return (inputs as Record<string, unknown>).operatorReseals;
 }
 
+function currentProof(head: string) {
+  return {
+    inspectTestSuite: async () => ({
+      status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' },
+    } as never),
+  };
+}
+
 function evidenceSection(prompt: string): string {
   const start = prompt.indexOf(SECTION_HEADING);
   const end = prompt.indexOf(NEXT_HEADING, start);
@@ -151,6 +160,7 @@ describe('acceptance: operator reseal reaches build_review Scope evidence (#1502
     const withResealInputs = await assembleBuildReviewInputs(
       makeGitRunner(fixture.root),
       fixture.planPath,
+      currentProof(fixture.head),
     );
     const withResealPrompt = buildGraderPrompt(withResealInputs);
 
@@ -160,6 +170,16 @@ describe('acceptance: operator reseal reaches build_review Scope evidence (#1502
       fromCommit: fixture.baseline,
       toCommit: fixture.head,
     }]);
+    expect(withResealInputs.sourceSnapshot.operatorReseals).toEqual(operatorReseals(withResealInputs));
+    const projections = deriveBuildReviewRubricProjections({
+      lapId: 'lap-operator-reseal',
+      inputs: withResealInputs,
+      tautology: { changedTestSelectors: [], revertedProductionPatch: '', preflightEvidence: { classification: 'red' } },
+    } as never);
+    expect(projections.scope.operatorReseals).toEqual(operatorReseals(withResealInputs));
+    for (const projection of [projections.tautology, projections.rootCause, projections.completeness]) {
+      expect(projection).not.toHaveProperty('operatorReseals');
+    }
     const populatedSection = evidenceSection(withResealPrompt);
     expect(populatedSection).toContain(STORY_PATH);
     expect(populatedSection).toContain(rationale);
@@ -171,14 +191,29 @@ describe('acceptance: operator reseal reaches build_review Scope evidence (#1502
     const withoutResealInputs = await assembleBuildReviewInputs(
       makeGitRunner(fixture.root),
       fixture.planPath,
+      currentProof(fixture.head),
     );
     const withoutResealPrompt = buildGraderPrompt(withoutResealInputs);
+
+    // Assemble both source snapshots through production, rather than holding
+    // the shared digest fixed in a fixture. A reseal is Scope-only cache input:
+    // it must not perturb the three closed sibling projections.
+    const withoutResealProjections = deriveBuildReviewRubricProjections({
+      lapId: 'lap-operator-reseal',
+      inputs: withoutResealInputs,
+      tautology: { changedTestSelectors: [], revertedProductionPatch: '', preflightEvidence: { classification: 'red' } },
+    } as never);
 
     expect(operatorReseals(withoutResealInputs)).toEqual([]);
     expect(evidenceSection(withoutResealPrompt)).toContain('(none)');
     expect(withoutEvidenceSection(withResealPrompt)).toBe(
       withoutEvidenceSection(withoutResealPrompt),
     );
+    expect(projections.scope.digest).not.toBe(withoutResealProjections.scope.digest);
+    for (const rubric of ['tautology', 'rootCause', 'completeness'] as const) {
+      expect(projections[rubric].digest).toBe(withoutResealProjections[rubric].digest);
+      expect(projections[rubric].snapshotDigest).toBe(withoutResealProjections[rubric].snapshotDigest);
+    }
   });
 
   it('renders an unused reseal without labeling the amended diff path', async () => {
@@ -194,6 +229,7 @@ describe('acceptance: operator reseal reaches build_review Scope evidence (#1502
     const inputs = await assembleBuildReviewInputs(
       makeGitRunner(fixture.root),
       fixture.planPath,
+      currentProof(fixture.head),
     );
     const section = evidenceSection(buildGraderPrompt(inputs));
 

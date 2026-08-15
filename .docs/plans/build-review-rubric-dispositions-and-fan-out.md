@@ -5,8 +5,29 @@
 `.docs/decisions/adr-2026-08-13-stable-build-review-finding-dispositions.md`
 **Architecture review:** `.docs/decisions/architecture-review-2026-08-13-build-review-rubric-dispositions.md` (APPROVED)
 **Stories:** `.docs/stories/build-review-rubric-dispositions-and-fan-out.md`
-**Conflict check:** Clean recheck as of 2026-08-13 (5 resolved; 0 blocking; 0 degrading)
+**Conflict check:** Clean recheck as of 2026-08-14 (6 resolved; 0 blocking; 0 degrading)
 **Intake:** jstoup111/ai-conductor#1542
+
+> **Amended 2026-08-14 by the operator after #1562 merged and #1563's post-BUILD
+> assessment:** retain Tasks 1-40 as the implementation history and append the bounded
+> `rem-build-review-*` tasks below. The amendment repairs production wiring that drifted from the
+> already-approved PRD, stories, ADRs, and component diagram: default fan-out selection,
+> provider-aware rubric-skill execution, branch/cache persistence, event emission, neutral skip
+> reduction, and disposition-aware lifecycle completion. It adds no rubric, command, event schema,
+> ledger, provider, or product behavior outside the accepted scope.
+
+> **Amended 2026-08-14 after #1556 merged:** append `rem-build-review-9` so the landed
+> operator-reseal evidence channel remains production-reachable when this plan retires the scalar
+> grader. The task composes the two approved designs by carrying reseal records into the frozen
+> Scope projection and nowhere else; a reseal remains judged evidence, never an exemption.
+
+> **Amended 2026-08-14 by the operator after PR #1577 merged:**
+> `adr-2026-08-14-retire-build-review-wiring-rubric` retires the Wiring rubric repository-wide,
+> superseding the Wiring item of `adr-2026-08-11-wiring-judged-in-build-review`. This feature ships
+> a FOUR-member fan-out — Tautology, Scope, Root Cause, Completeness. Task 9 (the
+> `build-review-wiring` skill) is removed from this plan: appended Task rem-build-review-10 deletes
+> its code, so its landed commits net out of the `base...HEAD` diff. The Wiring-only
+> `missing-entry-points` skip reason is retired with it.
 
 ## Summary
 
@@ -14,9 +35,10 @@ Keep one public `build_review` gate while moving its five judgement concerns int
 configured, engine-dispatched rubric skills. The engine freezes the evidence boundary, reuses the
 preceding `test_suite` PASS, runs only Tautology's missing reverted-production RED preflight,
 content-addressably short-circuits unchanged rubric judgements, joins raw findings once, and applies
-operator dispositions afterward. Forty small TDD tasks cover configuration, skills, projection,
+operator dispositions afterward. Forty original TDD tasks cover configuration, skills, projection,
 preflight, caching, capped execution, stable identities, CLI authorization, the event spine,
-reporting, and publication.
+reporting, and publication. Nine post-BUILD remediation tasks repair the production composition
+seams that the first implementation left disconnected while preserving the original task history.
 
 ## Technical Approach
 
@@ -28,6 +50,13 @@ freeze a source snapshot containing the full diff, approved plan, repair/widenin
 points, and removal evidence. A closed registry derives a versioned projection for each rubric.
 Skills receive only their projection; any field they may use is therefore present in the projection
 digest and participates in conservative cache invalidation.
+
+The operator-reseal records landed by #1556 join that frozen source after the normal seal reader has
+filtered them to literal `operator-reseal` lineage. They enter only the Scope projection, including
+their named paths, verbatim rationale, and commit range. The Scope digest therefore invalidates when
+that evidence changes, while Tautology, Root Cause, and Completeness remain byte-insulated
+from it. The Scope skill judges whether the rationale authorizes the named amendment and treats
+unmatched paths normally; no deterministic bypass or standing `.docs/` permission is introduced.
 
 The five rubric IDs are domain values, never `StepName`s. A typed auxiliary executor reuses the
 group core's capped scheduling, fresh provider sessions, rate-limit coordination, fallback ladders,
@@ -89,8 +118,17 @@ state. Raw rubric failure metrics remain distinct from effective pass and accept
 
 ## Constraints and Prerequisites
 
-- The task count is 40, the upper end of `/plan`'s warning band. It stays one plan because fan-out,
-  stable identity, caching, and disposition convergence share one aggregate contract.
+- The original task count is 40, the upper end of `/plan`'s warning band. The operator-directed
+  amendments raise the retained history to 49 addressable tasks because already-landed Tasks 1-40
+  cannot be rewritten or reused. The nine remediation tasks remain one bounded feature repair:
+  fan-out, stable identity, caching, events, and disposition convergence share one aggregate and
+  lifecycle gate contract.
+- PR #1556 is merged on `origin/main` at `bdd239ac7`; its seal reader, optional input field, prompt
+  compatibility path, and tests arrive through the normal engine-owned rebase. This feature must
+  compose with those landed surfaces rather than duplicate or replace them.
+- No `.docs/track/` file matches issue #1542 or this feature slug. The approved PRD's `Scope`
+  section is therefore the binding scope boundary for this amendment; every remediation task maps
+  to an existing FR and story.
 - Every test follows `.agents/skills/write-tests/SKILL.md`: injected providers/runners/clocks,
   isolated temporary project roots, no real third-party calls, no cyclic `Conductor.run()`, and no
   polling sleeps.
@@ -249,23 +287,6 @@ implementation branches do not edit release artifacts.
 3. Add the Completeness skill over its closed projection.
 4. Re-run the test; confirm GREEN and preserve plan-vs-full-diff judgement.
 5. Commit `feat(skills): add build review completeness policy`.
-
-### Task 9: Author the Wiring rubric skill contract
-
-**Story:** 1
-**Story:** 3
-**Story:** 8
-**Story:** 9
-**Type:** happy
-**Files:** `skills/build-review-wiring/SKILL.md`, `src/conductor/test/engine/build-review-rubric-skills.test.ts`
-**Dependencies:** Task 8
-
-1. Extend the contract test with failing Wiring cases for production surface/entry-point/reachability
-   anchors and the engine-owned `missing-entry-points` prerequisite skip.
-2. Run the focused test; confirm RED and review that the skill cannot manufacture a skip or pass.
-3. Add the Wiring skill over its closed projection.
-4. Re-run the test; confirm GREEN and preserve removal/relocation and scaffolding exceptions.
-5. Commit `feat(skills): add build review wiring policy`.
 
 ### Task 10: Register rubric skills in generated model and installation metadata
 
@@ -475,8 +496,8 @@ implementation branches do not edit release artifacts.
 **Files:** `src/conductor/src/engine/build-review-coordinator.ts`, `src/conductor/test/engine/build-review-coordinator.test.ts`
 **Dependencies:** Tasks 3, 4, 11
 
-1. Write failing coordinator tests for `skipped: disabled`, Wiring-only
-   `skipped: missing-entry-points`, all-disabled refusal, whole-gate disable, and zero model/cache calls.
+1. Write failing coordinator tests for `skipped: disabled`, all-disabled refusal, whole-gate
+   disable, and zero model/cache calls.
 2. Run the new test; confirm RED and domain-review skip versus pass/failure.
 3. Implement registry selection and prerequisite classification before cache/provider layers.
 4. Re-run the test; confirm GREEN and a lap with no valid judgement cannot pass.
@@ -812,35 +833,294 @@ implementation branches do not edit release artifacts.
    freshness, and unchanged legacy scenarios.
 5. Commit `test(acceptance): prove build review disposition convergence`.
 
+### Task rem-build-review-1: Make resolved default configuration select rubric fan-out
+
+**Story:** 22
+**Story:** 23
+**Type:** negative
+**Files:** `src/conductor/src/engine/step-runners.ts`, `src/conductor/test/engine/step-runners.test.ts`
+**Dependencies:** Tasks 22, 23, 40
+
+1. Write failing runner cases for an absent `build_review` block, a partial rubric override, and
+   explicit whole-gate disablement; prove the first two enter the five-rubric coordinator while the
+   disabled gate dispatches no rubric or scalar grader.
+2. Run the focused runner cases; confirm RED because production currently keys fan-out on raw config
+   presence rather than `ResolvedBuildReviewConfig`.
+3. Route every enabled production `build_review` through the rubric coordinator after the existing
+   deterministic preconditions, retaining the injectable coordinator only as a test seam and the
+   legacy scalar parser only for reading old evidence.
+4. Re-run the focused tests; confirm GREEN and no configuration shape can manufacture an empty
+   successful review.
+5. Commit `fix(engine): make build review fan-out the resolved default` with trailer
+   `Task: rem-build-review-1`.
+
+### Task rem-build-review-2: Execute registered rubric skills through provider-aware branch policy
+
+**Story:** 1
+**Story:** 2
+**Story:** 5
+**Story:** 6
+**Type:** happy
+**Files:** `src/conductor/src/engine/group-core.ts`, `src/conductor/src/engine/provider-execution.ts`, `src/conductor/src/engine/skill-invocation.ts`, `src/conductor/src/engine/step-runners.ts`, `src/conductor/test/engine/group-core.test.ts`, `src/conductor/test/engine/provider-execution.test.ts`, `src/conductor/test/engine/step-runners.test.ts`, `src/conductor/test/integration/provider-model-policy-wiring.integration.test.ts`, `src/conductor/test/engine/attribution-conductor-wiring.test.ts`
+**Dependencies:** Task rem-build-review-1
+
+1. Write failing pure and integration cases with two rubrics selecting different providers, models,
+   fallback ladders, retry budgets, and escalation flags; assert candidate-local host syntax invokes
+   each registry `skillName`, every session is fresh, and provider attribution names the rubric's
+   actual candidate.
+2. Run only the named provider/group/runner tests; confirm RED at the current direct
+   `this.provider.invoke` boundary and domain-review rubric IDs remain auxiliary values, never
+   fabricated `StepName`s or conduct-state keys.
+3. Complete the typed auxiliary branch adapter over the shared group semaphore and provider
+   candidate executor. Translate each fully resolved rubric policy exactly once, render the
+   registered provider-agnostic skill for the selected host, and retain existing safety,
+   rate-limit, session, fallback, retry, and attribution hooks.
+4. Re-run the focused tests; confirm GREEN for mixed providers, fallback/retry exhaustion as
+   infrastructure failure, capped concurrency, and zero cross-branch session reuse.
+5. Commit `fix(engine): honor build review rubric execution policy` with trailer
+   `Task: rem-build-review-2`.
+
+### Task rem-build-review-3: Materialize branch evidence and bounded semantic cache writes
+
+**Story:** 6
+**Story:** 8
+**Story:** 23
+**Story:** 25
+**Type:** negative
+**Files:** `src/conductor/src/engine/build-review-coordinator.ts`, `src/conductor/src/engine/build-review-artifacts.ts`, `src/conductor/src/engine/build-review-cache.ts`, `src/conductor/src/engine/step-runners.ts`, `src/conductor/test/engine/build-review-coordinator.test.ts`, `src/conductor/test/engine/build-review-artifacts.test.ts`, `src/conductor/test/engine/build-review-cache.test.ts`, `src/conductor/test/engine/step-runners.test.ts`
+**Dependencies:** Task rem-build-review-2
+
+1. Write failing tests that a fresh judged result atomically writes its semantic cache entry and
+   current-lap branch artifact, a valid hit writes only a rematerialized current-lap artifact with
+   explicit cache provenance, skips never write cache, and infrastructure/write failures block the
+   owning rubric without publishing a partial aggregate.
+2. Run the four focused suites; confirm RED because production currently reads cache but writes only
+   `.pipeline/build-review.json`.
+3. Add injected coordinator write effects for validated branch artifacts and cacheable judged
+   results, then wire production filesystem adapters from the runner. Preserve one owner per
+   rubric/lap path, atomic replace, bounded one-entry-per-rubric cache, and strict identity checks.
+4. Re-run the focused suites; confirm GREEN for cold/hit/invalidation/write-failure paths and prove
+   every aggregate input came from a validated current-lap branch artifact.
+5. Commit `fix(engine): persist build review branch and cache evidence` with trailer
+   `Task: rem-build-review-3`.
+
+### Task rem-build-review-4: Emit rubric and disposition occurrences on the existing event spine
+
+**Story:** 18
+**Story:** 20
+**Story:** 21
+**Type:** happy
+**Files:** `src/conductor/src/engine/build-review-coordinator.ts`, `src/conductor/src/engine/build-review-cli.ts`, `src/conductor/src/engine/closeout-events.ts`, `src/conductor/src/engine/event-sinks.ts`, `src/conductor/src/engine/step-runners.ts`, `src/conductor/src/index.ts`, `src/conductor/test/engine/build-review-coordinator.test.ts`, `src/conductor/test/engine/build-review-cli.test.ts`, `src/conductor/test/engine/event-sinks.test.ts`, `src/conductor/test/engine/step-runners.test.ts`, `src/conductor/test/cli/index.test.ts`
+**Dependencies:** Task rem-build-review-3
+
+1. Write failing occurrence-order tests for rubric start, judged result, skip, cache hit,
+   infrastructure failure, raw/effective outer verdict, and CLI acceptance/refusal; assert engine
+   events reach `EventPersister` and CLI events use the existing same-schema external writer.
+2. Run only the named suites; confirm RED because the union has declarations and consumers but no
+   production emitter, while its engine sink declarations currently disable persistence.
+3. Inject the existing `ConductorEventEmitter` boundary into the production runner/coordinator,
+   persist engine-owned variants through `.pipeline/events.jsonl`, and append standalone CLI
+   variants through the already-approved `.pipeline/pipeline-events.jsonl` writer. Add no event
+   type, timestamp sidecar, poller, ledger, or reader.
+4. Re-run the focused suites; confirm GREEN, exactly-once occurrence counts, timestamp-merged reader
+   visibility, and no duplicate persistence of external-process events.
+5. Commit `fix(events): connect build review occurrences to the event spine` with trailer
+   `Task: rem-build-review-4`.
+
+### Task rem-build-review-5: Treat skips as neutral coverage with a judged-work floor
+
+**Story:** 3
+**Story:** 7
+**Story:** 8
+**Story:** 21
+**Type:** negative
+**Files:** `src/conductor/src/engine/build-review-aggregate.ts`, `src/conductor/test/engine/build-review-aggregate.test.ts`
+**Dependencies:** Tasks 27, 28
+
+1. Replace the current skip-as-failure expectations with a failing exhaustive truth table: one or
+   more clean judged rubrics plus disabled/missing-entry skips passes; skips increment neither
+   legacy failed-rubric flags nor judged failure counts; zero judged results cannot pass; any
+   infrastructure failure or unresolved finding still fails.
+2. Run the aggregate suite; confirm RED at `legacyFailure` and the effective reducer's
+   `skipped.length === 0` condition.
+3. Derive raw/effective verdicts from judged count, unresolved findings, and infrastructure state
+   while retaining explicit `coverage`, skip reasons, raw findings, strict parsing, and legacy
+   fail-closed compatibility.
+4. Re-run the suite; confirm GREEN and raw/effective/coverage fields remain independently
+   inspectable without representing a skip as grader PASS.
+5. Commit `fix(engine): make build review skips verdict-neutral` with trailer
+   `Task: rem-build-review-5`.
+
+### Task rem-build-review-6: Resolve feature dispositions at the live runner boundary
+
+**Story:** 7
+**Story:** 11
+**Story:** 12
+**Story:** 13
+**Story:** 16
+**Type:** happy
+**Files:** `src/conductor/src/engine/build-review-effective.ts`, `src/conductor/src/engine/build-review-aggregate.ts`, `src/conductor/src/engine/build-review-dispositions.ts`, `src/conductor/src/engine/step-runners.ts`, `src/conductor/test/engine/build-review-effective.test.ts`, `src/conductor/test/engine/build-review-aggregate.test.ts`, `src/conductor/test/engine/step-runners.test.ts`
+**Dependencies:** Tasks 29, 30; Task rem-build-review-5
+
+1. Write failing tests for a shared engine-owned resolver that canonicalizes the main-repository and
+   feature identity, reads only that feature's disposition records under the existing bounded lock,
+   applies exact full-payload matches after raw join, and fails closed on missing identity,
+   unreadable/foreign state, or invalid aggregates.
+2. Run the focused resolver/runner suites; confirm RED because only the CLI currently joins the
+   disposition store and the live runner returns `aggregate.verdict`.
+3. Implement the shared feature-state resolver and make `runRubricBuildReview` write the unchanged
+   raw aggregate but stamp/return success from its effective verdict. Keep accepted findings raw,
+   preserve unresolved siblings, and never expose disposition state to rubric prompts or cache keys.
+4. Re-run the focused suites; confirm GREEN for wording drift, sibling/new concerns, re-dispatch,
+   cross-feature isolation, and state-read failure.
+5. Commit `fix(engine): apply dispositions to live build review results` with trailer
+   `Task: rem-build-review-6`.
+
+### Task rem-build-review-7: Make completion use the same effective verdict without weakening freshness
+
+**Story:** 7
+**Story:** 8
+**Story:** 11
+**Story:** 13
+**Story:** 23
+**Type:** negative
+**Files:** `src/conductor/src/engine/artifacts.ts`, `src/conductor/src/engine/build-review-effective.ts`, `src/conductor/test/engine/build-review-verdict.test.ts`, `src/conductor/test/engine/gate-code-validity.test.ts`
+**Dependencies:** Task rem-build-review-6
+
+1. Write failing completion-predicate cases where a fresh raw FAIL with one exactly accepted finding
+   completes, an unresolved sibling or infrastructure failure remains a named-route failure, a
+   clean judged-plus-skip aggregate completes, and missing/malformed/stale/legacy evidence cannot
+   gain disposition-aware PASS.
+2. Run the two focused gate suites; confirm RED because validation and completion currently branch
+   on the aggregate's raw top-level verdict.
+3. Join the shared feature-state resolver only for strict current fan-out aggregates after existing
+   mtime/code-stamp checks. Derive failure text from unresolved/infrastructure state so accepted
+   findings are inspectable but no longer reported as blockers; leave scalar legacy behavior intact.
+4. Re-run the focused suites; confirm GREEN and prove runner success, completion satisfaction, and
+   emitted effective outer verdict agree for the same artifact/state pair.
+5. Commit `fix(engine): complete build review from effective verdict` with trailer
+   `Task: rem-build-review-7`.
+
+### Task rem-build-review-8: Prove the repaired production composition through faithful fakes
+
+**Story:** 1
+**Story:** 2
+**Story:** 3
+**Story:** 5
+**Story:** 7
+**Story:** 8
+**Story:** 11
+**Story:** 12
+**Story:** 13
+**Story:** 16
+**Story:** 18
+**Story:** 20
+**Story:** 21
+**Story:** 22
+**Story:** 23
+**Story:** 25
+**Type:** integration
+**Files:** `src/conductor/test/acceptance/build-review-rubric-fanout-and-dispositions.acceptance.test.ts`, `src/conductor/test/acceptance/build-review-repeats-aggregate-verification-despit.acceptance.test.ts`
+**Dependencies:** Tasks rem-build-review-1 through rem-build-review-7
+
+1. Add request-level acceptance scenarios that use the real `DefaultStepRunner`, real coordinator,
+   real artifact/cache/disposition stores, real completion predicate, and real event persister with
+   fake provider runtimes and isolated temporary repositories.
+2. Prove RED for absent-config default-five dispatch, mixed provider/skill policy, cold-to-hit cache
+   rematerialization, neutral skips, one accepted finding converging on the next recomputation,
+   unresolved/infrastructure blocking, persisted events/metrics, and legacy scalar evidence.
+3. Complete only composition wiring missed by Tasks rem-build-review-1 through rem-build-review-7;
+   do not add a provider call, event schema, state file, or behavior outside the approved stories.
+4. Re-run the two named acceptance files; confirm GREEN, zero real LLM/GitHub/network calls, no live
+   checkout mutation, bounded workers, and byte-valid current-lap artifacts.
+5. Commit `test(acceptance): prove repaired build review production wiring` with trailer
+   `Task: rem-build-review-8`.
+
+### Task rem-build-review-9: Carry landed operator-reseal evidence into the Scope branch
+
+**Story:** 1
+**Story:** 6
+**Type:** integration
+**Files:** `src/conductor/src/engine/build-review-inputs.ts`, `src/conductor/src/engine/build-review-projections.ts`, `skills/build-review-scope/SKILL.md`, `src/conductor/test/engine/build-review-inputs.test.ts`, `src/conductor/test/engine/build-review-projections.test.ts`, `src/conductor/test/engine/build-review-rubric-skills.test.ts`, `src/conductor/test/acceptance/an-operator-s-protected-artifact-reseal-is-invisib.acceptance.test.ts`, `src/conductor/test/acceptance/build-review-rubric-fanout-and-dispositions.acceptance.test.ts`
+**Dependencies:** Tasks 12, 13; Tasks rem-build-review-1, rem-build-review-2
+
+1. After the engine-owned rebase supplies #1556, write failing tests that assemble current-proof
+   inputs with and without operator reseals; assert the immutable snapshot and Scope projection
+   carry the exact filtered paths, verbatim rationale, and commit range while the other four
+   projections contain none of that authority.
+2. Add failing digest/parser and skill-contract cases: any Scope-visible reseal change invalidates
+   the projection, absent or unusable seals remain an empty channel, unknown/machinery triggers
+   never enter it, and the Scope instructions require judging the rationale without exempting
+   unmatched paths or weakening another rubric.
+3. Run the named unit and acceptance suites; confirm RED because #1556 currently terminates at
+   `BuildReviewInputs`/`buildGraderPrompt`, while the fan-out snapshot, closed Scope projection, and
+   Scope skill omit its evidence and #1556's assembly fixtures do not supply the new current-suite
+   proof precondition.
+4. Freeze the landed `operatorReseals` field into the source snapshot, add it only to the exact-key
+   Scope projection/digest/parser, update the registered Scope skill contract, and adapt #1556's
+   fixtures to the existing proof boundary. Keep the legacy prompt contract green without using it
+   as the production fan-out route.
+5. Re-run the focused suites; confirm GREEN for populated/empty/instruction-shaped rationales,
+   named-path isolation, changed-evidence cache invalidation, and real `DefaultStepRunner` fan-out
+   with faithful provider fakes. Commit `fix(build-review): preserve reseal evidence in scope fan-out`
+   with trailer `Task: rem-build-review-9`.
+
+### Task rem-build-review-10: Retire the Wiring rubric member from the fan-out
+
+**Story:** 1
+**Story:** 3
+**Story:** 25
+**Type:** negative
+**Files:** `skills/build-review-wiring/SKILL.md`, `src/conductor/src/engine/build-review-registry.ts`, `src/conductor/src/engine/build-review-domain.ts`, `src/conductor/src/engine/build-review-coordinator.ts`, `src/conductor/src/engine/build-review-aggregate.ts`, `src/conductor/src/engine/build-review-projections.ts`, `src/conductor/src/engine/build-review-cache.ts`, `src/conductor/src/engine/build-review-finding-identity.ts`, `src/conductor/test/engine/build-review-registry.test.ts`, `src/conductor/test/engine/build-review-domain.test.ts`, `src/conductor/test/engine/build-review-coordinator.test.ts`, `src/conductor/test/engine/build-review-aggregate.test.ts`, `src/conductor/test/engine/build-review-projections.test.ts`, `src/conductor/test/engine/build-review-cache.test.ts`, `src/conductor/test/engine/build-review-finding-identity.test.ts`, `src/conductor/test/engine/build-review-rubric-skills.test.ts`, `src/conductor/test/acceptance/build-review-rubric-fanout-and-dispositions.acceptance.test.ts`
+**Dependencies:** Tasks rem-build-review-8, rem-build-review-9
+
+1. Write failing cases across the named suites: the registry exposes exactly four members
+   (Tautology, Scope, Root Cause, Completeness) and no `wiring` key; the domain's closed unions
+   contain neither a `wiring` rubric id nor a `missing-entry-points` skip reason; the coordinator
+   dispatches four branches with no entry-point prerequisite path; aggregate, projections, cache,
+   and finding-identity reject or ignore a `wiring` key per `adr-2026-08-14`'s read-tolerance rule;
+   the fan-out acceptance run materializes exactly four branch artifacts.
+2. Run only the named suites; confirm RED because the five-member registry, the
+   `build-review-wiring` skill, and the Wiring-only skip machinery still exist.
+3. Delete `skills/build-review-wiring/SKILL.md` and the registry's wiring entry; remove the
+   `missing-entry-points` reason and the Wiring entry-point prerequisite from domain and
+   coordinator; shrink the rubric unions and cache/artifact key spaces to four. When READING a
+   stored aggregate or cache entry, ignore a retired `wiring` key rather than failing — the
+   fail-open rule `adr-2026-08-14-retire-build-review-wiring-rubric` sets for in-flight artifacts.
+4. Re-run the named suites; confirm GREEN: four branches, no wiring artifact or cache entry, and
+   unchanged identities for the surviving four members.
+5. Commit `refactor(build-review): retire the wiring rubric member` with trailer
+   `Task: rem-build-review-10`.
+
 ## Story Coverage
 
 | Story | Primary tasks |
 |---:|---|
-| 1 | 4-11, 20, 23, 27, 40 |
-| 2 | 1, 3, 20, 21, 23, 40 |
-| 3 | 1, 2, 8, 9, 22, 40 |
+| 1 | 4-8, 10, 11, 20, 23, 27, 40, rem-build-review-2, rem-build-review-8, rem-build-review-9, rem-build-review-10 |
+| 2 | 1, 3, 20, 21, 23, 40, rem-build-review-2, rem-build-review-8 |
+| 3 | 1, 2, 8, 22, 40, rem-build-review-5, rem-build-review-8, rem-build-review-10 |
 | 4 | 2, 22, 40 |
-| 5 | 1-4, 10, 21, 23, 40 |
-| 6 | 12, 13, 18, 23, 24, 40 |
-| 7 | 11, 22, 27, 28, 30, 40 |
-| 8 | 11, 16, 19, 21, 24, 26-28, 40 |
-| 9 | 5-9, 11, 25, 26, 40 |
+| 5 | 1-4, 10, 21, 23, 40, rem-build-review-2, rem-build-review-8 |
+| 6 | 12, 13, 18, 23, 24, 40, rem-build-review-2, rem-build-review-3, rem-build-review-9 |
+| 7 | 11, 22, 27, 28, 30, 40, rem-build-review-5 through rem-build-review-8 |
+| 8 | 11, 16, 19, 21, 24, 26-28, 40, rem-build-review-3, rem-build-review-5, rem-build-review-7, rem-build-review-8 |
+| 9 | 5-8, 11, 25, 26, 40 |
 | 10 | 31, 40 |
-| 11 | 30, 32, 40 |
-| 12 | 13, 25, 30, 40 |
-| 13 | 13, 19, 25, 26, 30, 40 |
+| 11 | 30, 32, 40, rem-build-review-6 through rem-build-review-8 |
+| 12 | 13, 25, 30, 40, rem-build-review-6, rem-build-review-8 |
+| 13 | 13, 19, 25, 26, 30, 40, rem-build-review-6 through rem-build-review-8 |
 | 14 | 29, 31, 33, 40 |
 | 15 | 32, 33, 40 |
-| 16 | 17, 29, 30, 32, 40 |
+| 16 | 17, 29, 30, 32, 40, rem-build-review-6, rem-build-review-8 |
 | 17 | 29, 32, 33, 40 |
-| 18 | 34-37, 40 |
+| 18 | 34-37, 40, rem-build-review-4, rem-build-review-8 |
 | 19 | 38, 39, 40 |
-| 20 | 34-37, 40 |
-| 21 | 22, 27, 34, 36, 37, 40 |
-| 22 | 1-3, 10, 22, 40 |
-| 23 | 12, 22, 28, 40 |
+| 20 | 34-37, 40, rem-build-review-4, rem-build-review-8 |
+| 21 | 22, 27, 34, 36, 37, 40, rem-build-review-4, rem-build-review-5, rem-build-review-8 |
+| 22 | 1-3, 10, 22, 40, rem-build-review-1, rem-build-review-8 |
+| 23 | 12, 22, 28, 40, rem-build-review-1, rem-build-review-7, rem-build-review-8 |
 | 24 | 5, 12, 14-16, 23, 40 |
-| 25 | 4, 13, 17-19, 22, 23, 28, 34, 36, 40 |
+| 25 | 4, 13, 17-19, 22, 23, 28, 34, 36, 40, rem-build-review-3, rem-build-review-8, rem-build-review-10 |
 
 ## Dependency and Batch Boundaries
 
@@ -852,14 +1132,66 @@ implementation branches do not edit release artifacts.
   separation, lock atomicity, TTY/machine identity, and stale-lap races before observability.
 - **Batch 4 — observability and publication:** Tasks 34-40. Review event-spine reuse, metric
   denominators, accepted-risk parity, and full fake-boundary acceptance evidence.
+- **Batch 5 — post-BUILD production repair:** Tasks rem-build-review-1 through
+  rem-build-review-10. Review resolved-default routing, auxiliary provider/skill policy, durable
+  branch/cache effects, one-spine emission, skip truth table, disposition-aware runner/completion
+  parity, Scope-only operator-reseal evidence, and faithful production-path acceptance evidence
+  before resuming BUILD.
 - Re-run the advisory overlap scan before BUILD and at each batch boundary because active branches
   overlap shared config, group, event, and finish surfaces.
 - Run the repository-required `test/test_harness_integrity.sh` before every implementation commit as
   an external commit gate, not as a terminal catch-all plan task.
 
+## Post-Amendment Architecture Re-review
+
+**Date:** 2026-08-14
+**Verdict:** APPROVED
+
+The remediation remains inside the approved architecture. It connects the already-resolved rubric
+policy to the existing provider-aware auxiliary boundary, makes the existing branch/cache state
+writers and `ConductorEvent` variants production-reachable, and makes the existing post-judgement
+reducer authoritative at both lifecycle consumers. The component diagram already shows these exact
+dependencies and its outer-verdict label already states the neutral-skip/judged-floor rule, so this
+implementation repair requires no diagram change, new ADR, supersession, or architecture-review
+marker. The event-spine verdict remains one schema and reader path: engine occurrences use the
+normal emitter/persister; the standalone CLI retains the already-approved same-schema sibling
+ledger under exceptions A/B.
+
+The post-#1556 composition check is also APPROVED. It adds one field to an already-approved frozen
+projection boundary and follows `adr-2026-08-12-operator-reseal-as-second-scope-justification`'s
+existing evidence semantics. No component, persistence surface, event, provider seam, or lifecycle
+edge changes, so the current diagrams and ADR set remain accurate.
+
+## Remediation Verify-Claims Ledger
+
+- **99% verified:** an absent raw `build_review` block resolves five enabled rubrics but currently
+  falls through to the scalar grader; source basis is the resolver and production runner branch at
+  amendment time.
+- **98% verified:** production dispatch receives registry skill names and full rubric policies but
+  currently invokes one shared provider with a generic prompt; source basis is the registry,
+  coordinator, provider executor, and runner.
+- **97% verified:** branch/cache writers exist but the live coordinator only reads cache and the
+  runner writes only the aggregate; source basis is the coordinator, cache/artifact modules, and
+  runner.
+- **100% verified:** build-review event variants and consumers exist without a production emitter,
+  and engine sink declarations disable their persistence; source basis is the event union, sink
+  table, runner/CLI, and rollup readers.
+- **99% verified:** skips are currently classified as legacy failures and block the effective
+  reducer even when valid judged work is clean; source basis is the aggregate reducer and its truth
+  table tests.
+- **99% verified:** only CLI inspection applies accepted dispositions; live runner success and the
+  completion predicate branch on the raw aggregate verdict; source basis is the aggregate, CLI,
+  runner, and artifact predicate.
+- **100% verified:** merged #1556 reads operator reseals into `BuildReviewInputs` and renders them in
+  `buildGraderPrompt`, while #1563's production fan-out Scope projection and registered Scope skill
+  have no reseal field or rationale rule; source basis is merge `bdd239ac7`, the projection exact-key
+  parser, the Scope skill contract, and the runner's scalar/fan-out branch.
+- **Assumptions:** none. Every remediation claim is directly reproducible from the feature head, and
+  the accepted PRD/stories/ADRs already decide the intended behavior.
+
 ## Post-Plan Overlap Scan
 
-`conduct-ts overlap-scan` completed on 2026-08-13 over the exact union of all 40 task `**Files:**`
+`conduct-ts overlap-scan` completed on 2026-08-13 over the exact union of the original 40 task `**Files:**`
 entries. It reported advisory overlap with 30 unmerged spec branches. The first reported branches
 were `spec/647-kickback-evidence-invalidation`, `spec/651-park-all-dispatch-paths`,
 `spec/7b-adr-approved-before-writing-system-tests-is-onl`,
@@ -868,3 +1200,13 @@ The overlap is concentrated in intentionally narrow integration surfaces—confi
 events, CLI, finish/shipped publication, and existing build-review acceptance tests—while the
 rubric domain, projection, preflight, cache, identity, and disposition modules are new isolated
 paths. The scan is advisory; batch-boundary rescans and narrow shared-file commits are binding.
+
+The 2026-08-14 advisory rescan completed over the exact union of all 49 retained and remediation
+tasks (93 unique paths) with source ref `jstoup111/ai-conductor#1542`. It again reported broad overlap on the
+shared engine/CLI/event/test surfaces; the first reported branches were
+`spec/647-kickback-evidence-invalidation`, `spec/651-park-all-dispatch-paths`,
+`spec/7b-adr-approved-before-writing-system-tests-is-onl`, and
+`spec/a-successful-finish-publication-transition-consume`. The result is advisory and introduces no
+new requirement conflict; merged #1556 is no longer an active overlap entry. Batch 5 keeps the
+shared-file changes dependency-ordered and requires the normal finish-time rebase rather than
+widening or deferring the repair.

@@ -107,6 +107,19 @@ describe('parseCostBlock', () => {
 });
 
 describe('renderKpi', () => {
+  it('renders persisted raw build-review denominators and reduced coverage on the public KPI output', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(join(root, '.docs/shipped/feature.md'), record('feature', COST_LINES) + [
+      '', '## Build Review', 'laps_to_pass: 2', 'skipped: 1', 'cache_hits: 3',
+      'infrastructure_failures: 1', 'rubrics:', '  scope: failures: 1, judged: 2', 'skip_reasons:', '  disabled: 1', '',
+    ].join('\n'));
+
+    const report = await renderKpi(root);
+
+    expect(report).toContain('build_review=laps_to_pass=2 skipped=1 cache_hits=3 infrastructure_failures=1');
+    expect(report).toContain('scope: raw_failures=1/2');
+  });
+
   it('reports historical and corrupt timing explicitly without polluting measured averages', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     const fixtures: Record<string, string> = {

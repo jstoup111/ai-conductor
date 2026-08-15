@@ -33,7 +33,7 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 - Accepting a whole rubric, all current findings, or all future findings with one action.
 - Receiving disposition instructions from GitHub or another remote control surface.
 - Weakening the default blocking behavior for any undispositioned finding.
-- Changing what Tautology, Scope, Root Cause, Completeness, or Wiring means.
+- Changing what Tautology, Scope, Root Cause, or Completeness means.
 - Defining the planned claim/bypass mechanism for Tautology or Scope findings; that separate work
   may consume this feature's stable raw finding identities through a later approved contract.
 
@@ -47,10 +47,11 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 
 ## Functional Requirements
 
-- **FR-1:** An enabled `build_review` evaluates Tautology, Scope, Root Cause, Completeness, and
-  Wiring as separately attributable rubric results.
+- **FR-1:** An enabled `build_review` evaluates Tautology, Scope, Root Cause, and Completeness
+  as separately attributable rubric results. *(Amended 2026-08-14 by PR #1577: the Wiring rubric
+  is retired by `adr-2026-08-14-retire-build-review-wiring-rubric`.)*
 - **FR-2:** Eligible rubric evaluations run concurrently, subject to a configurable maximum whose
-  default is five simultaneous evaluations.
+  default is four simultaneous evaluations.
 - **FR-3:** Each rubric is enabled by default and may be disabled independently; a disabled rubric
   is reported as skipped rather than passed.
 - **FR-4:** Enabling `build_review` while disabling every rubric is rejected with an actionable
@@ -62,10 +63,8 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 - **FR-7:** The authoritative gate passes only when every enabled rubric passes after accepted
   findings are applied; skipped rubrics do not count as passes or failures.
 
-> **Amended 2026-08-13 by #1542 conflict resolution:** Wiring's existing not-judged state when
-> `config.wiring.entry_points` is absent or empty is rendered as
-> `skipped: missing-entry-points`. It is visible as reduced coverage, excluded from judged-rate
-> denominators, and never represented as a pass. A lap with no valid judged rubric cannot pass.
+> **Amended 2026-08-14 by PR #1577:** the 2026-08-13 `missing-entry-points` rendering is retired
+> with the Wiring rubric. A lap with no valid judged rubric still cannot pass.
 - **FR-8:** A rubric execution or provider failure blocks the gate and is distinguished from a
   content finding; infrastructure failure never becomes a rubric pass.
 - **FR-9:** Every failed rubric reports every independent finding it observed, and each finding
@@ -95,8 +94,8 @@ and measure whether repeated failures reflect maker quality or overly strict gra
   rubric without requiring manual worktree-ledger scans.
 - **FR-21:** Rubric failure-rate denominators include only enabled rubric judgements; skipped
   rubrics are reported as coverage but excluded from pass/fail rates.
-- **FR-22:** A project with no rubric-specific settings retains the existing five-rubric outer gate,
-  with every rubric enabled and a default maximum of five concurrent sessions.
+- **FR-22:** A project with no rubric-specific settings retains the four-rubric outer gate,
+  with every surviving rubric enabled and a default maximum of four concurrent sessions.
 - **FR-23:** When the entire `build_review` gate is disabled, no rubric evaluation runs and no empty
   result is presented as a successful review.
 - **FR-24:** `build_review` reuses the immediately preceding, code-valid `test_suite` PASS as its
@@ -146,7 +145,7 @@ and measure whether repeated failures reflect maker quality or overly strict gra
   blocking and prevents only the accepted concern from blocking the next lap.
 - The same accepted concern remains non-blocking after a later grader describes it differently.
 - A new concern under the same rubric still blocks.
-- Five enabled rubrics can execute simultaneously under the default limit, and lowering the limit
+- Four enabled rubrics can execute simultaneously under the default limit, and lowering the limit
   bounds simultaneous work without changing results.
 - A current HEAD with a code-valid `test_suite` PASS incurs no duplicate HEAD-green test run during
   review; the Tautology preflight instead proves or refutes RED with changed tests against
@@ -169,8 +168,8 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 
 ### In Scope
 
-- The five existing `build_review` rubric items.
-- Independent rubric execution policies and default-five concurrency.
+- The four surviving `build_review` rubric items: Tautology, Scope, Root Cause, and Completeness.
+- Independent rubric execution policies and default-four concurrency.
 - Engine-owned Tautology RED preflight that reuses `test_suite` green evidence.
 - Per-rubric content-addressed judgement caching and deterministic no-model skips.
 - Per-rubric enablement with explicit skipped behavior.
@@ -196,8 +195,8 @@ and measure whether repeated failures reflect maker quality or overly strict gra
   class of future findings.
 - **Local operator input, remote output only.** This provides immediate, attributable control without
   introducing a remote polling or authorization dependency.
-- **Default-on rubrics and default-five concurrency.** Existing review coverage remains present, and
-  the complete five-rubric review can use all available parallel lanes by default.
+- **Default-on rubrics and default-four concurrency.** Existing review coverage remains present, and
+  the complete four-rubric review can use all available parallel lanes by default.
 - **Skipped is distinct from passed.** Operators and metrics must never mistake reduced coverage for
   successful judgement.
 - **Reuse green evidence; measure only the missing counterfactual.** The upstream `test_suite` gate
@@ -209,7 +208,7 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 
 ## Dependencies
 
-- The existing five-rubric `build_review` contract and its whole-gate enablement behavior.
+- The existing four-rubric `build_review` contract and its whole-gate enablement behavior.
 - A verifiable local operator identity distinct from unattended build and review activity.
 - The existing operational event and shipment surfaces that already span feature re-dispatches.
 - The preceding code-valid `test_suite` evidence and the existing engine-owned scoped-test runner.
@@ -246,7 +245,7 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 
 - [approved by operator 2026-08-13] Product scope is `build_review` only, with extension seams for
   later rubric decomposition.
-- [approved by operator 2026-08-13] Fan-out is engine-managed and defaults to at most five concurrent
+- [approved by operator 2026-08-13, amended 2026-08-14 by PR #1577] Fan-out is engine-managed and defaults to at most four concurrent
   rubric sessions.
 - [approved by operator 2026-08-13] Each rubric is default-enabled and independently disableable,
   with skipped distinct from passed and all-disabled rejected while the gate is enabled.

@@ -9,6 +9,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
+import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -16,6 +17,32 @@ vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
 }));
 
 const ROUTED_SENTINEL = new Error('stop after first FINISH publication route');
+
+const PASS_EVIDENCE: FullSuitePassEvidence = {
+  version: 3,
+  outcome: 'PASS',
+  reason: 'exit_zero',
+  fingerprint: 'sha256:current-test-inputs',
+  categoryFingerprints: {
+    additional_inputs: 'sha256:additional-inputs',
+    dependencies: 'sha256:dependencies',
+    environment: 'sha256:environment',
+    migrations: 'sha256:migrations',
+    project_config: 'sha256:project-config',
+    source: 'sha256:source',
+    test_infrastructure: 'sha256:test-infrastructure',
+    tests: 'sha256:tests',
+  },
+  provenanceHeadSha: '0123456789abcdef',
+  command: 'npm test',
+  workingDirectory: 'src/conductor',
+  startedAt: '2026-08-15T00:00:00.000Z',
+  endedAt: '2026-08-15T00:00:01.000Z',
+  durationMs: 1_000,
+  exitCode: 0,
+  stdout: 'all tests passed\\n',
+  stderr: '',
+};
 
 describe('Conductor FINISH publication routing', () => {
   let dir: string;
@@ -600,6 +627,84 @@ describe('Conductor FINISH publication routing', () => {
       ROUTED_SENTINEL.message,
     );
   });
+
+  it.each([
+    ['failed', 'failed' as const],
+    ['stale', 'stale' as const],
+    ['missing', undefined],
+  ])(
+    'replays BUILD verification after implementation-invalid FINISH when prior verification state is %s',
+    async (_caseName, priorStatus) => {
+      const timeline: StepName[] = [];
+      let verificationStatesAtBuild: Pick<ConductState, 'test_suite' | 'build_review'> | undefined;
+      const ensure = vi.fn(async () => {
+        timeline.push('test_suite');
+        return {
+          status: 'REUSED',
+          evidence: PASS_EVIDENCE,
+        } as const;
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step, state) => {
+          timeline.push(step);
+          if (step === 'build') {
+            verificationStatesAtBuild = {
+              test_suite: state.test_suite,
+              build_review: state.build_review,
+            };
+          }
+          if (step === 'finish') {
+            return {
+              success: false,
+              publicationDisposition: {
+                kind: 'implementation_invalid',
+                evidence: 'implementation_evidence_invalid',
+              },
+            };
+          }
+          if (step === 'build_review') throw ROUTED_SENTINEL;
+          return { success: true };
+        }),
+      };
+      const persisted = await readState(statePath);
+      if (!persisted.ok) throw new Error('test fixture state must be readable');
+      const retryState = { ...persisted.value } as Record<string, unknown>;
+      for (const step of ['test_suite', 'build_review']) {
+        if (priorStatus === undefined) delete retryState[step];
+        else retryState[step] = priorStatus;
+      }
+      await writeState(statePath, retryState as ConductState);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        projectRoot: dir,
+        fromStep: 'finish',
+        mode: 'auto',
+        maxRetries: 1,
+        fullSuiteVerifier: {
+          ensure,
+          inspect: async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE } as const),
+        },
+        git: async () => ({ stdout: '' }),
+        gh: async () => ({ stdout: '' }),
+        runGh: async () => ({ stdout: '' }),
+      });
+
+      await conductor.run();
+
+      expect(timeline).toEqual(['finish', 'build', 'test_suite', 'build_review']);
+      expect(ensure).toHaveBeenCalledOnce();
+      expect(verificationStatesAtBuild).toEqual({
+        test_suite: 'stale',
+        build_review: 'stale',
+      });
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        ROUTED_SENTINEL.message,
+      );
+    },
+  );
 
   it('does not route a publication error without implementation evidence to BUILD', async () => {
     const calls: StepName[] = [];

@@ -87,6 +87,12 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'rebase_changed',
   'rebase_gate_invalidated',
   'build_review_repair_context',
+  'build_review_rubric_started',
+  'build_review_rubric_result',
+  'build_review_rubric_skipped',
+  'build_review_cache_hit',
+  'build_review_rubric_infrastructure_failure',
+  'build_review_outer_verdict',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -189,6 +195,27 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('persists engine-owned build-review occurrences through the shared ledger exactly once', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-review-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'build_review_outer_verdict' as const,
+      lapId: 'lap-current', rawVerdict: 'FAIL' as const, effectiveVerdict: 'PASS' as const,
+    };
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('persists a kickback to the event ledger without changing its audit record', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'kickback-event-sinks-'));
     const events = new ConductorEventEmitter();
@@ -277,6 +304,21 @@ describe('event sink subscriptions', () => {
     });
   });
 
+  it('keeps externally-owned build-review dispositions off the engine ledger', () => {
+    expect({
+      accepted: EVENT_SINKS.build_review_disposition_accepted,
+      refused: EVENT_SINKS.build_review_disposition_refused,
+      persisted: persistedEventTypes(),
+    }).toEqual({
+      accepted: { render: false, persist: false, audit: false },
+      refused: { render: false, persist: false, audit: false },
+      persisted: expect.not.arrayContaining([
+        'build_review_disposition_accepted',
+        'build_review_disposition_refused',
+      ]),
+    });
+  });
+
   it('defines provider-neutral operator park boundary telemetry without completion authority', () => {
     const boundaries = [
       { kind: 'step', name: 'memory' },
@@ -334,8 +376,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 78 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(78);
+  it('is total over all 86 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(86);
   });
 
   it('routes verdict_freshness to every sink', () => {

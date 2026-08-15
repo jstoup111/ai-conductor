@@ -3,6 +3,7 @@ import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  appendBuildReviewAcceptedRisk,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -13,6 +14,9 @@ import {
   makeIsProcessed,
   appendTimingSection,
 } from '../../src/engine/shipped-record.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import type { CostRollup } from '../../src/engine/cost-rollup.js';
 import type { TimingRollup } from '../../src/engine/timing-rollup.js';
@@ -389,6 +393,18 @@ describe('appendTimingSection', () => {
       parsed: parseShippedRecord(before),
       providerDuration: true,
     });
+  });
+});
+
+describe('accepted build-review risk shipped projection', () => {
+  it('reuses the deterministic accepted-risk section without changing frontmatter or cost blocks', () => {
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' } })!;
+    const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
+    const body = '---\nslug: feature\n---\n\n## Cost\ninput: 1\n\n## Time\nstate: measured\n';
+
+    expect(appendBuildReviewAcceptedRisk(body, [accepted])).toContain('## Accepted build-review risk');
+    expect(appendBuildReviewAcceptedRisk(body, [])).toBe(body);
+    expect(() => appendBuildReviewAcceptedRisk(body, [{ ...accepted, rationale: '' }])).toThrow(/unrenderable/);
   });
 });
 

@@ -1,8 +1,10 @@
 import { homedir } from 'os';
 import type { StepName, Phase, ComplexityTier } from '../types/index.js';
 import type {
+  BuildReviewRubricId,
   HarnessConfig,
   EffortLevel,
+  ProviderSelection,
   ReviewMode,
   StepConfig,
   PhaseConfig,
@@ -11,9 +13,11 @@ import type {
 import { getStepDefinition } from './steps.js';
 import {
   CLAUDE_MODEL_POLICY,
+  resolveProviderModelPolicy,
   type ProviderModelPolicy,
 } from './provider-model-policy.js';
 import { escalateAttempt } from './escalation.js';
+import { normalizeProviderSelection } from './provider-selection.js';
 
 // Legacy aliases retained for existing consumers. New resolution accepts a
 // provider policy explicitly, so these never participate in provider-aware
@@ -696,12 +700,32 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
 const DEFAULT_BUILD_REVIEW_ENABLED = true;
 const DEFAULT_PER_TASK_FLOOR_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
+const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 4;
+const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = [
+  'tautology',
+  'scope',
+  'rootCause',
+  'completeness',
+];
+
+/** Concrete execution policy for one independently-dispatched review rubric. */
+export interface ResolvedBuildReviewRubricPolicy {
+  enabled: boolean;
+  llm_provider: ProviderSelection;
+  model: string;
+  effort: EffortLevel;
+  model_fallback_ladder: readonly string[];
+  max_retries: number;
+  escalate: boolean;
+}
 
 /** Fully-resolved build_review settings (no optional fields). */
 export interface ResolvedBuildReviewConfig {
   enabled: boolean;
   perTaskFloor: boolean;
   scopeContainmentEnforced: boolean;
+  maxParallel: number;
+  rubrics: Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
 }
 
 /**
@@ -713,8 +737,80 @@ export interface ResolvedBuildReviewConfig {
  * malformed input happens in `validateConfig`; this resolver assumes a
  * validated (or absent) block and only applies the default.
  */
-export function resolveBuildReviewConfig(config?: HarnessConfig): ResolvedBuildReviewConfig {
+export function resolveBuildReviewConfig(
+  config?: HarnessConfig,
+  policy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
+  options: ResolveOptions = {},
+): ResolvedBuildReviewConfig {
   const block = config?.build_review;
+  const outerStepConfig = config?.steps?.build_review;
+  const inheritedProviderSelection = outerStepConfig?.llm_provider ?? config?.llm_provider ?? 'claude';
+  const inheritedPrimaryProvider = normalizeProviderSelection(inheritedProviderSelection)[0] ?? 'claude';
+  const inheritedPolicy = outerStepConfig?.llm_provider === undefined && config?.llm_provider === undefined
+    ? policy
+    : resolveProviderModelPolicy(inheritedPrimaryProvider);
+  const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => {
+    const rubric = block?.rubrics?.[rubricId];
+    const rubricProvider = rubric?.llm_provider ?? inheritedProviderSelection;
+    const rubricPrimaryProvider = normalizeProviderSelection(rubricProvider)[0] ?? inheritedPrimaryProvider;
+    const rubricPolicy = rubric?.llm_provider === undefined
+      ? inheritedPolicy
+      : resolveProviderModelPolicy(rubricPrimaryProvider);
+    const rubricConfig: HarnessConfig = {
+      ...config,
+      steps: {
+        ...config?.steps,
+        build_review: {
+          ...outerStepConfig,
+          ...(rubric?.model === undefined ? {} : { model: rubric.model }),
+          ...(rubric?.effort === undefined ? {} : { effort: rubric.effort }),
+          ...(rubric?.max_retries === undefined ? {} : { max_retries: rubric.max_retries }),
+          ...(rubric?.escalate === undefined ? {} : { escalate: rubric.escalate }),
+        },
+      },
+    };
+    // An explicitly routed rubric must not inherit native Claude/Codex values
+    // from its siblings. Keep only its own authored native overrides, while
+    // provider-neutral retry settings continue to inherit normally.
+    const nativeConfig = rubricPrimaryProvider === inheritedPrimaryProvider
+      ? rubricConfig
+      : {
+        steps: {
+          build_review: {
+            ...(rubric?.model === undefined ? {} : { model: rubric.model }),
+            ...(rubric?.effort === undefined ? {} : { effort: rubric.effort }),
+          },
+        },
+      } satisfies HarnessConfig;
+    const resolvedNative = resolveProviderNativeStepConfig(
+      'build_review',
+      'BUILD',
+      rubricPolicy,
+      nativeConfig,
+      options,
+    );
+    const resolvedNeutral = resolveProviderNeutralStepConfig(
+      'build_review',
+      'BUILD',
+      rubricPolicy,
+      rubricConfig,
+      options,
+    );
+    return [rubricId, {
+      enabled: rubric?.enabled ?? true,
+      llm_provider: rubricProvider,
+      model: resolvedNative.model,
+      effort: resolvedNative.effort,
+      model_fallback_ladder: rubric?.model_fallback_ladder
+        ?? (rubricPrimaryProvider === inheritedPrimaryProvider
+          ? config?.model_fallback_ladder ?? inheritedPolicy.modelFallbackLadder
+          : rubricPolicy.modelFallbackLadder),
+      max_retries: resolvedNeutral.max_retries,
+      escalate: resolvedNeutral.escalate,
+    } satisfies ResolvedBuildReviewRubricPolicy];
+  })) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
+  const enabledRubricCount = Object.values(rubrics).filter((rubric) => rubric.enabled).length;
+
   return {
     enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
     perTaskFloor:
@@ -725,5 +821,10 @@ export function resolveBuildReviewConfig(config?: HarnessConfig): ResolvedBuildR
       typeof block?.scopeContainmentEnforced === 'boolean'
         ? block.scopeContainmentEnforced
         : DEFAULT_SCOPE_CONTAINMENT_ENFORCED,
+    maxParallel: Math.min(
+      block?.maxParallel ?? DEFAULT_BUILD_REVIEW_MAX_PARALLEL,
+      enabledRubricCount,
+    ),
+    rubrics,
   };
 }

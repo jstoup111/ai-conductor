@@ -5,6 +5,9 @@ import type { BacklogTreeSource } from './backlog-tree-source.js';
 import type { CostRollup } from './cost-rollup.js';
 import { versionIdFromEngineDir } from './engine-version-id.js';
 import type { TimingRollup } from './timing-rollup.js';
+import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
+import type { BuildReviewMetrics } from './build-tail-rollup.js';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -237,6 +240,41 @@ export function appendTimingSection(
     activeLine +
     measuredLines
   );
+}
+
+/** Appends the same validated accepted-risk section used by retained PRs. */
+export function appendBuildReviewAcceptedRisk(
+  existingContent: string,
+  records: readonly BuildReviewDispositionRecord[],
+): string {
+  const upserted = upsertBuildReviewAcceptedRisk(existingContent, records);
+  if (!upserted.ok) throw new Error(upserted.message);
+  return upserted.body;
+}
+
+/** Appends an idempotent, parser-compatible build-review KPI block. */
+export function appendBuildReviewMetrics(
+  existingContent: string,
+  metrics: BuildReviewMetrics,
+): string {
+  const section = [
+    '## Build Review',
+    `laps_to_pass: ${metrics.lapsToPass ?? 'not reached'}`,
+    `skipped: ${metrics.skipped}`,
+    `cache_hits: ${metrics.cacheHits}`,
+    `infrastructure_failures: ${metrics.infrastructureFailures}`,
+    'rubrics:',
+    ...Object.entries(metrics.rubricFailureRates).sort(([left], [right]) => left.localeCompare(right))
+      .map(([rubric, rate]) => `  ${rubric}: failures: ${rate.failures}, judged: ${rate.judged}`),
+    'skip_reasons:',
+    ...Object.entries(metrics.skipReasons).sort(([left], [right]) => left.localeCompare(right))
+      .map(([reason, count]) => `  ${reason}: ${count}`),
+    '',
+  ].join('\n');
+  const pattern = /^## Build Review\s*$[\s\S]*?(?=^##\s|(?![\s\S]))/m;
+  return pattern.test(existingContent)
+    ? existingContent.replace(pattern, section)
+    : `${existingContent}${existingContent.endsWith('\n') ? '\n' : '\n\n'}${section}`;
 }
 
 const FRONTMATTER_LINE = /^([a-zA-Z_]+):\s*(.*)$/;

@@ -49,6 +49,12 @@ const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'm
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
 const BUILT_IN_MODEL_PROVIDERS = new Set(['claude', 'codex']);
 const VALID_ADR_CORPORA = new Set(['change_set', 'repo_wide']);
+const BUILD_REVIEW_RUBRIC_IDS = [
+  'tautology',
+  'scope',
+  'rootCause',
+  'completeness',
+] as const;
 
 function normalizeKeyedBlock(
   blockName: string,
@@ -73,6 +79,83 @@ function normalizeKeyedBlock(
     }
   }
   return normalized;
+}
+
+function validateBuildReviewRubrics(
+  maxParallel: unknown,
+  rubrics: unknown,
+): ConfigError | null {
+  if (
+    maxParallel !== undefined &&
+    (typeof maxParallel !== 'number' ||
+      !Number.isInteger(maxParallel) ||
+      maxParallel < 1 ||
+      maxParallel > BUILD_REVIEW_RUBRIC_IDS.length)
+  ) {
+    return {
+      type: 'validation_error',
+      message: `build_review.maxParallel must be an integer between 1 and ${BUILD_REVIEW_RUBRIC_IDS.length}`,
+    };
+  }
+  if (rubrics === undefined) return null;
+  if (!isPlainObject(rubrics)) {
+    return { type: 'validation_error', message: 'build_review.rubrics must be an object' };
+  }
+
+  const allowedPolicyKeys = new Set([
+    'enabled',
+    'llm_provider',
+    'model',
+    'effort',
+    'model_fallback_ladder',
+    'max_retries',
+    'escalate',
+  ]);
+  for (const [rubricId, policy] of Object.entries(rubrics)) {
+    const path = `build_review.rubrics.${rubricId}`;
+    if (!BUILD_REVIEW_RUBRIC_IDS.includes(rubricId as (typeof BUILD_REVIEW_RUBRIC_IDS)[number])) {
+      return { type: 'validation_error', message: `Unknown rubric ID: ${path}` };
+    }
+    if (!isPlainObject(policy)) {
+      return { type: 'validation_error', message: `${path} must be an object` };
+    }
+    for (const key of Object.keys(policy)) {
+      if (!allowedPolicyKeys.has(key)) {
+        return { type: 'validation_error', message: `Unknown key in ${path}: "${key}"` };
+      }
+    }
+    if (policy.enabled !== undefined && typeof policy.enabled !== 'boolean') {
+      return { type: 'validation_error', message: `${path}.enabled must be a boolean` };
+    }
+    const providerError = validateProviderSelection(policy.llm_provider, `${path}.llm_provider`);
+    if (providerError) return providerError;
+    if (policy.model !== undefined && typeof policy.model !== 'string') {
+      return { type: 'validation_error', message: `${path}.model must be a string` };
+    }
+    if (policy.effort !== undefined && !VALID_EFFORTS.has(policy.effort as EffortLevel)) {
+      return {
+        type: 'validation_error',
+        message: `${path}.effort must be low|medium|high|xhigh|max`,
+      };
+    }
+    if (
+      policy.model_fallback_ladder !== undefined &&
+      (!Array.isArray(policy.model_fallback_ladder) ||
+        policy.model_fallback_ladder.some((model) => typeof model !== 'string' || model === ''))
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.model_fallback_ladder must be an array of non-empty strings`,
+      };
+    }
+    if (policy.max_retries !== undefined && typeof policy.max_retries !== 'number') {
+      return { type: 'validation_error', message: `${path}.max_retries must be a number` };
+    }
+    if (policy.escalate !== undefined && typeof policy.escalate !== 'boolean') {
+      return { type: 'validation_error', message: `${path}.escalate must be a boolean` };
+    }
+  }
+  return null;
 }
 
 function validateTddModelConfig(
@@ -945,21 +1028,55 @@ export function validateConfig(
           { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
           { key: 'perTaskFloor', isValid: (value) => typeof value === 'boolean' },
           { key: 'scopeContainmentEnforced', isValid: (value) => typeof value === 'boolean' },
+          { key: 'maxParallel', isValid: () => true },
+          { key: 'rubrics', isValid: () => true },
         ],
         warnings,
       );
-      obj.build_review = {
+      const rubricError = validateBuildReviewRubrics(br.maxParallel, br.rubrics);
+      if (rubricError) return { ok: false, error: rubricError };
+      const resolvedBuildReview = {
         ...br,
         enabled: typeof br.enabled === 'boolean' ? br.enabled : true,
+        maxParallel: typeof br.maxParallel === 'number' ? br.maxParallel : 4,
+        rubrics: Object.fromEntries(
+          BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
+            rubricId,
+            {
+              ...((br.rubrics as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
+              enabled:
+                typeof (br.rubrics as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
+                  ? (br.rubrics as Record<string, Record<string, unknown>>)[rubricId].enabled
+                  : true,
+            },
+          ]),
+        ),
       };
+      obj.build_review = resolvedBuildReview;
+      if (
+        resolvedBuildReview.enabled === true &&
+        Object.values(resolvedBuildReview.rubrics as Record<string, { enabled: boolean }>).every(
+          (rubric) => rubric.enabled === false,
+        )
+      ) {
+        return errVal('build_review.rubrics must contain at least one enabled rubric when build_review is enabled');
+      }
     } else {
       warnings.push(
         `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,
       );
-      obj.build_review = { enabled: true };
+      obj.build_review = {
+        enabled: true,
+        maxParallel: 4,
+        rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: true }])),
+      };
     }
   } else if (obj.build_review === null || materializeDefaults) {
-    obj.build_review = { enabled: true };
+    obj.build_review = {
+      enabled: true,
+      maxParallel: 4,
+      rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: true }])),
+    };
   }
 
   // ci_watch — CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).

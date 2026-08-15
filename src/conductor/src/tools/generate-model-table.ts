@@ -17,6 +17,7 @@ import {
 import {
   STEP_RATIONALE,
   MODEL_FREE_ENGINE_STEPS,
+  AUXILIARY_MODEL_TABLE_ROWS,
   EXTRA_MODEL_TABLE_ROWS,
   SKILL_STEP_MAP,
   PIN_EXEMPT_SKILLS,
@@ -357,6 +358,11 @@ function assertValidInteractiveRows(rows: readonly ModelTableRow[]): void {
   }
 }
 
+/** Rows for engine-managed auxiliary judgements with no lifecycle StepName. */
+export function buildAuxiliaryRows(): ModelTableRow[] {
+  return AUXILIARY_MODEL_TABLE_ROWS.map((row) => ({ ...row }));
+}
+
 /** Rows for skills/agents with no corresponding engine step. */
 export function buildExtraRows(
   metadata: readonly ModelTableRow[] = EXTRA_MODEL_TABLE_ROWS,
@@ -390,11 +396,16 @@ function renderRow(row: ModelTableRow): string {
  */
 export function renderModelTable(): string {
   const engineRows = buildEngineRows();
+  const auxiliaryRows = buildAuxiliaryRows();
   const extraRows = buildExtraRows();
 
-  assertNoDuplicateRowNames(engineRows, extraRows);
+  assertNoDuplicateRowNames([...engineRows, ...auxiliaryRows], extraRows);
 
-  const lines = [TABLE_HEADER, TABLE_SEPARATOR, ...[...engineRows, ...extraRows].map(renderRow)];
+  const lines = [
+    TABLE_HEADER,
+    TABLE_SEPARATOR,
+    ...[...engineRows, ...auxiliaryRows, ...extraRows].map(renderRow),
+  ];
   return lines.join('\n');
 }
 
