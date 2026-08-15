@@ -144,6 +144,7 @@ export const BUILD_REVIEW_PROVENANCE_KEYS = Object.freeze([
   'sha',
   'commitSha',
   'blobSha',
+  'mergeBaseBlobSha',
   'headSha',
   'mergeBase',
   'baseRef',

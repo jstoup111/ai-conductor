@@ -71,11 +71,6 @@ async function fixtureRepo(): Promise<{ dir: string; planPath: string; head: str
   return { dir, planPath, head: await git(dir, 'rev-parse', 'HEAD') };
 }
 
-/** The closed projection is the final paragraph after the rubric's JSON shape example. */
-function projectionFromPrompt(prompt: string): { rubric: string; lapId: string; snapshotDigest: string; digest: string } {
-  return JSON.parse(prompt.split('\n\n').at(-1)!) as { rubric: string; lapId: string; snapshotDigest: string; digest: string };
-}
-
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -168,7 +163,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     const { dir, planPath } = await fixtureRepo();
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
-        const projection = projectionFromPrompt(options.prompt);
+        const projection = JSON.parse(options.prompt.slice(options.prompt.indexOf('{')));
         return {
           success: true,
           output: JSON.stringify({
@@ -211,7 +206,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     const projections: Array<{ rubric: string; digest: string; snapshotDigest: string }> = [];
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
-        const projection = projectionFromPrompt(options.prompt);
+        const projection = JSON.parse(options.prompt.slice(options.prompt.indexOf('{')));
         projections.push({ rubric: projection.rubric, digest: projection.digest, snapshotDigest: projection.snapshotDigest });
         return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
       }),
@@ -273,7 +268,7 @@ describe('acceptance: independent build_review rubric execution', () => {
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn(async (options) => {
         calls.push({ provider, prompt: options.prompt, model: options.model, effort: options.effort, sessionId: options.sessionId });
-        const projection = projectionFromPrompt(options.prompt);
+        const projection = JSON.parse(options.prompt.slice(options.prompt.indexOf('{')));
         // Make the real provider executor walk the resolved provider-native
         // ladder. The model it retries is the observable policy boundary.
         if (options.model === (provider === 'claude' ? 'opus' : 'gpt-5.6-sol')) {

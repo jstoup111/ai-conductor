@@ -130,13 +130,23 @@ function withRepair(src: Source, patch: Record<string, unknown>): Source {
   });
 }
 
+function withRevertedProductionManifest(src: Source, patch: Record<string, unknown>): Source {
+  return {
+    ...src,
+    tautology: {
+      ...src.tautology,
+      revertedProductionManifest: [{ ...src.tautology.revertedProductionManifest[0]!, ...patch }],
+    },
+  };
+}
+
 // Semantic siblings: content that MUST stay digest-sensitive next to each excluded key.
-const contentFlip = (src: Source): Source => withSnapshot(src, { contentDigest: 'sha256:changed-content' });
+const contentFlip = (src: Source): Source => withSnapshot(src, {
+  diff: FIXTURE_DIFF.replaceAll('src/a.ts', 'src/changed-a.ts'),
+});
 const proofFingerprintFlip = (src: Source): Source => withProof(src, { fingerprint: 'changed-proof-fingerprint' });
 const preflightClassificationFlip = (src: Source): Source => withPreflight(src, { classification: 'green' });
-// Input assembly derives a new shared content digest for a semantic repair
-// change (covered in build-review-inputs.test.ts), so the fixture mirrors it.
-const repairDiagnosticFlip = (src: Source): Source => withSnapshot(withRepair(src, { diagnostic: 'changed repair diagnostic' }), { contentDigest: 'sha256:changed-repair-content' });
+const repairDiagnosticFlip = (src: Source): Source => withRepair(src, { diagnostic: 'changed repair diagnostic' });
 
 /**
  * One paired case per key in the closed provenance vocabulary: mutating the
@@ -216,32 +226,32 @@ const provenanceKeyCoverage: Record<(typeof BUILD_REVIEW_PROVENANCE_KEYS)[number
   observedAt: {
     provenance: (src) => withRepair(src, { observedAt: 1_755_000_000_000 }),
     semanticSibling: repairDiagnosticFlip,
-    semanticAffected: ALL_RUBRICS,
+    semanticAffected: ['tautology', 'scope', 'rootCause'],
   },
   rebaseInvalidatedAt: {
     provenance: (src) => withRepair(src, { rebaseInvalidatedAt: 9_999 }),
-    semanticSibling: (src) => withSnapshot(withRepair(src, { reason: 'different_failure_reason' }), { contentDigest: 'sha256:changed-repair-content' }),
-    semanticAffected: ALL_RUBRICS,
+    semanticSibling: (src) => withRepair(src, { reason: 'different_failure_reason' }),
+    semanticAffected: ['tautology', 'scope', 'rootCause'],
   },
   id: {
     provenance: (src) => withRepair(src, { id: 'repair-rebased' }),
     semanticSibling: repairDiagnosticFlip,
-    semanticAffected: ALL_RUBRICS,
+    semanticAffected: ['tautology', 'scope', 'rootCause'],
   },
   commitSha: {
     provenance: (src) => withRepair(src, { commitSha: 'nested-rebased-commit' }),
     semanticSibling: repairDiagnosticFlip,
-    semanticAffected: ALL_RUBRICS,
+    semanticAffected: ['tautology', 'scope', 'rootCause'],
   },
   blobSha: {
     provenance: (src) => withRepair(src, { blobSha: 'nested-rebased-blob' }),
     semanticSibling: repairDiagnosticFlip,
-    semanticAffected: ALL_RUBRICS,
+    semanticAffected: ['tautology', 'scope', 'rootCause'],
   },
   executedAt: {
     provenance: (src) => withRepair(src, { executedAt: '2026-08-15T12:00:00.000Z' }),
     semanticSibling: repairDiagnosticFlip,
-    semanticAffected: ALL_RUBRICS,
+    semanticAffected: ['tautology', 'scope', 'rootCause'],
   },
   stdout: {
     provenance: (src) => withPreflight(
@@ -257,6 +267,11 @@ const provenanceKeyCoverage: Record<(typeof BUILD_REVIEW_PROVENANCE_KEYS)[number
       { output: { stdout: 'counterfactual stdout', stderr: 'rerun counterfactual stderr' } },
     ),
     semanticSibling: preflightClassificationFlip,
+    semanticAffected: ['tautology'],
+  },
+  mergeBaseBlobSha: {
+    provenance: (src) => withRevertedProductionManifest(src, { mergeBaseBlobSha: 'rebased-blob-sha' }),
+    semanticSibling: (src) => withRevertedProductionManifest(src, { path: 'src/changed-a.ts' }),
     semanticAffected: ['tautology'],
   },
   cacheProvenance: {
@@ -441,19 +456,19 @@ describe('build-review rubric projections', () => {
       {
         name: 'diff text', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
         changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
-          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-diff', diff: `${FIXTURE_DIFF}changed`,
+          ...original.inputs.sourceSnapshot, diff: FIXTURE_DIFF.replaceAll('src/a.ts', 'src/changed-a.ts'),
         } } }),
       },
       {
-        name: 'plan body', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        name: 'plan body', affectedRubrics: ['scope', 'rootCause', 'completeness'],
         changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
-          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-plan', planBody: '# Changed plan\n',
+          ...original.inputs.sourceSnapshot, planBody: '# Changed plan\n',
         } } }),
       },
       {
-        name: 'repair context', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        name: 'repair context', affectedRubrics: ['tautology', 'scope', 'rootCause'],
         changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
-          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-repair',
+          ...original.inputs.sourceSnapshot,
           repairContext: [{ id: 'repair-new', reason: 'command_failed', diagnostic: 'new', rebaseInvalidatedAt: 3 }],
         } } }),
       },
@@ -467,7 +482,7 @@ describe('build-review rubric projections', () => {
       {
         name: 'removal context', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
         changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
-          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-removal',
+          ...original.inputs.sourceSnapshot,
           removalContext: { deletedFiles: ['new-old.ts'], removedDeclarations: ['new-old'], removedMembers: [] },
         } } }),
       },
@@ -491,6 +506,8 @@ describe('build-review rubric projections', () => {
     for (const { name, affectedRubrics, changed } of contentMutations) {
       const changedProjections = deriveBuildReviewRubricProjections(changed);
       for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+        expect(changedProjections[rubric].contentDigest, `${name} keeps the shared content digest fixed`)
+          .toBe(first[rubric].contentDigest);
         const expectation = affectedRubrics.includes(rubric) ? 'not' : '';
         if (expectation === 'not') {
           expect(changedProjections[rubric].digest, name).not.toBe(first[rubric].digest);
@@ -596,25 +613,23 @@ describe('build-review rubric projections', () => {
   it.each([
     ['reason', { reason: 'different_failure_reason' }],
     ['diagnostic', { diagnostic: 'different semantic diagnostic' }],
-  ])('changes every affected rubric digest when repair-record %s changes', (_field, mutation) => {
+  ])('changes only repair-consuming rubric digests when repair-record %s changes', (_field, mutation) => {
     const first = deriveBuildReviewRubricProjections(source());
     const original = source();
     const second = deriveBuildReviewRubricProjections(source({
       inputs: {
         ...original.inputs,
-        sourceSnapshot: {
-          ...original.inputs.sourceSnapshot,
-          // Input assembly derives a new shared content digest for this
-          // semantic change (covered in build-review-inputs.test.ts).
-          contentDigest: 'sha256:changed-semantic-repair-context',
-          repairContext: [{ ...original.inputs.sourceSnapshot.repairContext[0]!, ...mutation }],
+          sourceSnapshot: {
+            ...original.inputs.sourceSnapshot,
+            repairContext: [{ ...original.inputs.sourceSnapshot.repairContext[0]!, ...mutation }],
         },
       },
     }));
 
-    for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
-      expect(second[rubric].digest).not.toBe(first[rubric].digest);
-    }
+    expect(second.tautology.digest).not.toBe(first.tautology.digest);
+    expect(second.scope.digest).not.toBe(first.scope.digest);
+    expect(second.rootCause.digest).not.toBe(first.rootCause.digest);
+    expect(second.completeness.digest).toBe(first.completeness.digest);
   });
 
   it('derives Scope widenings solely from the frozen source snapshot and isolates them from the other rubric payloads', () => {
