@@ -173,6 +173,7 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
     const body = await shippedRecordBody();
     const costStart = body.indexOf('## Cost');
     const timeStart = body.indexOf('\n## Time');
+    const buildReviewStart = body.indexOf('\n## Build Review');
     const costOutput = body.slice(costStart, timeStart).trimEnd();
 
     expect(costOutput).toBe(
@@ -191,7 +192,9 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
         `  codex: input: 40, output: 10, cache_read: 4, cache_creation: 1, cost_usd: 0.02, dispatches: 1, cost_unmetered: 0\n` +
         `  claude: input: 100, output: 20, cache_read: 10, cache_creation: 2, cost_usd: 0.05, dispatches: 1, cost_unmetered: 0`,
     );
-    expect(body.slice(timeStart + 1)).toBe(
+    // Build-review metrics are appended independently after Time. Keep this
+    // cost/timing acceptance seam focused on the two sections it owns.
+    expect(body.slice(timeStart + 1, buildReviewStart)).toBe(
       `## Time\n` +
         `state: measured\n` +
         `active_ms: 100\n` +
