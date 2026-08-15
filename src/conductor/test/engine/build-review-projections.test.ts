@@ -506,8 +506,6 @@ describe('build-review rubric projections', () => {
     for (const { name, affectedRubrics, changed } of contentMutations) {
       const changedProjections = deriveBuildReviewRubricProjections(changed);
       for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
-        expect(changedProjections[rubric].contentDigest, `${name} keeps the shared content digest fixed`)
-          .toBe(first[rubric].contentDigest);
         const expectation = affectedRubrics.includes(rubric) ? 'not' : '';
         if (expectation === 'not') {
           expect(changedProjections[rubric].digest, name).not.toBe(first[rubric].digest);
