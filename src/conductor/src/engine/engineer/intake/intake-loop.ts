@@ -18,6 +18,12 @@ import { CorruptLedgerError } from './ledger.js';
 
 /** Effects injected into the intake loop's tick/scheduler. */
 export interface IntakeLoopDeps {
+  /**
+   * Proves the durable ledger can be read before a poll. A successful probe is
+   * the only evidence that a previously reported corruption episode was
+   * repaired; a resolved poll alone may not access the ledger at all.
+   */
+  probeLedger?: () => Promise<void>;
   /** Polls all registered repos for newly captured envelopes this tick. */
   poll: () => Promise<Envelope[]>;
   /** Enqueues a single captured envelope (ledger-deduped upstream). */
@@ -126,6 +132,10 @@ export async function intakeTick(
 ): Promise<IntakeTickSummary> {
   let envelopes: Envelope[];
   try {
+    if (deps.probeLedger) {
+      await deps.probeLedger();
+      if (corruptionEpisode) corruptionEpisode.reportedKey = undefined;
+    }
     envelopes = await deps.poll();
   } catch (err) {
     if (err instanceof CorruptLedgerError) {
@@ -142,10 +152,6 @@ export async function intakeTick(
     deps.log(`intake tick: poll() failed: ${err instanceof Error ? err.message : String(err)}`);
     return { captured: 0 };
   }
-  // A poll that completes proves the ledger was repaired (or that this was a
-  // different, non-corruption failure episode), so a later corruption merits
-  // a fresh operator warning.
-  if (corruptionEpisode) corruptionEpisode.reportedKey = undefined;
   // Tick-level dedup safety gate (FR-2): if a single poll() returns multiple
   // envelopes sharing the same sourceRef, only the first is enqueued. The
   // adapter is expected to dedupe upstream, but this backstop ensures a

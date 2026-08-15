@@ -701,7 +701,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: {} as any,
+      ledger: { list: async () => [] } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });
@@ -763,8 +763,6 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
             adapter: {
               poll: async () => {
                 polls += 1;
-                if (polls === 3) await writeFile(ledgerPath, '{}', 'utf8');
-                if (polls === 4) await writeFile(ledgerPath, '{second corrupt ledger', 'utf8');
                 return ledger.list() as Promise<any[]>;
               },
             } as any,
@@ -772,6 +770,8 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
           createNotifier: () => ({ notify: async () => undefined }) as any,
           sleep: async () => {
             sleeps += 1;
+            if (sleeps === 2) await writeFile(ledgerPath, '{}', 'utf8');
+            if (sleeps === 3) await writeFile(ledgerPath, '{second corrupt ledger', 'utf8');
             if (sleeps === 4) throw STOP;
           },
           log: (line: string) => logs.push(line),
@@ -785,7 +785,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
         polls,
         corruptLogs: corruptLogs.length,
         quarantines: (await readdir(engineerDir)).filter((name) => name.startsWith('ledger.json.corrupt-')).length,
-      }).toEqual({ polls: 4, corruptLogs: 2, quarantines: 2 });
+      }).toEqual({ polls: 1, corruptLogs: 2, quarantines: 2 });
     } finally {
       await rm(engineerDir, { recursive: true, force: true });
     }
@@ -805,7 +805,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: {} as any,
+      ledger: { list: async () => [] } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });
@@ -857,7 +857,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: {} as any,
+      ledger: { list: async () => [] } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });

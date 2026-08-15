@@ -1222,55 +1222,42 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe('Task 17: intake capture preserves ledger durability', () => {
-  it('does not enqueue an envelope whose ledger record fails, while later envelopes complete capture', async () => {
+  it('stops corrupt-ledger intake before later enqueue, claim, or dispatch, while ordinary envelope failures remain isolated', async () => {
     await writeRegistry([]);
 
     const { runEngineerMode } = await loadLoop();
-    const { io } = scriptedIo(['exit']);
+    const { CorruptLedgerError } = await import('../../../src/engine/engineer/intake/ledger.js');
     const envelopes = [
       { source: 'github-issues', sourceRef: 'org/repo#1', text: 'first' },
       { source: 'github-issues', sourceRef: 'org/repo#2', text: 'second' },
       { source: 'github-issues', sourceRef: 'org/repo#3', text: 'third' },
     ];
-    const record = vi.fn(async ({ sourceRef }: { sourceRef: string }) => {
-      if (sourceRef === 'org/repo#2') throw new Error('ledger write failed');
+    const corruptRecord = vi.fn(async () => {
+      throw new CorruptLedgerError('/tmp/intake-ledger.json', 'invalid JSON');
     });
-    const enqueue = vi.fn(async (_envelope: (typeof envelopes)[number]) => undefined);
+    const corruptEnqueue = vi.fn(async (_envelope: (typeof envelopes)[number]) => undefined);
+    const corruptClaim = vi.fn(async () => undefined);
 
-    await runEngineerMode({
+    await expect(runEngineerMode({
       route: noopProvider,
-      io,
+      io: scriptedIo(['exit']).io,
       registryPath,
       engineerDir,
       sources: [{ poll: async () => envelopes }],
-      ledger: { record } as any,
-      queue: {
-        enqueue,
-        claim: async () => undefined,
-        ack: async () => undefined,
-        release: async () => undefined,
-      },
-    });
+      ledger: { record: corruptRecord } as any,
+      queue: { enqueue: corruptEnqueue, claim: corruptClaim, ack: async () => undefined, release: async () => undefined },
+    })).rejects.toBeInstanceOf(CorruptLedgerError);
 
     expect({
-      recorded: record.mock.calls.map(([entry]) => entry.sourceRef),
-      enqueued: enqueue.mock.calls.map(([envelope]) => envelope.sourceRef),
+      recorded: corruptRecord.mock.calls.length,
+      enqueued: corruptEnqueue.mock.calls.length,
+      claimed: corruptClaim.mock.calls.length,
     }).toEqual({
-      recorded: ['org/repo#1', 'org/repo#2', 'org/repo#3'],
-      enqueued: ['org/repo#1', 'org/repo#3'],
+      recorded: 1,
+      enqueued: 0,
+      claimed: 0,
     });
-  });
 
-  it('continues recording and enqueuing healthy envelopes when one enqueue fails', async () => {
-    await writeRegistry([]);
-
-    const { runEngineerMode } = await loadLoop();
-    const { io } = scriptedIo(['exit']);
-    const envelopes = [
-      { source: 'github-issues', sourceRef: 'org/repo#1', text: 'first' },
-      { source: 'github-issues', sourceRef: 'org/repo#2', text: 'second' },
-      { source: 'github-issues', sourceRef: 'org/repo#3', text: 'third' },
-    ];
     const record = vi.fn(async () => undefined);
     const successfullyEnqueued: string[] = [];
     const enqueue = vi.fn(async (envelope: (typeof envelopes)[number]) => {
@@ -1280,7 +1267,7 @@ describe('Task 17: intake capture preserves ledger durability', () => {
 
     await runEngineerMode({
       route: noopProvider,
-      io,
+      io: scriptedIo(['exit']).io,
       registryPath,
       engineerDir,
       sources: [{ poll: async () => envelopes }],

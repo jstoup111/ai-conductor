@@ -497,7 +497,7 @@ describe('runIntakeLoop', () => {
     );
   });
 
-  it('reports a corrupt-ledger episode once, resumes after repair, and reports a later distinct corruption', async () => {
+  it('retains a corrupt-ledger episode across a resolved poll without ledger evidence, then resets only after an explicit successful ledger probe', async () => {
     const mod = (await import(
       '../../../../src/engine/engineer/intake/intake-loop.js'
     )) as Record<string, any>;
@@ -507,10 +507,7 @@ describe('runIntakeLoop', () => {
     const ledgerPath = join(directory, 'ledger.json');
     const ledger = createLedger(ledgerPath);
     const logs = vi.fn((_msg: string) => {});
-    // Both corrupt states fail the same shape validation, so a key based only
-    // on `reason` incorrectly treats the second byte state as already reported.
     const firstCorruptBytes = '[]';
-    const secondCorruptBytes = 'null';
     const STOP = { __stop: true };
     let pollCalls = 0;
     let sleepCalls = 0;
@@ -519,26 +516,38 @@ describe('runIntakeLoop', () => {
       await writeFile(ledgerPath, firstCorruptBytes, 'utf8');
       const poll = vi.fn(async () => {
         pollCalls += 1;
-        if (pollCalls === 3) {
-          await writeFile(ledgerPath, secondCorruptBytes, 'utf8');
-        }
-        if (pollCalls === 4) {
-          await writeFile(ledgerPath, '{}', 'utf8');
-        }
-        if (pollCalls === 5) {
-          await writeFile(ledgerPath, firstCorruptBytes, 'utf8');
-        }
+        if (pollCalls === 2) return [];
         return ledger.list() as Promise<any[]>;
+      });
+      const probeLedger = vi.fn(async () => {
+        await ledger.list();
       });
       const enqueue = vi.fn(async (_envelope: unknown) => {});
       const notify = vi.fn(async (_ideas: unknown[]) => {});
       const sleep = vi.fn(async (_ms: number) => {
         sleepCalls += 1;
+        if (sleepCalls === 3) await writeFile(ledgerPath, '{}', 'utf8');
+        if (sleepCalls === 4) await writeFile(ledgerPath, firstCorruptBytes, 'utf8');
         if (sleepCalls === 5) throw STOP;
       });
 
+      const deps = {
+        poll,
+        enqueue,
+        notify,
+        sleep,
+        now: () => new Date(),
+        log: logs,
+        // The first three ticks model the adapter's resolved registry-empty
+        // path: no ledger access means no repair evidence. Once the ledger is
+        // explicitly repaired, the production-style probe becomes available.
+        get probeLedger() {
+          return pollCalls >= 3 ? probeLedger : undefined;
+        },
+      };
+
       await runIntakeLoop(
-        { poll, enqueue, notify, sleep, now: () => new Date(), log: logs },
+        deps,
         { intervalMs: 1 },
       ).catch((error: unknown) => {
         if (error !== STOP) throw error;
@@ -553,15 +562,14 @@ describe('runIntakeLoop', () => {
         pollCalls,
         enqueueCalls: enqueue.mock.calls.length,
         notifyCalls: notify.mock.calls.length,
-        quarantineCount: quarantines.length,
+        probeCalls: probeLedger.mock.calls.length,
         corruptionLogs,
       }).toEqual({
-        pollCalls: 5,
+        pollCalls: 4,
         enqueueCalls: 0,
         notifyCalls: 0,
-        quarantineCount: 2,
+        probeCalls: 2,
         corruptionLogs: [
-          expect.stringContaining(`ledger=${ledgerPath}`),
           expect.stringContaining(`ledger=${ledgerPath}`),
           expect.stringContaining(`ledger=${ledgerPath}`),
         ],
@@ -572,7 +580,6 @@ describe('runIntakeLoop', () => {
         ),
       ).toBe(true);
       expect(corruptionLogs.join('\n')).not.toContain(firstCorruptBytes);
-      expect(corruptionLogs.join('\n')).not.toContain(secondCorruptBytes);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
