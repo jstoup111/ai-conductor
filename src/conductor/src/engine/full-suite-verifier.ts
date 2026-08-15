@@ -92,6 +92,12 @@ export interface FullSuiteLockOptions {
   clock?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
   processIsLive?: (pid: number) => boolean;
+  /**
+   * Stronger than signal-0: proves that a live PID is the process instance
+   * which wrote this lock. Returning false permits stale-lock recovery;
+   * unknown identity must return true and keep the lock occupied.
+   */
+  processOwnsRecordedLock?: (owner: FullSuiteLockOwner) => boolean | Promise<boolean>;
 }
 
 interface FullSuiteVerificationContext {
@@ -124,6 +130,8 @@ interface FullSuiteLockOwner {
   pid: number;
   token: string;
   acquiredAt: string;
+  /** Linux `/proc/<pid>` creation timestamp identity when available. */
+  processStartToken?: string;
 }
 
 interface FullSuiteLockRecoveryClaim {
@@ -164,7 +172,9 @@ function isLockOwner(value: unknown): value is FullSuiteLockOwner {
     typeof record.token === 'string' &&
     record.token.length > 0 &&
     typeof record.acquiredAt === 'string' &&
-    !Number.isNaN(Date.parse(record.acquiredAt));
+    !Number.isNaN(Date.parse(record.acquiredAt)) &&
+    (record.processStartToken === undefined ||
+      (typeof record.processStartToken === 'string' && record.processStartToken.length > 0));
 }
 
 function parseLockOwner(serialized: string | null): FullSuiteLockOwner | null {
@@ -184,6 +194,51 @@ function defaultProcessIsLive(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
+}
+
+interface ProcessStartIdentity {
+  startedAt: number;
+  token: string;
+}
+
+type ProcessStartIdentityProbe =
+  | { status: 'FOUND'; identity: ProcessStartIdentity }
+  | { status: 'MISSING' }
+  | { status: 'UNKNOWN' };
+
+async function processStartIdentity(pid: number): Promise<ProcessStartIdentityProbe> {
+  try {
+    // `/proc` is deliberately an optional strengthening probe. Platforms
+    // without it retain signal-0's conservative occupied result.
+    const processStat = await stat(`/proc/${pid}`, { bigint: true });
+    return {
+      status: 'FOUND',
+      identity: {
+        startedAt: Number(processStat.ctimeNs / 1_000_000n),
+        token: processStat.ctimeNs.toString(),
+      },
+    };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { status: 'MISSING' }
+      : { status: 'UNKNOWN' };
+  }
+}
+
+async function defaultProcessOwnsRecordedLock(owner: FullSuiteLockOwner): Promise<boolean> {
+  const observed = await processStartIdentity(owner.pid);
+  if (observed.status === 'MISSING') {
+    // An owner which vanished after signal-0 cannot still own the lock.
+    return false;
+  }
+  if (observed.status === 'UNKNOWN') return true;
+  const { identity: observedIdentity } = observed;
+  if (owner.processStartToken !== undefined) {
+    return observedIdentity.token === owner.processStartToken;
+  }
+  // Legacy owner records lack an instance token. A process born after the
+  // lock was acquired is nevertheless a conclusive PID-reuse mismatch.
+  return observedIdentity.startedAt <= Date.parse(owner.acquiredAt);
 }
 
 async function readLockOwner(lockPath: string): Promise<string | null> {
@@ -332,7 +387,7 @@ async function quarantineClaimedStaleLock(
 
 async function recoverLockIfProvablyStale(
   lockPath: string,
-  options: Required<Pick<FullSuiteLockOptions, 'clock' | 'processIsLive'>> & {
+  options: Required<Pick<FullSuiteLockOptions, 'clock' | 'processIsLive' | 'processOwnsRecordedLock'>> & {
     unownedStaleMs: number;
   },
 ): Promise<
@@ -360,7 +415,18 @@ async function recoverLockIfProvablyStale(
         message: `Unable to verify full-suite lock owner liveness: ${lockErrorMessage(error)}`,
       };
     }
-    if (ownerIsLive) return { status: 'OCCUPIED' };
+    if (ownerIsLive) {
+      let ownsRecordedLock: boolean;
+      try {
+        ownsRecordedLock = await options.processOwnsRecordedLock(owner);
+      } catch (error) {
+        return {
+          status: 'FAILED',
+          message: `Unable to verify full-suite lock owner identity: ${lockErrorMessage(error)}`,
+        };
+      }
+      if (ownsRecordedLock) return { status: 'OCCUPIED' };
+    }
   } else {
     let ageMs: number;
     try {
@@ -422,6 +488,7 @@ async function acquireFullSuiteLock(
   const clock = supplied.clock ?? Date.now;
   const wait = supplied.wait ?? delay;
   const processIsLive = supplied.processIsLive ?? defaultProcessIsLive;
+  const processOwnsRecordedLock = supplied.processOwnsRecordedLock ?? defaultProcessOwnsRecordedLock;
   const pipelinePath = join(projectRoot, '.pipeline');
   const lockPath = join(pipelinePath, FULL_SUITE_LOCK_DIRECTORY);
   const startedAt = clock();
@@ -439,11 +506,15 @@ async function acquireFullSuiteLock(
     const token = randomUUID();
     try {
       await mkdir(lockPath);
+      const ownerProcessIdentity = await processStartIdentity(process.pid);
       const owner: FullSuiteLockOwner = {
         version: 1,
         pid: process.pid,
         token,
         acquiredAt: new Date(clock()).toISOString(),
+        ...(ownerProcessIdentity.status !== 'FOUND'
+          ? {}
+          : { processStartToken: ownerProcessIdentity.identity.token }),
       };
       try {
         await writeFile(
@@ -474,6 +545,7 @@ async function acquireFullSuiteLock(
     const recovery = await recoverLockIfProvablyStale(lockPath, {
       clock,
       processIsLive,
+      processOwnsRecordedLock,
       unownedStaleMs,
     });
     if (recovery.status === 'FAILED') return { ok: false, message: recovery.message };
