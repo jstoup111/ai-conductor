@@ -113,6 +113,7 @@ import type {
 import { resolveConductorStateStore } from './conductor-deps.js';
 import {
   ALL_STEPS,
+  OUT_OF_BAND_STEPS,
   buildStepRegistry,
   firstShipConsumer,
   shouldSkipForBootstrapMode,
@@ -2742,9 +2743,15 @@ export class Conductor {
 
   /** Emit a HALT event with the most recently advanced conductor step. */
   private async emitLoopHalt(reason: string, prUrl?: string): Promise<void> {
+    const candidate = resolveLastStep(this.haltState, this._breadcrumb);
+    const step =
+      ALL_STEPS.some(({ name }) => name === candidate) ||
+      Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
+        ? (candidate as StepName)
+        : undefined;
     await this.events.emit({
       type: 'loop_halt',
-      step: resolveLastStep(this.haltState, this._breadcrumb) as StepName,
+      ...(step ? { step } : {}),
       reason,
       prUrl,
     });

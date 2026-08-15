@@ -399,15 +399,22 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    // The existing backstop reason remains unchanged while its event gains a
-    // concrete attribution instead of the pre-central-emitter undefined step.
-    expect(halts).toEqual([
-      expect.objectContaining({
-        reason: expect.stringContaining(
-          'loop exited without a terminal verdict (last step: no step recorded)',
-        ),
-        step: 'no step recorded',
-      }),
+    // The diagnostic fallback stays in the reason, but it is not a StepName
+    // and therefore must not cross the typed event boundary as `step`.
+    expect(
+      halts.map((halt) => ({
+        halt,
+        hasStep: Object.prototype.hasOwnProperty.call(halt, 'step'),
+      })),
+    ).toEqual([
+      {
+        halt: expect.objectContaining({
+          reason: expect.stringContaining(
+            'loop exited without a terminal verdict (last step: no step recorded)',
+          ),
+        }),
+        hasStep: false,
+      },
     ]);
   });
 
