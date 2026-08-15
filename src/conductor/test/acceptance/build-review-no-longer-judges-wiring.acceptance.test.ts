@@ -96,6 +96,8 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
         findings: projection.rubric === 'scope'
           ? [{
                 concernKind: 'orphanedProductionSurface is outside the approved plan',
+                summary: 'src/orphan.ts adds production behavior outside the approved plan.',
+                evidenceLocations: ['src/orphan.ts:1'],
                 anchor: {
                   rubric: 'scope', path: 'src/orphan.ts', relation: 'outside-plan',
                 },

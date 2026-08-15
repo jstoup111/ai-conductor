@@ -91,7 +91,7 @@ function inputs(): BuildReviewFrozenInputs {
     sourceSnapshot: {
       digest: "sha256:snapshot", baseRef: "origin/main", mergeBase: "base", headSha: "head",
       diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
-      planBody: "# Plan\n", repairContext: [],
+      planBody: "# Plan\n", repairContext: [], acceptedWidenings: [],
       removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
     },
   };
