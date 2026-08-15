@@ -142,6 +142,8 @@ export function canonicalJson(value: BuildReviewProjectionJson): string {
 export const BUILD_REVIEW_PROVENANCE_KEYS = Object.freeze([
   // Commit and blob addressing (rebase-volatile identities of the same content).
   'sha',
+  'commitSha',
+  'blobSha',
   'headSha',
   'mergeBase',
   'baseRef',
@@ -154,6 +156,7 @@ export const BUILD_REVIEW_PROVENANCE_KEYS = Object.freeze([
   // Execution timing (rerun-volatile, meaning-free).
   'startedAt',
   'endedAt',
+  'executedAt',
   'durationMs',
   'observedAt',
   'rebaseInvalidatedAt',

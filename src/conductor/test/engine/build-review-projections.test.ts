@@ -228,6 +228,21 @@ const provenanceKeyCoverage: Record<(typeof BUILD_REVIEW_PROVENANCE_KEYS)[number
     semanticSibling: repairDiagnosticFlip,
     semanticAffected: ALL_RUBRICS,
   },
+  commitSha: {
+    provenance: (src) => withRepair(src, { commitSha: 'nested-rebased-commit' }),
+    semanticSibling: repairDiagnosticFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  blobSha: {
+    provenance: (src) => withRepair(src, { blobSha: 'nested-rebased-blob' }),
+    semanticSibling: repairDiagnosticFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  executedAt: {
+    provenance: (src) => withRepair(src, { executedAt: '2026-08-15T12:00:00.000Z' }),
+    semanticSibling: repairDiagnosticFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
   stdout: {
     provenance: (src) => withPreflight(
       withProof(src, { stdout: 'rerun full suite stdout' }),
@@ -533,6 +548,70 @@ describe('build-review rubric projections', () => {
       withRepair(source(), { execution: { verdict } });
     expect(deriveBuildReviewRubricProjections(nestedSemantic('flaky')).tautology.digest)
       .not.toBe(deriveBuildReviewRubricProjections(nestedSemantic('settled')).tautology.digest);
+  });
+
+  it('recursively excludes nested commit/blob anchors and execution output while retaining nested evidence semantics', () => {
+    const nestedEvidence = (commitSha: string, blobSha: string, executedAt: string, stdout: string): Source =>
+      withRepair(source(), {
+        nestedEvidence: {
+          revision: { commitSha, blobSha },
+          execution: { executedAt, output: { stdout, stderr: `${stdout} stderr` } },
+          classification: 'reproducible',
+        },
+      });
+    const first = deriveBuildReviewRubricProjections(
+      nestedEvidence('commit-before', 'blob-before', '2026-08-15T11:00:00.000Z', 'first transcript'),
+    );
+    const rerun = deriveBuildReviewRubricProjections(
+      nestedEvidence('commit-after', 'blob-after', '2026-08-15T12:00:00.000Z', 'second transcript'),
+    );
+
+    for (const rubric of ALL_RUBRICS) {
+      expect(rerun[rubric].digest, `nested rerun provenance must not perturb ${rubric}`).toBe(first[rubric].digest);
+    }
+
+    const semanticFlip = deriveBuildReviewRubricProjections(withRepair(source(), {
+      nestedEvidence: {
+        revision: { commitSha: 'commit-before', blobSha: 'blob-before' },
+        execution: { executedAt: '2026-08-15T11:00:00.000Z', output: { stdout: 'first transcript', stderr: 'first transcript stderr' } },
+        classification: 'non-reproducible',
+      },
+    }));
+    for (const rubric of ['tautology', 'scope', 'rootCause'] as const) {
+      expect(semanticFlip[rubric].digest, `nested semantic evidence must perturb ${rubric}`)
+        .not.toBe(first[rubric].digest);
+    }
+    expect(semanticFlip.completeness.digest).toBe(first.completeness.digest);
+  });
+
+  it('keeps full-suite and scoped-preflight rerun transcripts out of identity but retains their semantic classifications', () => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const rerun = deriveBuildReviewRubricProjections(withPreflight(
+      withProof(source(), {
+        provenanceHeadSha: 'rerun-head', startedAt: '2026-08-15T12:00:00.000Z', endedAt: '2026-08-15T12:00:09.000Z', durationMs: 9_000,
+        stdout: 'rerun full suite stdout', stderr: 'rerun full suite stderr',
+      }),
+      { output: { stdout: 'rerun preflight stdout', stderr: 'rerun preflight stderr' } },
+    ));
+    expect(rerun.tautology.digest).toBe(first.tautology.digest);
+
+    for (const [field, value] of [
+      ['fingerprint', 'changed-proof-fingerprint'],
+      ['categoryFingerprints', { unit: 'changed-category-fingerprint' }],
+      ['command', 'npm run test:changed'],
+    ] as const) {
+      expect(deriveBuildReviewRubricProjections(withProof(source(), { [field]: value })).tautology.digest, field)
+        .not.toBe(first.tautology.digest);
+    }
+    // FullSuitePassEvidence is correctly source-typed as PASS-only. The
+    // closed projection contract must still treat its outcome as semantic if
+    // a persisted projection is malformed or comes from a future proof type.
+    expect(projectionDigest({
+      ...first.tautology,
+      testSuiteProof: { ...(first.tautology.testSuiteProof as Record<string, unknown>), outcome: 'FAIL' },
+    } as unknown as typeof first.tautology)).not.toBe(first.tautology.digest);
+    expect(deriveBuildReviewRubricProjections(withPreflight(source(), { classification: 'green' })).tautology.digest)
+      .not.toBe(first.tautology.digest);
   });
 
   it('keeps counterfactual output and full-suite transcripts readable while digests ignore them', () => {
