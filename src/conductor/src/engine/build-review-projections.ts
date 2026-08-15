@@ -128,95 +128,67 @@ export function canonicalJson(value: BuildReviewProjectionJson): string {
   return JSON.stringify(canonicalize(value));
 }
 
-function withoutEvidenceProvenance(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
-  if (value === null || Array.isArray(value) || typeof value !== 'object') return value;
-  const evidence = value as { readonly [key: string]: BuildReviewProjectionJson };
-  const {
-    provenanceHeadSha: _ignoredProvenanceHeadSha,
-    startedAt: _ignoredStartedAt,
-    endedAt: _ignoredEndedAt,
-    durationMs: _ignoredDurationMs,
-    ...evidenceContent
-  } = evidence;
-  return evidenceContent;
-}
+/**
+ * The closed provenance vocabulary: every key whose value is commit/blob
+ * addressing, execution timing, a run transcript, or cache/record bookkeeping
+ * rather than the meaning of the evidence. Cache identity digests semantic
+ * content only, so these keys are dropped from the digested view recursively —
+ * at any nesting depth — which closes the class by construction: a provenance
+ * field can never hide inside a nested record again. The excluded values stay
+ * on the projection itself as non-digested anchors for grader reads.
+ * Semantic fields (paths, rationales, reasons, classifications, verdicts,
+ * selectors, exitCode, fingerprints, diagnostics) MUST stay digest-sensitive.
+ */
+export const BUILD_REVIEW_PROVENANCE_KEYS = Object.freeze([
+  // Commit and blob addressing (rebase-volatile identities of the same content).
+  'sha',
+  'headSha',
+  'mergeBase',
+  'baseRef',
+  'fromCommit',
+  'toCommit',
+  'provenanceHeadSha',
+  'sourceIdentities',
+  'lapId',
+  'snapshotDigest',
+  // Execution timing (rerun-volatile, meaning-free).
+  'startedAt',
+  'endedAt',
+  'durationMs',
+  'observedAt',
+  'rebaseInvalidatedAt',
+  // Run transcripts (environment- and rerun-volatile output logs).
+  'stdout',
+  'stderr',
+  // Cache and record bookkeeping (per-instance identity, not evidence meaning).
+  'cacheProvenance',
+  'cacheable',
+  'id',
+] as const);
 
-/** Tautology preflight records anchors and local cache execution for provenance, not identity. */
-function withoutPreflightProvenance(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
-  if (value === null || Array.isArray(value) || typeof value !== 'object') return value;
-  const evidence = value as { readonly [key: string]: BuildReviewProjectionJson };
-  const {
-    sourceIdentities: _ignoredSourceIdentities,
-    cacheProvenance: _ignoredCacheProvenance,
-    ...evidenceContent
-  } = evidence;
-  return evidenceContent;
-}
+const PROVENANCE_KEY_SET: ReadonlySet<string> = new Set(BUILD_REVIEW_PROVENANCE_KEYS);
 
-/** Scope widening SHAs identify the accepting commit for graders, not the widening's meaning. */
-function withoutAcceptedWideningCommitShas(value: readonly BuildReviewProjectionJson[]): readonly BuildReviewProjectionJson[] {
-  return value.map((widening) => {
-    if (widening === null || Array.isArray(widening) || typeof widening !== 'object') return widening;
-    const { sha: _ignoredCommitSha, ...wideningContent } = widening as {
-      readonly [key: string]: BuildReviewProjectionJson;
-    };
-    return wideningContent;
-  });
-}
-
-/** Scope reseal commit endpoints are readable provenance, while paths and reason carry meaning. */
-function withoutOperatorResealCommitEndpoints(value: readonly BuildReviewProjectionJson[]): readonly BuildReviewProjectionJson[] {
-  return value.map((reseal) => {
-    if (reseal === null || Array.isArray(reseal) || typeof reseal !== 'object') return reseal;
-    const { fromCommit: _ignoredFromCommit, toCommit: _ignoredToCommit, ...resealContent } = reseal as {
-      readonly [key: string]: BuildReviewProjectionJson;
-    };
-    return resealContent;
-  });
-}
-
-/** Repair record identity and invalidation timing are provenance, not remediation meaning. */
-function withoutRepairRecordProvenance(value: readonly BuildReviewProjectionJson[]): readonly BuildReviewProjectionJson[] {
-  return value.map((repair) => {
-    if (repair === null || Array.isArray(repair) || typeof repair !== 'object') return repair;
-    const { id: _ignoredId, rebaseInvalidatedAt: _ignoredRebaseInvalidatedAt, ...repairContent } = repair as {
-      readonly [key: string]: BuildReviewProjectionJson;
-    };
-    return repairContent;
-  });
+/** Recursively drop every provenance-vocabulary key from a JSON value, at any depth. */
+function withoutProvenance(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
+  if (Array.isArray(value)) return value.map(withoutProvenance);
+  if (value !== null && typeof value === 'object') {
+    const object = value as { readonly [key: string]: BuildReviewProjectionJson };
+    return Object.fromEntries(
+      Object.keys(object)
+        .filter((key) => !PROVENANCE_KEY_SET.has(key))
+        .map((key) => [key, withoutProvenance(object[key]!)]),
+    );
+  }
+  return value;
 }
 
 /** Version-bound digest of a closed projection, excluding rebase-only provenance. */
 export function projectionDigest(projection: Omit<BuildReviewRubricProjection, 'digest'> | BuildReviewRubricProjection): string {
-  const {
-    digest: _ignoredDigest,
-    lapId: _ignoredLapId,
-    snapshotDigest: _ignoredSnapshotDigest,
-    mergeBase: _ignoredMergeBase,
-    headSha: _ignoredHeadSha,
-    ...digestibleProjection
-  } = projection as BuildReviewRubricProjection;
-  const contentIdentity = {
-    ...digestibleProjection,
-    ...('testSuiteProof' in digestibleProjection
-      ? { testSuiteProof: withoutEvidenceProvenance(digestibleProjection.testSuiteProof) }
-      : {}),
-    ...('preflightEvidence' in digestibleProjection
-      ? { preflightEvidence: withoutPreflightProvenance(digestibleProjection.preflightEvidence) }
-      : {}),
-    ...('acceptedWidenings' in digestibleProjection
-      ? { acceptedWidenings: withoutAcceptedWideningCommitShas(digestibleProjection.acceptedWidenings) }
-      : {}),
-    ...('operatorReseals' in digestibleProjection
-      ? { operatorReseals: withoutOperatorResealCommitEndpoints(
-        digestibleProjection.operatorReseals as unknown as readonly BuildReviewProjectionJson[],
-      ) }
-      : {}),
-    ...('repairContext' in digestibleProjection
-      ? { repairContext: withoutRepairRecordProvenance(digestibleProjection.repairContext) }
-      : {}),
-  };
-  return `sha256:${createHash('sha256').update(canonicalJson(contentIdentity as unknown as BuildReviewProjectionJson)).digest('hex')}`;
+  // `digest` is the value being derived, never an input to itself. Every other
+  // exclusion is the recursive provenance vocabulary applied at any depth.
+  const { digest: _ignoredDigest, ...digestibleProjection } = projection as BuildReviewRubricProjection;
+  const contentIdentity = withoutProvenance(digestibleProjection as unknown as BuildReviewProjectionJson);
+  return `sha256:${createHash('sha256').update(canonicalJson(contentIdentity)).digest('hex')}`;
 }
 
 function json(value: unknown): BuildReviewProjectionJson {

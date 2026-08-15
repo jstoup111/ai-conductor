@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import {
+  BUILD_REVIEW_PROVENANCE_KEYS,
   deriveBuildReviewRubricProjections,
   deriveChangedFileReferences,
   projectionDigest,
@@ -31,7 +32,11 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       repairContext: [{ id: 'repair-b', reason: 'command_failed', diagnostic: 'b', observedAt: 2 }, { id: 'repair-a', reason: 'command_failed', diagnostic: 'a', observedAt: 1 }],
       acceptedWidenings: [{ path: 'src/b.ts', rationale: 'b', taskId: '2', sha: 'b' }, { path: 'src/a.ts', rationale: 'a', taskId: '1', sha: 'a' }],
       entryPoints: ['bin/b', 'bin/a'],
-      testSuiteProof: { provenanceHeadSha: 'head', outcome: 'PASS' },
+      testSuiteProof: {
+        provenanceHeadSha: 'head', outcome: 'PASS',
+        startedAt: '2026-08-15T11:00:00.000Z', endedAt: '2026-08-15T11:00:05.000Z', durationMs: 5_000,
+        stdout: 'full suite stdout', stderr: 'full suite stderr',
+      },
       operatorReseals: [{
         paths: ['.docs/stories/resealed-story.md'],
         reason: 'Operator approved this exact protected-artifact amendment.',
@@ -59,7 +64,9 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }],
       preflightEvidence: {
         classification: 'red',
+        cacheable: true, cacheProvenance: 'miss',
         sourceIdentities: { mergeBase: 'base', headSha: 'head' },
+        output: { stdout: 'counterfactual stdout', stderr: 'counterfactual stderr' },
         eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
         scopedRun: { exitCode: 1, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
       },
@@ -67,6 +74,187 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
     ...overrides,
   };
 }
+
+const ALL_RUBRICS = ['tautology', 'scope', 'rootCause', 'completeness'] as const;
+type RubricKey = (typeof ALL_RUBRICS)[number];
+type Source = BuildReviewProjectionSource;
+
+function withSnapshot(src: Source, patch: Record<string, unknown>): Source {
+  return {
+    ...src,
+    inputs: {
+      ...src.inputs,
+      sourceSnapshot: { ...src.inputs.sourceSnapshot, ...patch } as Source['inputs']['sourceSnapshot'],
+    },
+  };
+}
+
+function withProof(src: Source, patch: Record<string, unknown>): Source {
+  return {
+    ...src,
+    inputs: {
+      ...src.inputs,
+      testSuiteProof: { ...src.inputs.testSuiteProof, ...patch } as Source['inputs']['testSuiteProof'],
+    },
+  };
+}
+
+function withPreflight(src: Source, patch: Record<string, unknown>): Source {
+  return {
+    ...src,
+    tautology: {
+      ...src.tautology,
+      preflightEvidence: {
+        ...(src.tautology.preflightEvidence as Record<string, unknown>),
+        ...patch,
+      } as Source['tautology']['preflightEvidence'],
+    },
+  };
+}
+
+function withReseal(src: Source, patch: Record<string, unknown>): Source {
+  return withSnapshot(src, {
+    operatorReseals: [{ ...src.inputs.sourceSnapshot.operatorReseals![0]!, ...patch }],
+  });
+}
+
+function withWidening(src: Source, patch: Record<string, unknown>): Source {
+  return withSnapshot(src, {
+    acceptedWidenings: [{ ...src.inputs.sourceSnapshot.acceptedWidenings[0]!, ...patch }],
+  });
+}
+
+function withRepair(src: Source, patch: Record<string, unknown>): Source {
+  return withSnapshot(src, {
+    repairContext: [{ ...src.inputs.sourceSnapshot.repairContext[0]!, ...patch }],
+  });
+}
+
+// Semantic siblings: content that MUST stay digest-sensitive next to each excluded key.
+const contentFlip = (src: Source): Source => withSnapshot(src, { contentDigest: 'sha256:changed-content' });
+const proofFingerprintFlip = (src: Source): Source => withProof(src, { fingerprint: 'changed-proof-fingerprint' });
+const preflightClassificationFlip = (src: Source): Source => withPreflight(src, { classification: 'green' });
+// Input assembly derives a new shared content digest for a semantic repair
+// change (covered in build-review-inputs.test.ts), so the fixture mirrors it.
+const repairDiagnosticFlip = (src: Source): Source => withSnapshot(withRepair(src, { diagnostic: 'changed repair diagnostic' }), { contentDigest: 'sha256:changed-repair-content' });
+
+/**
+ * One paired case per key in the closed provenance vocabulary: mutating the
+ * provenance key must never change any digest, while flipping a semantic
+ * sibling in the same record must change the affected rubric digests.
+ */
+const provenanceKeyCoverage: Record<(typeof BUILD_REVIEW_PROVENANCE_KEYS)[number], {
+  readonly provenance: (src: Source) => Source;
+  readonly semanticSibling: (src: Source) => Source;
+  readonly semanticAffected: readonly RubricKey[];
+}> = {
+  sha: {
+    provenance: (src) => withWidening(src, { sha: 'rebased-widening-sha' }),
+    semanticSibling: (src) => withWidening(src, { rationale: 'changed widening rationale' }),
+    semanticAffected: ['scope'],
+  },
+  headSha: {
+    provenance: (src) => withSnapshot(src, { headSha: 'rebased-head' }),
+    semanticSibling: contentFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  mergeBase: {
+    provenance: (src) => withSnapshot(src, { mergeBase: 'rebased-merge-base' }),
+    semanticSibling: contentFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  baseRef: {
+    provenance: (src) => withSnapshot(src, { baseRef: 'origin/rebased-main' }),
+    semanticSibling: contentFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  fromCommit: {
+    provenance: (src) => withReseal(src, { fromCommit: 'reseal-base-2' }),
+    semanticSibling: (src) => withReseal(src, { reason: 'Operator approved revised protected-artifact scope.' }),
+    semanticAffected: ['scope'],
+  },
+  toCommit: {
+    provenance: (src) => withReseal(src, { toCommit: 'reseal-head-2' }),
+    semanticSibling: (src) => withReseal(src, { paths: ['.docs/plans/also-resealed.md'] }),
+    semanticAffected: ['scope'],
+  },
+  provenanceHeadSha: {
+    provenance: (src) => withProof(src, { provenanceHeadSha: 'rebased-head' }),
+    semanticSibling: proofFingerprintFlip,
+    semanticAffected: ['tautology'],
+  },
+  sourceIdentities: {
+    provenance: (src) => withPreflight(src, { sourceIdentities: { mergeBase: 'rebased-merge-base', headSha: 'rebased-head' } }),
+    semanticSibling: preflightClassificationFlip,
+    semanticAffected: ['tautology'],
+  },
+  lapId: {
+    provenance: (src) => ({ ...src, lapId: parseBuildReviewLapId('lap-rebased')! }),
+    semanticSibling: contentFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  snapshotDigest: {
+    provenance: (src) => withSnapshot(src, { digest: 'sha256:rebased-snapshot' }),
+    semanticSibling: contentFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  startedAt: {
+    provenance: (src) => withProof(src, { startedAt: '2026-08-15T12:00:00.000Z' }),
+    semanticSibling: proofFingerprintFlip,
+    semanticAffected: ['tautology'],
+  },
+  endedAt: {
+    provenance: (src) => withProof(src, { endedAt: '2026-08-15T12:00:08.000Z' }),
+    semanticSibling: proofFingerprintFlip,
+    semanticAffected: ['tautology'],
+  },
+  durationMs: {
+    provenance: (src) => withProof(src, { durationMs: 8_000 }),
+    semanticSibling: proofFingerprintFlip,
+    semanticAffected: ['tautology'],
+  },
+  observedAt: {
+    provenance: (src) => withRepair(src, { observedAt: 1_755_000_000_000 }),
+    semanticSibling: repairDiagnosticFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  rebaseInvalidatedAt: {
+    provenance: (src) => withRepair(src, { rebaseInvalidatedAt: 9_999 }),
+    semanticSibling: (src) => withSnapshot(withRepair(src, { reason: 'different_failure_reason' }), { contentDigest: 'sha256:changed-repair-content' }),
+    semanticAffected: ALL_RUBRICS,
+  },
+  id: {
+    provenance: (src) => withRepair(src, { id: 'repair-rebased' }),
+    semanticSibling: repairDiagnosticFlip,
+    semanticAffected: ALL_RUBRICS,
+  },
+  stdout: {
+    provenance: (src) => withPreflight(
+      withProof(src, { stdout: 'rerun full suite stdout' }),
+      { output: { stdout: 'rerun counterfactual stdout', stderr: 'counterfactual stderr' } },
+    ),
+    semanticSibling: proofFingerprintFlip,
+    semanticAffected: ['tautology'],
+  },
+  stderr: {
+    provenance: (src) => withPreflight(
+      withProof(src, { stderr: 'rerun full suite stderr' }),
+      { output: { stdout: 'counterfactual stdout', stderr: 'rerun counterfactual stderr' } },
+    ),
+    semanticSibling: preflightClassificationFlip,
+    semanticAffected: ['tautology'],
+  },
+  cacheProvenance: {
+    provenance: (src) => withPreflight(src, { cacheProvenance: 'hit' }),
+    semanticSibling: preflightClassificationFlip,
+    semanticAffected: ['tautology'],
+  },
+  cacheable: {
+    provenance: (src) => withPreflight(src, { cacheable: false }),
+    semanticSibling: preflightClassificationFlip,
+    semanticAffected: ['tautology'],
+  },
+};
 
 describe('build-review rubric projections', () => {
   it('derives the four closed projections with every skill dependency and a v1 digest', () => {
@@ -170,6 +358,8 @@ describe('build-review rubric projections', () => {
         testSuiteProof: {
           ...original.inputs.testSuiteProof,
           provenanceHeadSha: 'rebased-head',
+          startedAt: '2026-08-15T12:00:00.000Z', endedAt: '2026-08-15T12:00:08.000Z', durationMs: 8_000,
+          stdout: 'rebased full suite stdout', stderr: 'rebased full suite stderr',
         },
         sourceSnapshot: {
           ...original.inputs.sourceSnapshot,
@@ -181,13 +371,25 @@ describe('build-review rubric projections', () => {
             ...original.inputs.sourceSnapshot.acceptedWidenings[0]!,
             sha: 'rebased-widening-sha',
           }],
+          operatorReseals: [{
+            ...original.inputs.sourceSnapshot.operatorReseals![0]!,
+            fromCommit: 'rebased-reseal-base',
+            toCommit: 'rebased-reseal-head',
+          }],
+          repairContext: [{
+            ...original.inputs.sourceSnapshot.repairContext[0]!,
+            id: 'repair-rebased',
+            rebaseInvalidatedAt: 9_999,
+          }],
         },
       },
       tautology: {
         ...original.tautology,
         preflightEvidence: {
           classification: 'red',
+          cacheable: true, cacheProvenance: 'hit',
           sourceIdentities: { mergeBase: 'rebased-merge-base', headSha: 'rebased-head' },
+          output: { stdout: 'rebased counterfactual stdout', stderr: 'rebased counterfactual stderr' },
           eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
           scopedRun: { exitCode: 1, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
         },
@@ -205,7 +407,16 @@ describe('build-review rubric projections', () => {
     }
     expect(rebased.tautology.preflightEvidence).toMatchObject({
       sourceIdentities: { mergeBase: 'rebased-merge-base', headSha: 'rebased-head' },
+      cacheProvenance: 'hit',
+      output: { stdout: 'rebased counterfactual stdout', stderr: 'rebased counterfactual stderr' },
     });
+    expect(rebased.tautology.testSuiteProof).toMatchObject({
+      provenanceHeadSha: 'rebased-head',
+      startedAt: '2026-08-15T12:00:00.000Z', endedAt: '2026-08-15T12:00:08.000Z', durationMs: 8_000,
+      stdout: 'rebased full suite stdout', stderr: 'rebased full suite stderr',
+    });
+    expect(rebased.tautology.repairContext).toMatchObject([{ id: 'repair-rebased', rebaseInvalidatedAt: 9_999 }]);
+    expect(rebased.scope.operatorReseals).toMatchObject([{ fromCommit: 'rebased-reseal-base', toCommit: 'rebased-reseal-head' }]);
 
     const contentMutations: readonly {
       readonly name: string;
@@ -275,32 +486,71 @@ describe('build-review rubric projections', () => {
     }
   });
 
-  it.each([
-    ['fromCommit', { fromCommit: 'reseal-base-2' }],
-    ['toCommit', { toCommit: 'reseal-head-2' }],
-  ])('keeps Scope digest stable when only operator reseal %s changes', (_field, mutation) => {
-    const first = deriveBuildReviewRubricProjections(source());
-    const original = source();
-    const changed = source({
-      inputs: {
-        ...original.inputs,
-        sourceSnapshot: {
-          ...original.inputs.sourceSnapshot,
-          operatorReseals: [{
-            ...original.inputs.sourceSnapshot.operatorReseals![0],
-            ...mutation,
-          }],
-        },
-      },
-    });
-    const second = deriveBuildReviewRubricProjections(changed);
+  it('pairs digest coverage with every key in the closed provenance vocabulary', () => {
+    expect(Object.keys(provenanceKeyCoverage).sort()).toEqual([...BUILD_REVIEW_PROVENANCE_KEYS].sort());
+  });
 
-    expect(second.scope.snapshotDigest).toBe(first.scope.snapshotDigest);
-    expect(second.scope.digest).toBe(first.scope.digest);
-    expect(second.scope.operatorReseals).toMatchObject([mutation]);
-    expect(second.tautology.digest).toBe(first.tautology.digest);
-    expect(second.rootCause.digest).toBe(first.rootCause.digest);
-    expect(second.completeness.digest).toBe(first.completeness.digest);
+  it.each([...BUILD_REVIEW_PROVENANCE_KEYS])(
+    'ignores provenance key %s in every digest while its semantic sibling stays digest-sensitive',
+    (key) => {
+      const coverage = provenanceKeyCoverage[key];
+      const first = deriveBuildReviewRubricProjections(source());
+
+      const provenanceChanged = deriveBuildReviewRubricProjections(coverage.provenance(source()));
+      for (const rubric of ALL_RUBRICS) {
+        expect(provenanceChanged[rubric].digest, `${key} must not perturb the ${rubric} digest`).toBe(first[rubric].digest);
+      }
+
+      const semanticChanged = deriveBuildReviewRubricProjections(coverage.semanticSibling(source()));
+      for (const rubric of ALL_RUBRICS) {
+        if (coverage.semanticAffected.includes(rubric)) {
+          expect(semanticChanged[rubric].digest, `${key}'s semantic sibling must change the ${rubric} digest`).not.toBe(first[rubric].digest);
+        } else {
+          expect(semanticChanged[rubric].digest, `${key}'s semantic sibling must not change the ${rubric} digest`).toBe(first[rubric].digest);
+        }
+      }
+    },
+  );
+
+  it('ignores provenance nested at any depth inside evidence records', () => {
+    // Regression: a nested commit SHA or execution-timing field must not
+    // change any projection digest — normalization is recursive, not
+    // record-shaped, so nesting can never hide provenance again.
+    const nested = (headSha: string, startedAt: string, stdout: string): Source => withPreflight(
+      withRepair(source(), {
+        execution: { provenanceHeadSha: headSha, timing: { startedAt, durationMs: stdout.length } },
+      }),
+      { counterfactualRun: { anchors: { headSha }, output: { stdout } } },
+    );
+    const first = deriveBuildReviewRubricProjections(nested('nested-head-a', '2026-08-15T11:00:00.000Z', 'nested log a'));
+    const second = deriveBuildReviewRubricProjections(nested('nested-head-b', '2026-08-15T12:00:00.000Z', 'nested log b'));
+    for (const rubric of ALL_RUBRICS) {
+      expect(second[rubric].digest, `nested provenance must not perturb the ${rubric} digest`).toBe(first[rubric].digest);
+    }
+
+    // A semantic field at the same nesting depth stays digest-sensitive.
+    const nestedSemantic = (verdict: string): Source =>
+      withRepair(source(), { execution: { verdict } });
+    expect(deriveBuildReviewRubricProjections(nestedSemantic('flaky')).tautology.digest)
+      .not.toBe(deriveBuildReviewRubricProjections(nestedSemantic('settled')).tautology.digest);
+  });
+
+  it('keeps counterfactual output and full-suite transcripts readable while digests ignore them', () => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const second = deriveBuildReviewRubricProjections(withPreflight(
+      withProof(source(), { stdout: 'rerun full suite stdout', stderr: 'rerun full suite stderr' }),
+      { output: { stdout: 'rerun counterfactual stdout', stderr: 'rerun counterfactual stderr' } },
+    ));
+
+    for (const rubric of ALL_RUBRICS) {
+      expect(second[rubric].digest).toBe(first[rubric].digest);
+    }
+    expect(second.tautology.testSuiteProof).toMatchObject({
+      stdout: 'rerun full suite stdout', stderr: 'rerun full suite stderr',
+    });
+    expect(second.tautology.preflightEvidence).toMatchObject({
+      output: { stdout: 'rerun counterfactual stdout', stderr: 'rerun counterfactual stderr' },
+    });
   });
 
   it.each([
@@ -326,77 +576,6 @@ describe('build-review rubric projections', () => {
     expect(second.tautology.digest).toBe(first.tautology.digest);
     expect(second.rootCause.digest).toBe(first.rootCause.digest);
     expect(second.completeness.digest).toBe(first.completeness.digest);
-  });
-
-  it('keeps Tautology digest stable for proof timing while retaining that timing for the grader', () => {
-    const first = deriveBuildReviewRubricProjections(source());
-    const original = source();
-    const second = deriveBuildReviewRubricProjections(source({
-      inputs: {
-        ...original.inputs,
-        testSuiteProof: {
-          ...original.inputs.testSuiteProof,
-          startedAt: '2026-08-15T12:00:00.000Z',
-          endedAt: '2026-08-15T12:00:08.000Z',
-          durationMs: 8_000,
-        },
-      },
-    }));
-
-    expect(second.tautology.digest).toBe(first.tautology.digest);
-    expect(second.tautology.testSuiteProof).toMatchObject({
-      startedAt: '2026-08-15T12:00:00.000Z',
-      endedAt: '2026-08-15T12:00:08.000Z', durationMs: 8_000,
-    });
-  });
-
-  it('keeps Tautology digest stable when preflight cache provenance changes', () => {
-    const first = deriveBuildReviewRubricProjections(source());
-    const original = source();
-    const second = deriveBuildReviewRubricProjections(source({
-      tautology: {
-        ...original.tautology,
-        preflightEvidence: {
-          ...(original.tautology.preflightEvidence as Record<string, unknown>),
-          cacheProvenance: 'hit',
-        },
-      },
-    }));
-
-    expect(second.tautology.digest).toBe(first.tautology.digest);
-    expect(second.tautology.preflightEvidence).toMatchObject({ cacheProvenance: 'hit' });
-  });
-
-  it('changes Tautology digest when a semantic proof field changes', () => {
-    const first = deriveBuildReviewRubricProjections(source());
-    const original = source();
-    const second = deriveBuildReviewRubricProjections(source({
-      inputs: {
-        ...original.inputs,
-        testSuiteProof: { ...original.inputs.testSuiteProof, fingerprint: 'changed-proof-fingerprint' },
-      },
-    }));
-
-    expect(second.tautology.digest).not.toBe(first.tautology.digest);
-  });
-
-  it('keeps every affected rubric digest stable for repair-record identity and invalidation timing', () => {
-    const first = deriveBuildReviewRubricProjections(source());
-    const original = source();
-    const second = deriveBuildReviewRubricProjections(source({
-      inputs: {
-        ...original.inputs,
-        sourceSnapshot: {
-          ...original.inputs.sourceSnapshot,
-          repairContext: [{ ...original.inputs.sourceSnapshot.repairContext[0]!, id: 'repair-rebased', rebaseInvalidatedAt: 9_999 }],
-        },
-      },
-    }));
-
-    for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
-      expect(second[rubric].digest).toBe(first[rubric].digest);
-    }
-    expect(second.tautology.repairContext).toMatchObject([{ id: 'repair-rebased', rebaseInvalidatedAt: 9_999 }]);
   });
 
   it.each([
