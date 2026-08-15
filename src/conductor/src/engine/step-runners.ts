@@ -56,7 +56,7 @@ import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import { parseBuildReviewLapId, parseBuildReviewJudgedResult, type BuildReviewRubricResult } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
-import { classifyTautologyPaths, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
+import { classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -1920,6 +1920,11 @@ export class DefaultStepRunner implements StepRunner {
     const timeoutMs = (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
+    const removalMaintenanceSelectors = deriveRemovalMaintenanceSelectors(
+      inputs.diff,
+      classified.tests,
+      inputs.sourceSnapshot.removalContext,
+    );
     return await materializeTautologyPreflight({
       scopedWorkingDirectory: this.projectDir,
       mergeBase: inputs.sourceSnapshot.mergeBase,
@@ -1927,6 +1932,9 @@ export class DefaultStepRunner implements StepRunner {
       diff: inputs.diff,
       scopedCommand: this.config?.test_suite?.scoped_command ?? null,
       currentGreenProofIdentity: `${inputs.testSuiteProof.provenanceHeadSha}:${inputs.testSuiteProof.fingerprint}`,
+      ...(removalMaintenanceSelectors.length > 0
+        ? { approvedException: 'removal-maintenance' as const, removalMaintenanceSelectors }
+        : {}),
       createCheckout: async (path, headSha) => {
         const result = await this.gitRunner(['worktree', 'add', '--detach', path, headSha]);
         if (result.exitCode !== 0) throw new Error(result.stderr);

@@ -96,6 +96,35 @@ export function classifyTautologyPaths(paths: readonly string[]): TautologyPathC
   };
 }
 
+/**
+ * Select only changed tests that name an engine-derived removal.  This is a
+ * deliberately conservative mechanical prefilter: the rubric still checks
+ * the closed three-part removal-maintenance contract, but unrelated changed
+ * tests never inherit an exception merely because the same diff removes an
+ * API surface.
+ */
+export function deriveRemovalMaintenanceSelectors(
+  diff: string,
+  selectors: readonly string[],
+  removalContext: {
+    readonly deletedFiles: readonly string[];
+    readonly removedDeclarations: readonly string[];
+    readonly removedMembers: readonly { readonly declaration: string; readonly member: string }[];
+  },
+): readonly string[] {
+  const terms = [
+    ...removalContext.deletedFiles,
+    ...removalContext.removedDeclarations,
+    ...removalContext.removedMembers.flatMap(({ declaration, member }) => [declaration, member]),
+  ].filter((term) => term.length > 0);
+  if (terms.length === 0) return [];
+  const chunks = diff.split(/^diff --git /m);
+  return selectors.filter((selector) => {
+    const chunk = chunks.find((candidate) => candidate.startsWith(`a/${selector} b/${selector}`));
+    return chunk !== undefined && terms.some((term) => chunk.includes(term));
+  }).sort();
+}
+
 function failure(
   reason: Extract<TautologyPreflightResult, { classification: 'infrastructure-failure' }>['reason'],
   paths: readonly string[],

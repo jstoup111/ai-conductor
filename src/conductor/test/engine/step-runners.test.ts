@@ -3308,10 +3308,17 @@ TIER: M`,
       await runner.run('build_review', emptyState);
 
       const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      expect(invoke).toHaveBeenCalledTimes(4);
       expect(prompts).toContain('shared.ts');
       expect(prompts).toContain('shared parser changes atomically');
       expect(prompts).toContain('Task 3');
       expect(prompts).toContain(sha);
+      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
+      expect(scopePrompt).toContain('shared parser changes atomically');
+      expect(invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .filter((prompt) => !prompt.includes('"rubric":"scope"')).join('\n'))
+        .not.toContain('shared parser changes atomically');
     });
 
     it('renders and warning-logs containment violations with task, sha, and every path', async () => {
@@ -3342,6 +3349,7 @@ TIER: M`,
         const result = await runner.run('build_review', emptyState);
         const warnings = warnSpy.mock.calls.flat().join('\n');
 
+        expect(invoke).toHaveBeenCalledTimes(4);
         expect(result.output).toContain('Task 3');
         expect(result.output).toContain(sha);
         expect(result.output).toContain('artifacts.ts');
@@ -3459,6 +3467,7 @@ TIER: M`,
 
       expect(result.success).toBe(false);
       const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      expect(invoke).toHaveBeenCalledTimes(4);
       expect(prompts).toContain('Grade against this one.');
       expect(prompts).not.toContain('Wrong plan.');
     });
@@ -3479,6 +3488,7 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
+      expect(invoke).toHaveBeenCalledTimes(4);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
@@ -3502,6 +3512,7 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.repairProvenance).toEqual({ disposition: 'none_warranted' });
+      expect(invoke).toHaveBeenCalledTimes(4);
     });
 
     it('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
@@ -3521,6 +3532,7 @@ TIER: M`,
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
+      expect(invoke).toHaveBeenCalledTimes(4);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,

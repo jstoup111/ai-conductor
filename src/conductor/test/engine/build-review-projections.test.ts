@@ -56,7 +56,7 @@ describe('build-review rubric projections', () => {
     expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness']);
     expect(Object.keys(projections.tautology).sort()).toEqual([
       'changedTestSelectors', 'contractVersion', 'diff', 'digest', 'lapId', 'preflightEvidence',
-      'projectionVersion', 'revertedProductionPatch', 'rubric', 'snapshotDigest', 'testSuiteProof',
+      'projectionVersion', 'repairContext', 'revertedProductionPatch', 'rubric', 'snapshotDigest', 'testSuiteProof',
     ]);
     expect(Object.keys(projections.scope).sort()).toEqual([
       'acceptedWidenings', 'contractVersion', 'diff', 'digest', 'lapId', 'operatorReseals', 'planBody', 'projectionVersion',
@@ -73,7 +73,7 @@ describe('build-review rubric projections', () => {
     expect(projections.tautology).toMatchObject({
       rubric: 'tautology', projectionVersion: 'v1', lapId, snapshotDigest: 'sha256:snapshot',
       diff: expect.any(String), changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
-      revertedProductionPatch: 'revert patch', preflightEvidence: expect.any(Object),
+      revertedProductionPatch: 'revert patch', preflightEvidence: expect.any(Object), repairContext: expect.any(Array),
     });
     expect(projections.scope).toMatchObject({
       planBody: '# Approved plan\n', repairContext: expect.any(Array), acceptedWidenings: expect.any(Array),

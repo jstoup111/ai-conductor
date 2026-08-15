@@ -3,9 +3,20 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   materializeTautologyPreflight,
   classifyTautologyPaths,
+  deriveRemovalMaintenanceSelectors,
 } from '../../src/engine/build-review-tautology-preflight.js';
 
 describe('build-review Tautology preflight', () => {
+  it('derives removal-maintenance eligibility per changed selector rather than per diff', () => {
+    const diff = [
+      'diff --git a/src/old.ts b/src/old.ts', '-export function retired() {}',
+      'diff --git a/test/retired.test.ts b/test/retired.test.ts', '+expect(retired).toBeUndefined()',
+      'diff --git a/test/new.test.ts b/test/new.test.ts', '+expect(newBehavior()).toBe(true)',
+    ].join('\n');
+    expect(deriveRemovalMaintenanceSelectors(diff, ['test/retired.test.ts', 'test/new.test.ts'], {
+      deletedFiles: [], removedDeclarations: ['retired'], removedMembers: [],
+    })).toEqual(['test/retired.test.ts']);
+  });
   it('keeps HEAD tests while replacing only changed production files in a nested disposable checkout', async () => {
     const rootSnapshot = { 'src/a.ts': 'HEAD production', 'test/a.test.ts': 'HEAD test' };
     const featureSnapshot = JSON.stringify(rootSnapshot);

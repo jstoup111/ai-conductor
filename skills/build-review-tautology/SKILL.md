@@ -21,6 +21,7 @@ Use only the supplied projection version `v1`. Its closed input contains:
 - the reverted-production patch; and
 - typed preflight evidence, including source identities, the scoped command, bounded output, and
   its result classification.
+- engine-recorded rebase-repair context, when a changed test repairs stale base-state expectations.
 
 Do not infer facts from a prior review, a maker transcript, task-status narrative, or any state not
 present in this projection.
@@ -37,6 +38,12 @@ Interpret the preflight classification precisely:
 - `approved-exception` is not a finding when the supplied exception covers the relevant selector.
 - `infrastructure-failure` is not a finding. Do not invent evidence, downgrade it to a pass, or
   convert it into content criticism.
+
+The only exceptions are rebase repair, removal maintenance, and fixture relocation. Apply their
+diff-derived criteria exactly as supplied by the projection; a selector outside those criteria is
+measured normally. A fixture relocation requires both the test-path move and a production path
+handling/classification change that makes the former path lose its prior meaning; a move alone is
+not an exception.
 
 ## Result contract (v1)
 

@@ -129,7 +129,6 @@ describe('build_review resolves the feature-scoped plan, not the alphabetically-
       gitRunner: realGit(),
       modelOverride: 'fable',
       config: { model_fallback_ladder: ['fable'] } as HarnessConfig,
-      buildReviewInputOptions: currentBuildReviewProof,
     });
 
     const result = await runner.run('build_review', {

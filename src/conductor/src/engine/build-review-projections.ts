@@ -41,6 +41,8 @@ export interface TautologyProjection extends CommonProjection<'tautology'> {
   readonly testSuiteProof: BuildReviewProjectionJson;
   readonly revertedProductionPatch: string;
   readonly preflightEvidence: BuildReviewProjectionJson;
+  /** Rebase-repair evidence is visible only to the closed Tautology contract. */
+  readonly repairContext: readonly BuildReviewProjectionJson[];
 }
 
 export interface ScopeProjection extends CommonProjection<'scope'> {
@@ -127,6 +129,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     testSuiteProof: canonicalize(json(inputs.testSuiteProof)),
     revertedProductionPatch: source.tautology.revertedProductionPatch,
     preflightEvidence: canonicalize(source.tautology.preflightEvidence),
+    repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
   }) as TautologyProjection;
   const scope = seal({
     ...common(source, 'scope'), planBody: inputs.sourceSnapshot.planBody,
@@ -145,7 +148,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
 }
 
 const KEYS: Record<BuildReviewRubricId, readonly string[]> = {
-  tautology: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'changedTestSelectors', 'testSuiteProof', 'revertedProductionPatch', 'preflightEvidence'],
+  tautology: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'changedTestSelectors', 'testSuiteProof', 'revertedProductionPatch', 'preflightEvidence', 'repairContext'],
   scope: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext', 'acceptedWidenings', 'operatorReseals'],
   rootCause: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody', 'repairContext'],
   completeness: ['rubric', 'contractVersion', 'projectionVersion', 'lapId', 'snapshotDigest', 'digest', 'diff', 'planBody'],
