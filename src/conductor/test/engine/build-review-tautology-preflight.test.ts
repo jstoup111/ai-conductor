@@ -170,20 +170,32 @@ describe('build-review Tautology preflight', () => {
     );
   });
 
-  it.each([
-    ['no matching tests', 'no-tests'],
-    ['test collection failure', 'collection-failure'],
-  ])('fails closed when the scoped run reports %s rather than manufacturing RED evidence', async (_name, kind) => {
+  it('fails closed when the scoped run reports no matching tests rather than manufacturing RED evidence', async () => {
     const result = await materializeTautologyPreflight({
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
       diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
       createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
-      runScoped: async () => ({ kind: kind as 'no-tests' | 'collection-failure', exitCode: 1, stdout: '', stderr: 'no tests collected' }),
+      runScoped: async () => ({ kind: 'no-tests', exitCode: 1, stdout: '', stderr: 'no tests collected' }),
       removeCheckout: async () => {},
     });
 
-    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: kind === 'no-tests' ? 'scoped-run-no-tests' : 'scoped-run-collection-failed' });
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason: 'scoped-run-no-tests' });
     expect(result.classification).not.toBe('red');
+  });
+
+  it('classifies a reverted-tree collection failure as RED — the tests cannot load without the diff', async () => {
+    // The preflight's precondition is a current-HEAD green proof: tests that
+    // collect and pass with the diff but fail to even import once the diff's
+    // production is reverted have demonstrably failed without the diff.
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: 'collection-failure', exitCode: 1, stdout: '', stderr: 'Failed to load url ./added-module.ts' }),
+      removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({ classification: 'red', cacheable: true });
   });
 
   it('marks only a scoped assertion failure as semantic RED input', () => {

@@ -418,6 +418,28 @@ type ProviderAwareOneShotRequest =
       step: ProviderAwareFreeFormOneShotStep;
     });
 
+
+/**
+ * Extracts the judged-result JSON object from a rubric session's output.
+ * Sessions intermittently wrap the JSON in prose or markdown fences; a strict
+ * whole-output parse turned that wrapping into `invalid-provider-result`
+ * infrastructure failures. Parsing tries the raw output first, then a fenced
+ * block, then the outermost balanced object. Returns undefined when no
+ * candidate parses — validation of the parsed shape stays with the caller.
+ */
+export function extractJudgedResultCandidate(output: string): unknown {
+  const candidates: string[] = [output.trim()];
+  const fence = output.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
+  if (fence) candidates.push(fence[1].trim());
+  const first = output.indexOf('{');
+  const last = output.lastIndexOf('}');
+  if (first !== -1 && last > first) candidates.push(output.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try { return JSON.parse(candidate); } catch { /* try next shape */ }
+  }
+  return undefined;
+}
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -1898,11 +1920,8 @@ export class DefaultStepRunner implements StepRunner {
       const verified = safety?.verify(result) ?? result;
       this.callCount++;
       if (!verified.success || typeof verified.output !== 'string') return undefined;
-      try {
-        return parseBuildReviewJudgedResult(JSON.parse(verified.output));
-      } catch {
-        return undefined;
-      }
+      const candidate = extractJudgedResultCandidate(verified.output);
+      return candidate === undefined ? undefined : parseBuildReviewJudgedResult(candidate);
     }
     const result = await this.provider.invoke({
       prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${rubricPrompt}`,
@@ -1915,11 +1934,8 @@ export class DefaultStepRunner implements StepRunner {
     });
     this.callCount++;
     if (!result.success || typeof result.output !== 'string') return undefined;
-    try {
-      return parseBuildReviewJudgedResult(JSON.parse(result.output));
-    } catch {
-      return undefined;
-    }
+    const candidate = extractJudgedResultCandidate(result.output);
+    return candidate === undefined ? undefined : parseBuildReviewJudgedResult(candidate);
   }
 
   private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {
