@@ -12,6 +12,7 @@
  */
 
 import { execFile as execFileCallback } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,6 +76,19 @@ afterEach(async () => {
 });
 
 describe('acceptance: independent build_review rubric execution', () => {
+  it('wires the daemon feature event persister into its lifecycle runner', () => {
+    // Daemon mode owns the feature worktree EventPersister. The runner must
+    // receive that exact feature-scoped emitter, otherwise build_review's
+    // optional event callback silently drops the rubric and outer-verdict
+    // records before they reach .pipeline/events.jsonl.
+    const daemonSource = readFileSync(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
+    const runnerConstruction = daemonSource.match(
+      /const stepRunner = new DefaultStepRunner\([\s\S]*?\n    \);/,
+    )?.[0];
+
+    expect(runnerConstruction).toContain('events: featureEvents,');
+  });
+
   it('persists an early disposition refusal through the same-schema external event ledger', async () => {
     const { dir } = await fixtureRepo();
     await expect(dispatchBuildReviewAccept({

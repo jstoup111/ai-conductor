@@ -985,6 +985,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         modelPolicy: selectedRuntime.policy,
         mode: 'auto',
         providerExecution,
+        events: featureEvents,
         log: featureLog,
       },
     );
