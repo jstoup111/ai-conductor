@@ -34,6 +34,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
+import { resolvePlanPrdPath } from './plan-prd-reference.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -95,6 +96,14 @@ export interface ArtifactResolutionContext {
   featureDesc?: string;
   featureIdentities: readonly string[];
   changedPaths: ReadonlySet<string>;
+  /**
+   * Repo-relative `.docs/specs/...` path an active plan names via an explicit
+   * `**PRD:**` line — set only when a plan legitimately amends an older PRD
+   * whose filename predates and differs from the current feature's slug. See
+   * `resolvePlanPrdPath` for the reference grammar and `resolveFeaturePrdPaths`
+   * for how this is consulted ahead of the stem-matching ladder.
+   */
+  explicitPrdPath?: string;
 }
 
 export interface ArtifactResolutionResult {
@@ -143,6 +152,20 @@ export async function buildArtifactResolutionContext(
     options.featureDesc ? slugify(options.featureDesc) : undefined,
   ].filter((identity): identity is string => Boolean(identity));
   const uniqueFeatureIdentities = [...new Set(featureIdentities)];
+
+  let explicitPrdPath: string | undefined;
+  const candidatePlanPath = activePlanPath ?? planPath;
+  if (candidatePlanPath) {
+    try {
+      const content = await readFile(candidatePlanPath, 'utf8');
+      const candidateRepoPath = relative(projectRoot, candidatePlanPath).replaceAll('\\', '/');
+      const resolved = resolvePlanPrdPath(candidateRepoPath, content);
+      if (resolved) explicitPrdPath = resolved;
+    } catch {
+      // Plan unreadable; the existing stem-matching ladder still applies.
+    }
+  }
+
   const changedPaths = new Set<string>();
 
   try {
@@ -183,6 +206,7 @@ export async function buildArtifactResolutionContext(
     featureDesc: options.featureDesc,
     featureIdentities: uniqueFeatureIdentities,
     changedPaths,
+    explicitPrdPath,
   };
 }
 
@@ -610,6 +634,11 @@ export async function resolveFeaturePrdPaths(
   );
   const matchesStem = (stem: string): string[] =>
     prdFiles.filter((path) => planStem(path) === stem);
+
+  if (context.explicitPrdPath) {
+    const matches = matchesStem(planStem(context.explicitPrdPath));
+    if (matches.length > 0) return matches;
+  }
 
   if (context.activePlanPath) {
     const matches = matchesStem(planStem(context.activePlanPath));

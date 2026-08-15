@@ -322,6 +322,42 @@ describe('engine/artifacts', () => {
         },
       });
     });
+
+    it('reads an explicit **PRD:** reference off the active plan into explicitPrdPath', async () => {
+      await createFile(
+        '.pipeline/engine-state.json',
+        JSON.stringify({ activePlanPath: '.docs/plans/current-feature.md' }),
+      );
+      await createFile(
+        '.docs/plans/current-feature.md',
+        '**Stories:** .docs/stories/current-feature.md\n**PRD:** `.docs/specs/older-prd.md`\n',
+      );
+
+      const context = await buildArtifactResolutionContext(dir, {
+        featureDesc: 'current feature',
+        git: async () => ({ exitCode: 1, stdout: '', stderr: 'indeterminate' }),
+      });
+
+      expect(context.explicitPrdPath).toBe('.docs/specs/older-prd.md');
+    });
+
+    it('leaves explicitPrdPath unset when the active plan has no PRD line', async () => {
+      await createFile(
+        '.pipeline/engine-state.json',
+        JSON.stringify({ activePlanPath: '.docs/plans/current-feature.md' }),
+      );
+      await createFile(
+        '.docs/plans/current-feature.md',
+        '**Stories:** .docs/stories/current-feature.md\n',
+      );
+
+      const context = await buildArtifactResolutionContext(dir, {
+        featureDesc: 'current feature',
+        git: async () => ({ exitCode: 1, stdout: '', stderr: 'indeterminate' }),
+      });
+
+      expect(context.explicitPrdPath).toBeUndefined();
+    });
   });
 
   describe('resolveArtifactFiles', () => {

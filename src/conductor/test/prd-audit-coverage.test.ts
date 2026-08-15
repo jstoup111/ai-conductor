@@ -56,6 +56,46 @@ describe('resolveFeaturePrdPaths', () => {
       resolveFeaturePrdPaths(root, context({ featureIdentities: ['missing-feature'] })),
     ).resolves.toEqual([]);
   });
+
+  it('resolves an explicit PRD reference ahead of an unmatched plan/feature slug', async () => {
+    await writeFile(join(root, '.docs/specs/older-prd.md'), '# PRD');
+    await writeFile(join(root, '.docs/specs/other-feature.md'), '# PRD');
+
+    await expect(
+      resolveFeaturePrdPaths(
+        root,
+        context({
+          activePlanPath: '.docs/plans/current-feature.md',
+          explicitPrdPath: '.docs/specs/older-prd.md',
+        }),
+      ),
+    ).resolves.toEqual([join(root, '.docs/specs/older-prd.md')]);
+  });
+
+  it('falls through to the stem ladder when the explicit PRD reference matches nothing real', async () => {
+    await writeFile(join(root, '.docs/specs/current-feature.md'), '# PRD');
+
+    await expect(
+      resolveFeaturePrdPaths(
+        root,
+        context({
+          activePlanPath: '.docs/plans/current-feature.md',
+          explicitPrdPath: '.docs/specs/nonexistent-prd.md',
+        }),
+      ),
+    ).resolves.toEqual([join(root, '.docs/specs/current-feature.md')]);
+  });
+
+  it('does not resolve an explicit PRD reference that was superseded', async () => {
+    await writeFile(join(root, '.docs/specs/SUPERSEDED-older-prd.md'), '# PRD');
+
+    await expect(
+      resolveFeaturePrdPaths(
+        root,
+        context({ explicitPrdPath: '.docs/specs/older-prd.md' }),
+      ),
+    ).resolves.toEqual([]);
+  });
 });
 
 describe('findFrIdsWithoutRows', () => {
