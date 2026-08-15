@@ -174,6 +174,10 @@ describe('build-review rubric projections', () => {
           baseRef: 'origin/rebased-main',
           mergeBase: 'rebased-merge-base',
           headSha: 'rebased-head',
+          acceptedWidenings: [{
+            ...original.inputs.sourceSnapshot.acceptedWidenings[0]!,
+            sha: 'rebased-widening-sha',
+          }],
         },
       },
       tautology: {
@@ -225,9 +229,9 @@ describe('build-review rubric projections', () => {
         } } }),
       },
       {
-        name: 'accepted widenings', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        name: 'accepted widenings', affectedRubrics: ['scope'],
         changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
-          ...original.inputs.sourceSnapshot, contentDigest: 'sha256:content-widening',
+          ...original.inputs.sourceSnapshot,
           acceptedWidenings: [{ path: 'src/new.ts', rationale: 'new', taskId: '3', sha: 'new' }],
         } } }),
       },

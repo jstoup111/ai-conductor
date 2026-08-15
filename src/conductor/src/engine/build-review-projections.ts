@@ -143,6 +143,17 @@ function withoutPreflightSourceIdentities(value: BuildReviewProjectionJson): Bui
   return evidenceContent;
 }
 
+/** Scope widening SHAs identify the accepting commit for graders, not the widening's meaning. */
+function withoutAcceptedWideningCommitShas(value: readonly BuildReviewProjectionJson[]): readonly BuildReviewProjectionJson[] {
+  return value.map((widening) => {
+    if (widening === null || Array.isArray(widening) || typeof widening !== 'object') return widening;
+    const { sha: _ignoredCommitSha, ...wideningContent } = widening as {
+      readonly [key: string]: BuildReviewProjectionJson;
+    };
+    return wideningContent;
+  });
+}
+
 /** Version-bound digest of a closed projection, excluding rebase-only provenance. */
 export function projectionDigest(projection: Omit<BuildReviewRubricProjection, 'digest'> | BuildReviewRubricProjection): string {
   const {
@@ -160,6 +171,9 @@ export function projectionDigest(projection: Omit<BuildReviewRubricProjection, '
       : {}),
     ...('preflightEvidence' in digestibleProjection
       ? { preflightEvidence: withoutPreflightSourceIdentities(digestibleProjection.preflightEvidence) }
+      : {}),
+    ...('acceptedWidenings' in digestibleProjection
+      ? { acceptedWidenings: withoutAcceptedWideningCommitShas(digestibleProjection.acceptedWidenings) }
       : {}),
   };
   return `sha256:${createHash('sha256').update(canonicalJson(contentIdentity as unknown as BuildReviewProjectionJson)).digest('hex')}`;
