@@ -21,6 +21,16 @@
 > grader. The task composes the two approved designs by carrying reseal records into the frozen
 > Scope projection and nowhere else; a reseal remains judged evidence, never an exemption.
 
+> **Amended 2026-08-14 by the operator after PR #1577 merged:**
+> `adr-2026-08-14-retire-build-review-wiring-rubric` retires the Wiring rubric repository-wide,
+> superseding the Wiring item of `adr-2026-08-11-wiring-judged-in-build-review`. This feature ships
+> a FOUR-member fan-out — Tautology, Scope, Root Cause, Completeness. Where earlier task text
+> enumerates five rubrics or names the Wiring member, read four; Task 9's `build-review-wiring`
+> skill and the Wiring-only `missing-entry-points` skip reason are removed by appended Task
+> rem-build-review-10. rem-build-review-8's reference to
+> `wiring-judged-in-build-review.acceptance.test.ts` resolves to main's renamed
+> `build-review-no-longer-judges-wiring.acceptance.test.ts` after the finish-time rebase.
+
 ## Summary
 
 Keep one public `build_review` gate while moving its five judgement concerns into independently
@@ -1074,13 +1084,40 @@ implementation branches do not edit release artifacts.
    with faithful provider fakes. Commit `fix(build-review): preserve reseal evidence in scope fan-out`
    with trailer `Task: rem-build-review-9`.
 
+### Task rem-build-review-10: Retire the Wiring rubric member from the fan-out
+
+**Story:** 1
+**Story:** 3
+**Story:** 25
+**Type:** negative
+**Files:** `skills/build-review-wiring/SKILL.md`, `src/conductor/src/engine/build-review-registry.ts`, `src/conductor/src/engine/build-review-domain.ts`, `src/conductor/src/engine/build-review-coordinator.ts`, `src/conductor/src/engine/build-review-aggregate.ts`, `src/conductor/src/engine/build-review-projections.ts`, `src/conductor/src/engine/build-review-cache.ts`, `src/conductor/src/engine/build-review-finding-identity.ts`, `src/conductor/test/engine/build-review-registry.test.ts`, `src/conductor/test/engine/build-review-domain.test.ts`, `src/conductor/test/engine/build-review-coordinator.test.ts`, `src/conductor/test/engine/build-review-aggregate.test.ts`, `src/conductor/test/engine/build-review-projections.test.ts`, `src/conductor/test/engine/build-review-cache.test.ts`, `src/conductor/test/engine/build-review-finding-identity.test.ts`, `src/conductor/test/engine/build-review-rubric-skills.test.ts`, `src/conductor/test/acceptance/build-review-rubric-fanout-and-dispositions.acceptance.test.ts`
+**Dependencies:** Tasks rem-build-review-8, rem-build-review-9
+
+1. Write failing cases across the named suites: the registry exposes exactly four members
+   (Tautology, Scope, Root Cause, Completeness) and no `wiring` key; the domain's closed unions
+   contain neither a `wiring` rubric id nor a `missing-entry-points` skip reason; the coordinator
+   dispatches four branches with no entry-point prerequisite path; aggregate, projections, cache,
+   and finding-identity reject or ignore a `wiring` key per `adr-2026-08-14`'s read-tolerance rule;
+   the fan-out acceptance run materializes exactly four branch artifacts.
+2. Run only the named suites; confirm RED because the five-member registry, the
+   `build-review-wiring` skill, and the Wiring-only skip machinery still exist.
+3. Delete `skills/build-review-wiring/SKILL.md` and the registry's wiring entry; remove the
+   `missing-entry-points` reason and the Wiring entry-point prerequisite from domain and
+   coordinator; shrink the rubric unions and cache/artifact key spaces to four. When READING a
+   stored aggregate or cache entry, ignore a retired `wiring` key rather than failing — the
+   fail-open rule `adr-2026-08-14-retire-build-review-wiring-rubric` sets for in-flight artifacts.
+4. Re-run the named suites; confirm GREEN: four branches, no wiring artifact or cache entry, and
+   unchanged identities for the surviving four members.
+5. Commit `refactor(build-review): retire the wiring rubric member` with trailer
+   `Task: rem-build-review-10`.
+
 ## Story Coverage
 
 | Story | Primary tasks |
 |---:|---|
-| 1 | 4-11, 20, 23, 27, 40, rem-build-review-2, rem-build-review-8, rem-build-review-9 |
+| 1 | 4-11, 20, 23, 27, 40, rem-build-review-2, rem-build-review-8, rem-build-review-9, rem-build-review-10 |
 | 2 | 1, 3, 20, 21, 23, 40, rem-build-review-2, rem-build-review-8 |
-| 3 | 1, 2, 8, 9, 22, 40, rem-build-review-5, rem-build-review-8 |
+| 3 | 1, 2, 8, 9, 22, 40, rem-build-review-5, rem-build-review-8, rem-build-review-10 |
 | 4 | 2, 22, 40 |
 | 5 | 1-4, 10, 21, 23, 40, rem-build-review-2, rem-build-review-8 |
 | 6 | 12, 13, 18, 23, 24, 40, rem-build-review-2, rem-build-review-3, rem-build-review-9 |
@@ -1102,7 +1139,7 @@ implementation branches do not edit release artifacts.
 | 22 | 1-3, 10, 22, 40, rem-build-review-1, rem-build-review-8 |
 | 23 | 12, 22, 28, 40, rem-build-review-1, rem-build-review-7, rem-build-review-8 |
 | 24 | 5, 12, 14-16, 23, 40 |
-| 25 | 4, 13, 17-19, 22, 23, 28, 34, 36, 40, rem-build-review-3, rem-build-review-8 |
+| 25 | 4, 13, 17-19, 22, 23, 28, 34, 36, 40, rem-build-review-3, rem-build-review-8, rem-build-review-10 |
 
 ## Dependency and Batch Boundaries
 
@@ -1115,7 +1152,7 @@ implementation branches do not edit release artifacts.
 - **Batch 4 — observability and publication:** Tasks 34-40. Review event-spine reuse, metric
   denominators, accepted-risk parity, and full fake-boundary acceptance evidence.
 - **Batch 5 — post-BUILD production repair:** Tasks rem-build-review-1 through
-  rem-build-review-9. Review resolved-default routing, auxiliary provider/skill policy, durable
+  rem-build-review-10. Review resolved-default routing, auxiliary provider/skill policy, durable
   branch/cache effects, one-spine emission, skip truth table, disposition-aware runner/completion
   parity, Scope-only operator-reseal evidence, and faithful production-path acceptance evidence
   before resuming BUILD.

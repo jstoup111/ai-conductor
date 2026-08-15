@@ -13,6 +13,13 @@ approved.
 **Preserves:** the public gate placement, input-starvation trust boundary, fail-closed verdict,
 and dedicated failure routing established by the superseded decision
 
+> **Amended 2026-08-14 by PR #1577:** `adr-2026-08-14-retire-build-review-wiring-rubric` retires
+> the Wiring rubric repository-wide. This decision's branch topology, skill-owned judgement policy,
+> skip semantics, and fail-closed rules are unchanged, applied to the remaining FOUR members —
+> Tautology, Scope, Root Cause, Completeness. Where this document enumerates five members or names
+> `build-review-wiring` or the Wiring-only `missing-entry-points` skip reason, read the four-member
+> set with `disabled` as the only skip reason.
+
 ## Context
 
 `build_review` began as one engine-internal, one-shot grader because a normal custom step or skill

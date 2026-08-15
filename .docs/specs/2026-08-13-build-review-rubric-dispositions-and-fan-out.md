@@ -49,6 +49,9 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 
 - **FR-1:** An enabled `build_review` evaluates Tautology, Scope, Root Cause, Completeness, and
   Wiring as separately attributable rubric results.
+
+> **Amended 2026-08-14 by PR #1577:** the Wiring rubric is retired by
+> `adr-2026-08-14-retire-build-review-wiring-rubric`; FR-1 reads as the remaining FOUR rubrics.
 - **FR-2:** Eligible rubric evaluations run concurrently, subject to a configurable maximum whose
   default is five simultaneous evaluations.
 - **FR-3:** Each rubric is enabled by default and may be disabled independently; a disabled rubric
@@ -66,6 +69,10 @@ and measure whether repeated failures reflect maker quality or overly strict gra
 > `config.wiring.entry_points` is absent or empty is rendered as
 > `skipped: missing-entry-points`. It is visible as reduced coverage, excluded from judged-rate
 > denominators, and never represented as a pass. A lap with no valid judged rubric cannot pass.
+>
+> **Amended 2026-08-14 by PR #1577:** retired with the Wiring rubric — no
+> `missing-entry-points` skip exists in the four-rubric fan-out. The no-judged-rubric-cannot-pass
+> rule is unchanged.
 - **FR-8:** A rubric execution or provider failure blocks the gate and is distinguished from a
   content finding; infrastructure failure never becomes a rubric pass.
 - **FR-9:** Every failed rubric reports every independent finding it observed, and each finding

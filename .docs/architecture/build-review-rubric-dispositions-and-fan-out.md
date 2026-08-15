@@ -17,7 +17,6 @@ graph TD
     SC["build-review-scope"]
     RC["build-review-root-cause"]
     CO["build-review-completeness"]
-    WI["build-review-wiring"]
   end
 
   subgraph Engine["Conductor engine — deterministic authority"]
@@ -199,6 +198,7 @@ cache hits themselves are occurrences on the event spine.
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-08-13 | Confirmed plan wiring and exact-input preflight cache | Post-plan architecture-diagram/review pass |
+| 2026-08-14 | Removed the build-review-wiring skill node; fan-out is four rubric branches | Wiring rubric retired repository-wide by adr-2026-08-14-retire-build-review-wiring-rubric (PR #1577) |
 | 2026-08-13 | Reserved a typed post-judgement resolution seam | Account for future Tautology/Scope claims without designing them in #1542 |
 | 2026-08-13 | Added isolated Tautology RED preflight and per-rubric semantic-result cache | Reuse upstream green proof and bound repeat token spend |
 | 2026-08-13 | Reused the existing external-process event ledger | Architecture review found the approved same-schema sibling pattern already exists |
