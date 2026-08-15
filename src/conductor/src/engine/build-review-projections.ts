@@ -128,10 +128,16 @@ export function canonicalJson(value: BuildReviewProjectionJson): string {
   return JSON.stringify(canonicalize(value));
 }
 
-function withoutEvidenceProvenanceHeadSha(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
+function withoutEvidenceProvenance(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
   if (value === null || Array.isArray(value) || typeof value !== 'object') return value;
   const evidence = value as { readonly [key: string]: BuildReviewProjectionJson };
-  const { provenanceHeadSha: _ignoredProvenanceHeadSha, ...evidenceContent } = evidence;
+  const {
+    provenanceHeadSha: _ignoredProvenanceHeadSha,
+    startedAt: _ignoredStartedAt,
+    endedAt: _ignoredEndedAt,
+    durationMs: _ignoredDurationMs,
+    ...evidenceContent
+  } = evidence;
   return evidenceContent;
 }
 
@@ -154,6 +160,28 @@ function withoutAcceptedWideningCommitShas(value: readonly BuildReviewProjection
   });
 }
 
+/** Scope reseal commit endpoints are readable provenance, while paths and reason carry meaning. */
+function withoutOperatorResealCommitEndpoints(value: readonly BuildReviewProjectionJson[]): readonly BuildReviewProjectionJson[] {
+  return value.map((reseal) => {
+    if (reseal === null || Array.isArray(reseal) || typeof reseal !== 'object') return reseal;
+    const { fromCommit: _ignoredFromCommit, toCommit: _ignoredToCommit, ...resealContent } = reseal as {
+      readonly [key: string]: BuildReviewProjectionJson;
+    };
+    return resealContent;
+  });
+}
+
+/** Repair record identity and invalidation timing are provenance, not remediation meaning. */
+function withoutRepairRecordProvenance(value: readonly BuildReviewProjectionJson[]): readonly BuildReviewProjectionJson[] {
+  return value.map((repair) => {
+    if (repair === null || Array.isArray(repair) || typeof repair !== 'object') return repair;
+    const { id: _ignoredId, rebaseInvalidatedAt: _ignoredRebaseInvalidatedAt, ...repairContent } = repair as {
+      readonly [key: string]: BuildReviewProjectionJson;
+    };
+    return repairContent;
+  });
+}
+
 /** Version-bound digest of a closed projection, excluding rebase-only provenance. */
 export function projectionDigest(projection: Omit<BuildReviewRubricProjection, 'digest'> | BuildReviewRubricProjection): string {
   const {
@@ -167,13 +195,21 @@ export function projectionDigest(projection: Omit<BuildReviewRubricProjection, '
   const contentIdentity = {
     ...digestibleProjection,
     ...('testSuiteProof' in digestibleProjection
-      ? { testSuiteProof: withoutEvidenceProvenanceHeadSha(digestibleProjection.testSuiteProof) }
+      ? { testSuiteProof: withoutEvidenceProvenance(digestibleProjection.testSuiteProof) }
       : {}),
     ...('preflightEvidence' in digestibleProjection
       ? { preflightEvidence: withoutPreflightSourceIdentities(digestibleProjection.preflightEvidence) }
       : {}),
     ...('acceptedWidenings' in digestibleProjection
       ? { acceptedWidenings: withoutAcceptedWideningCommitShas(digestibleProjection.acceptedWidenings) }
+      : {}),
+    ...('operatorReseals' in digestibleProjection
+      ? { operatorReseals: withoutOperatorResealCommitEndpoints(
+        digestibleProjection.operatorReseals as unknown as readonly BuildReviewProjectionJson[],
+      ) }
+      : {}),
+    ...('repairContext' in digestibleProjection
+      ? { repairContext: withoutRepairRecordProvenance(digestibleProjection.repairContext) }
       : {}),
   };
   return `sha256:${createHash('sha256').update(canonicalJson(contentIdentity as unknown as BuildReviewProjectionJson)).digest('hex')}`;

@@ -406,6 +406,33 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.repairContext).toEqual([repair]);
     });
 
+    it('derives shared content identity from semantic repair context, not repair record provenance', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/semantic-repair.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+
+      const contentDigestFor = async (repair: Record<string, unknown>) => {
+        await writeFile(join(dir, '.pipeline/build-review-rebase-repairs.json'), JSON.stringify({ repairs: [repair] }));
+        return (await assembleBuildReviewInputs(realGit(), scopedPlanPath)).sourceSnapshot.contentDigest;
+      };
+      const baselineRepair = {
+        id: 'repair-original', gate: 'test_suite', reason: 'command_failed',
+        diagnostic: 'src/base.ts changed the aggregate command expectation', rebaseInvalidatedAt: 101,
+      };
+
+      const baseline = await contentDigestFor(baselineRepair);
+      const changedProvenance = await contentDigestFor({
+        ...baselineRepair, id: 'repair-rebased', rebaseInvalidatedAt: 202,
+      });
+      const changedReason = await contentDigestFor({ ...baselineRepair, reason: 'timeout' });
+      const changedDiagnostic = await contentDigestFor({ ...baselineRepair, diagnostic: 'src/other.ts changed' });
+
+      expect(changedProvenance).toBe(baseline);
+      expect(changedReason).not.toBe(baseline);
+      expect(changedDiagnostic).not.toBe(baseline);
+    });
+
     it('threads operator reseals only when the plan belongs to the feature root', async () => {
       const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });

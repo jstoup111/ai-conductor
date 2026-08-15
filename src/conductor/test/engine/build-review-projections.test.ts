@@ -40,7 +40,10 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       }],
       sourceSnapshot: {
         digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main', mergeBase: 'base', headSha: 'head',
-        diff: FIXTURE_DIFF, planBody: '# Approved plan\n', repairContext: [],
+        diff: FIXTURE_DIFF, planBody: '# Approved plan\n', repairContext: [{
+          id: 'repair-original', gate: 'test_suite', reason: 'command_failed',
+          diagnostic: 'fixture repair diagnostic', rebaseInvalidatedAt: 1,
+        }],
         acceptedWidenings: [{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }],
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
         operatorReseals: [{
@@ -273,11 +276,9 @@ describe('build-review rubric projections', () => {
   });
 
   it.each([
-    ['rationale', { reason: 'Operator approved revised protected-artifact scope.' }],
-    ['named path', { paths: ['.docs/plans/also-resealed.md'] }],
-    ['from commit', { fromCommit: 'reseal-base-2' }],
-    ['to commit', { toCommit: 'reseal-head-2' }],
-  ])('uses the supplied shared snapshot identity while a reseal %s changes only Scope', (_field, mutation) => {
+    ['fromCommit', { fromCommit: 'reseal-base-2' }],
+    ['toCommit', { toCommit: 'reseal-head-2' }],
+  ])('keeps Scope digest stable when only operator reseal %s changes', (_field, mutation) => {
     const first = deriveBuildReviewRubricProjections(source());
     const original = source();
     const changed = source({
@@ -295,10 +296,114 @@ describe('build-review rubric projections', () => {
     const second = deriveBuildReviewRubricProjections(changed);
 
     expect(second.scope.snapshotDigest).toBe(first.scope.snapshotDigest);
+    expect(second.scope.digest).toBe(first.scope.digest);
+    expect(second.scope.operatorReseals).toMatchObject([mutation]);
+    expect(second.tautology.digest).toBe(first.tautology.digest);
+    expect(second.rootCause.digest).toBe(first.rootCause.digest);
+    expect(second.completeness.digest).toBe(first.completeness.digest);
+  });
+
+  it.each([
+    ['rationale', { reason: 'Operator approved revised protected-artifact scope.' }],
+    ['named path', { paths: ['.docs/plans/also-resealed.md'] }],
+  ])('changes only Scope when an operator reseal semantic %s changes', (_field, mutation) => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const original = source();
+    const second = deriveBuildReviewRubricProjections(source({
+      inputs: {
+        ...original.inputs,
+        sourceSnapshot: {
+          ...original.inputs.sourceSnapshot,
+          operatorReseals: [{
+            ...original.inputs.sourceSnapshot.operatorReseals![0],
+            ...mutation,
+          }],
+        },
+      },
+    }));
+
     expect(second.scope.digest).not.toBe(first.scope.digest);
     expect(second.tautology.digest).toBe(first.tautology.digest);
     expect(second.rootCause.digest).toBe(first.rootCause.digest);
     expect(second.completeness.digest).toBe(first.completeness.digest);
+  });
+
+  it('keeps Tautology digest stable for proof timing while retaining that timing for the grader', () => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const original = source();
+    const second = deriveBuildReviewRubricProjections(source({
+      inputs: {
+        ...original.inputs,
+        testSuiteProof: {
+          ...original.inputs.testSuiteProof,
+          startedAt: '2026-08-15T12:00:00.000Z',
+          endedAt: '2026-08-15T12:00:08.000Z',
+          durationMs: 8_000,
+        },
+      },
+    }));
+
+    expect(second.tautology.digest).toBe(first.tautology.digest);
+    expect(second.tautology.testSuiteProof).toMatchObject({
+      startedAt: '2026-08-15T12:00:00.000Z',
+      endedAt: '2026-08-15T12:00:08.000Z', durationMs: 8_000,
+    });
+  });
+
+  it('changes Tautology digest when a semantic proof field changes', () => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const original = source();
+    const second = deriveBuildReviewRubricProjections(source({
+      inputs: {
+        ...original.inputs,
+        testSuiteProof: { ...original.inputs.testSuiteProof, fingerprint: 'changed-proof-fingerprint' },
+      },
+    }));
+
+    expect(second.tautology.digest).not.toBe(first.tautology.digest);
+  });
+
+  it('keeps every affected rubric digest stable for repair-record identity and invalidation timing', () => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const original = source();
+    const second = deriveBuildReviewRubricProjections(source({
+      inputs: {
+        ...original.inputs,
+        sourceSnapshot: {
+          ...original.inputs.sourceSnapshot,
+          repairContext: [{ ...original.inputs.sourceSnapshot.repairContext[0]!, id: 'repair-rebased', rebaseInvalidatedAt: 9_999 }],
+        },
+      },
+    }));
+
+    for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+      expect(second[rubric].digest).toBe(first[rubric].digest);
+    }
+    expect(second.tautology.repairContext).toMatchObject([{ id: 'repair-rebased', rebaseInvalidatedAt: 9_999 }]);
+  });
+
+  it.each([
+    ['reason', { reason: 'different_failure_reason' }],
+    ['diagnostic', { diagnostic: 'different semantic diagnostic' }],
+  ])('changes every affected rubric digest when repair-record %s changes', (_field, mutation) => {
+    const first = deriveBuildReviewRubricProjections(source());
+    const original = source();
+    const second = deriveBuildReviewRubricProjections(source({
+      inputs: {
+        ...original.inputs,
+        sourceSnapshot: {
+          ...original.inputs.sourceSnapshot,
+          // Input assembly derives a new shared content digest for this
+          // semantic change (covered in build-review-inputs.test.ts).
+          contentDigest: 'sha256:changed-semantic-repair-context',
+          repairContext: [{ ...original.inputs.sourceSnapshot.repairContext[0]!, ...mutation }],
+        },
+      },
+    }));
+
+    for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+      expect(second[rubric].digest).not.toBe(first[rubric].digest);
+    }
   });
 
   it('derives Scope widenings solely from the frozen source snapshot and isolates them from the other rubric payloads', () => {

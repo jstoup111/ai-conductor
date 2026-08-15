@@ -169,9 +169,14 @@ function contentSnapshotDigest(snapshot: Pick<
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff,
     planBody,
-    repairContext,
+    repairContext: semanticRepairContext(repairContext),
     removalContext,
   })).digest('hex')}`;
+}
+
+/** Repair-record identity and invalidation timing explain provenance, not remediation meaning. */
+function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
+  return repairs.map(({ gate, reason, diagnostic }) => ({ gate, reason, diagnostic }));
 }
 
 function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): readonly AcceptedScopeWidening[] {
