@@ -19,11 +19,16 @@ coverage state; this skill judges only when the engine dispatches it.
 Use only the supplied projection version `v1`. Its closed input contains:
 
 - the lap ID and snapshot digest;
-- the full changed diff; and
+- the full changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
+  ranges, anchored by `mergeBase` and `headSha`);
+- diff-derived removal evidence (`removalContext`), never an exemption; and
 - the approved plan.
 
-Do not infer delivery from a maker transcript, task-status narrative, prior review, or any state not
-present in this projection.
+The session runs inside the feature worktree. The diff content is not embedded: read the
+referenced files and obtain any per-path diff yourself with `git diff <mergeBase>..HEAD -- <path>`
+(or `git show <mergeBase>:<path>` for the pre-change form). Those reads are part of this closed
+input. Do not infer delivery from a maker transcript, task-status narrative, prior review, or any
+state not present in this projection and its referenced content.
 
 ## Judgement
 
@@ -36,7 +41,9 @@ gaps separate so the result preserves every independently actionable omission.
 
 ## Result contract (v1)
 
-Return one `judged` result for rubric `completeness` with contract version `v1` and a `findings`
+Return exactly one JSON `judged` result for rubric `completeness`: its top-level `kind` field is
+exactly the string `judged` (never `result` or any other field name), carrying contract version `v1`.
+It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings`
 array. Return every independent finding; an empty array means no Completeness concern was found.
 Each finding contains:
 

@@ -93,7 +93,10 @@ task state never blocks a build.
 At `build_review`, the containment floor writes `.pipeline/containment-floor.json`. Every violation is also
 printed in the step output and warning log with its task id, commit SHA, and offending paths. Every accepted
 widening is supplied directly to the isolated grader with its path, rationale, task id, and commit SHA, because
-the grader receives the branch diff rather than commit messages.
+the grader judges the branch diff rather than commit messages. The rubric projection carries that diff by
+reference — per-file paths, change kinds, and hunk line ranges anchored to the merge base — and the grader
+session, running inside the feature worktree, reads the referenced file contents and per-path diffs itself
+instead of receiving the raw diff text inline.
 
 ### Declared pattern replication check
 
