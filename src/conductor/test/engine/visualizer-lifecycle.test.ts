@@ -35,7 +35,7 @@ describe('visualizer lifecycle', () => {
     registry.register('visualizer', secondVisualizer.name, secondVisualizer);
     registry.markInitialized();
 
-    await startRegisteredVisualizers(registry, emitter);
+    startRegisteredVisualizers(registry, emitter);
     await emitter.emit({ type: 'step_started', step: 'explore', index: 0 });
 
     expect([

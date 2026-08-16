@@ -90,6 +90,7 @@ import {
   buildVisualizers,
   startRegisteredVisualizers,
   stopVisualizers,
+  withRegisteredVisualizers,
 } from './engine/visualizer-lifecycle.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
@@ -184,7 +185,12 @@ import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
 import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
 
-export { buildVisualizers, startRegisteredVisualizers, stopVisualizers };
+export {
+  buildVisualizers,
+  startRegisteredVisualizers,
+  stopVisualizers,
+  withRegisteredVisualizers,
+};
 
 /**
  * Build the options object passed into `runDaemonMode` for a `daemon` CLI
@@ -1211,8 +1217,7 @@ async function main(): Promise<void> {
       builtInVisualizers.push(otelVis);
     }
   }
-  const visualizerList = startRegisteredVisualizers(registry, events, builtInVisualizers);
-
+  await withRegisteredVisualizers(registry, events, async () => {
   const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
@@ -1329,9 +1334,9 @@ async function main(): Promise<void> {
   });
 
   await conductor.run();
+  }, builtInVisualizers);
 
   persister.stop();
-  await stopVisualizers(visualizerList);
   subscriber.stop();
 }
 
