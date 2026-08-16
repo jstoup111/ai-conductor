@@ -12,17 +12,23 @@ export function buildVisualizers(
 ): VisualizerPlugin[] {
   for (const vis of visualizers) {
     let warned = false;
-    const warn = (err: unknown): void => {
+    let registering = true;
+    const warn = (failure: 'start()' | 'handler', err: unknown): void => {
       if (warned) return;
       warned = true;
       console.warn(
-        `[visualizer] visualizer '${vis.name}' start() error: ${err instanceof Error ? err.message : String(err)}`,
+        `[visualizer] visualizer '${vis.name}' ${failure} failure: ${err instanceof Error ? err.message : String(err)}`,
       );
     };
     try {
-      emitter.withIsolatedHandlerRegistrations(() => vis.start(emitter), warn);
+      emitter.withIsolatedHandlerRegistrations(
+        () => vis.start(emitter),
+        (err) => warn(registering ? 'start()' : 'handler', err),
+      );
     } catch (err: unknown) {
-      warn(err);
+      warn('start()', err);
+    } finally {
+      registering = false;
     }
   }
   return visualizers;

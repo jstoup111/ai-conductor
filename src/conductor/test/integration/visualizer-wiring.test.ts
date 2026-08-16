@@ -66,6 +66,78 @@ describe('Visualizer wiring helpers', () => {
     }
   });
 
+  it('classifies startup and event-handler failures in visualizer warnings', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const startupEmitter = new ConductorEventEmitter();
+    const synchronousEmitter = new ConductorEventEmitter();
+    const asynchronousEmitter = new ConductorEventEmitter();
+    const startupVisualizer: VisualizerPlugin = {
+      name: 'startup-classification',
+      start: () => {
+        throw new Error('startup kaboom');
+      },
+      stop: async () => {},
+    };
+    const synchronousVisualizer: VisualizerPlugin = {
+      name: 'synchronous-handler-classification',
+      start: (emitter) => {
+        emitter.on('step_started', () => {
+          throw new Error('synchronous kaboom');
+        });
+      },
+      stop: async () => {},
+    };
+    const asynchronousVisualizer: VisualizerPlugin = {
+      name: 'rejected-handler-classification',
+      start: (emitter) => {
+        emitter.on('step_started', async () => {
+          throw new Error('asynchronous kaboom');
+        });
+      },
+      stop: async () => {},
+    };
+
+    try {
+      buildVisualizers([startupVisualizer], startupEmitter);
+      buildVisualizers([synchronousVisualizer], synchronousEmitter);
+      buildVisualizers([asynchronousVisualizer], asynchronousEmitter);
+      await synchronousEmitter.emit({
+        type: 'step_started',
+        step: 'explore',
+        index: 0,
+      });
+      await asynchronousEmitter.emit({
+        type: 'step_started',
+        step: 'explore',
+        index: 0,
+      });
+      await Promise.resolve();
+
+      const classify = (name: string) => {
+        const warnings = warnSpy.mock.calls
+          .map(([message]) => String(message))
+          .filter((message) => message.includes(name));
+        return {
+          count: warnings.length,
+          startFailure: warnings.some((message) => /start\(\).*fail/i.test(message)),
+          handlerFailure: warnings.some((message) => /handler.*fail/i.test(message)),
+        };
+      };
+
+      expect({
+        startup: classify(startupVisualizer.name),
+        synchronous: classify(synchronousVisualizer.name),
+        asynchronous: classify(asynchronousVisualizer.name),
+      }).toEqual({
+        startup: { count: 1, startFailure: true, handlerFailure: false },
+        synchronous: { count: 1, startFailure: false, handlerFailure: true },
+        asynchronous: { count: 1, startFailure: false, handlerFailure: true },
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('detaches a visualizer listener after its synchronous event-handler failure', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const emitter = new ConductorEventEmitter();
