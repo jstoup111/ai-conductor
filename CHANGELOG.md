@@ -67,6 +67,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review rubric dispatches enforce the judged-result schema with a bounded in-dispatch repair, and kickback routing honors operator dispositions recorded after aggregate composition. ([implementation PR #1605](https://github.com/jstoup111/ai-conductor/pull/1605)).
 - `build_review`'s rubric cache no longer misses on every rebase — a rebase that leaves diff and plan content unchanged now reuses prior rubric judgements instead of re-judging all four branches. ([implementation PR #1601](https://github.com/jstoup111/ai-conductor/pull/1601)).
 
+### Security
+
+- Shipped records and retained PR bodies list accepted build-review findings by id only; summaries, rationales, operator identity, and timestamps stay in the local disposition store. ([implementation PR #1615](https://github.com/jstoup111/ai-conductor/pull/1615)).
+
 ## Migration
 
 ```bash migration
