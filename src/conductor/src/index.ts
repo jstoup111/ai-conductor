@@ -190,12 +190,18 @@ export function buildVisualizers(
   emitter: ConductorEventEmitter,
 ): VisualizerPlugin[] {
   for (const vis of visualizers) {
-    try {
-      vis.start(emitter);
-    } catch (err: unknown) {
+    let warned = false;
+    const warn = (err: unknown): void => {
+      if (warned) return;
+      warned = true;
       console.warn(
         `[visualizer] visualizer '${vis.name}' start() error: ${err instanceof Error ? err.message : String(err)}`,
       );
+    };
+    try {
+      emitter.withIsolatedHandlerRegistrations(() => vis.start(emitter), warn);
+    } catch (err: unknown) {
+      warn(err);
     }
   }
   return visualizers;
