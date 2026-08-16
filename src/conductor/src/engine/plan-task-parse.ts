@@ -104,7 +104,9 @@ export function parsePlanTaskPreserves(text: string): Map<string, string[]> {
     const behavior = preservesMatch?.[1].trim();
     if (!behavior) continue;
     for (const id of currentIds) {
-      if (!result.has(id)) result.set(id, [behavior]);
+      const behaviors = result.get(id);
+      if (behaviors) behaviors.push(behavior);
+      else result.set(id, [behavior]);
     }
   }
 

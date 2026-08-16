@@ -22,6 +22,20 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
     expect(result).toEqual(new Map([['9', ['the ungated TokenMeter wrapper transparency']]]));
   });
 
+  it('accumulates separate preserved behaviors from one task block', () => {
+    const result = parsePlanTaskPreserves(`# Plan
+
+### Task 9: Preserve wrapper behavior
+**Preserves:** the ungated TokenMeter wrapper transparency
+**Preserves:** the provider-facing TokenMeter metric name
+`);
+
+    expect(result).toEqual(new Map([['9', [
+      'the ungated TokenMeter wrapper transparency',
+      'the provider-facing TokenMeter metric name',
+    ]]]));
+  });
+
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {
     expect(TASK_ID_PATTERN).toBe('[A-Za-z0-9._-]+');
   });
