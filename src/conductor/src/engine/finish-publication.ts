@@ -1250,7 +1250,13 @@ async function reconcileSelectablePublicationRetry(
   },
   observe: AdvanceFinishPublicationInput['observe'],
 ): Promise<AdvanceFinishPublicationResult> {
-  const selectedTransition = nextFinishPublicationTransition(await observe());
+  const freshSnapshot = await observe();
+  // An unavailable observer cannot prove that the retry's named transition
+  // became unselectable. Preserve the original retry so FINISH consumes its
+  // bounded retry allowance only after a determinate observation.
+  if (hasIndeterminatePublicationEvidence(freshSnapshot)) return retry;
+
+  const selectedTransition = nextFinishPublicationTransition(freshSnapshot);
   if (selectedTransition === retry.transition) return retry;
 
   return {
@@ -1260,6 +1266,17 @@ async function reconcileSelectablePublicationRetry(
       `The ${retry.transition} retry cannot run because the fresh publication ` +
       `observation selects ${selectedTransition}.`,
   };
+}
+
+function hasIndeterminatePublicationEvidence(snapshot: PublicationSnapshot): boolean {
+  return snapshot.implementationEvidence === 'indeterminate' ||
+    snapshot.shipEvidence === 'indeterminate' ||
+    snapshot.releaseReadiness === 'indeterminate' ||
+    snapshot.branchPushed === 'indeterminate' ||
+    snapshot.shippedRecord === 'indeterminate' ||
+    snapshot.outcomeRecord === 'indeterminate' ||
+    snapshot.pr.identity === 'indeterminate' ||
+    (snapshot.pr.identity === 'one' && snapshot.pr.prose === 'indeterminate');
 }
 
 async function emitPublicationEvent(

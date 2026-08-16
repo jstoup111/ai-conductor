@@ -344,15 +344,12 @@ export function createProductionFinishPublicationCoordinator(
                   const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
                   proseRevisionByPr.set(pr.url, revision);
                   const observedProse = prProse(pr.title, pr.body, halted);
-                  if (pendingAuthoredPrUrls.delete(pr.url) && observedProse === 'stale') {
-                    coordinatorAuthoredRevisions.add(revision);
-                  }
                   // The provider's accepted judgment is the only authority
                   // that promotes authored prose. Retain it for this exact
                   // observed revision so the core's mandatory re-observation
                   // can see the judgment-owned dimension advance.
                   const prose = observedProse === 'stale' &&
-                    (coordinatorAuthoredRevisions.has(revision) || judgmentByRevision.get(revision)?.kind === 'accepted')
+                    judgmentByRevision.get(revision)?.kind === 'accepted'
                     ? 'accepted' as const
                     : observedProse;
                   return {
@@ -401,7 +398,6 @@ export function createProductionFinishPublicationCoordinator(
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
                   await dispatchAuthoring(request);
-                  pendingAuthoredPrUrls.add(request.pullRequestUrl);
                 },
               }
             : {}),

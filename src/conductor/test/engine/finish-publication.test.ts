@@ -1853,7 +1853,37 @@ describe('advanceFinishPublication concurrent mutation reconciliation', () => {
 });
 
 describe('advanceFinishPublication PR prose judgment boundary', () => {
-  it('halts without spending a FINISH retry when a prose-authoring retry is no longer selectable', async () => {
+  it.each([
+    ['PR identity is unavailable', {
+      pr: { identity: 'indeterminate' },
+    }],
+    ['release readiness is unavailable', {
+      releaseReadiness: 'indeterminate',
+    }],
+  ] as const)(
+    'preserves a judgment retry when %s in the fresh observation',
+    async (_description, unavailableEvidence) => {
+      const observe = vi
+        .fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(readyPublicationSnapshot())
+        .mockResolvedValueOnce(readyPublicationSnapshot(unavailableEvidence));
+
+      await expect(
+        advanceFinishPublication({
+          observe,
+          effects: { dispatchJudgment: async () => ({ kind: 'timed_out' }) },
+        }),
+      ).resolves.toEqual({
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_timed_out',
+      });
+
+      expect(observe).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('halts without spending a FINISH retry when a determinate observation selects another transition', async () => {
     const observe = vi
       .fn<() => Promise<PublicationSnapshot>>()
       .mockResolvedValueOnce(readyPublicationSnapshot())
