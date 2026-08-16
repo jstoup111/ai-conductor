@@ -166,6 +166,27 @@ branches never edit either file (see `docs/contributing/releases.md`).
 "$HARNESS_DIR/bin/install" --update
 ```
 
+## Migration
+
+```bash migration
+# The `conduct-ts validate-wired-into <plan>` subcommand no longer exists.
+# Remove any script, CI step, or pre-plan hook that invokes it directly:
+#   conduct-ts validate-wired-into <plan-file-path> [--cwd <dir>]
+#
+# Plans no longer need `**Wired-into:**` task annotations — the engineer
+# step and land no longer parse or require them. Existing plans that still
+# carry the annotation are unaffected; new plans can omit it.
+#
+# No config file changes are required: `wiring.entry_points` in
+# .ai-conductor/config.yml keeps its existing shape and is now consumed by
+# the build_review wiring rubric prompt instead of the retired import-graph
+# probe.
+```
+
+```bash migration
+"$HARNESS_DIR/bin/install" --update
+```
+
 ## [0.101.1] - 2026-08-10
 
 ### Fixed
