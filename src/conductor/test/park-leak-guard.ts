@@ -13,26 +13,6 @@ export interface ParkedMarkersDiff {
   modified: string[];
 }
 
-/**
- * True only when `cwd` is the primary checkout that owns the shared Git
- * common directory. A linked worktree shares its main checkout's parked
- * ledger with the live daemon, so it cannot make an exclusive leak claim
- * about that ledger during a test run.
- */
-export async function isPrimaryCheckout(cwd: string): Promise<boolean> {
-  try {
-    const [{ stdout: checkoutRoot }, { stdout: commonDir }] = await Promise.all([
-      execa('git', ['-C', cwd, 'rev-parse', '--show-toplevel']),
-      execa('git', ['-C', cwd, 'rev-parse', '--git-common-dir']),
-    ]);
-    const resolvedCheckoutRoot = resolve(cwd, checkoutRoot);
-    const resolvedCommonDir = resolve(cwd, commonDir);
-    return resolvedCheckoutRoot === dirname(resolvedCommonDir);
-  } catch {
-    return false;
-  }
-}
-
 /** Resolve the main repository's parked-marker directory for any Git checkout. */
 export async function resolveRealParkedDir(cwd: string): Promise<string | null> {
   try {

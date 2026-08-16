@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
 import {
   diffParkedMarkers,
-  isPrimaryCheckout,
   resolveRealParkedDir,
   snapshotParkedMarkers,
   type ParkedMarkersDiff,
@@ -253,13 +252,7 @@ export default async function setup() {
   }
 
   const beforeState = await snapshotPipeline(process.cwd());
-  // A linked worktree shares the primary checkout's operator ledger with the
-  // live daemon. It cannot attribute mutations there to its test process, so
-  // the #1251 guard is meaningful only when this run owns that primary
-  // checkout. Fixture containment still applies in every checkout.
-  const realParkedDir = await isPrimaryCheckout(process.cwd())
-    ? await resolveRealParkedDir(process.cwd())
-    : null;
+  const realParkedDir = await resolveRealParkedDir(process.cwd());
   const parkedMarkersBefore: ParkedMarkersSnapshot = realParkedDir
     ? await snapshotParkedMarkers(realParkedDir)
     : { exists: false, markers: {} };
