@@ -39,6 +39,20 @@ export function startRegisteredVisualizers(
   return buildVisualizers([...builtIns, ...registered], emitter);
 }
 
+export async function withRegisteredVisualizers<T>(
+  registry: PluginRegistry,
+  emitter: ConductorEventEmitter,
+  run: () => Promise<T>,
+  builtIns: VisualizerPlugin[] = [],
+): Promise<T> {
+  const visualizers = startRegisteredVisualizers(registry, emitter, builtIns);
+  try {
+    return await run();
+  } finally {
+    await stopVisualizers(visualizers);
+  }
+}
+
 /**
  * Stop every visualizer plugin, swallowing individual errors so one failing
  * exporter cannot prevent the others from flushing.
