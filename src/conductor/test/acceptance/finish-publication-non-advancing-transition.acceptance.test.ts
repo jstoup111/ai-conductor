@@ -306,7 +306,7 @@ interface ObservedPr {
 
 async function runProductionObservation(
   pr: ObservedPr,
-  options: { failView?: boolean } = {},
+  options: { failView?: boolean; shippedRecordPresent?: boolean } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), 'finish-publication-non-advance-'));
   roots.push(root);
@@ -314,7 +314,9 @@ async function runProductionObservation(
   await mkdir(pipeline, { recursive: true });
   const shippedDirectory = join(root, '.docs', 'shipped');
   await mkdir(shippedDirectory, { recursive: true });
-  await writeFile(join(shippedDirectory, 'finish-publication-non-advance.md'), 'shipped\n');
+  if (options.shippedRecordPresent !== false) {
+    await writeFile(join(shippedDirectory, 'finish-publication-non-advance.md'), 'shipped\n');
+  }
   const stateFilePath = join(pipeline, 'conduct-state.json');
   const state: ConductState = {
     feature_desc: 'finish-publication-non-advance',
@@ -357,6 +359,14 @@ async function runProductionObservation(
       throw new Error(`unexpected gh command: ${args.join(' ')}`);
     },
     observeReleaseReadiness: async () => 'present',
+    ...(options.shippedRecordPresent === false
+      ? {
+          writeShippedRecord: async () => {
+            await writeFile(join(shippedDirectory, 'finish-publication-non-advance.md'), 'shipped\n');
+            return 0;
+          },
+        }
+      : {}),
   });
 
   const result = await coordinator.advance({
@@ -494,33 +504,33 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
     expect(viewCall?.join(' ')).toContain('labels');
   });
 
-  it('judges ordinary authored prose with no halt signal before selecting its transition', async () => {
+  it('treats an empty label list as no halt signal and continues publication progress', async () => {
     const { result, dispatchJudgment, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
       body: 'Reader-facing summary and validation evidence.',
       isDraft: true,
       labels: [],
-    });
+    }, { shippedRecordPresent: false });
 
-    expect(result).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
-    expect(dispatchJudgment).toHaveBeenCalledOnce();
+    expect(result).toEqual({ kind: 'publication_progress', transition: 'write_shipped_record' });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
     expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
       expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
     );
   });
 
-  it('does not treat an empty label list as a halt signal', async () => {
+  it('treats a documentation label as no halt signal and continues publication progress', async () => {
     const { result, dispatchJudgment, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
       body: 'Reader-facing summary and validation evidence.',
       isDraft: true,
-      labels: [],
-    });
+      labels: [{ name: 'documentation' }],
+    }, { shippedRecordPresent: false });
 
-    expect(result).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
-    expect(dispatchJudgment).toHaveBeenCalledOnce();
+    expect(result).toEqual({ kind: 'publication_progress', transition: 'write_shipped_record' });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
     expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
       expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
     );
