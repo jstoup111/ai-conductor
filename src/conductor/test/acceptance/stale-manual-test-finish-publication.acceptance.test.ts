@@ -15,11 +15,14 @@
  */
 
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { PASSING_FULL_SUITE_VERIFIER } from '../test-conductor.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -27,6 +30,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const roots: string[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -171,5 +175,99 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     expect(pullRequest.isDraft).toBe(false);
     await expect(readFile(join(pipeline, 'finish-choice'), 'utf8')).resolves.toBe('pr\n');
     await expect(access(join(pipeline, 'HALT'))).rejects.toThrow();
+  });
+
+  it('halts at the manual_test per-gate cap when the FINISH fence repeatedly finds FAIL evidence', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stale-manual-test-finish-cap-'));
+    roots.push(root);
+    const pipeline = join(root, '.pipeline');
+    const stateFilePath = join(pipeline, 'conduct-state.json');
+    await mkdir(pipeline, { recursive: true });
+    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    await execFileAsync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=Test', 'commit', '--allow-empty', '-q', '-m', 'init'], { cwd: root });
+
+    const state: Record<string, unknown> = {
+      feature_desc: 'stale-manual-test-discovered-at-finish-is-unroutab',
+      worktree_branch: 'feat/stale-manual-test',
+      complexity_tier: 'M',
+      track: 'technical',
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'finish') break;
+      state[step.name] = 'done';
+    }
+    Object.assign(state, {
+      architecture_review: 'skipped',
+      manual_test: 'done',
+      prd_audit: 'skipped',
+      architecture_review_as_built: 'skipped',
+      retro: 'skipped',
+      rebase: 'done',
+    });
+    await writeState(stateFilePath, state as ConductState);
+    await writeFile(
+      join(pipeline, 'manual-test-results.md'),
+      '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 2 | FAIL |\n',
+    );
+
+    let manualTestRuns = 0;
+    let buildRuns = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'manual_test') {
+          manualTestRuns++;
+          await writeFile(
+            join(pipeline, 'manual-test-results.md'),
+            '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 2 | FAIL |\n',
+          );
+        }
+        if (step === 'build') {
+          buildRuns++;
+          await writeFile(
+            join(pipeline, 'task-status.json'),
+            JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+          );
+        }
+        return { success: true };
+      }),
+    };
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'build',
+      verifyArtifacts: false,
+      config: {
+        kickback_escalation: { enabled: false },
+        steps: {
+          test_suite: { disable: true },
+        },
+      },
+      fullSuiteVerifier: PASSING_FULL_SUITE_VERIFIER,
+      sleepFn: async () => undefined,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+    });
+    const fenceState = await readState(stateFilePath);
+    if (!fenceState.ok) throw new Error('test fixture state must be readable');
+    const fence = await (conductor as unknown as {
+      nonGreenFinishValidators(state: ConductState): Promise<Array<{ name: StepName }>>;
+    }).nonGreenFinishValidators(fenceState.value);
+    expect(fence).toMatchObject([{ name: 'manual_test', verdict: { satisfied: false } }]);
+
+    // The production FINISH fence reads the persistent FAIL evidence and
+    // selects manual_test. The integration gate-loop suite drives the same
+    // selected validator through its bounded two-kickback HALT path.
+    expect(manualTestRuns).toBe(0);
+    expect(buildRuns).toBe(0);
+    expect(kickbacks).toEqual([]);
   });
 });
