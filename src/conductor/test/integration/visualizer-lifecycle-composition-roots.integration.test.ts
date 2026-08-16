@@ -459,7 +459,7 @@ export default {
         daemonSeamDelegatesShared: hasExactArguments(
           daemonDelegation,
           daemonSource,
-          ['registry', 'emitter', 'run'],
+          ['pluginRegistry', 'emitter', 'run'],
         ),
         inlineSeamAvailable: inlineLifecycle !== undefined,
         daemonSeamAvailable: daemonLifecycle !== undefined,

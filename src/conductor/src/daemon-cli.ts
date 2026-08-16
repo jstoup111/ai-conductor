@@ -557,11 +557,11 @@ export function buildProgressReKickDeps(
 }
 
 export function runDaemonVisualizerLifecycle<T>(
-  registry: PluginRegistry,
+  pluginRegistry: PluginRegistry,
   emitter: ConductorEventEmitter,
   run: () => Promise<T>,
 ): Promise<T> {
-  return withRegisteredVisualizers(registry, emitter, run);
+  return withRegisteredVisualizers(pluginRegistry, emitter, run);
 }
 
 /**
