@@ -66,6 +66,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review tautology prompts are bounded by construction (path manifest + closed run verdict instead of embedded file contents and raw test output), fixing prompt-too-long failures on large features. ([implementation PR #1600](https://github.com/jstoup111/ai-conductor/pull/1600)).
 - build_review rubric dispatches enforce the judged-result schema with a bounded in-dispatch repair, and kickback routing honors operator dispositions recorded after aggregate composition. ([implementation PR #1605](https://github.com/jstoup111/ai-conductor/pull/1605)).
 - `build_review`'s rubric cache no longer misses on every rebase — a rebase that leaves diff and plan content unchanged now reuses prior rubric judgements instead of re-judging all four branches. ([implementation PR #1601](https://github.com/jstoup111/ai-conductor/pull/1601)).
+- The Tautology build-review gate no longer blocks a build when a plan task is correctly declared verify-only and its changed test does not assert new behavior. ([implementation PR #1618](https://github.com/jstoup111/ai-conductor/pull/1618)).
+- Loop halts, rebase-conflict halts, and failed halt-marker writes now persist to `.pipeline/events.jsonl`, so a halt is reconstructable from the audit ledger alone. ([implementation PR #1519](https://github.com/jstoup111/ai-conductor/pull/1519)).
 
 ### Security
 
