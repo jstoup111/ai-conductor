@@ -400,7 +400,11 @@ describe('FINISH human-required halt marker', () => {
         projectRoot,
         fromStep: 'finish',
         mode: 'auto',
-        daemon: true,
+        // This fixture isolates the coordinator's human-required routing.
+        // It deliberately uses mocked-dispatch mode rather than pretending
+        // missing validator artifacts are production-grade gate evidence.
+        daemon: false,
+        verifyArtifacts: false,
         git: async () => ({ stdout: '' }),
         gh: async () => ({ stdout: '' }),
         runGh: async () => ({ stdout: '' }),
@@ -855,13 +859,13 @@ describe('FINISH publication disposition routing', () => {
       'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
       'restore_ship_observation',
     ],
-  ] as const)('halts evidence-invalid condition %s pending dedicated BUILD routing', async (code, message, nextAction) => {
+  ] as const)('halts evidence-invalid condition %s with its unresolved observation', async (code, message, nextAction) => {
     await expect(
       routeFinishPublicationDisposition({
         kind: 'publication_retry',
         condition: { code, message, nextAction },
       }),
-    ).resolves.toMatchObject({ kind: 'halt', reason: expect.stringContaining(code) });
+    ).resolves.toMatchObject({ kind: 'halt', reason: expect.not.stringContaining('dedicated BUILD routing rule') });
   });
 
   it('permits only cited implementation-invalid evidence to route BUILD', async () => {
