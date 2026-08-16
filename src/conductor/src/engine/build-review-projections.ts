@@ -71,6 +71,8 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly changedFiles: readonly ChangedFileReference[];
   /** Diff-derived removal evidence (never an exemption), kept inline because it is compact. */
   readonly removalContext: BuildReviewSourceSnapshot['removalContext'];
+  /** Engine-parsed verify-only task evidence, kept inline as compact ids and paths. */
+  readonly verifyOnlyContext: BuildReviewSourceSnapshot['verifyOnlyContext'];
 }
 
 export interface TautologyProjection extends CommonProjection<'tautology'> {
@@ -258,6 +260,7 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     headSha: snapshot.headSha,
     changedFiles: deriveChangedFileReferences(snapshot.diff),
     removalContext: snapshot.removalContext,
+    verifyOnlyContext: snapshot.verifyOnlyContext,
   };
 }
 
