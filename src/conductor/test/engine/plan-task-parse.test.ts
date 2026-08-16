@@ -5,9 +5,23 @@
 // phase can gut autoheal.ts's evidence-derivation logic without breaking the
 // wiring-reachability gate.
 import { describe, expect, it } from 'vitest';
-import { parsePlanTaskPaths, TASK_ID_PATTERN } from '../../src/engine/plan-task-parse.js';
+import {
+  parsePlanTaskPaths,
+  parsePlanTaskPreserves,
+  TASK_ID_PATTERN,
+} from '../../src/engine/plan-task-parse.js';
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
+  it('parses one preserved behavior from its task block', () => {
+    const result = parsePlanTaskPreserves(`# Plan
+
+### Task 9: Preserve wrapper behavior
+**Preserves:** the ungated TokenMeter wrapper transparency
+`);
+
+    expect(result).toEqual(new Map([['9', ['the ungated TokenMeter wrapper transparency']]]));
+  });
+
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {
     expect(TASK_ID_PATTERN).toBe('[A-Za-z0-9._-]+');
   });
