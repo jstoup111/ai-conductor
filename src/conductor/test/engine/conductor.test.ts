@@ -376,46 +376,49 @@ describe('engine/conductor', () => {
     });
   });
 
-  it('attributes a silent-exit backstop halt with no breadcrumb step to the explicit fallback', async () => {
+  it('stamps valid state and breadcrumb steps while omitting the invalid silent-exit fallback', async () => {
     const halts: Array<Extract<ConductorEvent, { type: 'loop_halt' }>> = [];
     events.on('loop_halt', (event) => {
       if (event.type === 'loop_halt') halts.push(event);
     });
-    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
-    let conductor: Conductor;
-    events.on('gate_blocked', () => {
-      // Reproduce a silent exit before the loop has any reliable step
-      // breadcrumb. The finally backstop still has to emit a concrete step.
-      (conductor as unknown as { _breadcrumb: Record<string, never> })._breadcrumb = {};
-    });
-    conductor = new Conductor({
+    const conductor = new Conductor({
       projectRoot: dir,
       stateFilePath: statePath,
-      stepRunner: runner,
+      stepRunner: createMockStepRunner(),
       events,
       daemon: true,
-      fromStep: 'stories',
     });
 
-    await conductor.run();
+    const emitLoopHalt = (conductor as unknown as {
+      emitLoopHalt(reason: string): Promise<void>;
+    }).emitLoopHalt.bind(conductor);
 
-    // The diagnostic fallback stays in the reason, but it is not a StepName
-    // and therefore must not cross the typed event boundary as `step`.
-    expect(
-      halts.map((halt) => ({
-        halt,
-        hasStep: Object.prototype.hasOwnProperty.call(halt, 'step'),
-      })),
-    ).toEqual([
-      {
-        halt: expect.objectContaining({
-          reason: expect.stringContaining(
-            'loop exited without a terminal verdict (last step: no step recorded)',
-          ),
-        }),
-        hasStep: false,
-      },
+    // `state.last_step` wins when a central halt occurs outside the loop.
+    (conductor as unknown as { haltState: ConductState }).haltState = { last_step: 'build' };
+    await emitLoopHalt('halt with persisted state');
+
+    // A loop breadcrumb supplies the step when state has not been persisted yet.
+    (conductor as unknown as { haltState: ConductState }).haltState = {};
+    (conductor as unknown as { _breadcrumb: { lastAdvancedStep?: string } })._breadcrumb = {
+      lastAdvancedStep: 'manual_test',
+    };
+    await emitLoopHalt('halt with breadcrumb');
+
+    // The diagnostic fallback remains in the reason, but is not a StepName and
+    // therefore must not cross the typed event boundary as `step`.
+    (conductor as unknown as { _breadcrumb: Record<string, never> })._breadcrumb = {};
+    await emitLoopHalt(
+      'loop exited without a terminal verdict (last step: no step recorded)',
+    );
+
+    expect(halts).toEqual([
+      expect.objectContaining({ reason: 'halt with persisted state', step: 'build' }),
+      expect.objectContaining({ reason: 'halt with breadcrumb', step: 'manual_test' }),
+      expect.objectContaining({
+        reason: 'loop exited without a terminal verdict (last step: no step recorded)',
+      }),
     ]);
+    expect(halts[2]).not.toHaveProperty('step');
   });
 
   it('attributes a halt raised after a step settled before the next dispatch to that settled step', async () => {
