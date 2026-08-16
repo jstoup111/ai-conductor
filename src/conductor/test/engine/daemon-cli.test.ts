@@ -17,6 +17,7 @@ import { mkdtemp, rm, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
@@ -31,6 +32,101 @@ import type {
   StateMutation,
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
+
+function runDaemonDepsWithinVisualizerLifecycle(sourceText: string): {
+  source: ts.SourceFile;
+  deps: ts.ObjectLiteralExpression;
+} {
+  const source = ts.createSourceFile(
+    'daemon-cli.ts',
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  let deps: ts.ObjectLiteralExpression | undefined;
+
+  const findNestedRunDaemon = (node: ts.Node): void => {
+    const firstArgument = ts.isCallExpression(node) ? node.arguments[0] : undefined;
+    if (
+      ts.isCallExpression(node)
+      && ts.isIdentifier(node.expression)
+      && node.expression.text === 'runDaemon'
+      && firstArgument !== undefined
+      && ts.isObjectLiteralExpression(firstArgument)
+    ) {
+      deps = firstArgument;
+      return;
+    }
+    ts.forEachChild(node, findNestedRunDaemon);
+  };
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isAwaitExpression(node)
+      && ts.isCallExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression)
+      && node.expression.expression.text === 'withRegisteredVisualizers'
+    ) {
+      const callback = node.expression.arguments[2];
+      if (
+        callback !== undefined
+        && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))
+      ) {
+        findNestedRunDaemon(callback.body);
+      }
+    }
+    if (deps === undefined) ts.forEachChild(node, visit);
+  };
+  visit(source);
+
+  if (deps === undefined) {
+    throw new Error(
+      'expected awaited withRegisteredVisualizers callback to invoke runDaemon with an object literal',
+    );
+  }
+  return { source, deps };
+}
+
+function propertyNamed(
+  object: ts.ObjectLiteralExpression,
+  name: string,
+): ts.ObjectLiteralElementLike | undefined {
+  return object.properties.find((property) => {
+    if (ts.isSpreadAssignment(property)) return false;
+    return (
+      (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name))
+      && property.name.text === name
+    );
+  });
+}
+
+function wiresRateLimitEpisode(property: ts.ObjectLiteralElementLike | undefined): boolean {
+  return (
+    property !== undefined
+    && (
+      (
+        ts.isShorthandPropertyAssignment(property)
+        && property.name.text === 'rateLimitEpisode'
+      ) || (
+        ts.isPropertyAssignment(property)
+        && ts.isIdentifier(property.initializer)
+        && property.initializer.text === 'rateLimitEpisode'
+      )
+    )
+  );
+}
+
+function wiresTeardownShouldStop(property: ts.ObjectLiteralElementLike | undefined): boolean {
+  if (property === undefined || !ts.isPropertyAssignment(property)) return false;
+  const initializer = property.initializer;
+  return ts.isArrowFunction(initializer)
+    && initializer.parameters.length === 0
+    && ts.isCallExpression(initializer.body)
+    && initializer.body.arguments.length === 0
+    && ts.isPropertyAccessExpression(initializer.body.expression)
+    && ts.isIdentifier(initializer.body.expression.expression)
+    && initializer.body.expression.expression.text === 'teardown'
+    && initializer.body.expression.name.text === 'shouldStop';
+}
 
 class RecordingConductStateStore implements ConductStateStore<ConductState> {
   readonly calls: Array<{ kind: 'batch'; batch: NamedAtomicStateMutationBatch<ConductState> }> = [];
@@ -445,7 +541,8 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     expect(src).toContain('rateLimitEpisode,');
     expect(src).toMatch(/new Conductor\({[\s\S]*?rateLimitEpisode,/);
     // Verify wiring to runDaemon deps (should appear in the deps object)
-    expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
+    const { deps } = runDaemonDepsWithinVisualizerLifecycle(src);
+    expect(wiresRateLimitEpisode(propertyNamed(deps, 'rateLimitEpisode'))).toBe(true);
   });
 });
 
@@ -476,7 +573,8 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
   it('runDaemon is invoked with a shouldStop dep wired to the teardown controller', () => {
     const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 
-    expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
+    const { deps } = runDaemonDepsWithinVisualizerLifecycle(src);
+    expect(wiresTeardownShouldStop(propertyNamed(deps, 'shouldStop'))).toBe(true);
   });
 
   it('onForceRelease synchronously releases the lock and logs a greppable force-release line', () => {
