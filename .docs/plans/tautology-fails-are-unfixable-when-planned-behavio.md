@@ -40,10 +40,12 @@ projections/skills), and lands the maker-side authoring boundaries. 11 tasks.
 - The two prior-story amendment notes and the conflict report were authored in DECIDE and travel
   in the spec commit — they are not build tasks (sealed-artifact prohibition).
 - **Conflict report canonical path (operator amendment, 2026-08-16):** the report lives at
-  `.docs/conflicts/2026-08-15-tautology-fails-are-unfixable-when-planned-behavio.md` — renamed
-  from its original topic stem so the engine's normalized-stem artifact association binds it to
-  this feature (#1617). The rename commit is operator-authorized, in-plan surface; it must be
-  preserved, not reverted to the topic-stem name.
+  `.docs/conflicts/2026-08-15-tautology-fails-are-unfixable-when-planned-behavio.md` so the
+  engine's normalized-stem artifact association binds it to this feature (#1617). The original
+  topic-stem file (`2026-08-15-verify-only-tautology-exemption.md`) remains in place as a short
+  relocation stub — deliberately, so the diff carries a content change plus an added file rather
+  than a git rename, which the tautology preflight cannot materialize (#1624). Both files are
+  operator-authorized, in-plan surface; neither may be deleted or re-merged into one path.
 
 ## Prerequisites
 
