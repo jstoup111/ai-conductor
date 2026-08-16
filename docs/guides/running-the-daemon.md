@@ -97,6 +97,18 @@ state badges and what each one means are in [cli reference](../reference/cli.md#
 `status` exits 0 even when entries are stale or missing — those are reported, not errors. It exits 1
 only when the registry itself is unreadable.
 
+### Export live events
+
+Install a `visualizer` plugin before starting the daemon. The daemon discovers compatible plugins from
+the global and project plugin directories, attaches all of them to its daemon-wide event bus, and
+forwards each feature's existing events to that bus. Restart a running daemon after installing or
+replacing a plugin; discovery occurs at process startup.
+
+A failed plugin is contained: startup or handler failure warns and detaches that plugin without
+stopping the daemon, and shutdown gives every plugin up to two seconds to flush without blocking its
+siblings. The manifest, entrypoint contract, discovery precedence, and test seam are in
+[extending the harness](../contributing/extending.md#add-a-visualizer-plugin).
+
 For the log:
 
 ```bash

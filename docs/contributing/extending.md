@@ -7,8 +7,8 @@ nav_order: 2
 # Extending the harness
 
 The exact files to change, the registration points, the validation that catches a mistake, and the tests
-to add — for the five things contributors add most often: a skill, an engine step, a gate, a hook, and a
-CLI command.
+to add — for the six things contributors add most often: a skill, a visualizer plugin, an engine step, a
+gate, a hook, and a CLI command.
 
 Paths are relative to the repository root. Engine source lives under `src/conductor/src/`; see
 [code organization](code-organization.md) for the layer map.
@@ -58,6 +58,56 @@ generated-table output, which belongs in `src/conductor/test/generate-model-tabl
 
 Adding a skill is additive. **Deleting or renaming one** touches `skill symlink targets`, a canonical
 breaking surface, and requires a migration block or a waiver. See [releases](releases.md).
+
+## Add a visualizer plugin
+
+A visualizer observes the existing `ConductorEventEmitter` spine without rendering terminal output.
+Install it in one of the two discovery directories:
+
+1. `~/.ai-conductor/plugins/<name>/` for every project.
+2. `<project>/.ai-conductor/plugins/<name>/` for one project. A project plugin shadows a global plugin
+   with the same kind and name.
+
+The directory needs a `plugin.yml` manifest and an entrypoint module:
+
+```yaml
+kind: visualizer
+name: example-visualizer
+entrypoint: index.mjs
+harness_version: ">=0.101.0 <1.0.0"
+```
+
+`harness_version` is optional. When present, an incompatible range aborts startup before the plugin is
+registered. An invalid manifest is warned and skipped; a missing or unloadable entrypoint aborts
+startup. The entrypoint exports a default object implementing this lifecycle:
+
+```ts
+interface VisualizerPlugin {
+  readonly name: string;
+  start(emitter: ConductorEventEmitter): void;
+  stop(): Promise<void>;
+}
+```
+
+Register handlers synchronously with `emitter.on(type, handler)` inside `start()`. Do not add emission
+sites or write a parallel event stream. `stop()` must unregister local resources and flush pending
+exports. Both `conduct-ts inline` and `conduct-ts daemon` start every compatible registered visualizer;
+there is no visualizer-selection config. Inline also starts the built-in OTel visualizer when OTel is
+enabled. The daemon attaches plugins to its daemon-wide bus, which receives the existing events
+forwarded from feature-scoped buses.
+
+The runtime isolates each plugin:
+
+- A `start()` failure detaches any handlers registered before the throw, warns once, and does not stop
+  later visualizers from starting.
+- A synchronous or asynchronous handler failure detaches every handler owned by that visualizer and
+  warns once. Visualizer promises are observed for rejection but never delay event delivery.
+- Shutdown invokes every plugin's `stop()` concurrently. A throw, rejection, or stop taking longer
+  than two seconds is warned and contained so another plugin cannot block process teardown.
+
+Unit-test lifecycle behavior with a `PluginRegistry`, a real `ConductorEventEmitter`, and stub plugins;
+do not launch agents or call the visualizer's third-party destination. Production wiring belongs in
+both composition roots: `src/index.ts` and `src/daemon-cli.ts`.
 
 ## Add an engine step
 
