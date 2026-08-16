@@ -44,7 +44,8 @@ Interpret the preflight classification precisely:
 - `red` is expected evidence that the changed tests detect the reverted production behavior; it is
   not itself a finding.
 - `stayed-green` requires a blocking finding for each independent changed-test/behavior obligation
-  that remained insensitive to the reverted production behavior.
+  that remained insensitive to the reverted production behavior only when none of the four closed
+  exceptions qualifies for that obligation.
 - `approved-exception` is not a finding when the supplied exception covers the relevant selector.
 - `infrastructure-failure` is not a finding. Do not invent evidence, downgrade it to a pass, or
   convert it into content criticism.
