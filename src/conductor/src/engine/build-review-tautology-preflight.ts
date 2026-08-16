@@ -170,7 +170,9 @@ function addedPaths(diff: string): ReadonlySet<string> {
   const chunks = diff.split(/^diff --git /m);
   for (const chunk of chunks) {
     const header = /^a\/(.+) b\/(.+)$/m.exec(chunk);
-    if (header && /^new file mode /m.test(chunk)) added.add(header[2]!);
+    const absentAtMergeBase = /^new file mode /m.test(chunk)
+      || (/^rename from /m.test(chunk) && /^rename to /m.test(chunk));
+    if (header && absentAtMergeBase) added.add(header[2]!);
   }
   return added;
 }

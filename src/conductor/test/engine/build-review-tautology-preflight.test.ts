@@ -85,6 +85,31 @@ describe('build-review Tautology preflight', () => {
     expect(JSON.stringify(rootSnapshot)).toBe(featureSnapshot);
   });
 
+  it('removes a renamed production destination absent at the merge base before running the counterfactual', async () => {
+    const calls: string[] = [];
+    const removeFile = vi.fn(async (path: string) => { calls.push(`remove:${path}`); });
+    const runScoped = vi.fn(async () => {
+      calls.push('run');
+      return { kind: 'test-failure' as const, exitCode: 1, stdout: 'RED', stderr: '' };
+    });
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: [
+        'diff --git a/.docs/conflicts/original.md b/.docs/conflicts/renamed.md',
+        'similarity index 100%',
+        'rename from .docs/conflicts/original.md',
+        'rename to .docs/conflicts/renamed.md',
+        'diff --git a/test/a.test.ts b/test/a.test.ts',
+      ].join('\n'),
+      createCheckout: async () => {}, readMergeBaseFile: async () => undefined, writeFile: async () => {}, removeFile,
+      runScoped, removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({ classification: 'red', revertedProductionManifest: [] });
+    expect(removeFile).toHaveBeenCalledWith('/feature/.pipeline/build-review-preflight/head/.docs/conflicts/renamed.md');
+    expect(calls).toEqual(['remove:/feature/.pipeline/build-review-preflight/head/.docs/conflicts/renamed.md', 'run']);
+  });
+
   it('does not run an aggregate fallback for absent or unclassifiable test selectors', async () => {
     const runScoped = vi.fn();
     const result = await materializeTautologyPreflight({
