@@ -33,24 +33,29 @@ const fixtureTouchedPath = fileURLToPath(
   new URL('../fixtures/daemon-e2e/touched.txt', import.meta.url),
 );
 
-export async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
+// Returns the dump so callers can embed it in a thrown error's message —
+// CI smoke reporters keep failureMessages but drop console output (#1656's
+// release-gate failure was undiagnosable from the job log).
+export async function dumpPipelineDiagnostics(worktreeDir: string): Promise<string> {
+  const lines: string[] = [];
+  const emit = (line: string): void => { lines.push(line); };
   const logPath = join(worktreeDir, '.daemon/daemon.log');
   const daemonLog = await readFile(logPath, 'utf-8').catch(() => null);
 
   if (daemonLog === null) {
-    console.error(`daemon log not found at ${logPath}`);
+    emit(`daemon log not found at ${logPath}`);
   } else {
-    console.error(`daemon log tail from ${logPath}`);
-    console.error(daemonLog.split('\n').slice(-50).join('\n'));
+    emit(`daemon log tail from ${logPath}`);
+    emit(daemonLog.split('\n').slice(-50).join('\n'));
   }
 
   const haltPath = join(worktreeDir, '.pipeline/HALT');
   const haltReason = await readFile(haltPath, 'utf-8').catch(() => null);
   if (haltReason === null) {
-    console.error(`halt marker not found at ${haltPath}`);
+    emit(`halt marker not found at ${haltPath}`);
   } else {
-    console.error(`halt marker at ${haltPath}`);
-    console.error(haltReason);
+    emit(`halt marker at ${haltPath}`);
+    emit(haltReason);
   }
 
   for (const [label, path] of [
@@ -59,26 +64,29 @@ export async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void
   ]) {
     const contents = await readFile(path, 'utf-8').catch(() => null);
     if (contents === null) {
-      console.error(`${label} not found at ${path}`);
+      emit(`${label} not found at ${path}`);
     } else {
-      console.error(`${label} at ${path}`);
-      console.error(contents);
+      emit(`${label} at ${path}`);
+      emit(contents);
     }
   }
 
   const parkedDir = join(worktreeDir, '.daemon/parked');
   const parkedEntries = await readdir(parkedDir).catch(() => []);
   if (parkedEntries.length === 0) {
-    console.error(`park markers not found in ${parkedDir}`);
+    emit(`park markers not found in ${parkedDir}`);
   }
   for (const entry of parkedEntries) {
     const markerPath = join(parkedDir, entry);
     const reason = await readFile(markerPath, 'utf-8').catch(() => null);
     if (reason !== null) {
-      console.error(`park marker at ${markerPath}`);
-      console.error(reason);
+      emit(`park marker at ${markerPath}`);
+      emit(reason);
     }
   }
+  const dump = lines.join('\n');
+  console.error(dump);
+  return dump;
 }
 
 describe('daemon E2E diagnostics', () => {

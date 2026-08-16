@@ -656,7 +656,12 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
         taskTrailer: /(?:^|\n)Task:\s*1\s*$/m.test(commitBody),
       }).toEqual({ terminal: true, madeCommit: true, touchedFixture: true, taskTrailer: true });
     } catch (error) {
-      await dumpPipelineDiagnostics(worktreeDir);
+      const dump = await dumpPipelineDiagnostics(worktreeDir);
+      // Embed the dump in the failure itself: CI's smoke reporter keeps
+      // failureMessages but drops console output.
+      if (error instanceof Error) {
+        error.message += `\n\n--- pipeline diagnostics ---\n${dump}`;
+      }
       throw error;
     } finally {
       console.info(
