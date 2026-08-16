@@ -6,9 +6,10 @@
 
 /** A conservative inventory of API-shape removals visible in a unified diff. */
 export interface BuildReviewRemovalContext {
-  deletedFiles: string[];
-  removedDeclarations: string[];
-  removedMembers: Array<{ declaration: string; member: string }>;
+  readonly deletedFiles: readonly string[];
+  readonly removedDeclarations: readonly string[];
+  readonly removedMembers: readonly { declaration: string; member: string }[];
+  readonly removedTestAssertions?: readonly { path: string; line: string }[];
 }
 
 const EMPTY_REMOVALS = (): BuildReviewRemovalContext => ({
@@ -19,6 +20,8 @@ const EMPTY_REMOVALS = (): BuildReviewRemovalContext => ({
 
 const exportedDeclaration = /^\s*export\s+(?:declare\s+)?(?:const|let|var|function|class|interface|type|enum|namespace|module)\s+([A-Za-z_$][\w$]*)\b/;
 const exportedType = /^\s*export\s+(?:declare\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)\b/;
+const testPath = /(?:^|\/)(?:test|tests|__tests__)\/.+\.(?:[cm]?[jt]sx?)$/;
+const activeAssertion = /\b(?:expect|assert)\s*(?:\.|\()/;
 
 function hunkDeclaration(header: string): string | undefined {
   return header.slice(header.lastIndexOf('@@') + 2).match(exportedType)?.[1];
@@ -65,7 +68,13 @@ function canReadOldCandidate(line: string, state: { inBlockComment: boolean }): 
  * conservative: an unrecognised declaration is omitted rather than guessed.
  */
 export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalContext {
-  const result = EMPTY_REMOVALS();
+  const result = {
+    ...EMPTY_REMOVALS(),
+    deletedFiles: [] as string[],
+    removedDeclarations: [] as string[],
+    removedMembers: [] as Array<{ declaration: string; member: string }>,
+    removedTestAssertions: [] as Array<{ path: string; line: string }>,
+  };
   let currentPath: string | undefined;
   let renamed = false;
   let scope: string | undefined;
@@ -113,6 +122,9 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
 
     const removed = rawLine.slice(1);
     if (!canReadOldCandidate(removed, oldSyntax)) continue;
+    if (currentPath && !renamed && testPath.test(currentPath) && activeAssertion.test(removed)) {
+      result.removedTestAssertions.push({ path: currentPath, line: removed });
+    }
     const declaration = declarationIdentity(removed);
     if (declaration) {
       result.removedDeclarations.push(declaration);
@@ -126,5 +138,6 @@ export function deriveBuildReviewRemovals(diff: string): BuildReviewRemovalConte
     deletedFiles: result.deletedFiles,
     removedDeclarations: result.removedDeclarations.filter((declaration) => !addedDeclarations.has(declaration)),
     removedMembers: result.removedMembers.filter(({ declaration, member }) => !addedMembers.has(`${declaration}\u0000${member}`)),
+    ...(result.removedTestAssertions?.length === 0 ? {} : { removedTestAssertions: result.removedTestAssertions }),
   };
 }

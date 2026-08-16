@@ -57,8 +57,6 @@ export interface BuildReviewInputs {
   removalContext?: BuildReviewRemovalContext;
   /** Engine-parsed verify-only plan task evidence for the grader, never an exemption. */
   verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
-  /** Engine-parsed preserved-behavior plan evidence for the grader, never an exemption. */
-  preservationContext?: readonly BuildReviewPreservationContext[];
   /** Operator-authorized protected-artifact reseals from the feature seal. */
   operatorReseals?: OperatorReseal[];
   /**
@@ -114,6 +112,7 @@ export interface BuildReviewSourceSnapshot {
     readonly deletedFiles: readonly string[];
     readonly removedDeclarations: readonly string[];
     readonly removedMembers: readonly { readonly declaration: string; readonly member: string }[];
+    readonly removedTestAssertions?: readonly { readonly path: string; readonly line: string }[];
   };
   /** Engine-parsed verify-only plan task evidence frozen with the source read. */
   readonly verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
@@ -331,6 +330,10 @@ export async function assembleBuildReviewInputs(
       deletedFiles: Object.freeze([...removalContext.deletedFiles]),
       removedDeclarations: Object.freeze([...removalContext.removedDeclarations]),
       removedMembers: Object.freeze([...removalContext.removedMembers]),
+      removedTestAssertions: Object.freeze((removalContext.removedTestAssertions ?? []).map((assertion) => Object.freeze({
+        path: assertion.path,
+        line: assertion.line,
+      }))),
     }),
     verifyOnlyContext: Object.freeze(verifyOnlyContext.map((context) => Object.freeze({
       taskId: context.taskId,
@@ -356,9 +359,8 @@ export async function assembleBuildReviewInputs(
     trackingRefSha: resolution.trackingRefSha,
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
-    removalContext,
+    removalContext: sourceSnapshot.removalContext,
     verifyOnlyContext,
-    preservationContext,
     repairContext,
     acceptedWidenings: [...sourceSnapshot.acceptedWidenings],
     operatorReseals,

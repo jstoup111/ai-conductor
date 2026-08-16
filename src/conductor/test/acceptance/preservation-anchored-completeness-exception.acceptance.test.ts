@@ -53,6 +53,7 @@ interface Scenario {
   preserves?: readonly string[];
   planRequirement?: string;
   baseCarrier?: string;
+  retainCarrier?: boolean;
   replacements?: Readonly<Record<string, string>>;
   changeProduction?: boolean;
 }
@@ -68,7 +69,10 @@ interface CompletenessProjection {
   lapId: string;
   snapshotDigest: string;
   preservationContext?: readonly PreservationEntry[];
-  removalContext: { deletedFiles: readonly string[] };
+  removalContext: {
+    deletedFiles: readonly string[];
+    removedTestAssertions?: readonly { path: string; line: string }[];
+  };
 }
 
 interface CompletenessFinding {
@@ -138,8 +142,11 @@ async function makeFixture(scenario: Scenario): Promise<Fixture> {
   await mkdir(dirname(root), { recursive: true });
   await git(repository, 'worktree', 'add', '-q', '-b', `feature/${scenario.name}`, root);
 
-  if (scenario.baseCarrier !== undefined) {
+  if (scenario.baseCarrier !== undefined && !scenario.retainCarrier) {
     await rm(join(root, CARRIER_PATH));
+  }
+  if (scenario.baseCarrier !== undefined && scenario.retainCarrier) {
+    await writeRepoFile(root, CARRIER_PATH, 'expect(unrelated.stays).toBe(true);\n');
   }
   for (const [path, content] of Object.entries(scenario.replacements ?? {})) {
     await writeRepoFile(root, path, content);
@@ -166,15 +173,15 @@ function currentProof(head: string) {
   };
 }
 
-function preservationContext(value: unknown): readonly PreservationEntry[] | undefined {
-  return (value as { preservationContext?: readonly PreservationEntry[] }).preservationContext;
-}
-
 function contractSupportsPreservation(skill: string): boolean {
   return /preservation[- ]maintenance/i.test(skill) &&
-    /no equivalent assertion[\s\S]*survives anywhere/i.test(skill) &&
+    /declared behavior plus removal[\s\S]*carrier[\s\S]*maintenance case/i.test(skill) &&
+    /active assertion[\s\S]*distinguishes the preserved behavior/i.test(skill) &&
+    /weakened[\s\S]*assertion-free[\s\S]*different-behavior[\s\S]*commented-out[\s\S]*skipped/i.test(skill) &&
+    /suppress(?:es)? the carrier-specific plan gap[\s\S]*equivalent assertion survives/i.test(skill) &&
+    /no equivalent\s+assertion[\s\S]*emit(?:s)? the preserved-behavior finding/i.test(skill) &&
     /per preserved[- ]behavior clause/i.test(skill) &&
-    /removalContext[\s\S]*anchors exactly/i.test(skill);
+    /removedTestAssertions[\s\S]*retained test files/i.test(skill);
 }
 
 function finding(missingOutcome: string): CompletenessFinding {
@@ -210,6 +217,12 @@ async function carrierContents(root: string): Promise<string[]> {
     .map((path) => readFile(join(root, path), 'utf8')));
 }
 
+function removalAnchorsBehavior(projection: CompletenessProjection, behavior: string): boolean {
+  return projection.removalContext.deletedFiles.includes(CARRIER_PATH) ||
+    (projection.removalContext.removedTestAssertions ?? []).some((entry) =>
+      entry.path === CARRIER_PATH && behaviorAssertedIn(entry.line, behavior));
+}
+
 async function behaviorRemovedFromBaseCarrier(root: string): Promise<string | undefined> {
   try {
     const baseCarrier = await git(root, 'show', `HEAD~1:${CARRIER_PATH}`);
@@ -235,11 +248,11 @@ async function judgeScenario(scenario: Scenario): Promise<{
       const contextPresent = JSON.stringify(projection.preservationContext ?? []) === JSON.stringify(expectedContext);
       const contractPresent = contractSupportsPreservation(skill);
       const replacementContents = await carrierContents(fixture.root);
-      const carrierWasRemoved = projection.removalContext.deletedFiles.includes(CARRIER_PATH);
       const lostPreservedBehaviors = (projection.preservationContext ?? [])
         .map(({ behavior }) => behavior)
-        .filter((behavior) => !replacementContents.some((content) => behaviorAssertedIn(content, behavior)));
-      const removedCarrierBehavior = carrierWasRemoved
+        .filter((behavior) => !removalAnchorsBehavior(projection, behavior) ||
+          !replacementContents.some((content) => behaviorAssertedIn(content, behavior)));
+      const fallbackMissingBehavior = (projection.preservationContext ?? []).length === 0
         ? await behaviorRemovedFromBaseCarrier(fixture.root)
         : undefined;
       const syntheticFailure = !contractPresent
@@ -248,9 +261,7 @@ async function judgeScenario(scenario: Scenario): Promise<{
           ? ['the engine omitted the declared preservation evidence']
           : lostPreservedBehaviors.length > 0
             ? lostPreservedBehaviors
-            : (projection.preservationContext ?? []).length > 0 || removedCarrierBehavior === undefined
-              ? []
-              : [removedCarrierBehavior];
+            : fallbackMissingBehavior === undefined ? [] : [fallbackMissingBehavior];
       const findings = syntheticFailure.map(finding);
       return {
         success: true,
@@ -320,9 +331,9 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     );
     const expected = scenario.preserves!.map((behavior) => ({ taskId: '9', behavior }));
 
-    expect(preservationContext(inputs)).toEqual(expected);
-    expect(preservationContext(inputs.sourceSnapshot)).toEqual(expected);
-    expect(Object.isFrozen(preservationContext(inputs.sourceSnapshot))).toBe(true);
+    expect(inputs).not.toHaveProperty('preservationContext');
+    expect(inputs.sourceSnapshot.preservationContext).toEqual(expected);
+    expect(Object.isFrozen(inputs.sourceSnapshot.preservationContext)).toBe(true);
 
     const projections = deriveBuildReviewRubricProjections({
       lapId: 'lap-preservation' as never,
@@ -333,7 +344,7 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
         preflightEvidence: { classification: 'not-requested' },
       },
     });
-    expect(preservationContext(projections.completeness)).toEqual(expected);
+    expect(projections.completeness.preservationContext).toEqual(expected);
     expect(projections.completeness.projectionVersion).toBe('v2');
     expect(projections.tautology).not.toHaveProperty('preservationContext');
     expect(projections.scope).not.toHaveProperty('preservationContext');
@@ -354,7 +365,8 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     const inputs = await assembleBuildReviewInputs(
       makeGitRunner(fixture.root), fixture.planPath, currentProof(fixture.head),
     );
-    expect(preservationContext(inputs)).toEqual(expected);
+    expect(inputs).not.toHaveProperty('preservationContext');
+    expect(inputs.sourceSnapshot.preservationContext).toEqual(expected);
   });
 
   it('returns no finding when coverage is relocated with an equivalent assertion', async () => {
@@ -377,6 +389,47 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     expect(judged.projection.removalContext.deletedFiles).toContain(CARRIER_PATH);
     expect(judged.result).toMatchObject({ kind: 'judged', findings: [] });
     expect(judged.success).toBe(true);
+  });
+
+  it('suppresses the carrier-specific gap when an equivalent assertion moves from a retained carrier', async () => {
+    const judged = await judgeScenario({
+      name: 'retained-carrier-equivalent-relocation',
+      preserves: ['wrapper transparency'],
+      retainCarrier: true,
+      baseCarrier: 'expect(wrapper.transparent).toBe(true);\nexpect(unrelated.stays).toBe(true);\n',
+      replacements: {
+        'test/provider-leg.test.ts': 'expect(wrapper.transparent).toBe(true);\n',
+      },
+    });
+
+    expect(judged.projection.removalContext.deletedFiles).not.toContain(CARRIER_PATH);
+    expect(judged.projection.removalContext.removedTestAssertions).toContainEqual({
+      path: CARRIER_PATH,
+      line: 'expect(wrapper.transparent).toBe(true);',
+    });
+    expect(judged.result).toMatchObject({ kind: 'judged', findings: [] });
+    expect(judged.success).toBe(true);
+  });
+
+  it('emits the preserved-behavior finding when a retained carrier loses its equivalent assertion', async () => {
+    const judged = await judgeScenario({
+      name: 'retained-carrier-lost-coverage',
+      preserves: ['wrapper transparency'],
+      retainCarrier: true,
+      baseCarrier: 'expect(wrapper.transparent).toBe(true);\nexpect(unrelated.stays).toBe(true);\n',
+    });
+
+    expect(judged.projection.removalContext.deletedFiles).not.toContain(CARRIER_PATH);
+    expect(judged.projection.removalContext.removedTestAssertions).toContainEqual({
+      path: CARRIER_PATH,
+      line: 'expect(wrapper.transparent).toBe(true);',
+    });
+    expect(judged.result.findings?.[0]?.anchor).toEqual({
+      rubric: 'completeness',
+      planTask: '9',
+      missingOutcome: 'wrapper transparency',
+    });
+    expect(judged.success).toBe(false);
   });
 
   it.each([
