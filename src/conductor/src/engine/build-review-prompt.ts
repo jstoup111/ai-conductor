@@ -118,6 +118,13 @@ The Tautology exceptions are an explicitly closed list:
    measured normally on that assertion. Evaluate this predicate per changed test, never
    for the whole diff. A qualifying test must not receive a Tautology finding solely because
    its relocated form also passes pre-diff.
+4. Verify-only maintenance: exempt a changed test only when all three conditions
+   hold. First, the Engine-parsed verify-only tasks block lists a verify-only task.
+   Second, the changed test's lines reference that task's plan-declared files or
+   the behavior that task verifies. Third, the change adds no assertion about
+   behavior this diff introduces. Evaluate this predicate per changed test, never
+   per diff. A qualifying test must not receive a Tautology finding solely because
+   it passes pre-diff; a non-qualifying pre-diff-passing test is measured normally.
 A changed test qualifying under none of these exceptions is measured normally.
 
 For every changed test evaluated under the fixture relocation exception, append exactly one \`[relocation-audit]\` entry to \`reasons\` on PASS or FAIL: \`[relocation-audit] (EXEMPTED|MEASURED): old path → new path; production hunk(s) (do|do not) force the move\`. These audit-only entries are evidence, not failing-rubric summaries, and are permitted in addition to one-line summaries for failed rubric items. A PASS with one or more evaluated relocations requires the corresponding audit entries; a PASS with no evaluated relocations may leave \`reasons\` empty. \`findings\` remains failure-only and must be omitted or empty on PASS.

@@ -400,7 +400,7 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(/adds a new behavioral assertion[\s\S]*measured normally/i);
   });
 
-  it('renders the three closed Tautology exceptions, including qualifying fixture relocation', () => {
+  it('renders the four closed Tautology exceptions, including qualifying fixture relocation and verify-only maintenance', () => {
     const relocationDiff = `diff --git a/test/fixture.test.ts b/test/fixture.test.ts
 --- a/test/fixture.test.ts
 +++ b/test/fixture.test.ts
@@ -414,7 +414,7 @@ diff --git a/src/classify.ts b/src/classify.ts
 +return path === 'docs/c.md' ? 'root-markdown' : 'other';
 `;
     const prompt = buildGraderPrompt({ ...inputs, diff: relocationDiff });
-    const exceptions = prompt.match(/The Tautology exceptions are an explicitly closed list:[\s\S]*?measured normally\./)?.[0] ?? '';
+    const exceptions = prompt.match(/The Tautology exceptions are an explicitly closed list:[\s\S]*?(?=\n\nFor every changed test evaluated under)/)?.[0] ?? '';
     expect(exceptions).toMatch(/1\. Rebase repair:[\s\S]*Engine-recorded rebase repair context block/i);
     expect(exceptions).toMatch(/2\. Removal maintenance:[\s\S]*Engine-derived removal evidence block/i);
     expect(exceptions).toMatch(/3\. Fixture relocation:/i);
@@ -429,8 +429,16 @@ diff --git a/src/classify.ts b/src/classify.ts
     expect(prompt).toContain(relocationDiff);
     expect(relocationDiff).not.toMatch(/^(rename from|rename to|similarity index) /m);
     expect(exceptions).toMatch(/absence of Git rename headers does\s+not disqualify/i);
-    expect(exceptions).toMatch(/qualifying under none of these exceptions is measured normally/i);
-    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(3);
+    expect(exceptions).toMatch(/4\. Verify-only maintenance:/i);
+    expect(exceptions).toMatch(/Engine-parsed verify-only tasks block lists a verify-only task/i);
+    expect(exceptions).toMatch(/changed test's lines reference[\s\S]*plan-declared files[\s\S]*behavior that task verifies/i);
+    expect(exceptions).toMatch(/adds no assertion about[\s\S]*behavior this diff introduces/i);
+    expect(exceptions).toMatch(/per changed test, never\s+per diff/i);
+    expect(exceptions).toMatch(/must not receive a Tautology finding solely because[\s\S]*passes pre-diff/i);
+    expect(exceptions).toMatch(/non-qualifying pre-diff-passing test is measured normally/i);
+    expect(exceptions).toContain('A changed test qualifying under none of these exceptions is measured normally.');
+    expect(prompt).toContain("{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] } }");
+    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(4);
   });
 
   it('keeps unforced fixture moves and added assertions under ordinary Tautology', () => {
