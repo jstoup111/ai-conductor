@@ -23,6 +23,32 @@ describe('engine/release-renderer — deterministic release candidates (Task 6)'
     expect(rendered.version).toBe(expected);
   });
 
+  it('strips unpublished sections above the base version so re-renders never consume numbers', () => {
+    // A merged-but-unpublished release PR leaves its section in CHANGELOG and
+    // its number in VERSION; re-rendering from the last published tag must
+    // collapse those phantoms into the fresh section (0.102.0 -> 0.103.0 ->
+    // 0.104.0 inflation observed live on 2026-08-16).
+    const changelog = [
+      '# Changelog', '',
+      '## [Unreleased]', '',
+      '## [0.103.0] - 2026-08-16', '', '### Fixed', '- Phantom render two.', '',
+      '## [0.102.0] - 2026-08-16', '', '### Added', '- Phantom render one.', '',
+      '## [0.101.1] - 2026-08-10', '', '### Fixed', '- Published history stays.', '',
+    ].join('\n');
+    const rendered = renderReleaseCandidate({
+      currentVersion: '0.101.1',
+      date: '2026-08-16',
+      changelog,
+      candidates: [candidate(1, 'Added', 'minor', 'The real change.')],
+    });
+
+    expect(rendered.version).toBe('0.102.0');
+    expect(rendered.changelog.match(/^## \[0\.102\.0\]/gm)).toHaveLength(1);
+    expect(rendered.changelog).not.toContain('## [0.103.0]');
+    expect(rendered.changelog).not.toContain('Phantom render');
+    expect(rendered.changelog).toContain('- Published history stays.');
+  });
+
   it('rejects an unknown semver impact rather than rendering a partial release', () => {
     expect(() => renderReleaseCandidate({
       currentVersion: '1.2.3',

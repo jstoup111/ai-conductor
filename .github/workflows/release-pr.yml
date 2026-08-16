@@ -148,7 +148,11 @@ jobs:
               return;
             }
             const rendered = renderReleaseCandidate({
-              currentVersion: (await readFile('VERSION', 'utf8')).trim(),
+              // Base the bump on the last PUBLISHED tag, not main's VERSION file —
+              // a merged-but-unpublished release PR advances VERSION and would
+              // otherwise consume a version number per failed publish (#1662's
+              // sibling; 0.102.0 → 0.103.0 on 2026-08-16).
+              currentVersion: candidates.latestTag.replace(/^v/, ''),
               changelog: await readFile('CHANGELOG.md', 'utf8'),
               candidates: candidates.candidates,
               date: new Date().toISOString().slice(0, 10),
