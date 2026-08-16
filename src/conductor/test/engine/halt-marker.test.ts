@@ -123,7 +123,7 @@ describe('writeHaltMarker', () => {
     expect(events).toEqual(['body', 'class-temp', 'class-published']);
   });
 
-  it('leaves no retryable old class when the replacement class write is interrupted', async () => {
+  it('reports a HALT.class-only failure while preserving the written HALT park marker', async () => {
     root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
     await mkdir(join(root, '.pipeline'), { recursive: true });
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -137,11 +137,13 @@ describe('writeHaltMarker', () => {
     });
 
     await expect(writeHaltMarker(root, 'reason', 'needs-human')).resolves.toEqual({
-      status: 'failed',
-      path: join(root, HALT_MARKER),
+      status: 'partial',
+      writtenPath: join(root, HALT_MARKER),
+      path: join(root, HALT_CLASS_MARKER),
       reason: 'interrupted class write',
     });
 
+    await expect(readFile(join(root, HALT_MARKER), 'utf-8')).resolves.toBe('reason');
     await expect(readHaltClass(root)).resolves.toBe('unclassified');
   });
 });

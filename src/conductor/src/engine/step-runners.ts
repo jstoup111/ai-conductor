@@ -169,7 +169,9 @@ function mapProviderLifecycleHalt(
 ): ProviderExecutionResult {
   const markerMessage = result.haltMarkerWrite.status === 'written'
     ? ' See .pipeline/HALT.'
-    : ` Halt marker write failed at ${result.haltMarkerWrite.path}: ${result.haltMarkerWrite.reason}.`;
+    : result.haltMarkerWrite.status === 'partial'
+      ? ` HALT was written, but HALT.class write failed at ${result.haltMarkerWrite.path}: ${result.haltMarkerWrite.reason}.`
+      : ` Halt marker write failed at ${result.haltMarkerWrite.path}: ${result.haltMarkerWrite.reason}.`;
   return {
     success: false,
     output: `Provider preparation timed out twice.${markerMessage}`,
