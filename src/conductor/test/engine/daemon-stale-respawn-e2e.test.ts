@@ -11,37 +11,17 @@ import {
   hasSession,
   setRemainOnExit,
   respawnPane,
-  type TmuxRunner,
+  defaultTmuxRunner,
 } from '../../src/engine/daemon-tmux.js';
 import { createRestartRequester } from '../../src/daemon-cli.js';
 import * as restartIntent from '../../src/engine/restart-intent.js';
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 import { fastForwardRoot } from '../../src/engine/daemon-backlog.js';
 import { captureEngineIdentity, createStaleEngineChecker } from '../../src/engine/engine-identity.js';
-import { execFile as execFileCb, spawnSync } from 'node:child_process';
+import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCb);
-
-/**
- * Runs one real-tmux scenario against a private server rather than the
- * operator's inherited TMUX socket. `tmux -V` alone cannot prove that socket
- * is usable, and sharing it lets unrelated sessions interfere with scrollback
- * observations in these end-to-end tests.
- */
-function isolatedTmuxRunner(socketName: string): TmuxRunner {
-  return (args, opts) => {
-    const result = spawnSync('tmux', ['-L', socketName, ...args], {
-      stdio: opts.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
-      encoding: 'utf-8',
-    });
-    return {
-      code: result.status ?? 1,
-      stdout: (result.stdout as string | null) ?? '',
-      stderr: (result.stderr as string | null) ?? '',
-    };
-  };
-}
 
 // Capstone acceptance spec for #353 / adr-2026-07-06-stale-engine-respawn-in-place
 // (TR-2, TR-3, TR-4). The production wiring this drives — createRestartRequester
@@ -715,10 +695,10 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
     it(
       'session-hosted stale-engine restart never leaves the daemon stopped',
       async () => {
+        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
         const suffix = randomBytes(4).toString('hex');
         const name = `cc-daemon-e2e-${suffix}`;
-        const runTmux = isolatedTmuxRunner(`ai-conductor-e2e-${suffix}`);
-        if (!(await tmuxInstalled(runTmux))) return; // skip cleanly — no tmux on PATH
         const cwd = await mkdtemp(join(tmpdir(), 'stale-respawn-e2e-'));
         const daemonDir = await mkdtemp(join(tmpdir(), 'stale-respawn-e2e-dir-'));
 
@@ -728,7 +708,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
 
         function captureScrollback(): string {
-          const result = runTmux(['capture-pane', '-p', '-S', '-', '-t', `=${name}:`], {
+          const result = defaultTmuxRunner(['capture-pane', '-p', '-S', '-', '-t', `=${name}:`], {
             inherit: false,
           });
           return result.code === 0 ? result.stdout : '';
@@ -738,9 +718,9 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           // Seed a session-hosted daemon (mirrors Supervisor.start's
           // fresh-session path) with remain-on-exit armed, exactly as TR-1
           // requires on every creation path.
-          await newDetachedSession(name, bootCmd, cwd, runTmux);
-          await setRemainOnExit(name, runTmux);
-          expect(await hasSession(name, runTmux)).toBe(true);
+          await newDetachedSession(name, bootCmd, cwd);
+          await setRemainOnExit(name);
+          expect(await hasSession(name)).toBe(true);
           await waitFor(() => /BOOT_\d+/.test(captureScrollback()));
           const prePidMatch = captureScrollback().match(/BOOT_(\d+)/);
           expect(prePidMatch).not.toBeNull();
@@ -750,7 +730,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           const triggerSelfRestart = vi.fn(async () => {
             // The real production shape (index.ts buildDaemonModeOptions):
             // triggerSelfRestart = () => respawnPane(sessionName).
-            await respawnPane(name, runTmux, bootCmd);
+            await respawnPane(name, defaultTmuxRunner, bootCmd);
           });
 
           const mockLock = { releaseSync: vi.fn() };
@@ -770,7 +750,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           await requester({ fromIdentity: prePid, targetIdentity: `${prePid}-fresh` });
 
           // Never stopped: `daemon status` proxy — session still up, pane alive.
-          expect(await hasSession(name, runTmux)).toBe(true);
+          expect(await hasSession(name)).toBe(true);
 
           // New pid: only true once triggerSelfRestart actually fires
           // respawnPane — which requires the requester to have called it.
@@ -798,7 +778,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           const hyphenMarkerPath = join(daemonDir, '.daemon', 'RESTART-PENDING');
           expect(existsSync(hyphenMarkerPath)).toBe(false);
         } finally {
-          await killSession(name, runTmux);
+          await killSession(name);
           await rm(cwd, { recursive: true, force: true });
           await rm(daemonDir, { recursive: true, force: true });
           if (prevNoRealExec === undefined) {
@@ -814,10 +794,10 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
     it(
       'E2E capstone: supervised daemon → stale → respawn → single-generation steady-state (Task 17)',
       async () => {
+        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
+
         const suffix = randomBytes(4).toString('hex');
         const sessionName = `cc-daemon-capstone-${suffix}`;
-        const runTmux = isolatedTmuxRunner(`ai-conductor-capstone-${suffix}`);
-        if (!(await tmuxInstalled(runTmux))) return; // skip cleanly — no tmux on PATH
         const cwd = await mkdtemp(join(tmpdir(), 'stale-respawn-capstone-'));
         const daemonDir = join(cwd, '.daemon');
 
@@ -828,7 +808,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
         const bootCmd = 'bash -c "echo DAEMON_PID_$$; while true; do sleep 1; done"';
 
         function captureScrollback(): string {
-          const result = runTmux(
+          const result = defaultTmuxRunner(
             ['capture-pane', '-p', '-S', '-', '-t', `=${sessionName}:`],
             { inherit: false },
           );
@@ -837,9 +817,9 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
 
         try {
           // 1. Start supervised daemon in tmux session
-          await newDetachedSession(sessionName, bootCmd, cwd, runTmux);
-          await setRemainOnExit(sessionName, runTmux);
-          expect(await hasSession(sessionName, runTmux)).toBe(true);
+          await newDetachedSession(sessionName, bootCmd, cwd);
+          await setRemainOnExit(sessionName);
+          expect(await hasSession(sessionName)).toBe(true);
 
           // Wait for daemon to print its PID
           await waitFor(() => /DAEMON_PID_\d+/.test(captureScrollback()), 5000);
@@ -876,7 +856,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           // 3. Idle boundary fires respawn: trigger the respawnPane directly.
           //    In real scenario, daemon loop would detect staleness and call this
           //    via the triggerSelfRestart callback.
-          await respawnPane(sessionName, runTmux, bootCmd);
+          await respawnPane(sessionName, defaultTmuxRunner, bootCmd);
 
           // Wait for the new daemon to boot (new PID should appear in scrollback)
           let newPid: number | null = null;
@@ -899,7 +879,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           await waitFor(() => !isProcessAlive(prePid), 3000);
 
           // 4a. Verify session is still alive (never stopped)
-          expect(await hasSession(sessionName, runTmux)).toBe(true);
+          expect(await hasSession(sessionName)).toBe(true);
 
           // 4b. Verify predecessor is dead (ESRCH)
           expect(isProcessAlive(prePid)).toBe(false);
@@ -918,7 +898,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           const hyphenMarkerPath = join(daemonDir, 'RESTART-PENDING');
           expect(existsSync(hyphenMarkerPath)).toBe(false);
         } finally {
-          await killSession(sessionName, runTmux);
+          await killSession(sessionName);
           await rm(cwd, { recursive: true, force: true });
           if (prevNoRealExec === undefined) {
             delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
