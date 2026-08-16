@@ -174,6 +174,22 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       });
     });
 
+    it('ignores the unreplaced Closes placeholder comment below a "none" section', () => {
+      // shipDraftPrBody appends this HTML comment; it survives whenever
+      // issue-link injection is skipped, and swallowing it turned a correct
+      // `none` into "Invalid release disposition: Migration" at the gate.
+      expect(
+        parseReleaseDisposition(
+          `${fields}\n\n## Migration\n\nnone\n\n<!-- Closes <owner/repo#N> — added automatically when this feature came from an intake issue. -->\n`,
+        ),
+      ).toEqual({
+        disposition: 'note',
+        category: 'Added',
+        semver: 'minor',
+        note: 'Adds a thing.',
+      });
+    });
+
     it('tolerates a trailing Closes line after the metadata block', () => {
       expect(
         parseReleaseDisposition(

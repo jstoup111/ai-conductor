@@ -85,6 +85,15 @@ function migrationSectionContent(raw: string): string {
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (fenceDelimiterRe.test(trimmed)) inFence = !inFence;
+    // The ship-draft template appends an HTML-comment placeholder
+    // (`<!-- Closes <owner/repo#N> — … -->`) below the final section, and it
+    // survives whenever issue-link injection is skipped (no sourceRef, or no
+    // recorded implementation PR). It is annotation, not migration content:
+    // swallowing it turned a correct `none` into a malformed disposition at
+    // the finish-time release gate. Single-line comments outside fences are
+    // ignored; fence tracking still protects a comment echoed inside a
+    // runnable block.
+    else if (!inFence && /^<!--.*-->$/.test(trimmed)) continue;
     else if (!inFence && thematicBreakRe.test(trimmed)) break;
     // The release metadata block also ends the section (#1396). An authored body
     // may put `## Migration` LAST, with the Release-* block directly below it and
