@@ -68,6 +68,12 @@ Consider **only the blocking gaps or the stall question**. Each gap already carr
 answered by reasoning over committed artifacts (plan, stories, ADRs, task-status) without
 re-reading source files unless essential.
 
+**Remediation context pointers:** When the dispatch context includes `plan contract:` or
+`prior attempts:` pointers, read every referenced file before planning repairs. Treat the
+referenced plan task's **Steps** as the governing contract for the repair; prior-attempt
+artifacts supply earlier same-anchor context, not a replacement contract. When no pointers
+appear, inspect `.docs/plans/` and `.pipeline/build-review/` directly before planning.
+
 ### 2. Dispatch `remediation-planner`
 
 Dispatch the **`remediation-planner`** agent with the blocking gaps + their evidence. The agent

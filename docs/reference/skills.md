@@ -580,7 +580,10 @@ joins before `build_review`.
   `advisory`. Deliberately outside the sequential list so the loop never dispatches it unconditionally.
 - **Inputs** — `.pipeline/build-review.json` (present when a `build_review` FAIL dispatches
   remediation), `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
-  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`.
+  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`. A `build_review`-sourced
+  dispatch also carries best-effort `plan contract:` and `prior attempts:` pointer lines (see
+  [gates](../explanation/gates.md#where-a-build_review-fail-goes)); the skill treats a referenced plan
+  task's Steps as the governing repair contract and prior-attempt artifacts as context only.
 - **Outputs** — `.pipeline/remediation.json`, overwritten each run. The engine then appends each task
   into the feature's plan. No completion glob — the engine reads the JSON directly to route.
 - **Gate role** — advisory; it is the unblocker rather than a blocker. HALT is reserved for exactly
