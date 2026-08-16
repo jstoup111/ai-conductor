@@ -49,6 +49,34 @@ describe('engine/release-candidates — merged pull requests after the latest ta
     expect(git.mergeRange).toHaveBeenCalledWith('v1.2.3');
   });
 
+  it('excludes the bot-owned release PR from candidates while its merge stays explained', async () => {
+    // A merged-but-unpublished release PR (failed publish gate) falls inside
+    // the since-last-tag window with no Release-Disposition of its own; it
+    // wedged maintenance as invalid-disposition #1467 on 2026-08-16.
+    const git = {
+      latestTag: vi.fn(async () => 'v1.2.3'),
+      mergeRange: vi.fn(async () => ['merge-200', 'merge-release']),
+    };
+    const github = {
+      listMergedPullRequests: vi.fn(async () => ({
+        items: [
+          { number: 200, merged: true, mergedAt: '2026-08-02T12:00:00Z', mergeSha: 'merge-200', body: 'Release-Disposition: no-note' },
+          { number: 150, merged: true, mergedAt: '2026-08-02T11:00:00Z', mergeSha: 'merge-release', body: '# Release 1.2.4\n\nChangelog prose without metadata.', headRef: 'automation/release-pr' },
+        ],
+        hasNextPage: false,
+        totalCount: 2,
+      })),
+    };
+
+    const collected = await collectReleaseCandidates({ git, github });
+
+    expect(collected).toMatchObject({
+      completeness: { status: 'complete' },
+      candidates: [{ number: 200, mergeSha: 'merge-200' }],
+    });
+    expect(collected.candidates).toHaveLength(1);
+  });
+
   it('returns an incomplete verdict when a later page cannot be reached', async () => {
     const collected = await collectReleaseCandidates({
       git: { latestTag: vi.fn(async () => 'v1.2.3'), mergeRange: vi.fn(async () => ['merge-101']) },
