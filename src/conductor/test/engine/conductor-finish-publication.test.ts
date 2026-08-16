@@ -487,9 +487,10 @@ describe('Conductor FINISH publication routing', () => {
 
     await conductor.run();
 
-    // Coordinator-authored prose is accepted on its mandatory re-observation,
-    // so FINISH proceeds directly to presentation repair.
-    expect(runner.run).toHaveBeenCalledTimes(1);
+    // Placeholder prose first requires an authoring pass. Its successful
+    // re-observation then requires the separate, mandatory judgment pass
+    // before FINISH proceeds to presentation repair.
+    expect(runner.run).toHaveBeenCalledTimes(2);
     expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
