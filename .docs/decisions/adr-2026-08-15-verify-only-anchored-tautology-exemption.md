@@ -11,6 +11,15 @@ being narrowed), the verify-only completion machinery
 rule, the grader's input isolation (diff + plan only; task-status remains forbidden), or the
 verdict schema.
 
+> **Amended 2026-08-16 by #1579 (architecture-review, remediating
+> `build_review:root-cause-symptom-displacement`):** the input-isolation clause above is narrowed,
+> not withdrawn. The frozen grader source now admits a third **engine-derived** class alongside diff
+> and plan — commit-trailer evidence read from the reviewed `mergeBase..HEAD` range (D6 below). What
+> the clause forbids is unchanged and absolute: `.pipeline/task-status.json` and every other maker
+> self-report state remain forbidden as a grader input at every seam. The boundary now reads
+> "diff + plan + engine-read commit trailers from the reviewed range; maker self-report state
+> remains forbidden."
+
 ## Context
 
 Issue #1579. The Tautology rubric ("every new/changed test would fail without the diff") has a
@@ -59,6 +68,32 @@ At build_review input assembly, the engine derives from `planBody` (already an i
 its plan-declared file paths (`parsePlanTaskPaths`). No LLM in the derivation path. The context
 joins the source snapshot (and its digest) exactly as `removalContext` does.
 
+> **Amended 2026-08-16 by #1579 (architecture-review, remediating
+> `build_review:root-cause-overbroad-boundary`):** one derived context, **two separately computed
+> memberships**. The derivation above is preserved verbatim as the *Tautology* evidence membership
+> (D3). It gains one additional deterministic per-task classification, consumed by *Completeness*
+> alone (D4):
+>
+> - `noImplementationPlanned(task)` is **true** iff either (i) the task block carries
+>   `**Verify-only:** yes` under the existing exact-match, fail-closed parse, or (ii) the block
+>   carries no `**Verify-only:** yes` and its `**Type:**` line's `+`-split, trimmed, lower-cased
+>   token set is **exactly** `{verification}`.
+> - It is **false** in every other case, including every mixed declaration —
+>   `**Type:** implementation+verification`, `happy-path+verification`,
+>   `infrastructure+verification` — unless clause (i) independently holds. Absent, empty, or
+>   unparseable markers are false. Fail-closed in both directions.
+>
+> Rationale: `parsePlanTaskVerifyOnly` (`autoheal.ts:638-674`) returns `true` when *any* `+`-split
+> token is `verification`, so a task that plans real implementation behavior alongside its
+> verification half was being granted no-implementation-diff treatment by D4. A mixed task's
+> implementation half must stay fully judged; only an explicit planner declaration that the task
+> delivers no code delta — `**Verify-only:** yes`, the #677 marker's actual meaning — buys the
+> Completeness relief for a mixed `**Type:**` line.
+>
+> This is a boundary split, not a second channel: `noImplementationPlanned` rides each existing
+> `verifyOnlyContext` entry, so one evidence block still carries both memberships and every
+> snapshot/projection/digest seam stays singular.
+
 ### D2 — It travels as a fifth evidence block, not a rule change
 
 `build-review-prompt.ts` renders an "Engine-parsed verify-only tasks" block — evidence, not an
@@ -79,6 +114,16 @@ helper assertions and unanchored tests still FAIL).
 One guidance line: a task listed in the engine-parsed verify-only block legitimately contributes
 no implementation diff; its absence from the diff is not a Completeness gap. (Holistic judgement
 otherwise unchanged.)
+
+> **Amended 2026-08-16 by #1579 (architecture-review, remediating
+> `build_review:root-cause-overbroad-boundary`):** the guidance line is scoped to block entries
+> whose `noImplementationPlanned` classification (D1 amendment) is `true` — not to every listed
+> task. A listed task with `noImplementationPlanned: false` (a mixed `**Type:**` declaration
+> without `**Verify-only:** yes`) is judged for its implementation half exactly as an unlisted task
+> is: its absence from the diff is a Completeness gap. D3's Tautology membership is deliberately
+> **not** narrowed — its conditions (2) and (3) are per-test and already prevent a mixed task from
+> excusing a test that asserts behavior this diff introduces, so the wider membership costs nothing
+> there while the narrower one is required here.
 
 ### D5 — Maker-side authoring boundary (absorbs #1529)
 
@@ -112,6 +157,79 @@ the deferred Approach B follow-up (engine-run pre-diff pass/fail evidence per ch
 durable anchor upgrade for this residue. Anchoring any exemption to `task-status.json` is rejected
 outright — that is maker self-report, and the gate exists because self-reports are not evidence
 (#773 doctrine).
+
+> **Amended 2026-08-16 by #1579 (architecture-review, remediating
+> `build_review:root-cause-symptom-displacement`):** this residue is **withdrawn**, not merely
+> narrowed. Accepting it left the discovered case's closure invisible to Completeness, so the
+> design treated the recurring finding's symptom (the Tautology lap-burner) while leaving the same
+> root cause — a legitimately diff-absent task the grader cannot account for — live on the
+> Completeness rubric. The rejection of `task-status.json` as an anchor stands verbatim and is what
+> D6 below is built to respect; what is withdrawn is the conclusion that no admissible signal
+> exists.
+>
+> ### D6 — The discovered case emits engine-authenticated skipped-task evidence
+>
+> - **Source.** At build_review input assembly the engine reads the reviewed commit range
+>   (`mergeBase..HEAD`, already resolved for the diff at `build-review-inputs.ts:245-266`) and
+>   derives `skippedTaskContext: readonly { taskId, reason, commit }[]` — one entry per commit in
+>   that range carrying **both** a `Task: <id>` trailer and an `Evidence: skipped <reason>`
+>   trailer, which is exactly the D5 closure form. No LLM in the derivation path.
+> - **Authentication — why this is evidence and `task-status.json` is not.** The trailers live in
+>   immutable commits inside the same reviewed range the diff is cut from, so they are part of the
+>   history under review rather than a mutable sidecar a maker can rewrite after the fact. The
+>   generated `commit-msg` hook rejects `Task:` naming drift and ids absent from the task ledger at
+>   commit time (`git-hook-assets.ts:224-246`), which is an early filter, not the authority. The
+>   authority is assembly-side: each parsed id is re-resolved against the **sealed** `planBody`
+>   using the existing canonical-id folding, and any id that does not resolve to a plan task, or
+>   any commit missing either trailer, is dropped fail-closed. The `<reason>` string is rendered as
+>   evidence text and carries no decision authority.
+> - **Isolation.** `.pipeline/task-status.json` is read at no seam in this derivation. The engine
+>   never consults task status to decide membership, and no task-status value reaches the grader.
+> - **Snapshot / projection contract.** `skippedTaskContext` is frozen into
+>   `BuildReviewSourceSnapshot`, participates in **both** `snapshotDigest` and
+>   `contentSnapshotDigest`, and rides `CommonProjection` beside `verifyOnlyContext`. One evidence
+>   seam; no new event, ledger, sidecar, or observation channel.
+> - **Completeness contract.** A task listed in the engine-parsed skipped block accounts for its
+>   own absence from the diff: that absence alone is not a Completeness gap. It is **not** an
+>   automatic pass — Completeness still judges whether the approved plan's outcomes were delivered,
+>   and an outcome left unmet is a gap however its task closed. Per-task SHA-chasing remains
+>   forbidden; the block is read as context for holistic judgement, exactly as `verifyOnlyContext`
+>   is.
+> - **Tautology contract.** Unchanged. A discovered-case task authors no test, so it never reaches
+>   the per-test predicate. The closed exception list stays at four.
+> - **D5 is unchanged in behavior.** The discovered case still closes with no operator act and no
+>   plan amendment. Only its visibility to the grader changes.
+> - **Approach B remains the deferred durable upgrade** for per-test pre-diff pass/fail evidence;
+>   D6 closes the Completeness half of the residue without waiting for it.
+
+## Required plan realignment (2026-08-16 amendments) — DEFERRED (operator ruling, 2026-08-16)
+
+> **Operator ruling (2026-08-16):** the two amendments above are approved as design direction but
+> are **deferred out of this feature's scope** to issue #1622. They do NOT bind this feature's
+> stories, plan, acceptance specs, or build: the original 11-task plan stands as the delivery
+> contract, and BUILD proceeds without a `stories` → `plan` → `coherence_check` re-run (autonomous
+> re-plan is prohibited by design, and the operator declines an interactive re-plan for this
+> feature). The realignment below is retained verbatim as the implementation sketch for #1622.
+
+The two amendments above are structural; when #1622 is taken up, its plan must land these:
+
+- **Task 1 (derivation)** — emit `noImplementationPlanned` per `verifyOnlyContext` entry under the
+  D1-amendment predicate, with fail-closed coverage of every mixed `**Type:**` form and of the
+  `**Verify-only:** yes` override.
+- **Task 2 (snapshot/digest)** and **Task 3 (projections)** — carry the new per-entry field, and
+  add `skippedTaskContext` to the snapshot, both digests, and `CommonProjection`.
+- **New task — D6 derivation** — read `Task:`/`Evidence: skipped` trailer pairs from
+  `mergeBase..HEAD`, resolve ids against `planBody`, drop unresolvable entries fail-closed.
+- **Task 6 (monolithic Completeness line)** and **Task 8 (fan-out Completeness skill)** — scope the
+  no-implementation-diff relief to `noImplementationPlanned: true` entries, and add the
+  skipped-block guidance with its explicit "accounts for absence, is not an automatic pass" limit.
+- **New task — D6 prompt/skill parity** — render the skipped-task evidence block in
+  `buildGraderPrompt` and mirror it in `skills/build-review-completeness/SKILL.md`, `(none)` when
+  empty.
+- **Task 11 (plan skill guidance)** — state that a mixed `**Type:** implementation+verification`
+  declaration does **not** buy Completeness relief; only `**Verify-only:** yes` declares a task
+  with no code delta.
+- **Tasks 4, 5, 7, 9, 10** — unaffected; D3 and D5 are unchanged.
 
 ## Consequences
 

@@ -58,6 +58,20 @@ whether the test only restates copied behavior or is otherwise wrong;
 then write a failing test for the task's uncovered behavior. Only a separate proof that the copy
 satisfies the whole task may use the existing `Evidence: satisfied-by` closure.
 
+### No Legitimate RED for Already-Existing Behavior
+
+This boundary applies only when there is no behavior left to add, change, or fix. It never applies
+to a task that adds, changes, or fixes behavior; those tasks run the full RED → DOMAIN → GREEN →
+DOMAIN → COMMIT cycle.
+
+For a plan-declared verify-only/verification task, author at most the documenting test explicitly
+asked for by the plan. Do not invent unrelated assertions to manufacture a RED result.
+
+If investigation discovers that the behavior already exists but the sealed plan did not declare the
+task verify-only/verification, do not author a test that cannot fail. Delete any redundant test
+authored during this lap, do not amend the sealed plan, and close the task with the existing
+`Evidence: skipped <reason>` empty-commit form in **Commit-less Completions: Evidence Trailers**.
+
 ### Phase 1: RED
 
 **Agent:** Generator (test-files-only context).

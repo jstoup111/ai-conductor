@@ -51,6 +51,10 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
         }],
         acceptedWidenings: [{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }],
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
+        verifyOnlyContext: [{
+          taskId: '3',
+          paths: ['src/verified.ts', 'test/verified.test.ts'],
+        }],
         operatorReseals: [{
           paths: ['.docs/stories/resealed-story.md'],
           reason: 'Operator approved this exact protected-artifact amendment.',
@@ -288,26 +292,30 @@ const provenanceKeyCoverage: Record<(typeof BUILD_REVIEW_PROVENANCE_KEYS)[number
 
 describe('build-review rubric projections', () => {
   it('derives the four closed projections with every skill dependency and a v1 digest', () => {
-    const projections = deriveBuildReviewRubricProjections(source());
+    const fixture = source();
+    const projections = deriveBuildReviewRubricProjections(fixture);
 
     expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness']);
     expect(Object.keys(projections.tautology).sort()).toEqual([
       'changedFiles', 'changedTestSelectors', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'preflightEvidence', 'projectionVersion', 'removalContext', 'repairContext',
       'revertedProductionManifest', 'rubric', 'snapshotDigest', 'testSuiteProof',
+      'verifyOnlyContext',
     ]);
     expect(Object.keys(projections.scope).sort()).toEqual([
       'acceptedWidenings', 'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'operatorReseals', 'planBody', 'projectionVersion', 'removalContext',
       'repairContext', 'rubric', 'snapshotDigest',
+      'verifyOnlyContext',
     ]);
     expect(Object.keys(projections.rootCause).sort()).toEqual([
       'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
       'projectionVersion', 'removalContext', 'repairContext', 'rubric', 'snapshotDigest',
+      'verifyOnlyContext',
     ]);
     expect(Object.keys(projections.completeness).sort()).toEqual([
       'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
-      'projectionVersion', 'removalContext', 'rubric', 'snapshotDigest',
+      'projectionVersion', 'removalContext', 'rubric', 'snapshotDigest', 'verifyOnlyContext',
     ]);
     expect(projections.tautology).toMatchObject({
       rubric: 'tautology', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
@@ -317,6 +325,10 @@ describe('build-review rubric projections', () => {
         hunks: [{ oldStart: 1, oldCount: 2, newStart: 1, newCount: 3 }],
       }],
       removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
+      verifyOnlyContext: [{
+        taskId: '3',
+        paths: ['src/verified.ts', 'test/verified.test.ts'],
+      }],
       changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
       revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }],
       preflightEvidence: expect.any(Object), repairContext: expect.any(Array),
@@ -337,7 +349,9 @@ describe('build-review rubric projections', () => {
     // The raw diff body must never travel inside a projection — only references do.
     for (const projection of Object.values(projections)) {
       expect(JSON.stringify(projection)).not.toContain('embedded-diff-body-line');
+      expect(projection.verifyOnlyContext).toEqual(fixture.inputs.sourceSnapshot.verifyOnlyContext);
     }
+    expect(projections.tautology).not.toHaveProperty('planBody');
     for (const projection of [projections.tautology, projections.rootCause, projections.completeness]) {
       expect(projection).not.toHaveProperty('operatorReseals');
     }
@@ -484,6 +498,16 @@ describe('build-review rubric projections', () => {
         changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
           ...original.inputs.sourceSnapshot,
           removalContext: { deletedFiles: ['new-old.ts'], removedDeclarations: ['new-old'], removedMembers: [] },
+        } } }),
+      },
+      {
+        name: 'verify-only context', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
+        changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
+          ...original.inputs.sourceSnapshot,
+          verifyOnlyContext: [{
+            taskId: '3',
+            paths: ['src/changed-verified.ts', 'test/verified.test.ts'],
+          }],
         } } }),
       },
       {

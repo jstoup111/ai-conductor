@@ -147,10 +147,22 @@ describe('buildGraderPrompt', () => {
 
   it('includes the completeness rubric item and forbids per-task reasoning', () => {
     const prompt = buildGraderPrompt(inputs);
+    const holisticJudgement = `Completeness must be judged holistically: read the plan and the diff as a
+whole and form a judgement of whether the diff, taken together, delivers
+everything the plan describes.`;
+    const forbiddenPerTaskChasing = `Do NOT reason about completeness on a
+per-task basis — you must never chase individual task SHAs, verify
+per-task commit reachability, or look for corroborating evidence tying
+each plan task to a specific commit.`;
 
     expect(prompt).toContain(
       'Completeness: every planned task\'s work is present in the diff',
     );
+    expect(prompt).toMatch(
+      /listed in the engine-parsed verify-only block.*no implementation diff/i,
+    );
+    expect(prompt).toContain(holisticJudgement);
+    expect(prompt).toContain(forbiddenPerTaskChasing);
     expect(prompt).toMatch(
       /completeness .*(judg(e|ed|ement)|assess(ed)?) holistically/i,
     );
@@ -372,6 +384,24 @@ describe('buildGraderPrompt', () => {
     expect(empty).toMatch(/Engine-derived removal evidence[\s\S]*\(none\)/);
   });
 
+  it('renders verify-only task evidence without granting an exemption, escaping declared paths', () => {
+    const populated = buildGraderPrompt({
+      ...inputs,
+      verifyOnlyContext: [{
+        taskId: '4',
+        paths: ['src/conductor/src/engine/already`present.ts', 'src/conductor/test/engine/already-present.test.ts'],
+      }],
+    });
+    const empty = buildGraderPrompt({ ...inputs, verifyOnlyContext: [] });
+
+    expect(populated).toMatch(/Engine-parsed verify-only tasks/i);
+    expect(populated).toMatch(/evidence,? not an exemption/i);
+    expect(populated).toContain('Task 4');
+    expect(populated).toContain('src/conductor/src/engine/already\\`present.ts');
+    expect(populated).toContain('src/conductor/test/engine/already-present.test.ts');
+    expect(empty).toMatch(/Engine-parsed verify-only tasks[\s\S]*\(none\)/);
+  });
+
   it('defines removal maintenance through all three per-test conditions', () => {
     const prompt = buildGraderPrompt(inputs);
     expect(prompt).toMatch(/all three conditions/i);
@@ -382,7 +412,7 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(/adds a new behavioral assertion[\s\S]*measured normally/i);
   });
 
-  it('renders the three closed Tautology exceptions, including qualifying fixture relocation', () => {
+  it('renders the four closed Tautology exceptions, including qualifying fixture relocation and verify-only maintenance', () => {
     const relocationDiff = `diff --git a/test/fixture.test.ts b/test/fixture.test.ts
 --- a/test/fixture.test.ts
 +++ b/test/fixture.test.ts
@@ -396,7 +426,7 @@ diff --git a/src/classify.ts b/src/classify.ts
 +return path === 'docs/c.md' ? 'root-markdown' : 'other';
 `;
     const prompt = buildGraderPrompt({ ...inputs, diff: relocationDiff });
-    const exceptions = prompt.match(/The Tautology exceptions are an explicitly closed list:[\s\S]*?measured normally\./)?.[0] ?? '';
+    const exceptions = prompt.match(/The Tautology exceptions are an explicitly closed list:[\s\S]*?(?=\n\nFor every changed test evaluated under)/)?.[0] ?? '';
     expect(exceptions).toMatch(/1\. Rebase repair:[\s\S]*Engine-recorded rebase repair context block/i);
     expect(exceptions).toMatch(/2\. Removal maintenance:[\s\S]*Engine-derived removal evidence block/i);
     expect(exceptions).toMatch(/3\. Fixture relocation:/i);
@@ -411,8 +441,16 @@ diff --git a/src/classify.ts b/src/classify.ts
     expect(prompt).toContain(relocationDiff);
     expect(relocationDiff).not.toMatch(/^(rename from|rename to|similarity index) /m);
     expect(exceptions).toMatch(/absence of Git rename headers does\s+not disqualify/i);
-    expect(exceptions).toMatch(/qualifying under none of these exceptions is measured normally/i);
-    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(3);
+    expect(exceptions).toMatch(/4\. Verify-only maintenance:/i);
+    expect(exceptions).toMatch(/Engine-parsed verify-only tasks block lists a verify-only task/i);
+    expect(exceptions).toMatch(/changed test's lines reference[\s\S]*plan-declared files[\s\S]*behavior that task verifies/i);
+    expect(exceptions).toContain('the change adds no new assertion about behavior this diff introduces.');
+    expect(exceptions).toMatch(/per changed test, never\s+per diff/i);
+    expect(exceptions).toMatch(/must not receive a Tautology finding solely because[\s\S]*passes pre-diff/i);
+    expect(exceptions).toMatch(/non-qualifying pre-diff-passing test is measured normally/i);
+    expect(exceptions).toContain('A changed test qualifying under none of these exceptions is measured normally.');
+    expect(prompt).toContain("{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] } }");
+    expect((exceptions.match(/^\d\. /gm) ?? [])).toHaveLength(4);
   });
 
   it('keeps unforced fixture moves and added assertions under ordinary Tautology', () => {

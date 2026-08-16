@@ -120,6 +120,17 @@ Concrete check: `grep -rE "criterion keyword" <the project's test directories>`.
 already asserts the expected behavior, skip that criterion. Log skipped criteria so the retro
 can verify nothing was missed.
 
+### No Legitimate Acceptance-Spec RED for Already-Existing Behavior
+
+For a plan-marked verify-only/verification task, generate at most the documenting acceptance spec
+explicitly requested by the plan. Outside such a task, no acceptance spec is invented for
+already-existing behavior just to manufacture a RED result.
+
+If investigation discovers that behavior already exists but the sealed plan did not mark the task
+verify-only/verification, follow `/tdd`'s **No Legitimate RED for Already-Existing Behavior**
+discovered-case exit. Do not amend the sealed plan or retain a redundant acceptance spec. This
+boundary never applies to work that adds, changes, or fixes behavior.
+
 **End-to-end internally; fake third parties:** Acceptance specs test the real application entry
 point and internal system. Do NOT mock internal infrastructure (database, queues, caches,
 background jobs). Replace every **third-party external service** (LLM providers, hosted APIs,

@@ -144,6 +144,11 @@ expected to prove existing behavior already satisfies its acceptance criteria, r
 than land new code. The match is exact (case-insensitive) on the literal value `yes`;
 any other value, or the line's absence, means the task is NOT verify-only.
 
+Use `**Verify-only:** yes` (or `**Type:** verification`) for a task that verifies or
+documents behavior that may already exist. This marker is review-load-bearing evidence
+for the Tautology and Completeness reviews. Never mark a task that delivers new or
+changed behavior: over-marking widens the exemption and is forbidden.
+
 Verify-only tasks preferably complete via an empty commit rather than a code commit:
 carry a `Task: <id>` trailer and an `Evidence: skipped <reason>` trailer (see
 `skills/tdd/SKILL.md`'s "Commit-less Completions: Evidence Trailers" section for the

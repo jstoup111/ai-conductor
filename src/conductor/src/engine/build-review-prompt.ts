@@ -20,6 +20,7 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
     repairContext = [],
     acceptedWidenings = [],
     removalContext,
+    verifyOnlyContext,
     operatorReseals,
   } = inputs;
   const escapeEvidence = (value: string) => value.replaceAll('`', '\\`');
@@ -32,6 +33,13 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
         ...removalContext.removedMembers.map(({ declaration, member }) =>
           `- Removed member: ${escapeEvidence(declaration)}.${escapeEvidence(member)}`),
       ].join('\n')
+    : '(none)';
+  const renderedVerifyOnlyContext = verifyOnlyContext && verifyOnlyContext.length > 0
+    ? verifyOnlyContext.map(({ taskId, paths }) =>
+        `- Task ${escapeEvidence(taskId)}: declared paths: ${paths.length > 0
+          ? paths.map((path) => `\`${escapeEvidence(path)}\``).join(', ')
+          : '(none declared)'}`,
+      ).join('\n')
     : '(none)';
   const renderedRepairContext = repairContext.length > 0
     ? repairContext.map((repair) =>
@@ -110,13 +118,24 @@ The Tautology exceptions are an explicitly closed list:
    measured normally on that assertion. Evaluate this predicate per changed test, never
    for the whole diff. A qualifying test must not receive a Tautology finding solely because
    its relocated form also passes pre-diff.
+4. Verify-only maintenance: exempt a changed test only when all three conditions
+   hold. First, the Engine-parsed verify-only tasks block lists a verify-only task.
+   Second, the changed test's lines reference that task's plan-declared files or
+   the behavior that task verifies. Third, the change adds no new assertion about behavior this diff introduces.
+   Evaluate this predicate per changed test, never
+   per diff. A qualifying test must not receive a Tautology finding solely because
+   it passes pre-diff; a non-qualifying pre-diff-passing test is measured normally.
 A changed test qualifying under none of these exceptions is measured normally.
 
 For every changed test evaluated under the fixture relocation exception, append exactly one \`[relocation-audit]\` entry to \`reasons\` on PASS or FAIL: \`[relocation-audit] (EXEMPTED|MEASURED): old path → new path; production hunk(s) (do|do not) force the move\`. These audit-only entries are evidence, not failing-rubric summaries, and are permitted in addition to one-line summaries for failed rubric items. A PASS with one or more evaluated relocations requires the corresponding audit entries; a PASS with no evaluated relocations may leave \`reasons\` empty. \`findings\` remains failure-only and must be omitted or empty on PASS.
 
 Completeness must be judged holistically: read the plan and the diff as a
 whole and form a judgement of whether the diff, taken together, delivers
-everything the plan describes. Do NOT reason about completeness on a
+everything the plan describes.
+
+A task listed in the Engine-parsed verify-only block legitimately contributes no implementation diff.
+
+Do NOT reason about completeness on a
 per-task basis — you must never chase individual task SHAs, verify
 per-task commit reachability, or look for corroborating evidence tying
 each plan task to a specific commit. That per-task SHA/reachability/
@@ -179,5 +198,12 @@ The following removals are diff-derived evidence, not an exemption. Evaluate
 them only under the Tautology exception rules stated above:
 
 ${renderedRemovalContext}
+
+## Engine-parsed verify-only tasks
+
+The following plan-derived tasks are evidence, not an exemption. Use this
+evidence only when judging the diff; it grants no exemption on its own:
+
+${renderedVerifyOnlyContext}
 `;
 }
