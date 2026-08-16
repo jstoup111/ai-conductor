@@ -124,7 +124,17 @@ function parseClaudeEnvelope(stdout: string): EnvelopeSummary | undefined {
   summary.numTurns = num(parsed.num_turns);
   summary.durationMs = num(parsed.duration_ms) ?? num(parsed.duration_api_ms);
   summary.costUsd = num(parsed.total_cost_usd);
-  summary.inputTokens = num(usage.input_tokens);
+  // Anthropic's `input_tokens` EXCLUDES cached input; the real prompt volume is
+  // the sum of fresh, cache-read, and cache-creation tokens. Without the cache
+  // fields a cache-heavy dispatch reports a double-digit "input" next to a
+  // multi-dollar cost (#1634).
+  const freshInput = num(usage.input_tokens);
+  const cacheRead = num(usage.cache_read_input_tokens);
+  const cacheCreation = num(usage.cache_creation_input_tokens);
+  summary.inputTokens =
+    freshInput === undefined && cacheRead === undefined && cacheCreation === undefined
+      ? undefined
+      : (freshInput ?? 0) + (cacheRead ?? 0) + (cacheCreation ?? 0);
   summary.outputTokens = num(usage.output_tokens);
   return summary;
 }

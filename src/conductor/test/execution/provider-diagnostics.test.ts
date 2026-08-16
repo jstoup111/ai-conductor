@@ -44,7 +44,7 @@ describe('summarizeProviderDiagnostic: claude result envelope', () => {
     stop_reason: 'end_turn',
     session_id: '82306471-0000-0000-0000-000000000000',
     total_cost_usd: 4.956137999999998,
-    usage: { input_tokens: 12_345, output_tokens: 4_100 },
+    usage: { input_tokens: 345, cache_read_input_tokens: 10_000, cache_creation_input_tokens: 2_000, output_tokens: 4_100 },
     permission_denials: [{ tool_name: 'Bash', tool_input: { command: 'rm -rf /' } }],
     result: 'RED acceptance specs written, executed, and committed.\n\n**What landed:** …',
   });
