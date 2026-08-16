@@ -8,8 +8,10 @@ import { describe, expect, it } from 'vitest';
 import {
   parsePlanTaskPaths,
   parsePlanTaskPreserves,
+  TASK_HEADER_PATTERN,
   TASK_ID_PATTERN,
 } from '../../src/engine/plan-task-parse.js';
+import { parsePlanTaskVerifyOnly } from '../../src/engine/autoheal.js';
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
   it('parses one preserved behavior from its task block', () => {
@@ -38,6 +40,35 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
 
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {
     expect(TASK_ID_PATTERN).toBe('[A-Za-z0-9._-]+');
+  });
+
+  it('keeps every task parser on the shared supported header grammar', () => {
+    const plan = `### Task rem-adr-001: Colon-delimited
+**Preserves:** colon behavior
+**Verify-only:** yes
+**Files:** src/colon.ts
+
+#### Task task_1 — Dash-delimited
+**Preserves:** dash behavior
+**Verify-only:** yes
+**Files:** src/dash.ts
+
+##### Task 1.2
+**Preserves:** bare numeric behavior
+**Verify-only:** yes
+**Files:** src/bare.ts
+
+###### T0 — Shorthand
+**Preserves:** shorthand behavior
+**Verify-only:** yes
+**Files:** src/shorthand.ts
+`;
+    const ids = ['rem-adr-001', 'task_1', '1.2', 'T0'];
+
+    expect(TASK_HEADER_PATTERN).toBeInstanceOf(RegExp);
+    expect(Array.from(parsePlanTaskPaths(plan).keys())).toEqual(ids);
+    expect(Array.from(parsePlanTaskPreserves(plan).keys())).toEqual(ids);
+    expect(Array.from(parsePlanTaskVerifyOnly(plan).keys())).toEqual(ids);
   });
 
   it('exports a working parsePlanTaskPaths', () => {

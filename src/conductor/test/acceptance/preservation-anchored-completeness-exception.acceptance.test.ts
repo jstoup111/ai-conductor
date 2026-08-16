@@ -55,7 +55,6 @@ interface Scenario {
   baseCarrier?: string;
   replacements?: Readonly<Record<string, string>>;
   changeProduction?: boolean;
-  expectedLost: readonly string[];
 }
 
 interface Fixture {
@@ -191,6 +190,35 @@ function finding(missingOutcome: string): CompletenessFinding {
   };
 }
 
+const ASSERTION_BY_BEHAVIOR: Readonly<Record<string, string>> = {
+  'wrapper transparency': 'expect(wrapper.transparent).toBe(true)',
+  'failed preflight never dispatches': 'expect(dispatches).toBe(0)',
+  'optional member remains absent': 'expect(wrapper.optionalMember).toBeUndefined()',
+};
+
+function behaviorAssertedIn(content: string, behavior: string): boolean {
+  const assertion = ASSERTION_BY_BEHAVIOR[behavior];
+  return assertion !== undefined && content.split('\n').some((line) =>
+    !line.includes('it.skip') && line.includes(assertion),
+  );
+}
+
+async function carrierContents(root: string): Promise<string[]> {
+  const trackedPaths = (await git(root, 'ls-files')).split('\n');
+  return Promise.all(trackedPaths
+    .filter((path) => path.startsWith('test/'))
+    .map((path) => readFile(join(root, path), 'utf8')));
+}
+
+async function behaviorRemovedFromBaseCarrier(root: string): Promise<string | undefined> {
+  try {
+    const baseCarrier = await git(root, 'show', `HEAD~1:${CARRIER_PATH}`);
+    return Object.keys(ASSERTION_BY_BEHAVIOR).find((behavior) => behaviorAssertedIn(baseCarrier, behavior));
+  } catch {
+    return undefined;
+  }
+}
+
 async function judgeScenario(scenario: Scenario): Promise<{
   success: boolean;
   result: { kind: string; contractVersion?: string; findings?: CompletenessFinding[] };
@@ -206,11 +234,23 @@ async function judgeScenario(scenario: Scenario): Promise<{
       const expectedContext = (scenario.preserves ?? []).map((behavior) => ({ taskId: '9', behavior }));
       const contextPresent = JSON.stringify(projection.preservationContext ?? []) === JSON.stringify(expectedContext);
       const contractPresent = contractSupportsPreservation(skill);
+      const replacementContents = await carrierContents(fixture.root);
+      const carrierWasRemoved = projection.removalContext.deletedFiles.includes(CARRIER_PATH);
+      const lostPreservedBehaviors = (projection.preservationContext ?? [])
+        .map(({ behavior }) => behavior)
+        .filter((behavior) => !replacementContents.some((content) => behaviorAssertedIn(content, behavior)));
+      const removedCarrierBehavior = carrierWasRemoved
+        ? await behaviorRemovedFromBaseCarrier(fixture.root)
+        : undefined;
       const syntheticFailure = !contractPresent
         ? ['the Completeness rubric lacks the preservation-maintenance predicate']
         : !contextPresent
           ? ['the engine omitted the declared preservation evidence']
-          : scenario.expectedLost;
+          : lostPreservedBehaviors.length > 0
+            ? lostPreservedBehaviors
+            : (projection.preservationContext ?? []).length > 0 || removedCarrierBehavior === undefined
+              ? []
+              : [removedCarrierBehavior];
       const findings = syntheticFailure.map(finding);
       return {
         success: true,
@@ -271,7 +311,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       replacements: {
         'test/provider-leg.test.ts': 'expect(wrapper.transparent).toBe(true);\n',
       },
-      expectedLost: [],
     };
     const fixture = await makeFixture(scenario);
     const inputs = await assembleBuildReviewInputs(
@@ -310,7 +349,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       name: `fail-closed-${_name.replace(' ', '-')}`,
       baseCarrier: 'expect(wrapper.transparent).toBe(true);\n',
       replacements: { 'test/provider-leg.test.ts': 'expect(wrapper.transparent).toBe(true);\n' },
-      expectedLost: [],
     });
     await writeFile(fixture.planPath, body, 'utf8');
     const inputs = await assembleBuildReviewInputs(
@@ -334,7 +372,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
           'expect(wrapper.optionalMember).toBeUndefined();',
         ].join('\n'),
       },
-      expectedLost: [],
     });
 
     expect(judged.projection.removalContext.deletedFiles).toContain(CARRIER_PATH);
@@ -354,7 +391,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       preserves: [behavior],
       baseCarrier: 'expect(wrapper.transparent).toBe(true);\n',
       replacements,
-      expectedLost: [behavior],
     });
 
     expect(judged.result).toMatchObject({
@@ -383,7 +419,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       replacements: {
         'test/provider-leg.test.ts': 'expect(wrapper.transparent).toBe(true);\n',
       },
-      expectedLost: ['failed preflight never dispatches'],
     });
 
     expect(judged.result.findings).toHaveLength(1);
@@ -410,7 +445,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
           'expect(wrapper.optionalMember).toBeUndefined();',
         ].join('\n'),
       },
-      expectedLost: ['failed preflight never dispatches'],
     });
 
     expect(judged.result.findings).toHaveLength(1);
@@ -430,7 +464,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
         'expect(dispatches).toBe(0);',
         'expect(wrapper.optionalMember).toBeUndefined();',
       ].join('\n'),
-      expectedLost: ['failed preflight never dispatches', 'optional member remains absent'],
     });
 
     expect(judged.result.findings?.map((entry) => entry.anchor)).toEqual([
@@ -453,7 +486,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       name: 'removal-only',
       planRequirement: `Retain coverage for ${behavior}.`,
       baseCarrier: 'expect(wrapper.transparent).toBe(true);\n',
-      expectedLost: [behavior],
     });
 
     expect(judged.projection.preservationContext ?? []).toEqual([]);
@@ -478,7 +510,6 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       preserves: [behavior],
       planRequirement: `Add and preserve coverage for ${behavior}.`,
       changeProduction: true,
-      expectedLost: [behavior],
     });
 
     expect(judged.projection.preservationContext).toEqual([{ taskId: '9', behavior }]);
