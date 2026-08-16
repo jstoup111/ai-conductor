@@ -107,6 +107,8 @@ export interface BuildReviewSourceSnapshot {
     readonly removedDeclarations: readonly string[];
     readonly removedMembers: readonly { readonly declaration: string; readonly member: string }[];
   };
+  /** Engine-parsed verify-only plan task evidence frozen with the source read. */
+  readonly verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
 }
 
 /** Immutable operator reseal record captured in a source snapshot. */
@@ -173,14 +175,15 @@ function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'co
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'removalContext'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'verifyOnlyContext'
 >): string {
-  const { diff, planBody, repairContext, removalContext } = snapshot;
+  const { diff, planBody, repairContext, removalContext, verifyOnlyContext } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff: withoutDiffBlobIdentities(diff),
     planBody,
     repairContext: semanticRepairContext(repairContext),
     removalContext,
+    verifyOnlyContext,
   })).digest('hex')}`;
 }
 
@@ -313,6 +316,10 @@ export async function assembleBuildReviewInputs(
       removedDeclarations: Object.freeze([...removalContext.removedDeclarations]),
       removedMembers: Object.freeze([...removalContext.removedMembers]),
     }),
+    verifyOnlyContext: Object.freeze(verifyOnlyContext.map((context) => Object.freeze({
+      taskId: context.taskId,
+      paths: Object.freeze([...context.paths]),
+    }))),
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,

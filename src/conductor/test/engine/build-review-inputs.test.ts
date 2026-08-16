@@ -318,6 +318,34 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       });
     });
 
+    it('includes frozen verify-only evidence in the source snapshot identity', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
+      ]);
+
+      const withoutMarker = await assembleBuildReviewInputs(git, planPath);
+      await writeFile(planPath, `# Plan body
+
+### Task 3: Prove existing behavior
+**Verify-only:** yes
+**Files:** \`src/engine/build-review-inputs.ts\`
+`, 'utf-8');
+      const withMarker = await assembleBuildReviewInputs(git, planPath);
+      const { verifyOnlyContext } = withMarker.sourceSnapshot;
+
+      expect(withMarker.sourceSnapshot.digest).not.toBe(withoutMarker.sourceSnapshot.digest);
+      expect(verifyOnlyContext).toEqual([
+        { taskId: '3', paths: ['src/engine/build-review-inputs.ts'] },
+      ]);
+      expect({
+        context: Object.isFrozen(verifyOnlyContext),
+        entry: Object.isFrozen(verifyOnlyContext?.[0]),
+        paths: Object.isFrozen(verifyOnlyContext?.[0]?.paths),
+      }).toEqual({ context: true, entry: true, paths: true });
+    });
+
     it('stale base: fetches, recomputes merge-base against the refreshed ref, fresh=false', async () => {
       const { git } = fakeGit([
         { match: ['remote'], result: { exitCode: 0, stdout: 'origin\n' } },
