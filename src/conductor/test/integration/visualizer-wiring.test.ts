@@ -178,4 +178,43 @@ describe('Visualizer wiring helpers', () => {
     };
     await expect(stopVisualizers([badVis])).resolves.toBeUndefined();
   });
+
+  it('bounds a never-settling visualizer stop without blocking other plugins', async () => {
+    const { stopVisualizers } = await import('../../src/index.js');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.useFakeTimers();
+    const healthyStop = vi.fn(async () => {});
+    const hangingVisualizer: VisualizerPlugin = {
+      name: 'never-stopping',
+      start: () => {},
+      stop: () => new Promise<void>(() => {}),
+    };
+    const healthyVisualizer: VisualizerPlugin = {
+      name: 'healthy-stop',
+      start: () => {},
+      stop: healthyStop,
+    };
+
+    try {
+      const outcome = Promise.race([
+        stopVisualizers([hangingVisualizer, healthyVisualizer]).then(
+          () => 'resolved' as const,
+        ),
+        new Promise<'timed-out'>((resolve) => {
+          setTimeout(() => resolve('timed-out'), 10_000);
+        }),
+      ]);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect([
+        await outcome,
+        healthyStop.mock.calls.length,
+        warnSpy.mock.calls.length,
+      ]).toEqual(['resolved', 1, 1]);
+    } finally {
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+    }
+  });
 });

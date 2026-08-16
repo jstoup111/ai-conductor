@@ -213,13 +213,27 @@ export function buildVisualizers(
  */
 export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<void> {
   await Promise.all(
-    visualizers.map((vis) =>
-      vis.stop().catch((err: unknown) => {
-        console.warn(
-          `[otel] visualizer '${vis.name}' stop() error: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }),
-    ),
+    visualizers.map(async (vis) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          Promise.resolve().then(() => vis.stop()),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => reject(new Error('timed out after 2000ms')), 2_000);
+          }),
+        ]);
+      } catch (err: unknown) {
+        try {
+          console.warn(
+            `[visualizer] visualizer '${vis.name}' stop() error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        } catch {
+          /* reporting failures must not block shutdown */
+        }
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+      }
+    }),
   );
 }
 
