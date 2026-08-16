@@ -1,4 +1,4 @@
-import type { BuildReviewFinding } from './build-review-domain.js';
+import type { BuildReviewFinding, BuildReviewFindingAnchor } from './build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 
@@ -7,7 +7,7 @@ type PriorLap = {
   readonly findings: readonly { readonly findingRef: string; readonly finding: BuildReviewFinding }[];
 };
 
-/** Renders concise plan locations for completeness findings that name a plan task. */
+/** Renders concise plan locations for findings that name a plan task or an owned file. */
 export function planContractPointers(
   findings: readonly BuildReviewFinding[],
   plan: string,
@@ -19,13 +19,14 @@ export function planContractPointers(
     const anchor = identityForFinding(finding)?.canonicalPayload.anchor;
     if (!anchor) return [];
 
-    if (anchor.rubric === 'scope') {
+    const fileAnchor = fileAnchorFor(anchor);
+    if (fileAnchor) {
       const matchingTaskIds = [...planTaskPaths]
-        .filter(([, paths]) => paths.has(anchor.path))
+        .filter(([, paths]) => paths.has(fileAnchor))
         .map(([taskId]) => taskId);
       if (matchingTaskIds.length !== 1) return [];
 
-      return [`plan contract: ${planPath} — Task ${matchingTaskIds[0]} (anchor: ${anchor.path})`];
+      return [`plan contract: ${planPath} — Task ${matchingTaskIds[0]} (anchor: ${fileAnchor})`];
     }
 
     if (anchor.rubric !== 'completeness') return [];
@@ -36,6 +37,15 @@ export function planContractPointers(
 
     return [`plan contract: ${planPath} — Task ${planTask} (anchor: ${missingOutcome})`];
   });
+}
+
+function fileAnchorFor(anchor: BuildReviewFindingAnchor): string | undefined {
+  switch (anchor.rubric) {
+    case 'scope': return anchor.path;
+    case 'tautology': return anchor.changedTest;
+    case 'rootCause': return anchor.locus;
+    case 'completeness': return undefined;
+  }
 }
 
 /** Renders concise references to same-identity findings from prior review laps. */

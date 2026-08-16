@@ -78,6 +78,122 @@ describe('planContractPointers', () => {
     ]);
   });
 
+  it('resolves a tautology changed test only when one task owns the file', () => {
+    const plan = `# Implementation Plan
+
+### Task 2: Own a focused test file
+**Files:** src/engine/owned.test.ts
+
+### Task 3: First shared-test task
+**Files:** src/engine/shared.test.ts
+
+### Task 4: Second shared-test task
+**Files:** src/engine/shared.test.ts
+`;
+
+    expect(
+      planContractPointers(
+        [
+          {
+            concernKind: 'tautological-test',
+            summary: 'The owned test does not distinguish the changed behavior.',
+            evidenceLocations: ['src/engine/owned.test.ts:1'],
+            anchor: {
+              rubric: 'tautology',
+              changedTest: 'src/engine/owned.test.ts',
+              exercisedBehavior: 'owns a focused test file',
+              violationKind: 'still-passes-before-change',
+            },
+          },
+          {
+            concernKind: 'tautological-test',
+            summary: 'The shared test has more than one plan owner.',
+            evidenceLocations: ['src/engine/shared.test.ts:1'],
+            anchor: {
+              rubric: 'tautology',
+              changedTest: 'src/engine/shared.test.ts',
+              exercisedBehavior: 'is shared',
+              violationKind: 'still-passes-before-change',
+            },
+          },
+          {
+            concernKind: 'tautological-test',
+            summary: 'The unmapped test has no plan owner.',
+            evidenceLocations: ['src/engine/unmapped.test.ts:1'],
+            anchor: {
+              rubric: 'tautology',
+              changedTest: 'src/engine/unmapped.test.ts',
+              exercisedBehavior: 'is unmapped',
+              violationKind: 'still-passes-before-change',
+            },
+          },
+        ],
+        plan,
+        '.docs/plans/remediation-context.md',
+      ),
+    ).toEqual([
+      'plan contract: .docs/plans/remediation-context.md — Task 2 (anchor: src/engine/owned.test.ts)',
+    ]);
+  });
+
+  it('resolves a root-cause locus only when one task owns the file', () => {
+    const plan = `# Implementation Plan
+
+### Task 2: Own a focused engine file
+**Files:** src/engine/root-owned.ts
+
+### Task 3: First shared-file task
+**Files:** src/engine/root-shared.ts
+
+### Task 4: Second shared-file task
+**Files:** src/engine/root-shared.ts
+`;
+
+    expect(
+      planContractPointers(
+        [
+          {
+            concernKind: 'incomplete-root-cause-fix',
+            summary: 'The owned locus identifies the missing mechanism.',
+            evidenceLocations: ['src/engine/root-owned.ts:1'],
+            anchor: {
+              rubric: 'rootCause',
+              statedDefect: 'The governing plan task is unavailable.',
+              locus: 'src/engine/root-owned.ts',
+              relation: 'omits the ownership join',
+            },
+          },
+          {
+            concernKind: 'incomplete-root-cause-fix',
+            summary: 'The shared locus has more than one plan owner.',
+            evidenceLocations: ['src/engine/root-shared.ts:1'],
+            anchor: {
+              rubric: 'rootCause',
+              statedDefect: 'The governing plan task is unavailable.',
+              locus: 'src/engine/root-shared.ts',
+              relation: 'omits the ownership join',
+            },
+          },
+          {
+            concernKind: 'incomplete-root-cause-fix',
+            summary: 'The unmapped locus has no plan owner.',
+            evidenceLocations: ['src/engine/root-unmapped.ts:1'],
+            anchor: {
+              rubric: 'rootCause',
+              statedDefect: 'The governing plan task is unavailable.',
+              locus: 'src/engine/root-unmapped.ts',
+              relation: 'omits the ownership join',
+            },
+          },
+        ],
+        plan,
+        '.docs/plans/remediation-context.md',
+      ),
+    ).toEqual([
+      'plan contract: .docs/plans/remediation-context.md — Task 2 (anchor: src/engine/root-owned.ts)',
+    ]);
+  });
+
   it('renders concise references to same-anchor findings from prior review laps', () => {
     const currentFinding: BuildReviewFinding = {
       concernKind: 'out-of-scope-change',
