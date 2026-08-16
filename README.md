@@ -127,6 +127,7 @@ owns that call.
 - [Emergency-stop a running feature](docs/runbooks/emergency-stop-a-running-feature.md)
 - [Stalled or stuck feature](docs/runbooks/stalled-or-stuck-feature.md)
 - [Worktree and evidence recovery](docs/runbooks/worktree-and-evidence-recovery.md)
+- [Corrupt intake ledger or stuck ledger lease](docs/runbooks/corrupt-intake-ledger.md)
 - [Daemon recovery](docs/runbooks/daemon-recovery.md)
 - [Shipped-record reconciliation](docs/runbooks/shipped-record-reconciliation.md)
 
