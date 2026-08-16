@@ -735,7 +735,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       ? { url: prUrl, title: 'feat: draft publication', body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.', isDraft: true }
       : undefined;
     const state: Record<string, unknown> = {
-      feature_desc: 'feature', worktree_branch: 'feat/feature', complexity_tier: 'S',
+      feature_desc: 'feature', worktree_branch: 'feat/feature', complexity_tier: 'S', track: 'technical',
       ...(prPresent ? { pr_url: prUrl } : {}),
     };
     for (const step of ALL_STEPS) {

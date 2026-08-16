@@ -53,6 +53,7 @@ describe('Conductor FINISH publication routing', () => {
     statePath = join(dir, 'conduct-state.json');
     const state: Record<string, unknown> = {
       complexity_tier: 'S',
+      track: 'technical',
       feature_desc: 'finish-publication',
     };
     for (const step of [

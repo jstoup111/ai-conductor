@@ -68,7 +68,7 @@ async function createFinishState(): Promise<{ root: string; stateFilePath: strin
   await mkdir(pipeline, { recursive: true });
   const stateFilePath = join(pipeline, 'conduct-state.json');
   const state: Record<string, unknown> = {
-    complexity_tier: 'M',
+    complexity_tier: 'S',
     feature_desc: 'finish-publication-progress-budget',
     track: 'technical',
   };
