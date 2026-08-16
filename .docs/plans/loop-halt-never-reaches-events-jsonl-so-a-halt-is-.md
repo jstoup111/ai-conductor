@@ -216,6 +216,17 @@ consumers whose halt-counting branches have never executed are revived and cover
 
 **Dependencies:** Task 3
 
+*(Operator ruling 2026-08-16, resolving the accepted-widening plan gap: the
+`halt_marker_write_failed` occurrence is ALSO carried into the separate audit
+ledger — the subscription in `src/conductor/src/engine/event-sinks.ts`, its
+translator in `src/conductor/src/engine/audit-trail.ts`, their regression
+tests (`audit-trail.test.ts`, `audit-trail-completeness.integration.test.ts`),
+and the audit-ledger documentation in `docs/reference/artifacts.md` are
+in-plan deliverables of this task. Rationale: the feature exists to make halt
+failures observable, and the audit ledger is the durable observability
+record; the operator accepted this surface as a scope widening at
+build_review and this amendment gives it plan authority.)*
+
 ### Task 9: Carry the new result contract to every halt-marker call site
 
 **Story:** Story 5 — the never-throws, no-emitter, failed-emit and partial-failure paths.
