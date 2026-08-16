@@ -86,6 +86,11 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins } from './engine/plugin-loader.js';
 import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
+import {
+  buildVisualizers,
+  startRegisteredVisualizers,
+  stopVisualizers,
+} from './engine/visualizer-lifecycle.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
@@ -179,63 +184,7 @@ import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
 import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
 
-// ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
-
-/**
- * Start every visualizer plugin by calling `.start(emitter)`. Returns the same
- * array (for chaining). Called immediately after EventPersister is started.
- */
-export function buildVisualizers(
-  visualizers: VisualizerPlugin[],
-  emitter: ConductorEventEmitter,
-): VisualizerPlugin[] {
-  for (const vis of visualizers) {
-    let warned = false;
-    const warn = (err: unknown): void => {
-      if (warned) return;
-      warned = true;
-      console.warn(
-        `[visualizer] visualizer '${vis.name}' start() error: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    };
-    try {
-      emitter.withIsolatedHandlerRegistrations(() => vis.start(emitter), warn);
-    } catch (err: unknown) {
-      warn(err);
-    }
-  }
-  return visualizers;
-}
-
-/**
- * Stop every visualizer plugin, swallowing individual errors so one failing
- * exporter cannot prevent the others from flushing.
- */
-export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<void> {
-  await Promise.all(
-    visualizers.map(async (vis) => {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          Promise.resolve().then(() => vis.stop()),
-          new Promise<never>((_resolve, reject) => {
-            timeout = setTimeout(() => reject(new Error('timed out after 2000ms')), 2_000);
-          }),
-        ]);
-      } catch (err: unknown) {
-        try {
-          console.warn(
-            `[visualizer] visualizer '${vis.name}' stop() error: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        } catch {
-          /* reporting failures must not block shutdown */
-        }
-      } finally {
-        if (timeout !== undefined) clearTimeout(timeout);
-      }
-    }),
-  );
-}
+export { buildVisualizers, startRegisteredVisualizers, stopVisualizers };
 
 /**
  * Build the options object passed into `runDaemonMode` for a `daemon` CLI
@@ -1246,7 +1195,7 @@ async function main(): Promise<void> {
   auditWriter.subscribe(events);
 
   // Wire visualizer plugins (FR-1 gate: OTel visualizer only when enabled).
-  const visualizerList: VisualizerPlugin[] = [];
+  const builtInVisualizers: VisualizerPlugin[] = [];
   const otelResolved = resolveOtelConfig(config ?? {}, pipelineDir);
   if (otelResolved.enabled) {
     const otelVis = createOtelVisualizer(
@@ -1259,10 +1208,10 @@ async function main(): Promise<void> {
       events,
     );
     if (otelVis) {
-      visualizerList.push(otelVis);
+      builtInVisualizers.push(otelVis);
     }
   }
-  buildVisualizers(visualizerList, events);
+  const visualizerList = startRegisteredVisualizers(registry, events, builtInVisualizers);
 
   const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
