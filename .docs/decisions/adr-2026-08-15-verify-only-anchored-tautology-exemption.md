@@ -202,10 +202,16 @@ outright — that is maker self-report, and the gate exists because self-reports
 > - **Approach B remains the deferred durable upgrade** for per-test pre-diff pass/fail evidence;
 >   D6 closes the Completeness half of the residue without waiting for it.
 
-## Required plan realignment (2026-08-16 amendments)
+## Required plan realignment (2026-08-16 amendments) — DEFERRED (operator ruling, 2026-08-16)
 
-The two amendments above are structural and bind the re-running `stories` → `plan` →
-`coherence_check` pass. The plan must land these before BUILD re-enters:
+> **Operator ruling (2026-08-16):** the two amendments above are approved as design direction but
+> are **deferred out of this feature's scope** to issue #1622. They do NOT bind this feature's
+> stories, plan, acceptance specs, or build: the original 11-task plan stands as the delivery
+> contract, and BUILD proceeds without a `stories` → `plan` → `coherence_check` re-run (autonomous
+> re-plan is prohibited by design, and the operator declines an interactive re-plan for this
+> feature). The realignment below is retained verbatim as the implementation sketch for #1622.
+
+The two amendments above are structural; when #1622 is taken up, its plan must land these:
 
 - **Task 1 (derivation)** — emit `noImplementationPlanned` per `verifyOnlyContext` entry under the
   D1-amendment predicate, with fail-closed coverage of every mixed `**Type:**` form and of the
