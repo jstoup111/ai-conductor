@@ -96,6 +96,39 @@ describe('Visualizer wiring helpers', () => {
     }
   });
 
+  it('detaches a visualizer listener after its asynchronous event-handler failure', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const emitter = new ConductorEventEmitter();
+    const rejectingHandler = vi.fn(async () => {
+      throw new Error('async visualizer handler failed');
+    });
+    const healthyHandler = vi.fn();
+    const visualizer: VisualizerPlugin = {
+      name: 'rejecting-listener',
+      start: (visualizerEmitter) => {
+        visualizerEmitter.on('step_started', rejectingHandler);
+      },
+      stop: async () => {},
+    };
+
+    try {
+      emitter.on('step_started', healthyHandler);
+      buildVisualizers([visualizer], emitter);
+      await emitter.emit({ type: 'step_started', step: 'explore', index: 0 });
+      await Promise.resolve();
+      await emitter.emit({ type: 'step_started', step: 'explore', index: 0 });
+      await Promise.resolve();
+
+      expect([
+        rejectingHandler.mock.calls.length,
+        healthyHandler.mock.calls.length,
+        warnSpy.mock.calls.length,
+      ]).toEqual([1, 2, 1]);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('stopVisualizers calls stop() on each visualizer', async () => {
     const { stopVisualizers } = await import('../../src/index.js');
     const vis = new FakeVisualizer();
