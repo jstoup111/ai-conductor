@@ -9,7 +9,7 @@ export type BuildReviewRubricPrerequisite = 'none';
 export interface BuildReviewRubricDescriptor {
   readonly skillName: string;
   readonly contractVersion: 'v1';
-  readonly projectionVersion: 'v1';
+  readonly projectionVersion: 'v2';
   readonly cachePolicy: BuildReviewRubricCachePolicy;
   readonly prerequisite: BuildReviewRubricPrerequisite;
 }
@@ -26,28 +26,28 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
   tautology: Object.freeze({
     skillName: 'build-review-tautology',
     contractVersion: 'v1',
-    projectionVersion: 'v1',
+    projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
   }),
   scope: Object.freeze({
     skillName: 'build-review-scope',
     contractVersion: 'v1',
-    projectionVersion: 'v1',
+    projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
   }),
   rootCause: Object.freeze({
     skillName: 'build-review-root-cause',
     contractVersion: 'v1',
-    projectionVersion: 'v1',
+    projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
   }),
   completeness: Object.freeze({
     skillName: 'build-review-completeness',
     contractVersion: 'v1',
-    projectionVersion: 'v1',
+    projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
   }),

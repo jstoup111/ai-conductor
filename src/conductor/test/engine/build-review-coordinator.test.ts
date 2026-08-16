@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
   classifyBuildReviewRubricBranches,
   coordinateBuildReviewRubrics,
@@ -81,6 +82,12 @@ describe("build-review coordinator: pre-dispatch classification", () => {
 });
 
 function inputs(): BuildReviewFrozenInputs {
+  const sourceContent = {
+    diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
+    planBody: "# Plan\n",
+    repairContext: [],
+    removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+  };
   return {
     diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
     planBody: "# Plan\n",
@@ -89,12 +96,25 @@ function inputs(): BuildReviewFrozenInputs {
     removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
     testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" } as never,
     sourceSnapshot: {
-      digest: "sha256:snapshot", baseRef: "origin/main", mergeBase: "base", headSha: "head",
-      diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
-      planBody: "# Plan\n", repairContext: [], acceptedWidenings: [],
-      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+      digest: "sha256:snapshot", contentDigest: contentDigestFor(sourceContent), baseRef: "origin/main", mergeBase: "base", headSha: "head",
+      ...sourceContent, acceptedWidenings: [],
     },
   };
+}
+
+function contentDigestFor(content: {
+  readonly diff: string;
+  readonly planBody: string;
+  readonly repairContext: readonly unknown[];
+  readonly removalContext: unknown;
+}): string {
+  const { diff, planBody, repairContext, removalContext } = content;
+  return `sha256:${createHash("sha256").update(JSON.stringify({
+    diff,
+    planBody,
+    repairContext,
+    removalContext,
+  })).digest("hex")}`;
 }
 
 describe("build-review coordinator: frozen fan-out", () => {
@@ -167,7 +187,7 @@ describe("build-review coordinator: frozen fan-out", () => {
         revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
       }),
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
-        version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v1" as const,
+        version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v2" as const,
         projectionDigest: projection.digest, policyFingerprint,
         result: {
           kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
@@ -183,6 +203,116 @@ describe("build-review coordinator: frozen fan-out", () => {
       lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "cache-hit", cachedLapId: "cached" },
     });
     expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("scope");
+  });
+
+  it("serves rebased cache hits with current-lap provenance and re-dispatches only widened scope", async () => {
+    const cache = new Map<BuildReviewCacheEntry["rubric"], BuildReviewCacheEntry>();
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
+    const writeCache = vi.fn(async (entry: BuildReviewCacheEntry) => {
+      cache.set(entry.rubric, entry);
+    });
+    const dispatchModel = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
+    }));
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    let preflightSourceIdentities = { mergeBase: "base", headSha: "head" };
+    const preflight = async () => ({
+      classification: "approved-exception" as const, exception: "empty-test-set" as const,
+      cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
+      revertedProductionManifest: [], revertedProductionPatch: [], sourceIdentities: preflightSourceIdentities, output: { stdout: "", stderr: "" },
+    });
+    const initial = inputs();
+    const rebased: BuildReviewFrozenInputs = {
+      ...initial,
+      mergeBase: "rebased-base",
+      baseRef: "origin/rebased-main",
+      testSuiteProof: {
+        ...initial.testSuiteProof,
+        provenanceHeadSha: "rebased-head",
+      },
+      sourceSnapshot: {
+        ...initial.sourceSnapshot,
+        digest: "sha256:rebased-snapshot",
+        mergeBase: "rebased-base",
+        headSha: "rebased-head",
+        baseRef: "origin/rebased-main",
+      },
+    };
+    const run = (lapId: string, snapshot: BuildReviewFrozenInputs) => coordinateBuildReviewRubrics({
+      config: config(), inputs: snapshot, lapId: parseBuildReviewLapId(lapId)!, preflight,
+      readCache: async (branch) => cache.get(branch.rubric), dispatchModel, writeArtifact, writeCache, emit,
+    });
+
+    await run("lap-cached", initial);
+    dispatchModel.mockClear();
+    writeArtifact.mockClear();
+    emit.mockClear();
+    preflightSourceIdentities = { mergeBase: "rebased-base", headSha: "rebased-head" };
+
+    const rebasedResult = await run("lap-rebased", rebased);
+
+    expect({
+      cacheHits: emit.mock.calls.map(([event]) => event).filter((event) => event.type === "build_review_cache_hit"),
+      dispatches: dispatchModel.mock.calls.length,
+      branches: rebasedResult.kind === "ready" ? rebasedResult.branches : [],
+      artifacts: writeArtifact.mock.calls.map(([artifact]) => artifact),
+    }).toMatchObject({
+      cacheHits: [
+        { rubric: "tautology", lapId: "lap-rebased" },
+        { rubric: "scope", lapId: "lap-rebased" },
+        { rubric: "rootCause", lapId: "lap-rebased" },
+        { rubric: "completeness", lapId: "lap-rebased" },
+      ],
+      dispatches: 0,
+      branches: [
+        { kind: "cache-hit", rubric: "tautology", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
+        { kind: "cache-hit", rubric: "scope", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
+        { kind: "cache-hit", rubric: "rootCause", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
+        { kind: "cache-hit", rubric: "completeness", result: { lapId: "lap-rebased", snapshotDigest: "sha256:rebased-snapshot" } },
+      ],
+      artifacts: [
+        { rubric: "tautology", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
+        { rubric: "scope", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
+        { rubric: "rootCause", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
+        { rubric: "completeness", provenance: { kind: "cache-hit", cachedLapId: "lap-cached" } },
+      ],
+    });
+
+    dispatchModel.mockClear();
+    emit.mockClear();
+    const widenedSourceSnapshot = {
+      ...rebased.sourceSnapshot,
+      digest: "sha256:widened-snapshot",
+      acceptedWidenings: [{ path: "src/widened.ts", rationale: "required coordination", taskId: "5", sha: "widened-sha" }],
+    };
+    const widened = {
+      ...rebased,
+      sourceSnapshot: {
+        ...widenedSourceSnapshot,
+      },
+    };
+
+    const widenedResult = await run("lap-widened", widened);
+
+    expect({
+      cacheHits: emit.mock.calls.map(([event]) => event).filter((event) => event.type === "build_review_cache_hit"),
+      dispatched: dispatchModel.mock.calls.map(([branch]) => branch.rubric),
+      branches: widenedResult.kind === "ready" ? widenedResult.branches : [],
+    }).toMatchObject({
+      cacheHits: [
+        { rubric: "tautology", lapId: "lap-widened" },
+        { rubric: "rootCause", lapId: "lap-widened" },
+        { rubric: "completeness", lapId: "lap-widened" },
+      ],
+      dispatched: ["scope"],
+      branches: [
+        { kind: "cache-hit", rubric: "tautology" },
+        { kind: "dispatched", rubric: "scope" },
+        { kind: "cache-hit", rubric: "rootCause" },
+        { kind: "cache-hit", rubric: "completeness" },
+      ],
+    });
   });
 
   it("turns artifact write failure into an owning infrastructure result and never caches skips", async () => {
@@ -252,7 +382,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       scopedRun: { exitCode: 1 as number, runKind: "test-failure" as const, ranSelectors: ["test/a.test.ts"], failureExcerpt: "AssertionError: expected 2 to be 1" },
     }));
     const cachedScope = {
-      version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v1" as const,
+      version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v2" as const,
       projectionDigest: "", policyFingerprint: "", result: {
         kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
         snapshotDigest: "old", contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,

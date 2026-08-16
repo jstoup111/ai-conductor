@@ -105,6 +105,78 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs).not.toHaveProperty('acceptedDispositions');
     });
 
+    it('derives content identity from review content rather than git provenance or operator reseals', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/identity.md');
+
+      async function contentDigestFor({
+        baseRef = 'feature/first',
+        mergeBase = 'base-first',
+        headSha = 'head-first',
+        diff = 'diff --git a/a b/a\nindex 1111111..2222222 100644\n+change\n',
+        planBody = '# Plan body\n\nSome plan content.\n',
+        resealReason = 'Operator approved the amendment.',
+        acceptedWidenings = [] as BuildReviewInputOptions['acceptedWidenings'],
+      } = {}): Promise<string> {
+        await mkdir(join(dir, '.docs/plans'), { recursive: true });
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(scopedPlanPath, planBody, 'utf-8');
+        await writeFile(join(dir, '.pipeline/protected-artifact-seal.json'), JSON.stringify({
+          version: 2,
+          baselineCommit: 'baseline',
+          protectedArtifacts: [],
+          rebaselines: [{
+            trigger: 'operator-reseal', fromCommit: 'before', toCommit: 'after',
+            paths: ['.docs/stories/fixture.md'], reason: resealReason,
+          }],
+        }));
+        const { git } = fakeGit([
+          { match: ['remote'], result: { exitCode: 0, stdout: '' } },
+          { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: `${baseRef}\n` } },
+          { match: ['merge-base', baseRef, 'HEAD'], result: { stdout: `${mergeBase}\n` } },
+          { match: ['diff', `${mergeBase}..HEAD`], result: { stdout: diff } },
+        ]);
+
+        return (await assembleBuildReviewInputs(git, scopedPlanPath, {
+          acceptedWidenings,
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { ...CURRENT_PROOF.evidence, provenanceHeadSha: headSha },
+          }),
+        })).sourceSnapshot.contentDigest;
+      }
+
+      const baseline = await contentDigestFor();
+      const changedProvenance = await contentDigestFor({
+          baseRef: 'feature/rebased', mergeBase: 'base-rebased', headSha: 'head-rebased',
+      });
+      const rebasedBlobIdentity = await contentDigestFor({
+        diff: 'diff --git a/a b/a\nindex aaaaaaa..bbbbbbb 100644\n+change\n',
+      });
+      const oneByteDiff = await contentDigestFor({ diff: 'diff --git a/a b/a\nindex 1111111..2222222 100644\n+changed\n' });
+      const changedPlan = await contentDigestFor({ planBody: '# Plan body\n\nChanged plan content.\n' });
+      const changedReseal = await contentDigestFor({ resealReason: 'Operator approved the corrected amendment.' });
+      const changedWidening = await contentDigestFor({
+        acceptedWidenings: [{ path: 'src/widened.ts', rationale: 'required coordination', taskId: '5', sha: 'widened-sha' }],
+      });
+
+      expect({
+        hasSha256Digest: /^sha256:[a-f0-9]{64}$/.test(baseline),
+        provenanceIsExcluded: changedProvenance === baseline,
+        blobIdentityIsExcluded: rebasedBlobIdentity === baseline,
+        diffIsIncluded: oneByteDiff !== baseline,
+        planIsIncluded: changedPlan !== baseline,
+        resealIsExcluded: changedReseal === baseline,
+        wideningIsExcluded: changedWidening === baseline,
+      }).toEqual({
+        hasSha256Digest: true,
+        provenanceIsExcluded: true,
+        blobIdentityIsExcluded: true,
+        diffIsIncluded: true,
+        planIsIncluded: true,
+        resealIsExcluded: true,
+        wideningIsExcluded: true,
+      });
+    });
+
     it.each([
       { status: 'FAILED', reason: 'nonzero_exit', message: 'suite failed' },
       { status: 'STALE', reason: 'source_changed' },
@@ -337,6 +409,33 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
 
       expect(result.repairContext).toEqual([repair]);
+    });
+
+    it('derives shared content identity from semantic repair context, not repair record provenance', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/semantic-repair.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+
+      const contentDigestFor = async (repair: Record<string, unknown>) => {
+        await writeFile(join(dir, '.pipeline/build-review-rebase-repairs.json'), JSON.stringify({ repairs: [repair] }));
+        return (await assembleBuildReviewInputs(realGit(), scopedPlanPath)).sourceSnapshot.contentDigest;
+      };
+      const baselineRepair = {
+        id: 'repair-original', gate: 'test_suite', reason: 'command_failed',
+        diagnostic: 'src/base.ts changed the aggregate command expectation', rebaseInvalidatedAt: 101,
+      };
+
+      const baseline = await contentDigestFor(baselineRepair);
+      const changedProvenance = await contentDigestFor({
+        ...baselineRepair, id: 'repair-rebased', rebaseInvalidatedAt: 202,
+      });
+      const changedReason = await contentDigestFor({ ...baselineRepair, reason: 'timeout' });
+      const changedDiagnostic = await contentDigestFor({ ...baselineRepair, diagnostic: 'src/other.ts changed' });
+
+      expect(changedProvenance).toBe(baseline);
+      expect(changedReason).not.toBe(baseline);
+      expect(changedDiagnostic).not.toBe(baseline);
     });
 
     it('threads operator reseals only when the plan belongs to the feature root', async () => {

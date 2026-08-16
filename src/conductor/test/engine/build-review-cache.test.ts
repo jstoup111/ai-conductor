@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cacheEntryPath,
   classifyBuildReviewCacheLookup,
+  parseBuildReviewCacheEntry,
   readBuildReviewCacheEntry,
   writeBuildReviewCacheEntry,
   type BuildReviewCacheEntry,
@@ -13,7 +14,7 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
     version: 1,
     rubric: "scope",
     contractVersion: "v1",
-    projectionVersion: "v1",
+    projectionVersion: "v2",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
     result: {
@@ -57,6 +58,35 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
+  it("rejects v1 entries at the current public parse boundary", () => {
+    expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v1" })).toBeUndefined();
+  });
+
+  it("classifies stored v1 entries through the read seam against the current v2 projection identity", async () => {
+    const currentLookup = {
+      rubric: "scope",
+      contractVersion: "v1",
+      projectionVersion: "v2",
+      projectionDigest: "sha256:projection-a",
+      policyFingerprint: "sha256:policy-a",
+      lapId: "lap-current",
+      snapshotDigest: "snapshot-current",
+    } as never;
+    const root = "/feature";
+    const path = cacheEntryPath(root, "scope");
+    const fs = memoryFilesystem({
+      [path]: JSON.stringify({ ...entry(), projectionVersion: "v1" }),
+    });
+
+    expect([
+      classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "scope", fs), currentLookup),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v2", projectionDigest: "sha256:changed-input" }, currentLookup),
+    ]).toEqual([
+      { kind: "miss", reason: "projection-version-mismatch" },
+      { kind: "miss", reason: "projection-digest-mismatch" },
+    ]);
+  });
+
   it("stores one versioned semantic judgement per feature-scoped rubric with atomic replacement", async () => {
     const fs = memoryFilesystem();
     const root = "/feature";
@@ -78,6 +108,37 @@ describe("build-review semantic cache", () => {
         ["/feature/.pipeline/build-review/cache/scope.json.tmp", "/feature/.pipeline/build-review/cache/scope.json"],
       ],
       files: [path],
+    });
+  });
+
+  it("isolates a foreign feature entry by content digest before atomically replacing it", async () => {
+    const featureBRoot = "/features/b";
+    const path = cacheEntryPath(featureBRoot, "scope");
+    const foreignEntry = { ...entry("snapshot-feature-a"), projectionDigest: "sha256:feature-a-content" };
+    const freshEntry = { ...entry("snapshot-feature-b"), projectionDigest: "sha256:feature-b-content" };
+    const fs = memoryFilesystem({ [path]: JSON.stringify(foreignEntry) });
+
+    const foreignCandidate = await readBuildReviewCacheEntry(featureBRoot, "scope", fs);
+    await writeBuildReviewCacheEntry(featureBRoot, freshEntry, fs);
+
+    expect({
+      path,
+      lookup: classifyBuildReviewCacheLookup(foreignCandidate, {
+        rubric: "scope",
+        contractVersion: "v1",
+        projectionVersion: "v2",
+        projectionDigest: freshEntry.projectionDigest,
+        policyFingerprint: freshEntry.policyFingerprint,
+        lapId: "lap-feature-b",
+        snapshotDigest: freshEntry.result.snapshotDigest,
+      } as never),
+      storedEntry: await readBuildReviewCacheEntry(featureBRoot, "scope", fs),
+      renameCalls: fs.renameCalls,
+    }).toEqual({
+      path: "/features/b/.pipeline/build-review/cache/scope.json",
+      lookup: { kind: "miss", reason: "projection-digest-mismatch" },
+      storedEntry: freshEntry,
+      renameCalls: [[`${path}.tmp`, path]],
     });
   });
 
@@ -117,7 +178,7 @@ describe("build-review semantic cache", () => {
     const request = {
       rubric: "scope" as const,
       contractVersion: "v1" as const,
-      projectionVersion: "v1" as const,
+      projectionVersion: "v2" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       lapId: "lap-current" as never,
@@ -169,7 +230,7 @@ describe("build-review semantic cache", () => {
     const request = {
       rubric: "scope" as const,
       contractVersion: "v1" as const,
-      projectionVersion: "v1" as const,
+      projectionVersion: "v2" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       lapId: "lap-current" as never,
@@ -184,7 +245,7 @@ describe("build-review semantic cache", () => {
       classifyBuildReviewCacheLookup(undefined, request),
       classifyBuildReviewCacheLookup({ ...entry(), rubric: "completeness" }, request),
       classifyBuildReviewCacheLookup({ ...entry(), contractVersion: "v2" } as never, request),
-      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v2" } as never, request),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v1" } as never, request),
       classifyBuildReviewCacheLookup({ ...entry(), projectionDigest: "sha256:changed-input" }, request),
       classifyBuildReviewCacheLookup({ ...entry(), policyFingerprint: "sha256:changed-provider-model-effort-fallback-retry" }, request),
       classifyBuildReviewCacheLookup(unsafeInfrastructure, request),
@@ -192,7 +253,7 @@ describe("build-review semantic cache", () => {
       { kind: "miss", reason: "missing" },
       { kind: "miss", reason: "invalid-entry" },
       { kind: "miss", reason: "invalid-entry" },
-      { kind: "miss", reason: "invalid-entry" },
+      { kind: "miss", reason: "projection-version-mismatch" },
       { kind: "miss", reason: "projection-digest-mismatch" },
       { kind: "miss", reason: "policy-fingerprint-mismatch" },
       { kind: "miss", reason: "invalid-entry" },

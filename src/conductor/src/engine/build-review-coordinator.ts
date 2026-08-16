@@ -13,6 +13,7 @@ import {
 import {
   classifyBuildReviewCacheLookup,
   type BuildReviewCacheEntry,
+  type BuildReviewCacheEntryCandidate,
 } from "./build-review-cache.js";
 import {
   parseBuildReviewBranchArtifact,
@@ -96,7 +97,7 @@ export interface BuildReviewCoordinationInput {
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
     policyFingerprint: string,
-  ) => Promise<BuildReviewCacheEntry | undefined>;
+  ) => Promise<BuildReviewCacheEntryCandidate | undefined>;
   readonly dispatchModel: (
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
@@ -246,7 +247,7 @@ export async function coordinateBuildReviewRubrics(
     }
     const projection = projections[branch.rubric];
     const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
-    let candidate: BuildReviewCacheEntry | undefined;
+    let candidate: BuildReviewCacheEntryCandidate | undefined;
     try {
       candidate = await input.readCache(branch, projection, policyFingerprint);
     } catch {

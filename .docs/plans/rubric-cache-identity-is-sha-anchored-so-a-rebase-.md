@@ -20,9 +20,17 @@ including `baseRef`/`mergeBase`/`headSha`). The fix:
 
 - **`build-review-inputs.ts`** — add a `contentDigest` field to
   `BuildReviewSourceSnapshot`: sha256 over the shared snapshot's content fields only
-  (diff, planBody, repairContext, acceptedWidenings, removalContext), excluding
-  `digest`, `baseRef`, `mergeBase`, `headSha`, and the scope-only `operatorReseals`.
+  (diff, planBody, repairContext, removalContext), excluding
+  `digest`, `baseRef`, `mergeBase`, `headSha`, and the scope-only fields
+  `acceptedWidenings` and `operatorReseals`.
   The existing `digest` (full identity) is unchanged and stays on the snapshot.
+  *(Operator ruling 2026-08-15, resolving the Task 5 stall: cache identity is
+  rubric-specific. `acceptedWidenings` is consumed only by the scope projection, so it
+  must not enter the shared `contentDigest`; it reaches scope's cache key through
+  `projectionDigest()` over `ScopeProjection`'s own fields — exactly like
+  `operatorReseals`. A newly accepted widening therefore invalidates only scope's
+  cache entry, preserving Task 5's selectivity criterion: scope misses and
+  re-dispatches while the other three rubrics still hit.)*
 - **`build-review-projections.ts`** — `common()` carries `contentDigest`;
   `projectionDigest()` digests the projection excluding `digest`, `lapId`,
   `snapshotDigest`, `mergeBase`, and `headSha`. Content sensitivity is preserved
@@ -30,6 +38,22 @@ including `baseRef`/`mergeBase`/`headSha`). The fix:
   the digested view; the anchors stay on the projection as non-digested provenance for
   the grader's by-reference git reads. `changedFiles` (hunk ranges) is diff-derived and
   rebase-stable, so it stays digested.
+- **Semantic-identity principle (operator ruling 2026-08-15, second amendment).**
+  The five named top-level exclusions above are instances of a general rule, and the
+  rule — not the field list — is the authorized design: **cache identity digests
+  semantic content only; commit-addressed and execution provenance is excluded from
+  digested identity wherever it appears in any projection, at any nesting depth.**
+  Provenance means: commit/blob SHAs (including `acceptedWidenings[].sha`,
+  `operatorReseals[].fromCommit`/`toCommit`, `testSuiteProof.provenanceHeadSha`,
+  preflight `sourceIdentities`), execution timing (`startedAt`, `endedAt`,
+  `durationMs`), and any other rebase- or rerun-volatile field that does not change
+  the meaning of the evidence. The semantic remainder of each record (paths,
+  rationales, task ids, reasons, classifications, verdicts, selector lists) stays
+  digest-sensitive. Normalizing such a field out of digested identity is in-plan for
+  Task 2 and requires no further scope authorization; excluded provenance may remain
+  on the projection as non-digested context for the grader. Every normalization must
+  carry a test proving the volatile field no longer perturbs the digest while a
+  semantic flip of the same record still does.
 - **`build-review-registry.ts` + type literals** — bump `projectionVersion` to `'v2'`
   in the registry descriptors and every `'v1'` projectionVersion literal
   (projections, cache entry/lookup, coordinator, artifacts). Pre-fix cache entries then

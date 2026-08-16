@@ -11,11 +11,11 @@ Judge the Scope concern for one engine-managed `build_review` rubric branch. Thi
 judgement-only contract: the engine owns evidence assembly, result validation, finding identity,
 dispositions, and the outer gate verdict.
 
-## Input projection (v1)
+## Input projection (v2)
 
-Use only the supplied projection version `v1`. Its closed input contains:
+Use only the supplied projection version `v2`. Its closed input contains:
 
-- the lap ID and snapshot digest;
+- the lap ID, snapshot digest, and top-level `contentDigest`;
 - the changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
   ranges, anchored by `mergeBase` and `headSha`);
 - diff-derived removal evidence (`removalContext`), never an exemption;

@@ -14,11 +14,11 @@ dispositions, configuration, and the outer gate verdict.
 Completeness is default-enabled. The engine owns explicit disablement and reports any resulting
 coverage state; this skill judges only when the engine dispatches it.
 
-## Input projection (v1)
+## Input projection (v2)
 
-Use only the supplied projection version `v1`. Its closed input contains:
+Use only the supplied projection version `v2`. Its closed input contains:
 
-- the lap ID and snapshot digest;
+- the lap ID, snapshot digest, and top-level `contentDigest`;
 - the full changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
   ranges, anchored by `mergeBase` and `headSha`);
 - diff-derived removal evidence (`removalContext`), never an exemption; and

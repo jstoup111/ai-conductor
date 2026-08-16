@@ -58,9 +58,11 @@ export interface ChangedFileReference {
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
   readonly contractVersion: 'v1';
-  readonly projectionVersion: 'v1';
+  readonly projectionVersion: 'v2';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
+  /** Stable identity of the source content, independent of commit provenance. */
+  readonly contentDigest: string;
   readonly digest: string;
   /** Anchors for by-reference reads: `git diff <mergeBase>..HEAD -- <path>`. */
   readonly mergeBase: string;
@@ -126,10 +128,71 @@ export function canonicalJson(value: BuildReviewProjectionJson): string {
   return JSON.stringify(canonicalize(value));
 }
 
-/** Version-bound digest of a closed projection (with its digest field excluded). */
+/**
+ * The closed provenance vocabulary: every key whose value is commit/blob
+ * addressing, execution timing, a run transcript, or cache/record bookkeeping
+ * rather than the meaning of the evidence. Cache identity digests semantic
+ * content only, so these keys are dropped from the digested view recursively —
+ * at any nesting depth — which closes the class by construction: a provenance
+ * field can never hide inside a nested record again. The excluded values stay
+ * on the projection itself as non-digested anchors for grader reads.
+ * Semantic fields (paths, rationales, reasons, classifications, verdicts,
+ * selectors, exitCode, fingerprints, diagnostics) MUST stay digest-sensitive.
+ */
+export const BUILD_REVIEW_PROVENANCE_KEYS = Object.freeze([
+  // Commit and blob addressing (rebase-volatile identities of the same content).
+  'sha',
+  'commitSha',
+  'blobSha',
+  'mergeBaseBlobSha',
+  'headSha',
+  'mergeBase',
+  'baseRef',
+  'fromCommit',
+  'toCommit',
+  'provenanceHeadSha',
+  'sourceIdentities',
+  'lapId',
+  'snapshotDigest',
+  // Execution timing (rerun-volatile, meaning-free).
+  'startedAt',
+  'endedAt',
+  'executedAt',
+  'durationMs',
+  'observedAt',
+  'rebaseInvalidatedAt',
+  // Run transcripts (environment- and rerun-volatile output logs).
+  'stdout',
+  'stderr',
+  // Cache and record bookkeeping (per-instance identity, not evidence meaning).
+  'cacheProvenance',
+  'cacheable',
+  'id',
+] as const);
+
+const PROVENANCE_KEY_SET: ReadonlySet<string> = new Set(BUILD_REVIEW_PROVENANCE_KEYS);
+
+/** Recursively drop every provenance-vocabulary key from a JSON value, at any depth. */
+function withoutProvenance(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
+  if (Array.isArray(value)) return value.map(withoutProvenance);
+  if (value !== null && typeof value === 'object') {
+    const object = value as { readonly [key: string]: BuildReviewProjectionJson };
+    return Object.fromEntries(
+      Object.keys(object)
+        .filter((key) => !PROVENANCE_KEY_SET.has(key))
+        .map((key) => [key, withoutProvenance(object[key]!)]),
+    );
+  }
+  return value;
+}
+
+/** Version-bound digest of a closed projection, excluding rebase-only provenance. */
 export function projectionDigest(projection: Omit<BuildReviewRubricProjection, 'digest'> | BuildReviewRubricProjection): string {
-  const { digest: _ignored, ...withoutDigest } = projection as BuildReviewRubricProjection;
-  return `sha256:${createHash('sha256').update(canonicalJson(withoutDigest as unknown as BuildReviewProjectionJson)).digest('hex')}`;
+  // `digest` is the value being derived, never an input to itself. Every other
+  // exclusion is the recursive provenance vocabulary applied at any depth.
+  const { digest: _ignoredDigest, ...digestibleProjection } = projection as BuildReviewRubricProjection;
+  const contentIdentity = withoutProvenance(digestibleProjection as unknown as BuildReviewProjectionJson);
+  return `sha256:${createHash('sha256').update(canonicalJson(contentIdentity)).digest('hex')}`;
 }
 
 function json(value: unknown): BuildReviewProjectionJson {
@@ -190,6 +253,7 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     projectionVersion: descriptor.projectionVersion,
     lapId: source.lapId,
     snapshotDigest: snapshot.digest,
+    contentDigest: snapshot.contentDigest,
     mergeBase: snapshot.mergeBase,
     headSha: snapshot.headSha,
     changedFiles: deriveChangedFileReferences(snapshot.diff),
