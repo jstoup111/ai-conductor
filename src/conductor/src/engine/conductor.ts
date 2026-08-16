@@ -2677,19 +2677,40 @@ export class Conductor {
 
   /** Best-effort compact remediation context from existing build-review evidence. */
   private async buildReviewPointerLines(verdictRaw: unknown): Promise<readonly string[]> {
+    const aggregate = parseBuildReviewAggregate(verdictRaw);
+    if (!aggregate) return [];
+    const findings = Object.values(aggregate.results).flatMap((result) =>
+      result.kind === 'judged' ? result.findings : [],
+    );
+    const activePlanPath = await this.getActivePlanPath();
+    let planPointers: readonly string[] = [];
+    if (activePlanPath) {
+      try {
+        const plan = await readFile(join(this.projectRoot, activePlanPath), 'utf-8');
+        planPointers = planContractPointers(findings, plan, activePlanPath);
+      } catch {
+        // Plan evidence is advisory; preserve independent prior-attempt pointers.
+      }
+    }
+
+    const priorLaps: Array<{ artifactPath: string; findings: Array<{ findingRef: string; finding: typeof findings[number] }> }> = [];
+    let lapIds: readonly string[] = [];
     try {
-      const aggregate = parseBuildReviewAggregate(verdictRaw);
-      const activePlanPath = await this.getActivePlanPath();
-      if (!aggregate || !activePlanPath) return [];
-      const findings = Object.values(aggregate.results).flatMap((result) =>
-        result.kind === 'judged' ? result.findings : [],
-      );
-      const plan = await readFile(join(this.projectRoot, activePlanPath), 'utf-8');
-      const priorLaps: Array<{ artifactPath: string; findings: Array<{ findingRef: string; finding: typeof findings[number] }> }> = [];
-      for (const lapId of await readdir(join(this.projectRoot, '.pipeline', 'build-review'))) {
-        if (lapId === aggregate.lapId) continue;
-        for (const file of await readdir(join(this.projectRoot, '.pipeline', 'build-review', lapId))) {
-          if (!file.endsWith('.json')) continue;
+      lapIds = await readdir(join(this.projectRoot, '.pipeline', 'build-review'));
+    } catch {
+      // No prior-lap directory is equivalent to no prior attempts.
+    }
+    for (const lapId of lapIds) {
+      if (lapId === aggregate.lapId) continue;
+      let files: readonly string[] = [];
+      try {
+        files = await readdir(join(this.projectRoot, '.pipeline', 'build-review', lapId));
+      } catch {
+        continue;
+      }
+      for (const file of files) {
+        if (!file.endsWith('.json')) continue;
+        try {
           const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readFile(
             join(this.projectRoot, '.pipeline', 'build-review', lapId, file), 'utf-8',
           )));
@@ -2699,11 +2720,15 @@ export class Conductor {
               findings: artifact.result.findings.map((finding, index) => ({ findingRef: String(index), finding })),
             });
           }
+        } catch {
+          // A malformed or unreadable artifact must not discard other prior laps.
         }
       }
-      return [...planContractPointers(findings, plan, activePlanPath), ...priorAttemptPointers(findings, priorLaps)];
+    }
+    try {
+      return [...planPointers, ...priorAttemptPointers(findings, priorLaps)];
     } catch {
-      return [];
+      return planPointers;
     }
   }
 

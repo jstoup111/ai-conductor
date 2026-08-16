@@ -19,6 +19,98 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
+  async function dispatchPointerContext(options: {
+    readonly activePlan: boolean;
+    readonly priorArtifacts: Readonly<Record<string, string>>;
+  }): Promise<string | undefined> {
+    if (!dir) throw new Error('test directory was not initialized');
+    const statePath = join(dir, '.pipeline', 'state.json');
+    const state: Record<string, unknown> = { complexity_tier: 'M' };
+    for (const step of ALL_STEPS) {
+      if (step.name !== 'build_review') state[step.name] = 'done';
+    }
+    await writeState(statePath, state as ConductState);
+    await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '42', status: 'completed' }] }),
+    );
+
+    const currentLapId = parseBuildReviewLapId('lap-current')!;
+    const priorLapId = parseBuildReviewLapId('lap-prior')!;
+    const finding: BuildReviewFinding = {
+      concernKind: 'missing-outcome',
+      summary: 'The remediation context does not identify its governing task.',
+      evidenceLocations: ['src/engine/conductor.ts:7500'],
+      anchor: {
+        rubric: 'completeness',
+        planTask: '42',
+        missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+      },
+    };
+    const judged = (lapId = currentLapId) => ({
+      kind: 'judged' as const,
+      rubric: 'completeness' as const,
+      lapId,
+      snapshotDigest: 'sha256:pointer-context',
+      contractVersion: 'v1' as never,
+      findings: [finding],
+      verdict: 'FAIL' as const,
+    });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: currentLapId,
+      snapshotDigest: 'sha256:pointer-context',
+      results: {
+        tautology: { ...judged(), rubric: 'tautology', findings: [], verdict: 'PASS' },
+        scope: { ...judged(), rubric: 'scope', findings: [], verdict: 'PASS' },
+        rootCause: { ...judged(), rubric: 'rootCause', findings: [], verdict: 'PASS' },
+        completeness: judged(),
+      },
+    });
+    if (options.activePlan) {
+      const activePlanPath = '.docs/plans/active-remediation-plan.md';
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, activePlanPath), '### Task 42: Preserve the remediation context contract\n');
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath }));
+    }
+    for (const [file, contents] of Object.entries(options.priorArtifacts)) {
+      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', file), contents);
+    }
+
+    let remediationContext: string | undefined;
+    const runner: StepRunner = {
+      run: async (step: StepName, _state, runOptions): Promise<StepRunResult> => {
+        if (step === 'build_review') {
+          await writeFile(join(dir!, '.pipeline', 'build-review.json'), JSON.stringify(aggregate));
+        }
+        if (step === 'remediate') {
+          remediationContext = runOptions?.retryReason;
+          await writeFile(join(dir!, '.pipeline', 'remediation.json'), JSON.stringify({
+            dispositions: [{
+              id: 'completeness-boundary',
+              disposition: 'halt',
+              category: 'architectural-clarity',
+              rationale: 'End the focused dispatch after observing its context.',
+              tasks: [],
+            }],
+          }));
+        }
+        return { success: true };
+      },
+    };
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      fromStep: 'build_review',
+      verifyArtifacts: true,
+      mode: 'auto',
+      daemon: true,
+    }).run();
+    return remediationContext;
+  }
+
   it('asks remediation to inspect approved-plan tasks before proposing a plan-level change', async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-review-remediate-dispatch-'));
     const statePath = join(dir, '.pipeline', 'state.json');
@@ -203,6 +295,67 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     expect(remediationContext).toMatch(
       /plan contract: \.docs\/plans\/active-remediation-plan\.md — Task 42 \(anchor: pass plan and prior-attempt pointers to remediation\)\nprior attempts \(1\): \.pipeline\/build-review\/lap-prior\/completeness\.json#\S+/,
     );
+  });
+
+  it('retains a same-anchor prior-attempt pointer without an active plan', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-review-remediate-prior-no-plan-'));
+    const context = await dispatchPointerContext({
+      activePlan: false,
+      priorArtifacts: {
+        'completeness.json': JSON.stringify({
+          version: 1,
+          rubric: 'completeness',
+          lapId: parseBuildReviewLapId('lap-prior'),
+          snapshotDigest: 'sha256:pointer-context',
+          result: {
+            kind: 'judged', rubric: 'completeness', lapId: parseBuildReviewLapId('lap-prior'),
+            snapshotDigest: 'sha256:pointer-context', contractVersion: 'v1',
+            findings: [{
+              concernKind: 'missing-outcome',
+              summary: 'The remediation context does not identify its governing task.',
+              evidenceLocations: ['src/engine/conductor.ts:7500'],
+              anchor: {
+                rubric: 'completeness', planTask: '42',
+                missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+              },
+            }], verdict: 'FAIL',
+          },
+          provenance: { kind: 'fresh' },
+        }),
+      },
+    });
+
+    expect(context).toContain('prior attempts (1): .pipeline/build-review/lap-prior/completeness.json#0');
+  });
+
+  it('skips a malformed prior artifact while retaining valid same-anchor pointers', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-review-remediate-malformed-prior-'));
+    const validArtifact = JSON.stringify({
+      version: 1,
+      rubric: 'completeness',
+      lapId: parseBuildReviewLapId('lap-prior'),
+      snapshotDigest: 'sha256:pointer-context',
+      result: {
+        kind: 'judged', rubric: 'completeness', lapId: parseBuildReviewLapId('lap-prior'),
+        snapshotDigest: 'sha256:pointer-context', contractVersion: 'v1',
+        findings: [{
+          concernKind: 'missing-outcome',
+          summary: 'The remediation context does not identify its governing task.',
+          evidenceLocations: ['src/engine/conductor.ts:7500'],
+          anchor: {
+            rubric: 'completeness', planTask: '42',
+            missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+          },
+        }], verdict: 'FAIL',
+      },
+      provenance: { kind: 'fresh' },
+    });
+    const context = await dispatchPointerContext({
+      activePlan: true,
+      priorArtifacts: { 'malformed.json': '{not valid json', 'completeness.json': validArtifact },
+    });
+
+    expect(context).toContain('prior attempts (1): .pipeline/build-review/lap-prior/completeness.json#0');
   });
 
   it('dispatches remediation without an active-plan path and retains the coverage-check direction', async () => {
