@@ -73,6 +73,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Remediation repairs now carry pointers to the governing plan task and prior same-anchor attempts, instead of being dispatched blind to the plan contract. ([implementation PR #1637](https://github.com/jstoup111/ai-conductor/pull/1637)).
 - Intake commands now fail closed with a clear error and an untouched ledger when the intake ledger is corrupt, instead of risking silent data loss. ([implementation PR #1541](https://github.com/jstoup111/ai-conductor/pull/1541)).
 - Claude usage lines now count cached input, so per-dispatch and feature token totals reflect real prompt volume. ([implementation PR #1641](https://github.com/jstoup111/ai-conductor/pull/1641)).
+- FINISH prose judgments persist per revision, so resumed publications re-observe accepted prose instead of paying a new judgment attempt. ([implementation PR #1653](https://github.com/jstoup111/ai-conductor/pull/1653)).
 
 ### Security
 
