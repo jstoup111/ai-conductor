@@ -55,6 +55,10 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
           taskId: '3',
           paths: ['src/verified.ts', 'test/verified.test.ts'],
         }],
+        preservationContext: [{
+          taskId: '5',
+          behavior: 'the preserved behavior remains covered',
+        }],
         operatorReseals: [{
           paths: ['.docs/stories/resealed-story.md'],
           reason: 'Operator approved this exact protected-artifact amendment.',
@@ -315,7 +319,7 @@ describe('build-review rubric projections', () => {
     ]);
     expect(Object.keys(projections.completeness).sort()).toEqual([
       'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId', 'mergeBase', 'planBody',
-      'projectionVersion', 'removalContext', 'rubric', 'snapshotDigest', 'verifyOnlyContext',
+      'preservationContext', 'projectionVersion', 'removalContext', 'rubric', 'snapshotDigest', 'verifyOnlyContext',
     ]);
     expect(projections.tautology).toMatchObject({
       rubric: 'tautology', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
@@ -345,7 +349,12 @@ describe('build-review rubric projections', () => {
       }],
     });
     expect(projections.rootCause).toMatchObject({ planBody: '# Approved plan\n', repairContext: expect.any(Array) });
-    expect(projections.completeness).toMatchObject({ planBody: '# Approved plan\n', changedFiles: expect.any(Array) });
+    expect(projections.completeness).toMatchObject({
+      planBody: '# Approved plan\n',
+      preservationContext: [{ taskId: '5', behavior: 'the preserved behavior remains covered' }],
+      projectionVersion: 'v2',
+      changedFiles: expect.any(Array),
+    });
     // The raw diff body must never travel inside a projection — only references do.
     for (const projection of Object.values(projections)) {
       expect(JSON.stringify(projection)).not.toContain('embedded-diff-body-line');

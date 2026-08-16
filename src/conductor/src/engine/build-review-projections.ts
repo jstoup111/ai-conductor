@@ -99,6 +99,8 @@ export interface RootCauseProjection extends CommonProjection<'rootCause'> {
 
 export interface CompletenessProjection extends CommonProjection<'completeness'> {
   readonly planBody: string;
+  /** Preserved-behavior plan evidence is relevant to Completeness alone. */
+  readonly preservationContext: BuildReviewSourceSnapshot['preservationContext'];
 }
 
 export type BuildReviewRubricProjection =
@@ -294,7 +296,9 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
   }) as RootCauseProjection;
   const completeness = seal({
-    ...common(source, 'completeness'), planBody: inputs.sourceSnapshot.planBody,
+    ...common(source, 'completeness'),
+    planBody: inputs.sourceSnapshot.planBody,
+    preservationContext: inputs.sourceSnapshot.preservationContext,
   }) as CompletenessProjection;
   return Object.freeze({ tautology, scope, rootCause, completeness });
 }
