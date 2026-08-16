@@ -144,7 +144,7 @@ Behavioral rules for projects using this harness live in [HARNESS.md](HARNESS.md
 
 1. **One skill, one responsibility** — skills have singular focus
 2. **Artifacts are the interface** — skills communicate via files in `.docs/`, not internal orchestration
-3. **Deterministic where possible, LLM only where necessary** — if machinery can enforce it, machinery does
+3. **Machinery by default, judgement where needed** — machinery enforces what it can; inherently judgement-shaped questions get an LLM judgement, not a rigid mechanical proxy
 4. **Negative paths are mandatory** — every story carries concrete failure scenarios
 5. **Evaluator sees fresh context** — no shared state with the generator prevents confirmation bias
 6. **Dry business logic, not dry code** — extract shared behavior, not shared shape

@@ -14,19 +14,30 @@ The active host agent MUST read and follow HARNESS.md at the start of every sess
 
 ## Design Principles
 
-**Deterministic where possible; LLM only where necessary.** When designing any fix or
-feature for this harness, first ask: can the engine, a git hook, a gate, or plain code
-do this mechanically? Dispatch an LLM agent only for the parts that genuinely require
-judgement (synthesis, code authoring, ambiguous resolution). Never rely on prompt
-discipline for something machinery can enforce or compute — prompt-level rules drift
-under long builds and cost operator interventions; deterministic enforcement is instant,
-token-free, and fails at the point of violation. When an agent repeatedly violates a
-rule, the fix is machinery that stamps/validates/rejects at the moment of the mistake —
-not a stronger prompt. (Precedents: `build_review`'s completeness rubric derives build
-completion from an LLM-judged plan-vs-diff comparison rather than trusting agent
-self-reports or commit-trailer stamps — `Task:` trailers are telemetry only (#773); #426
-fixed path matching engine-side; #433 replaces trailer discipline with engine-stamped
-task ids and commit hooks.)
+**Machinery by default; judgement where the question is a judgement call.** When designing
+any fix or feature for this harness, first ask: can the engine, a git hook, a gate, or
+plain code do this mechanically? If yes, prefer that — deterministic enforcement is
+instant, token-free, and fails at the point of violation, while prompt-level rules drift
+under long builds and cost operator interventions. Never rely on prompt discipline for
+something machinery can genuinely enforce or compute; when an agent repeatedly violates a
+mechanical invariant, the fix is machinery that stamps/validates/rejects at the moment of
+the mistake, not a stronger prompt. (Precedents: #426 fixed path matching engine-side;
+#433 replaced trailer discipline with engine-stamped task ids and commit hooks; `Task:`
+trailers are telemetry only (#773).)
+
+This is a default, **not a hard rule**. Some questions are inherently judgement calls —
+"is this done?", "is this the same finding as last round?", "does this diff deliver the
+plan?" — and forcing them through rigid mechanical shapes (boolean rubrics, exact-match
+identity, fixed routing) produces its own failure class: the mechanism cannot recognize
+resolution, so the same substance is re-litigated forever. `build_review` cycling is the
+canonical example — rubric machinery re-raising equivalent findings under drifted ids
+because equivalence is a judgement the machinery was built to avoid making. Signs you have
+over-mechanized: the mechanism needs an ever-growing exception list; operators routinely
+override or park to get past it; the "deterministic" check delegates its hard core to
+string matching on LLM output. In those cases the right design is machinery for the
+bookkeeping (scoping the inputs, bounding retries, persisting verdicts) with an LLM
+judgement at the point where the question actually requires one — and the judgement's
+output constrained by schema, not re-derived mechanically.
 
 **Extend the existing event spine; never add a parallel channel.** This repository has one
 telemetry spine — `ConductorEventEmitter` → the `ConductorEvent` union → `EventPersister` →
