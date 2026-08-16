@@ -429,6 +429,10 @@ describe('Conductor FINISH publication routing', () => {
     await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
     const state: Record<string, unknown> = {
       complexity_tier: 'S',
+      // This focused coordinator fixture has no product or architecture
+      // evidence. Declare its real SHIP membership instead of leaving the
+      // daemon fence to redispatch absent validators forever.
+      track: 'technical',
       feature_desc: 'finish-publication',
       worktree_branch: 'feat/finish-publication',
       pr_url: prUrl,
@@ -436,10 +440,14 @@ describe('Conductor FINISH publication routing', () => {
     for (const step of [
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
-      'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+      'worktree', 'acceptance_specs', 'build', 'build_review',
       'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
+    // A technical feature with no approved architecture decision has no
+    // as-built review to run; its downstream validator is skipped by the
+    // ordinary upstream-skip rule.
+    state.architecture_review = 'skipped';
     await writeState(productionStatePath, state as ConductState);
     const runner: StepRunner = {
       run: vi.fn(async () => {
@@ -520,10 +528,13 @@ describe('Conductor FINISH publication routing', () => {
     for (const step of [
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
-      'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+      'worktree', 'acceptance_specs', 'build', 'build_review',
       'wiring_check', 'test_suite', 'architecture_review_as_built', 'retro', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
-    // The two steps a technical-track feature legitimately skips.
+    // This feature has no approved architecture decision, so its as-built
+    // validator is legitimately skipped through the upstream-skip rule.
+    state.architecture_review = 'skipped';
+    // The two other SHIP validators a technical-track feature legitimately skips.
     state.manual_test = 'skipped';
     state.prd_audit = 'skipped';
     await writeState(productionStatePath, state as ConductState);
