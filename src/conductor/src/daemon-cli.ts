@@ -556,6 +556,14 @@ export function buildProgressReKickDeps(
   };
 }
 
+export function runDaemonVisualizerLifecycle<T>(
+  registry: PluginRegistry,
+  emitter: ConductorEventEmitter,
+  run: () => Promise<T>,
+): Promise<T> {
+  return withRegisteredVisualizers(registry, emitter, run);
+}
+
 /**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
@@ -1454,7 +1462,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         makeWatchHaltClearedSeam(worktreeBase)(slug, onCleared)
     : undefined;
 
-  const result = await withRegisteredVisualizers(
+  const result = await runDaemonVisualizerLifecycle(
     registry,
     events,
     () => runDaemon(

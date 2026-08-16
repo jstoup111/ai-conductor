@@ -192,6 +192,15 @@ export {
   withRegisteredVisualizers,
 };
 
+export function runInlineVisualizerLifecycle<T>(
+  registry: PluginRegistry,
+  emitter: ConductorEventEmitter,
+  run: () => Promise<T>,
+  builtIns: VisualizerPlugin[] = [],
+): Promise<T> {
+  return withRegisteredVisualizers(registry, emitter, run, builtIns);
+}
+
 /**
  * Build the options object passed into `runDaemonMode` for a `daemon` CLI
  * invocation (FR-9 wiring). Wires the self-restart callback when this daemon
@@ -1217,7 +1226,7 @@ async function main(): Promise<void> {
       builtInVisualizers.push(otelVis);
     }
   }
-  await withRegisteredVisualizers(registry, events, async () => {
+  await runInlineVisualizerLifecycle(registry, events, async () => {
   const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
