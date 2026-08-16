@@ -365,6 +365,39 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       }).toEqual({ context: true, entry: true, paths: true });
     });
 
+    it('freezes parsed preservation evidence in the source snapshot identity', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
+      ]);
+      const planBodyWithout = `# Plan body
+
+### Task 3: Preserve existing behavior
+`;
+      const planBodyWith = `${planBodyWithout}**Preserves:** the ungated TokenMeter wrapper transparency
+`;
+      await writeFile(planPath, planBodyWithout, 'utf-8');
+      const withoutClause = await assembleBuildReviewInputs(git, planPath);
+      await writeFile(planPath, planBodyWith, 'utf-8');
+      const withClause = await assembleBuildReviewInputs(git, planPath);
+      const { preservationContext } = withClause.sourceSnapshot;
+
+      expect({
+        context: preservationContext,
+        digestChanges: withClause.sourceSnapshot.digest !== withoutClause.sourceSnapshot.digest,
+        contentDigestChanges: withClause.sourceSnapshot.contentDigest !== withoutClause.sourceSnapshot.contentDigest,
+        frozen: Object.isFrozen(preservationContext),
+        entryFrozen: Object.isFrozen(preservationContext?.[0]),
+      }).toEqual({
+        context: [{ taskId: '3', behavior: 'the ungated TokenMeter wrapper transparency' }],
+        digestChanges: true,
+        contentDigestChanges: true,
+        frozen: true,
+        entryFrozen: true,
+      });
+    });
+
     it('stale base: fetches, recomputes merge-base against the refreshed ref, fresh=false', async () => {
       const { git } = fakeGit([
         { match: ['remote'], result: { exitCode: 0, stdout: 'origin\n' } },

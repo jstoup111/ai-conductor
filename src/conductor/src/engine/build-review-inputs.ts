@@ -13,7 +13,7 @@ import { readOperatorReseals, type OperatorReseal } from './protected-artifact-s
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskVerifyOnly } from './autoheal.js';
-import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { parsePlanTaskPaths, parsePlanTaskPreserves } from './plan-task-parse.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -57,6 +57,8 @@ export interface BuildReviewInputs {
   removalContext?: BuildReviewRemovalContext;
   /** Engine-parsed verify-only plan task evidence for the grader, never an exemption. */
   verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
+  /** Engine-parsed preserved-behavior plan evidence for the grader, never an exemption. */
+  preservationContext?: readonly BuildReviewPreservationContext[];
   /** Operator-authorized protected-artifact reseals from the feature seal. */
   operatorReseals?: OperatorReseal[];
   /**
@@ -79,6 +81,12 @@ export interface BuildReviewInputs {
 export interface BuildReviewVerifyOnlyContext {
   readonly taskId: string;
   readonly paths: readonly string[];
+}
+
+/** One behavior a plan task declares must retain equivalent coverage. */
+export interface BuildReviewPreservationContext {
+  readonly taskId: string;
+  readonly behavior: string;
 }
 
 /** Inputs returned after the proof gate has frozen a source snapshot. */
@@ -109,6 +117,8 @@ export interface BuildReviewSourceSnapshot {
   };
   /** Engine-parsed verify-only plan task evidence frozen with the source read. */
   readonly verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
+  /** Engine-parsed preserved-behavior plan evidence frozen with the source read. */
+  readonly preservationContext?: readonly BuildReviewPreservationContext[];
 }
 
 /** Immutable operator reseal record captured in a source snapshot. */
@@ -175,15 +185,16 @@ function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'co
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'verifyOnlyContext'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'verifyOnlyContext' | 'preservationContext'
 >): string {
-  const { diff, planBody, repairContext, removalContext, verifyOnlyContext } = snapshot;
+  const { diff, planBody, repairContext, removalContext, verifyOnlyContext, preservationContext } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff: withoutDiffBlobIdentities(diff),
     planBody,
     repairContext: semanticRepairContext(repairContext),
     removalContext,
     verifyOnlyContext,
+    preservationContext,
   })).digest('hex')}`;
 }
 
@@ -274,6 +285,8 @@ export async function assembleBuildReviewInputs(
       taskId,
       paths: [...(planTaskPaths.get(taskId) ?? [])],
     }));
+  const preservationContext = [...parsePlanTaskPreserves(planBody)]
+    .flatMap(([taskId, behaviors]) => behaviors.map((behavior) => ({ taskId, behavior })));
 
   const featureRoot = dirname(dirname(dirname(planPath)));
   const planIsInFeatureRoot =
@@ -323,6 +336,10 @@ export async function assembleBuildReviewInputs(
       taskId: context.taskId,
       paths: Object.freeze([...context.paths]),
     }))),
+    preservationContext: Object.freeze(preservationContext.map((context) => Object.freeze({
+      taskId: context.taskId,
+      behavior: context.behavior,
+    }))),
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,
@@ -341,6 +358,7 @@ export async function assembleBuildReviewInputs(
     fresh: resolution.fresh,
     removalContext,
     verifyOnlyContext,
+    preservationContext,
     repairContext,
     acceptedWidenings: [...sourceSnapshot.acceptedWidenings],
     operatorReseals,
