@@ -572,6 +572,12 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
       const stepTracker: { current: StepName | undefined } = { current: undefined };
       meter = new TokenMeter(provisioned, () => stepTracker.current);
       await dispatchAfterLivePreflight(providerHome, async () => {
+      // The harness repo gitignores its runtime dirs; without this the
+      // review-era .pipeline writes (rubric caches, verdicts) surface as
+      // uncommitted paths and the completion gate halts the fixture dirty
+      // (0.103.0 release-gate failure — "17 uncommitted paths:
+      // .pipeline/build-review.json …", visible via the embedded diagnostics).
+      await writeFile(join(worktreeDir, '.gitignore'), '.pipeline/\n.daemon/\n');
       await execa('git', ['add', '-A'], { cwd: worktreeDir });
       await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], {
         cwd: worktreeDir,
