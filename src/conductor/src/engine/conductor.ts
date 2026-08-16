@@ -25,6 +25,9 @@ import {
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
+import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
+import { planContractPointers, priorAttemptPointers } from './remediation-context-pointers.js';
 import type {
   AuthenticationReadiness,
   CodexProbeFailure,
@@ -2669,6 +2672,38 @@ export class Conductor {
     } catch {
       // Engine state doesn't exist or is invalid
       return null;
+    }
+  }
+
+  /** Best-effort compact remediation context from existing build-review evidence. */
+  private async buildReviewPointerLines(verdictRaw: unknown): Promise<readonly string[]> {
+    try {
+      const aggregate = parseBuildReviewAggregate(verdictRaw);
+      const activePlanPath = await this.getActivePlanPath();
+      if (!aggregate || !activePlanPath) return [];
+      const findings = Object.values(aggregate.results).flatMap((result) =>
+        result.kind === 'judged' ? result.findings : [],
+      );
+      const plan = await readFile(join(this.projectRoot, activePlanPath), 'utf-8');
+      const priorLaps: Array<{ artifactPath: string; findings: Array<{ findingRef: string; finding: typeof findings[number] }> }> = [];
+      for (const lapId of await readdir(join(this.projectRoot, '.pipeline', 'build-review'))) {
+        if (lapId === aggregate.lapId) continue;
+        for (const file of await readdir(join(this.projectRoot, '.pipeline', 'build-review', lapId))) {
+          if (!file.endsWith('.json')) continue;
+          const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readFile(
+            join(this.projectRoot, '.pipeline', 'build-review', lapId, file), 'utf-8',
+          )));
+          if (artifact?.result.kind === 'judged') {
+            priorLaps.push({
+              artifactPath: `.pipeline/build-review/${lapId}/${file}`,
+              findings: artifact.result.findings.map((finding, index) => ({ findingRef: String(index), finding })),
+            });
+          }
+        }
+      }
+      return [...planContractPointers(findings, plan, activePlanPath), ...priorAttemptPointers(findings, priorLaps)];
+    } catch {
+      return [];
     }
   }
 
@@ -7488,6 +7523,9 @@ export class Conductor {
                 }
                 if (!kickback.exhausted) {
 
+                  const pointerLines = await this.buildReviewPointerLines(verdictRaw);
+                  const pointerContext = pointerLines.length > 0 ? `\n${pointerLines.join('\n')}` : '';
+
                   // #989: a build_review FAIL resolves a structured routing
                   // decision instead of assuming `build`. A completeness
                   // failure implicates the PLAN (the diff does not cover what
@@ -7501,7 +7539,7 @@ export class Conductor {
                   let reworkHint =
                     `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
                     `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
-                    `this build.`;
+                    `this build.` + pointerContext;
                   let reworkEvidence = evidence;
                   if (buildReviewFailRoute(parsed) === 'remediate') {
                     const activePlanPath = await this.getActivePlanPath();
@@ -7513,7 +7551,7 @@ export class Conductor {
                         `proposing a plan-level change. ` +
                         (activePlanPath ? `Active plan: ${activePlanPath}. ` : '') +
                         `Plan remediation per the /remediate ` +
-                        `skill and write .pipeline/remediation.json.`,
+                        `skill and write .pipeline/remediation.json.` + pointerContext,
                       { source: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT },
                     );
                     if (outcome.kind === 'halt') {
