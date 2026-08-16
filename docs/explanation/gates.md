@@ -300,6 +300,15 @@ On the remediation path the planner picks the target per gap, the kickback event
 than `build`, and a gap that needs a human halts instead of routing. Remediation may still choose `build`
 for a scope gap — the difference is that the deletion becomes a recorded plan-level decision.
 
+Both the `build` rework hint and the remediation dispatch prompt carry best-effort `plan contract:` and
+`prior attempts:` pointer lines derived from the raw rubric aggregate — a `plan contract:` pointer names the
+active plan's owning task for a finding anchored to a plan task or an owned file, and a `prior attempts:`
+pointer lists earlier `.pipeline/build-review/<lap>/*.json` findings that share the same canonical anchor.
+Pointer derivation is advisory: a missing active plan, an unreadable prior-lap artifact, or an anchor with no
+unique matching task yields no pointer for that finding rather than blocking the dispatch. The
+[`/remediate` skill](../reference/skills.md) treats a referenced plan task's Steps as the governing repair
+contract and prior-attempt artifacts as earlier same-anchor context, not a replacement contract.
+
 Routing is re-checked against the disposition store at the moment the kickback is emitted, not only when
 the FAIL was graded. An operator `conduct build-review accept` can land while the remediation planner is
 composing rework from the raw aggregate (a window of minutes); when every graded finding is accepted by
