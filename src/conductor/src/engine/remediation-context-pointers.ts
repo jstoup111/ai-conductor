@@ -16,7 +16,8 @@ export function planContractPointers(
   const planTaskPaths = parsePlanTaskPaths(plan);
 
   return findings.flatMap((finding) => {
-    const { anchor } = finding;
+    const anchor = identityForFinding(finding)?.canonicalPayload.anchor;
+    if (!anchor) return [];
 
     if (anchor.rubric === 'scope') {
       const matchingTaskIds = [...planTaskPaths]
@@ -43,22 +44,43 @@ export function priorAttemptPointers(
   priorLaps: readonly PriorLap[],
 ): readonly string[] {
   const priorByIdentity = new Map<string, string[]>();
-  for (const { artifactPath, findings: priorFindings } of priorLaps) {
-    for (const { findingRef, finding } of priorFindings) {
-      const identity = canonicalizeBuildReviewFindingIdentity({
-        rubric: finding.anchor.rubric, contractVersion: 'v1', concernKind: finding.concernKind, anchor: finding.anchor,
-      });
-      if (identity) priorByIdentity.set(identity.id, [...(priorByIdentity.get(identity.id) ?? []), `${artifactPath}#${findingRef}`]);
+  for (const priorLap of priorLaps) {
+    const lap = record(priorLap);
+    if (!lap || typeof lap.artifactPath !== 'string' || !Array.isArray(lap.findings)) continue;
+
+    for (const priorEntry of lap.findings) {
+      const entry = record(priorEntry);
+      if (!entry || typeof entry.findingRef !== 'string') continue;
+
+      const identity = identityForFinding(entry.finding);
+      if (identity) priorByIdentity.set(identity.id, [...(priorByIdentity.get(identity.id) ?? []), `${lap.artifactPath}#${entry.findingRef}`]);
     }
   }
 
   return findings.flatMap((finding) => {
-    const identity = canonicalizeBuildReviewFindingIdentity({
-      rubric: finding.anchor.rubric, contractVersion: 'v1', concernKind: finding.concernKind, anchor: finding.anchor,
-    });
+    const identity = identityForFinding(finding);
     const priorAttempts = identity && priorByIdentity.get(identity.id);
     return priorAttempts ? [`prior attempts (${priorAttempts.length}): ${priorAttempts.join(', ')}`] : [];
   });
+}
+
+function identityForFinding(value: unknown) {
+  const finding = record(value);
+  const anchor = finding && record(finding.anchor);
+  if (!finding || !anchor) return undefined;
+
+  return canonicalizeBuildReviewFindingIdentity({
+    rubric: anchor.rubric,
+    contractVersion: 'v1',
+    concernKind: finding.concernKind,
+    anchor,
+  });
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function escapeRegExp(value: string): string {

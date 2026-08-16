@@ -119,4 +119,49 @@ describe('planContractPointers', () => {
       'prior attempts (2): .pipeline/build-review/lap-1/scope.json#finding-1, .pipeline/build-review/lap-2/scope.json#finding-2',
     ]);
   });
+
+  it('ignores unresolvable plan, prior-lap, and malformed finding inputs', () => {
+    const scopeFinding: BuildReviewFinding = {
+      concernKind: 'out-of-scope-change',
+      summary: 'The current change is outside the approved plan.',
+      evidenceLocations: ['src/engine/conductor.ts:1'],
+      anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'outside-plan' },
+    };
+    const differentAnchorFinding: BuildReviewFinding = {
+      concernKind: 'out-of-scope-change',
+      summary: 'The prior change was anchored to another file.',
+      evidenceLocations: ['src/engine/other.ts:1'],
+      anchor: { rubric: 'scope', path: 'src/engine/other.ts', relation: 'outside-plan' },
+    };
+
+    const results = [
+      planContractPointers([{
+        concernKind: 'missing-outcome',
+        summary: 'The requested plan task is absent.',
+        evidenceLocations: ['src/engine/conductor.ts:1'],
+        anchor: { rubric: 'completeness', planTask: '999', missingOutcome: 'renders the plan contract pointer' },
+      }], '### Task 1: Existing task\n', '.docs/plans/remediation-context.md'),
+      priorAttemptPointers([scopeFinding], [{
+        artifactPath: '.pipeline/build-review/lap-different/scope.json',
+        findings: [{ findingRef: 'finding-different', finding: differentAnchorFinding }],
+      }]),
+      priorAttemptPointers([scopeFinding], [
+        null as unknown as Parameters<typeof priorAttemptPointers>[1][number],
+        {
+          artifactPath: '.pipeline/build-review/lap-valid/scope.json',
+          findings: [{ findingRef: 'finding-valid', finding: scopeFinding }],
+        },
+      ]),
+      planContractPointers([null as unknown as BuildReviewFinding], '', '.docs/plans/remediation-context.md'),
+      priorAttemptPointers([{} as unknown as BuildReviewFinding], []),
+    ];
+
+    expect(results).toEqual([
+      [],
+      [],
+      ['prior attempts (1): .pipeline/build-review/lap-valid/scope.json#finding-valid'],
+      [],
+      [],
+    ]);
+  });
 });
