@@ -444,7 +444,7 @@ diff --git a/src/classify.ts b/src/classify.ts
     expect(exceptions).toMatch(/4\. Verify-only maintenance:/i);
     expect(exceptions).toMatch(/Engine-parsed verify-only tasks block lists a verify-only task/i);
     expect(exceptions).toMatch(/changed test's lines reference[\s\S]*plan-declared files[\s\S]*behavior that task verifies/i);
-    expect(exceptions).toMatch(/adds no assertion about[\s\S]*behavior this diff introduces/i);
+    expect(exceptions).toContain('the change adds no new assertion about behavior this diff introduces.');
     expect(exceptions).toMatch(/per changed test, never\s+per diff/i);
     expect(exceptions).toMatch(/must not receive a Tautology finding solely because[\s\S]*passes pre-diff/i);
     expect(exceptions).toMatch(/non-qualifying pre-diff-passing test is measured normally/i);

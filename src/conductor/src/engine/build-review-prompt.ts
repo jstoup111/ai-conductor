@@ -121,8 +121,8 @@ The Tautology exceptions are an explicitly closed list:
 4. Verify-only maintenance: exempt a changed test only when all three conditions
    hold. First, the Engine-parsed verify-only tasks block lists a verify-only task.
    Second, the changed test's lines reference that task's plan-declared files or
-   the behavior that task verifies. Third, the change adds no assertion about
-   behavior this diff introduces. Evaluate this predicate per changed test, never
+   the behavior that task verifies. Third, the change adds no new assertion about behavior this diff introduces.
+   Evaluate this predicate per changed test, never
    per diff. A qualifying test must not receive a Tautology finding solely because
    it passes pre-diff; a non-qualifying pre-diff-passing test is measured normally.
 A changed test qualifying under none of these exceptions is measured normally.
