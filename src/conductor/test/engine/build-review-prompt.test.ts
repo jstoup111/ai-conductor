@@ -147,10 +147,22 @@ describe('buildGraderPrompt', () => {
 
   it('includes the completeness rubric item and forbids per-task reasoning', () => {
     const prompt = buildGraderPrompt(inputs);
+    const holisticJudgement = `Completeness must be judged holistically: read the plan and the diff as a
+whole and form a judgement of whether the diff, taken together, delivers
+everything the plan describes.`;
+    const forbiddenPerTaskChasing = `Do NOT reason about completeness on a
+per-task basis — you must never chase individual task SHAs, verify
+per-task commit reachability, or look for corroborating evidence tying
+each plan task to a specific commit.`;
 
     expect(prompt).toContain(
       'Completeness: every planned task\'s work is present in the diff',
     );
+    expect(prompt).toContain(
+      'A task listed in the Engine-parsed verify-only tasks block legitimately contributes no implementation diff.',
+    );
+    expect(prompt).toContain(holisticJudgement);
+    expect(prompt).toContain(forbiddenPerTaskChasing);
     expect(prompt).toMatch(
       /completeness .*(judg(e|ed|ement)|assess(ed)?) holistically/i,
     );
