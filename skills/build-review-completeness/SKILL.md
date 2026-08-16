@@ -55,9 +55,8 @@ following hold:
 Condition 3 produces the finding: relocation alone never exempts, because the absence of a
 surviving equivalent assertion is the defect.
 
-Evaluate this predicate per preserved-behavior clause, never per diff. It does not permit per-task
-commit reasoning: do not chase per-task SHAs, verify per-task commit reachability, or seek trailer
-corroboration. Judge from plan text, diff content, and engine-derived removal evidence only.
+Evaluate this predicate per preserved-behavior clause, never per diff. Do not use task-history
+attribution: judge only from plan text, diff content, and engine-derived removal evidence.
 
 ## Result contract (v1)
 
