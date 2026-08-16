@@ -23,21 +23,37 @@ function record(id = finding.id): BuildReviewDispositionRecord {
 }
 
 describe('accepted build-review risk rendering', () => {
-  it('renders deterministic full attribution for every accepted finding', () => {
+  it('renders only ids, rubrics, a count, and the disposition-store pointer', () => {
     const secondFinding = canonicalizeBuildReviewFindingIdentity({
       rubric: 'scope', contractVersion: 'v1', concernKind: 'missing-approval',
       anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'outside-plan' },
     })!;
     const rendered = renderBuildReviewAcceptedRisk([record(), { ...record(), finding: secondFinding, summary: 'second risk' }]);
 
-    expect(rendered).toEqual({
-      ok: true,
-      section: expect.stringContaining(`## Accepted build-review risk\n\n- Finding: \`${finding.id}\``),
-    });
-    expect((rendered as { section: string }).section).toContain('**Rubric:** scope');
-    expect((rendered as { section: string }).section).toContain('**Rationale:** Accepted temporary migration risk');
-    expect((rendered as { section: string }).section).toContain('**Operator:** james');
-    expect((rendered as { section: string }).section).toContain('**Accepted at:** 2026-08-14T12:00:00.000Z');
+    expect(rendered).toMatchObject({ ok: true });
+    const section = (rendered as { section: string }).section;
+    expect(section).toContain('<!-- build-review-accepted-risk:start -->');
+    expect(section).toContain('<!-- build-review-accepted-risk:end -->');
+    expect(section).toContain('## Accepted build-review risk');
+    expect(section).toContain('Accepted findings: 2');
+    expect(section).toContain(`- Finding: \`${finding.id}\` — rubric: scope`);
+    expect(section).toContain(`- Finding: \`${secondFinding.id}\` — rubric: scope`);
+    expect(section).toContain("Details are retained in the feature's local build-review disposition store.");
+  });
+
+  it('never publishes summary, rationale, operator identity, or timestamps (#1614)', () => {
+    const rendered = renderBuildReviewAcceptedRisk([record()]);
+
+    expect(rendered).toMatchObject({ ok: true });
+    const section = (rendered as { section: string }).section;
+    expect(section).toContain(`\`${finding.id}\``);
+    expect(section).toContain('rubric: scope');
+    expect(section).not.toContain('src/a.ts is outside the approved plan');
+    expect(section).not.toContain('Accepted temporary migration risk');
+    expect(section).not.toContain('james');
+    expect(section).not.toContain('2026-08-14T12:00:00.000Z');
+    expect(section).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    expect(section).not.toMatch(/\*\*(Summary|Rationale|Operator|Accepted at):\*\*/);
   });
 
   it('upserts the section idempotently and leaves a body with no findings unchanged', () => {

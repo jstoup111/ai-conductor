@@ -670,7 +670,11 @@ describe('production FINISH publication composition', () => {
       const body = edits[0][edits[0].indexOf('--body') + 1];
       expect(body).toContain('Reader-facing summary.');
       expect(body).toContain('Accepted build-review risk');
-      expect(body).toContain('**Rationale:** reason');
+      expect(body).toContain(`- Finding: \`${finding.id}\` — rubric: scope`);
+      expect(body).not.toContain('**Rationale:**');
+      expect(body).not.toContain('reason');
+      expect(body).not.toContain('james');
+      expect(body).not.toContain('2026-08-14T12:00:00.000Z');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

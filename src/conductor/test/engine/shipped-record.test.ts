@@ -402,7 +402,13 @@ describe('accepted build-review risk shipped projection', () => {
     const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
     const body = '---\nslug: feature\n---\n\n## Cost\ninput: 1\n\n## Time\nstate: measured\n';
 
-    expect(appendBuildReviewAcceptedRisk(body, [accepted])).toContain('## Accepted build-review risk');
+    const appended = appendBuildReviewAcceptedRisk(body, [accepted]);
+    expect(appended).toContain('## Accepted build-review risk');
+    expect(appended).toContain(`- Finding: \`${finding.id}\` — rubric: scope`);
+    expect(appended).not.toContain('summary');
+    expect(appended).not.toContain('reason');
+    expect(appended).not.toContain('james');
+    expect(appended).not.toContain('2026-08-14T12:00:00.000Z');
     expect(appendBuildReviewAcceptedRisk(body, [])).toBe(body);
     expect(() => appendBuildReviewAcceptedRisk(body, [{ ...accepted, rationale: '' }])).toThrow(/unrenderable/);
   });
