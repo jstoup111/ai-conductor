@@ -98,10 +98,11 @@ forwarded from feature-scoped buses.
 
 The runtime isolates each plugin:
 
-- A `start()` failure detaches any handlers registered before the throw, warns once, and does not stop
-  later visualizers from starting.
+- A `start()` failure detaches any handlers registered before the throw, emits one `start() failure`
+  warning, and does not stop later visualizers from starting.
 - A synchronous or asynchronous handler failure detaches every handler owned by that visualizer and
-  warns once. Visualizer promises are observed for rejection but never delay event delivery.
+  emits one `handler failure` warning. Visualizer promises are observed for rejection but never delay
+  event delivery.
 - Shutdown invokes every plugin's `stop()` concurrently. A throw, rejection, or stop taking longer
   than two seconds is warned and contained so another plugin cannot block process teardown.
 
