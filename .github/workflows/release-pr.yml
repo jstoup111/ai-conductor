@@ -123,6 +123,7 @@ jobs:
                     mergedAt: pullRequest.merged_at,
                     mergeSha: pullRequest.merge_commit_sha ?? '',
                     body: pullRequest.body ?? '',
+                    headRef: pullRequest.head?.ref,
                   })) : [],
                   hasNextPage: false,
                   totalCount: pullRequests.length,
