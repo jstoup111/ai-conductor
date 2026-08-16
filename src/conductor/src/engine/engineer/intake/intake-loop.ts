@@ -14,9 +14,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { Envelope } from './port.js';
+import { CorruptLedgerError } from './ledger.js';
 
 /** Effects injected into the intake loop's tick/scheduler. */
 export interface IntakeLoopDeps {
+  /**
+   * Proves the durable ledger can be read before a poll. A successful probe is
+   * the only evidence that a previously reported corruption episode was
+   * repaired; a resolved poll alone may not access the ledger at all.
+   */
+  probeLedger?: () => Promise<void>;
   /** Polls all registered repos for newly captured envelopes this tick. */
   poll: () => Promise<Envelope[]>;
   /** Enqueues a single captured envelope (ledger-deduped upstream). */
@@ -52,6 +59,26 @@ export interface IntakeLoopOptions {
 export interface IntakeTickSummary {
   /** Number of envelopes captured (polled and enqueued) this tick. */
   captured: number;
+}
+
+/** Mutable state retained by the continuous scheduler for one corruption episode. */
+interface CorruptionEpisode {
+  reportedKey?: string;
+}
+
+function corruptionEpisodeKey(error: CorruptLedgerError): string {
+  // Successful quarantine paths are content-addressed in effect: the ledger
+  // reuses a matching sibling for identical bytes and allocates a new one for
+  // different bytes. Include that stable byte-state witness so two malformed
+  // states that share a parser/shape reason are separate episodes.
+  return `${error.ledgerPath}\u0000${error.corruptBytesDigest ?? error.quarantinePath ?? error.reason}`;
+}
+
+function corruptLedgerDiagnostic(error: CorruptLedgerError): string {
+  const quarantinePath = error.quarantinePath
+    ?? error.quarantineDiagnostic
+    ?? 'unavailable (quarantine creation failed)';
+  return `intake loop: corrupt ledger ledger=${error.ledgerPath} quarantine=${quarantinePath}; intake paused until the ledger is repaired`;
 }
 
 /**
@@ -99,11 +126,26 @@ function enrichOrigin(envelope: Envelope, log: (msg: string) => void): Envelope 
  * summary `{ captured: <count> }`. Pure orchestration over injected effects:
  * no real I/O, no claude/provider capability.
  */
-export async function intakeTick(deps: IntakeLoopDeps): Promise<IntakeTickSummary> {
+export async function intakeTick(
+  deps: IntakeLoopDeps,
+  corruptionEpisode?: CorruptionEpisode,
+): Promise<IntakeTickSummary> {
   let envelopes: Envelope[];
   try {
+    if (deps.probeLedger) {
+      await deps.probeLedger();
+      if (corruptionEpisode) corruptionEpisode.reportedKey = undefined;
+    }
     envelopes = await deps.poll();
   } catch (err) {
+    if (err instanceof CorruptLedgerError) {
+      const key = corruptionEpisodeKey(err);
+      if (corruptionEpisode?.reportedKey !== key) {
+        deps.log(corruptLedgerDiagnostic(err));
+        if (corruptionEpisode) corruptionEpisode.reportedKey = key;
+      }
+      return { captured: 0 };
+    }
     // The adapter already isolates per-repo failures (FR-27/ADR-012); this
     // catch is a defensive backstop so an unexpected poll() rejection never
     // crashes the tick or the loop. Log and treat this tick as zero-capture.
@@ -211,9 +253,10 @@ function resolveIntervalMs(intervalMs: number, log: (msg: string) => void): numb
  */
 export async function runIntakeLoop(deps: IntakeLoopDeps, opts: IntakeLoopOptions): Promise<void> {
   const intervalMs = resolveIntervalMs(opts.intervalMs, deps.log);
+  const corruptionEpisode: CorruptionEpisode = {};
   for (;;) {
     try {
-      await intakeTick(deps);
+      await intakeTick(deps, corruptionEpisode);
     } catch (err) {
       // Whole-tick failure backstop (Task 6): intakeTick() already isolates
       // per-repo poll/enqueue failures internally, but an unexpected failure

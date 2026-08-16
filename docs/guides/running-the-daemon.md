@@ -916,6 +916,10 @@ lock before respawning.
 shipped record. Park it, then run `conduct-ts shipped-record`. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md).
 
+**An intake command reports a corrupt ledger or a `ledger.json.lease` timeout.** Do not bypass the
+dedup failure. Follow [corrupt intake ledger or stuck ledger lease](../runbooks/corrupt-intake-ledger.md)
+to inspect the quarantine copy, repair or replace the ledger, and safely clear an orphaned lease.
+
 A feature the daemon itself finished is deduped from both sides: discovery skips it once the shipped
 record is on the base branch (post-merge) *and* once the record is committed on the feature's own
 branch (`feat/daemon-<slug>`, pre-merge). The pre-merge half exists because a finish that records the

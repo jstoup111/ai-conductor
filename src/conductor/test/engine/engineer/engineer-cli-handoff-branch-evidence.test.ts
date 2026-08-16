@@ -15,7 +15,7 @@
 // 5. pr-opened path regression: original flow works unchanged (branch recorded by openSpecPr caller if needed).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { access, mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -279,6 +279,41 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     const afterHandoff = await ledger.get('github-issues', sourceRef);
     expect(afterHandoff?.status).toBe('claimed');
     expect(afterHandoff?.branch).toBe(branch);
+  });
+
+  it('does not print a local-commit result when branch evidence encounters a corrupt ledger', async () => {
+    const sourceRef = 'o/b#101';
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    const ledger = createLedger(ledgerPath);
+    await ledger.record({ source: 'github-issues', sourceRef });
+    const worktree = await seedWorktree();
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
+    const corruptContent = 'SECRET_LEDGER_ENTRY_MUST_NOT_REACH_THE_OPERATOR';
+    await writeFile(ledgerPath, corruptContent, 'utf8');
+
+    const { out, err, opts } = captureOpts({
+      gh: (async () => {
+        throw new Error('git: error: No remote configured.');
+      }) as any,
+      ensureRunningLaunch: async () => {},
+    });
+
+    const code = await dispatchEngineer(
+      { kind: 'handoff', project: 'test-proj', branch, worktree, sourceRef },
+      opts,
+    );
+
+    const diagnostic = err.join('\n');
+    const quarantines = await readdir(engineerDir);
+    const quarantine = quarantines.find((name) => name.startsWith('ledger.json.corrupt-'));
+    expect(quarantine).toBeDefined();
+    expect({ code, out, leaksLedgerContent: diagnostic.includes(corruptContent) }).toEqual({
+      code: 1,
+      out: [],
+      leaksLedgerContent: false,
+    });
+    expect(diagnostic).toContain(ledgerPath);
+    expect(diagnostic).toContain(join(engineerDir, quarantine!));
   });
 
   it('TEST 3: without --source-ref → no ledger write attempted, kind local-commit', async () => {

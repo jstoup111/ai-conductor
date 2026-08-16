@@ -12,7 +12,7 @@ ledger as a single opaque node.
 graph TD
   subgraph writers["Mutating processes (concurrent, separate OS processes)"]
     CLI["engineer-cli verbs<br/>claim / unclaim / forget /<br/>reopen / writeback / handoff<br/>(7 createLedger sites)"]:::existing
-    LOOP["engineer/loop.ts<br/>long-running intake capture<br/>(record on every polled envelope)"]:::existing
+    LOOP["intake/intake-loop.ts<br/>background intake capture<br/>(record on every polled envelope;<br/>engineer/loop.ts runEngineerMode is dormant — no live caller)"]:::existing
   end
 
   subgraph ledger["engineer/intake/ledger.ts"]

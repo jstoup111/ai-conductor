@@ -462,7 +462,8 @@ nest a second interactive session, prints guidance to run `/engineer` directly, 
 
 Before each fresh session, and only when no idea came from the CLI, the loop polls GitHub issues into
 the durable inbox and prints `Intake: N issue(s) queued.` for a non-zero N. That poll is skipped
-entirely while a background brain loop is alive. Poll failures print and never block.
+entirely while a background brain loop is alive. Ordinary poll failures print and never block; a
+corrupt ledger is the exception — it fails closed and exits 1 (see the subcommand table below).
 
 After each session exits, the loop prompts `Process another idea in a fresh session? [Y/n]` on a TTY.
 Non-TTY stdin answers no, so the loop never runs unattended. The child's exit code is returned; a spawn
@@ -487,6 +488,12 @@ returns 1.
 
 `--source-ref` on `worktree`, `--body` on `worktree`, and the `--idea` and free-text launch forms are
 all accepted by the code but absent from the root `--help` output.
+
+Every subcommand that touches the ledger — `launch`'s pre-poll, `land`, `handoff`, `claim`, `forget`,
+`unclaim`, `requeue`, and `resolve` — fails closed on a corrupt ledger: exit 1 with
+`engineer <kind>: intake ledger is corrupt at <path>; quarantine path: <path>; ledger was not
+modified.` The ledger itself is left untouched for repair. See
+[corrupt intake ledger or stuck ledger lease](../runbooks/corrupt-intake-ledger.md).
 
 > **Known limitation.** Omitting a required flag or positional on `worktree`, `land`, `handoff`,
 > `forget`, or `resolve` prints the full guide text and exits **0**, not a usage error. A script that

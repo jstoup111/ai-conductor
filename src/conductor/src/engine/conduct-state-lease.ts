@@ -45,6 +45,8 @@ export interface ConductStateLease {
 }
 
 export interface ConductStateLeaseOptions {
+  /** Optional human-readable name for the store whose mutation this lease guards. */
+  label?: string;
   filesystem?: ConductStateLeaseFilesystem;
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
@@ -59,11 +61,12 @@ export interface ConductStateLeaseOptions {
 }
 
 export type ConductStateLeaseRecoveryDiagnostic =
-  | { kind: 'recovered'; statePath: string; ownerPid: number }
+  | { kind: 'recovered'; statePath: string; ownerPid: number; storeLabel?: string }
   | {
     kind: 'refused';
     statePath: string;
     reason: 'invalid_owner_metadata' | 'owner_liveness_unverifiable' | 'ownership_changed';
+    storeLabel?: string;
   };
 
 const defaultFilesystem: ConductStateLeaseFilesystem = {
@@ -151,10 +154,15 @@ export function createConductStateLease(
   const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   const processIsLive = options.processIsLive ?? defaultProcessIsLive;
   const leasePath = `${statePath}.lease`;
+  const leaseName = options.label ?? 'conduct-state';
+  const leaseTitle = options.label ?? 'Conduct-state';
 
   function reportRecovery(diagnostic: ConductStateLeaseRecoveryDiagnostic): void {
     try {
-      options.onRecoveryDiagnostic?.(diagnostic);
+      options.onRecoveryDiagnostic?.({
+        ...diagnostic,
+        ...(options.label === undefined ? {} : { storeLabel: options.label }),
+      });
     } catch {
       // Diagnostics must never change lease ownership or error authority.
     }
@@ -172,7 +180,7 @@ export function createConductStateLease(
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
-        message: `Unable to recover conduct-state lease: owner metadata is unavailable (${errorMessage(error)})`,
+        message: `Unable to recover ${leaseName} lease: owner metadata is unavailable (${errorMessage(error)})`,
       };
     }
     const owner = parseLeaseOwner(serializedOwner);
@@ -180,7 +188,7 @@ export function createConductStateLease(
       reportRecovery({ kind: 'refused', statePath, reason: 'invalid_owner_metadata' });
       return {
         status: 'refused',
-        message: 'Unable to recover conduct-state lease: owner metadata is invalid or ambiguous',
+        message: `Unable to recover ${leaseName} lease: owner metadata is invalid or ambiguous`,
       };
     }
 
@@ -191,7 +199,7 @@ export function createConductStateLease(
       reportRecovery({ kind: 'refused', statePath, reason: 'owner_liveness_unverifiable' });
       return {
         status: 'refused',
-        message: `Unable to recover conduct-state lease: owner liveness is unverifiable (${errorMessage(error)})`,
+        message: `Unable to recover ${leaseName} lease: owner liveness is unverifiable (${errorMessage(error)})`,
       };
     }
     if (ownerIsLive) return { status: 'occupied', ownerPid: owner.pid };
@@ -204,7 +212,7 @@ export function createConductStateLease(
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
-        message: `Unable to recover conduct-state lease: could not claim recovery (${errorMessage(error)})`,
+        message: `Unable to recover ${leaseName} lease: could not claim recovery (${errorMessage(error)})`,
       };
     }
 
@@ -219,14 +227,14 @@ export function createConductStateLease(
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
-        message: `Unable to recover conduct-state lease: ownership changed during recovery (${errorMessage(error)})`,
+        message: `Unable to recover ${leaseName} lease: ownership changed during recovery (${errorMessage(error)})`,
       };
     }
     if (confirmedOwner !== serializedOwner || confirmedClaim !== claim) {
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
-        message: 'Unable to recover conduct-state lease: ownership changed during recovery',
+        message: `Unable to recover ${leaseName} lease: ownership changed during recovery`,
       };
     }
 
@@ -237,7 +245,7 @@ export function createConductStateLease(
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
-        message: `Unable to recover conduct-state lease: could not quarantine dead owner (${errorMessage(error)})`,
+        message: `Unable to recover ${leaseName} lease: could not quarantine dead owner (${errorMessage(error)})`,
       };
     }
 
@@ -250,7 +258,7 @@ export function createConductStateLease(
         reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
         return {
           status: 'refused',
-          message: 'Unable to recover conduct-state lease: ownership changed during recovery',
+          message: `Unable to recover ${leaseName} lease: ownership changed during recovery`,
         };
       }
       await filesystem.releaseDirectory(quarantinedLeasePath);
@@ -258,7 +266,7 @@ export function createConductStateLease(
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
-        message: `Unable to recover conduct-state lease: could not finalize recovery (${errorMessage(error)})`,
+        message: `Unable to recover ${leaseName} lease: could not finalize recovery (${errorMessage(error)})`,
       };
     }
 
@@ -287,7 +295,7 @@ export function createConductStateLease(
             return {
               ok: false,
               kind: 'filesystem',
-              message: `Unable to acquire conduct-state lease: ${errorMessage(error)}`,
+              message: `Unable to acquire ${leaseName} lease: ${errorMessage(error)}`,
             };
           }
 
@@ -303,7 +311,7 @@ export function createConductStateLease(
             return {
               ok: false,
               kind: 'timeout',
-              message: `Unable to acquire conduct-state lease within ${waitTimeoutMs}ms${lastLiveOwnerPid === undefined ? '' : `; owner pid ${lastLiveOwnerPid} is live`}`,
+              message: `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms${lastLiveOwnerPid === undefined ? '' : `; owner pid ${lastLiveOwnerPid} is live`}`,
             };
           }
           try {
@@ -312,7 +320,7 @@ export function createConductStateLease(
             return {
               ok: false,
               kind: 'interrupted',
-              message: `Interrupted while waiting for conduct-state lease: ${errorMessage(waitError)}`,
+              message: `Interrupted while waiting for ${leaseName} lease: ${errorMessage(waitError)}`,
             };
           }
           continue;
@@ -325,7 +333,7 @@ export function createConductStateLease(
           return {
             ok: false,
             kind: 'filesystem',
-            message: `Unable to record conduct-state lease owner: ${errorMessage(error)}`,
+            message: `Unable to record ${leaseName} lease owner: ${errorMessage(error)}`,
           };
         }
 
@@ -335,15 +343,15 @@ export function createConductStateLease(
             async release(): Promise<{ ok: true } | { ok: false; message: string }> {
               try {
                 if (await filesystem.readOwner(ownerPath(leasePath)) !== serializedOwner) {
-                  return { ok: false, message: 'Conduct-state lease ownership was lost before release' };
+                  return { ok: false, message: `${leaseTitle} lease ownership was lost before release` };
                 }
                 if (await filesystem.readRecoveryClaim(recoveryClaimPath(leasePath)) !== null) {
-                  return { ok: false, message: 'Conduct-state lease recovery is in progress' };
+                  return { ok: false, message: `${leaseTitle} lease recovery is in progress` };
                 }
                 await filesystem.releaseDirectory(leasePath);
                 return { ok: true };
               } catch (error) {
-                return { ok: false, message: `Unable to release conduct-state lease: ${errorMessage(error)}` };
+                return { ok: false, message: `Unable to release ${leaseName} lease: ${errorMessage(error)}` };
               }
             },
           },
