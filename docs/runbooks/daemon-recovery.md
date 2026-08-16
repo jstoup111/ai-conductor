@@ -199,32 +199,11 @@ was no marker. **Confirm:** `conduct-ts daemon status` no longer shows `⏸`.
 
 ### Corrupt intake ledger or stuck ledger lease
 
-The engineer intake ledger (`<engineer-dir>/ledger.json`) is the sole dedup authority. A corrupt
-ledger deliberately stops intake: the failing command reports `corrupt ledger ledger=…
-quarantine=…`, and the intake loop refuses to proceed. Do not delete either file before inspecting
-the quarantine copy.
-
-**Recover a corrupt ledger:**
-
-1. Inspect the named `ledger.json.corrupt-<timestamp>` file. It contains the bytes that could not
-   be parsed; determine whether it is truncated or whether its entries can be repaired.
-2. Repair `ledger.json` in place, or replace it with a known-good, parseable backup. If recovery is
-   impossible, create a new valid empty ledger only with the understanding that its dedup history is
-   lost.
-3. Re-run the failing command (or wait for the intake loop's next probe). Keep the quarantine file
-   until the repaired ledger has been read successfully.
-
-Every ledger operation, including read-only `list` and `get`, acquires
-`ledger.json.lease/`. A dead lease owner is reclaimed automatically. If an acquire timeout remains,
-inspect `<engineer-dir>/ledger.json.lease/owner.json`, confirm its pid is no longer doing ledger work,
-stop that holder, and only then remove that one explicit lease directory:
-
-```bash
-rm -r -- <engineer-dir>/ledger.json.lease
-```
-
-Never use a wildcard or remove the ledger itself to clear a lease. Re-run the blocked operation to
-confirm the lease is gone.
+A corrupt engineer intake ledger deliberately stops intake: the failing command reports `corrupt
+ledger ledger=… quarantine=…`, and the intake loop refuses to proceed. A stuck `ledger.json.lease`
+blocks every ledger operation, including read-only `list` and `get`. Do not delete either the
+ledger or the lease directory before diagnosing — recovery is in
+[corrupt intake ledger or stuck ledger lease](corrupt-intake-ledger.md).
 
 ### Spin loops
 
