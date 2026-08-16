@@ -663,6 +663,17 @@ describe('build-review rubric projections', () => {
     expect(second.completeness.digest).toBe(first.completeness.digest);
   });
 
+  it('changes the Completeness cache digest when preservation context is present', () => {
+    const withoutPreservation = deriveBuildReviewRubricProjections(withSnapshot(source(), {
+      preservationContext: [],
+    }));
+    const withPreservation = deriveBuildReviewRubricProjections(withSnapshot(source(), {
+      preservationContext: [{ taskId: '5', behavior: 'the preserved behavior now requires a dedicated test' }],
+    }));
+
+    expect(withPreservation.completeness.digest).not.toBe(withoutPreservation.completeness.digest);
+  });
+
   it('derives Scope widenings solely from the frozen source snapshot and isolates them from the other rubric payloads', () => {
     const original = source();
     const first = deriveBuildReviewRubricProjections(original);
