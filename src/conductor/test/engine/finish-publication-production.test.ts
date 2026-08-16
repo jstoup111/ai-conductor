@@ -566,7 +566,9 @@ describe('production FINISH publication composition', () => {
 
       expect(beforeRestart).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
       expect(afterRestart).toEqual(beforeRestart);
-      expect(dispatchJudgment).toHaveBeenCalledTimes(2);
+      // Durable per-revision verdicts: the restarted coordinator re-observes
+      // the persisted acceptance instead of paying a second judgment session.
+      expect(dispatchJudgment).toHaveBeenCalledTimes(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -978,9 +980,11 @@ describe('production FINISH publication composition', () => {
         state: { feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
         mode: 'auto' as const, daemon: true, dispatchJudgment, emit: async () => {},
       };
-      await expect(makeCoordinator().advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'judgment_halt_prose' });
-      await expect(makeCoordinator().advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'judgment_halt_prose' });
-      expect(dispatchJudgment).toHaveBeenCalledOnce();
+      await expect(makeCoordinator().advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+      await expect(makeCoordinator().advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+      // The halt banner is classified deterministically before any judgment,
+      // so no provider session is spent on either fresh coordinator.
+      expect(dispatchJudgment).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

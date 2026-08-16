@@ -412,7 +412,15 @@ export function createProductionFinishPublicationCoordinator(
             const revision = proseRevisionByPr.get(request.pullRequestUrl);
             const digest = revision === undefined ? undefined : revisionDigest(revision);
             const cached = digest === undefined ? undefined : judgmentByRevision.get(digest);
-            if (cached) return cached;
+            if (cached) {
+              // A persisted acceptance must also restore the prose-state
+              // tracking a fresh coordinator lost, or the re-observed verdict
+              // says "accepted" while classification still reads stale.
+              if (cached.kind === 'accepted' && revision !== undefined) {
+                acceptedProseRevisionByPr.set(request.pullRequestUrl, revision);
+              }
+              return cached;
+            }
             const result = decodePrProseJudgment(await dispatchJudgment(request));
             if (revision !== undefined && result.kind === 'accepted') {
               acceptedProseRevisionByPr.set(request.pullRequestUrl, revision);
