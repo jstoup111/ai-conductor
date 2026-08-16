@@ -22,6 +22,8 @@ Use only the supplied projection version `v2`. Its closed input contains:
 - the full changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
   ranges, anchored by `mergeBase` and `headSha`);
 - diff-derived removal evidence (`removalContext`), never an exemption; and
+- engine-parsed preservation evidence (`preservationContext`), which names preserved behaviors
+  declared for plan tasks; and
 - engine-parsed verify-only evidence (`verifyOnlyContext`): only a plan task listed here
   legitimately contributes no implementation diff; and
 - the approved plan.
@@ -40,6 +42,17 @@ do not reduce the judgement to individual commits or task records.
 
 Identify each missing deliverable that prevents a plan outcome from being delivered. Keep unrelated
 gaps separate so the result preserves every independently actionable omission.
+
+Preservation maintenance uses a closed three-condition predicate. Apply it only when all of the
+following hold:
+
+1. `preservationContext` names the preserved behavior for a plan task;
+2. the engine-derived removal evidence shows this diff deleted or moved the carrier that asserted
+   that behavior at merge base; and
+3. no equivalent assertion of that behavior survives anywhere in the post-diff tree.
+
+Condition 3 produces the finding: relocation alone never exempts, because the absence of a
+surviving equivalent assertion is the defect.
 
 ## Result contract (v1)
 
