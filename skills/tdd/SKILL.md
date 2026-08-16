@@ -72,6 +72,16 @@ task verify-only/verification, do not author a test that cannot fail. Delete any
 authored during this lap, do not amend the sealed plan, and close the task with the existing
 `Evidence: skipped <reason>` empty-commit form in **Commit-less Completions: Evidence Trailers**.
 
+### Removal Boundary
+
+Deleting code is not new behavior and starts no RED cycle. When a task's subject is a removal —
+a file, a seam, a flag, a code path going away — do not author a test whose subject is the code
+being deleted, and do not restate coverage the deleted code used to carry. The deletion itself,
+plus the survival of the existing suite, is the evidence. Removal-anchored review treatment is
+defined by `adr-2026-08-12-removal-anchored-tautology-exemption.md`; maintenance edits that keep
+existing tests compiling after a removal (updating imports, dropping dead selectors) are ordinary
+edits, not new coverage, and need no RED of their own.
+
 ### Phase 1: RED
 
 **Agent:** Generator (test-files-only context).
@@ -189,10 +199,19 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 3. Type-check passes (if tech-context specifies a type-checker — e.g., `tsc --noEmit` /
    `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.
 4. Working tree is clean (no uncommitted changes outside this task)
-5. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
+5. **Pre-diff sensitivity check** — for every NEW or CHANGED test in this task that claims to
+   cover new or changed behavior: verify it FAILS against the pre-diff implementation (stash or
+   revert the production diff, run the test, restore). A test that still passes proves nothing
+   and will fail the tautology review rubric one expensive lap later. A value computed by the
+   test but never asserted on is an automatic fail of this check. Exempt: tasks under the
+   **No Legitimate RED for Already-Existing Behavior** and **Removal Boundary** sections, and
+   plan-declared `**Verify-only:** yes` tasks — their evidence forms replace this check.
+   (Engine-owned enforcement of this check is tracked by #1619; until it lands, this step is
+   the only guard.)
+6. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
    interruptions lose uncommitted work. Commit as soon as GREEN passes and linter is clean.
-6. Commit with descriptive message referencing the behavior added
-7. **Commit includes Task trailer** — All commits (feature, refactor, fixups) in this TDD
+7. Commit with descriptive message referencing the behavior added
+8. **Commit includes Task trailer** — All commits (feature, refactor, fixups) in this TDD
    cycle must include `Task: <id>` as a trailer in the commit body. This anchors commits
    to their implementation task and enables task-status tracking.
 
