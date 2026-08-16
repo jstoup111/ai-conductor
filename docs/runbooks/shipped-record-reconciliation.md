@@ -127,14 +127,12 @@ conduct-ts shipped-record --slug <slug> --pr <implementation-pr-url>
 Use `--pr local` instead of a URL for a merge-local finish. Never run it for a `keep` or
 `discard` finish — those did not ship.
 
-> **Known limitation.** The Cost block's `halts:` field is structurally always `0`. The rollup
-> counts `loop_halt` events from `.pipeline/events.jsonl`, but `loop_halt` is one of the 28 of 57
-> event types the engine emits and never registers as readable, so it never reaches that file.
-> The zero is written verbatim into every committed shipped record and re-read by `conduct-ts
-> kpi` — a halt count of 0 in a shipped record proves nothing about whether the feature halted.
-> Read `.pipeline/HALT` and the daemon log instead. The per-provider breakdown is written but
-> never surfaced: `conduct-ts kpi` has no parser for the `providers:` lines.
-> Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+> **Known limitation.** The Cost block's `halts:` field counts persisted `loop_halt` events from
+> `.pipeline/events.jsonl`; it is written into every committed shipped record and re-read by
+> `conduct-ts kpi`. Use it as the ledger-derived count of recorded halt occurrences. `.pipeline/HALT`
+> remains the durable current park signal, and the daemon log provides immediate diagnostic detail.
+> The per-provider breakdown is written but never surfaced: `conduct-ts kpi` has no parser for the
+> `providers:` lines.
 
 Then push, and merge the PR. The record rides in with the code, so the merge lands the
 implementation and the shipped fact atomically:
@@ -271,8 +269,9 @@ In the startup dashboard the slug must appear under PROCESSED — not ELIGIBLE, 
 If it is still PARKED, you have not unparked it, and the park is masking whether the dedup works.
 Unpark and re-check.
 
-Do not verify a ship by reading the record's `halts:` count — it is always `0` regardless of what
-happened. See the known limitation in Recovery.
+Verify the shipped record's `halts:` count against the persisted `loop_halt` occurrences in that
+feature's `.pipeline/events.jsonl`. A count of `0` means no `loop_halt` occurrence was recorded;
+use `.pipeline/HALT` and the daemon log for the current park state and diagnostic detail.
 
 Related: [stalled or stuck feature](stalled-or-stuck-feature.md) when the feature never reached a
 ship at all, and [daemon recovery](daemon-recovery.md) when the re-dispatch loop is a daemon

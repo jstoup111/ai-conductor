@@ -645,16 +645,15 @@ Readers: `conduct-ts inline --report`, `computeCostRollup` (which feeds the ship
 block), the daemon signal emitters, the engineer-loop signal assembler, and the `retro` skill by prose.
 No dashboard and no `kpi` path reads it.
 
-> **Known limitation.** The other 29 event types — including `gate_verdict`, `loop_halt`,
-> `loop_converged`, `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`,
-> `ci_failed`, and every remaining `rebase_*` variant not listed above — are emitted for real but
-> never persisted, because the emitter dispatches only to handlers registered for that exact type.
-> One read path is structurally dead as a result: `cost-rollup.halts` counts `loop_halt` and is
-> therefore **permanently 0** — and that zero is committed verbatim into every shipped record's
-> `## Cost` block and re-read by `conduct-ts kpi`. `aggregateHalts` always returns `[]`, so `--report`
-> shows no halts however many occurred; read halts from `.pipeline/HALT` and the daemon log instead.
-> `kickback` is persisted, so `aggregateKickbacks` and `--report`'s kickback table do reflect real
-> occurrences. Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+> **Known limitation.** The other 27 event types — including `gate_verdict`, `loop_converged`,
+> `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`, `ci_failed`, and every
+> remaining `rebase_*` variant not listed above — are emitted for real but never persisted, because
+> the emitter dispatches only to handlers registered for that exact type. `loop_halt`,
+> `halt_marker_write_failed`, and `rebase_conflict_halt` are persisted, so `cost-rollup.halts`,
+> shipped records' `## Cost` blocks, `conduct-ts kpi`, and `aggregateHalts`/`--report` reflect real
+> halt occurrences. `.pipeline/HALT` remains the durable park signal and the daemon log remains a
+> useful immediate diagnostic. `kickback` is likewise persisted, so `aggregateKickbacks` and
+> `--report`'s kickback table reflect real occurrences.
 
 `build_progress` events carry an additional `tickReason` (`task-delta` | `head-moved` |
 `heartbeat`) and an explicit `headMoved` boolean, letting a reader distinguish "HEAD did not
