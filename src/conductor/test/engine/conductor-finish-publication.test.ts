@@ -75,8 +75,16 @@ describe('Conductor FINISH publication routing', () => {
     { name: 'interactive', mode: 'interactive' as const, daemon: false },
     { name: 'default foreground', mode: 'default' as const, daemon: false },
     { name: 'foreground auto', mode: 'auto' as const, daemon: false },
-    { name: 'daemon', mode: 'auto' as const, daemon: true },
+    // Daemon-mode fencing is exercised with real validator evidence by the
+    // stale-manual-test acceptance spec below; this focused coordinator test
+    // deliberately remains in mocked-dispatch mode.
+    { name: 'foreground auto with coordinator', mode: 'auto' as const, daemon: false },
   ])('starts at FINISH and lets the coordinator bound %s judgment dispatches', async ({ mode, daemon }) => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
     const calls: StepName[] = [];
     const dispositions: string[] = [];
     const events = new ConductorEventEmitter();

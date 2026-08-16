@@ -1609,8 +1609,10 @@ export class Conductor {
     // `verifyArtifacts:false` is the intentional mocked-dispatch mode used by
     // focused unit tests. Its success authority is the runner result, so the
     // publication fence must not reintroduce artifact-only validation and
-    // invalidate an otherwise green SHIP round indefinitely.
-    if (this.finishPublication || (!this.verifyArtifacts && !this.daemon)) return [];
+    // invalidate an otherwise green SHIP round indefinitely. A production
+    // publication coordinator is not an exemption: ADR 2026-07-26 requires
+    // current-HEAD validation before every FINISH publication side effect.
+    if (!this.verifyArtifacts && !this.daemon) return [];
 
     const track = await this.resolveTrack(state);
     const membership = resolveGroupMembership(
