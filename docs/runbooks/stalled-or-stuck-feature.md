@@ -503,11 +503,13 @@ Read-only. Renders three tables from `.pipeline/events.jsonl` — Step Durations
 and Token Spend — then exits 0. An unreadable events log exits 1. Run it from inside the
 worktree; it reads `.pipeline/` relative to the current directory.
 
-> **Known limitation.** `--report` does not yet render halt or kickback tables, although
-> `loop_halt`, `rebase_conflict_halt`, `halt_marker_write_failed`, and `kickback` now persist in
-> `events.jsonl`. Use `.pipeline/HALT` as the durable park state and `.pipeline/gates/<step>.json`
-> for the gate verdict. Tracked in [#1023](https://github.com/jstoup111/ai-conductor/issues/1023)
-> and [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+> **Known limitation.** `--report` renders neither halt nor kickback tables, although
+> `loop_halt`, `rebase_conflict_halt`, `halt_marker_write_failed`, and `kickback` persist in
+> `events.jsonl`. For halt occurrences, use `cost-rollup.halts`, the shipped record's `## Cost`
+> block, `conduct-ts kpi`, or the engineer-loop signal assembler; use `.pipeline/HALT` as the
+> durable park state and `.pipeline/gates/<step>.json` for the gate verdict. Tracked in
+> [#1023](https://github.com/jstoup111/ai-conductor/issues/1023) and
+> [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
 ### 5. Read the daemon's own narrative
 
