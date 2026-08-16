@@ -19,7 +19,6 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { dispatchEngineer } from '../../src/engine/engineer-cli.js';
-import { runEngineerMode } from '../../src/engine/engineer/loop.js';
 import { CorruptLedgerError, createLedger } from '../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../src/engine/engineer/intake/queue.js';
 import { parseEnvelope, type Envelope } from '../../src/engine/engineer/intake/port.js';
@@ -109,84 +108,76 @@ describe('Story 4 — corrupt ledger fails the real claim command loudly', () =>
 });
 
 describe('Story 5 — corrupt ledger stops the launch-time intake flow', () => {
-  it('reports corruption before enqueue or claim while leaving per-envelope wiring real', async () => {
-    const root = await freshDir('intake-ledger-loop-');
+  // The live launch-time flow is the engineer CLI's pre-poll (engineer-cli.ts
+  // `dispatchEngineer({kind:'launch'})`): a corrupt ledger stops the launch
+  // before any enqueue or interactive session. `runEngineerMode` carries the
+  // same guard but has no live production caller (as-built audit, 2026-08-16);
+  // these cases target the production boundary.
+  it('stops the launch before enqueue or session when the real ledger file is corrupt', async () => {
+    const root = await freshDir('intake-ledger-launch-');
     const engineerDir = join(root, 'engineer');
-    const registryPath = join(root, 'registry.json');
-    await mkdir(engineerDir, { recursive: true });
-    await writeFile(join(engineerDir, 'ledger.json'), '{broken', 'utf8');
-    await writeFile(registryPath, '[]', 'utf8');
-
-    const enqueued: Envelope[] = [];
-    let claimCalls = 0;
-    const output: string[] = [];
-    let thrown: unknown;
-    try {
-      await runEngineerMode({
-        route: { invoke: async () => '[]' },
-        io: { prompt: async () => null, print: (line) => output.push(line) },
-        registryPath,
-        engineerDir,
-        sources: [{ poll: async () => [envelope('acme/app#42')] }],
-        ledger: createLedger(join(engineerDir, 'ledger.json')),
-        queue: {
-          enqueue: async (item) => void enqueued.push(item),
-          claim: async () => {
-            claimCalls += 1;
-            return null;
-          },
-          ack: async () => undefined,
-          release: async () => undefined,
-          list: async () => [],
-          remove: async () => undefined,
-        },
-      });
-    } catch (error: unknown) {
-      thrown = error;
-    }
-
-    const diagnostic = [
-      ...output,
-      thrown instanceof Error ? thrown.message : thrown === undefined ? '' : String(thrown),
-    ].join('\n');
-    expect(diagnostic).toMatch(/corrupt.*ledger|ledger.*corrupt/i);
-    expect(enqueued).toEqual([]);
-    expect(claimCalls).toBe(0);
-  });
-
-  it('stops before enqueue or claim when a ledger-backed source poll reports corruption', async () => {
-    const root = await freshDir('intake-ledger-poll-');
-    const engineerDir = join(root, 'engineer');
-    const registryPath = join(root, 'registry.json');
     const ledgerPath = join(engineerDir, 'ledger.json');
     await mkdir(engineerDir, { recursive: true });
-    await writeFile(registryPath, '[]', 'utf8');
+    await writeFile(ledgerPath, '{broken', 'utf8');
 
     const enqueued: Envelope[] = [];
-    let claimCalls = 0;
-    await expect(
-      runEngineerMode({
-        route: { invoke: async () => '[]' },
-        io: { prompt: async () => null, print: () => undefined },
-        registryPath,
-        engineerDir,
-        sources: [{ poll: async () => { throw new CorruptLedgerError(ledgerPath, 'invalid JSON'); } }],
-        queue: {
-          enqueue: async (item) => void enqueued.push(item),
-          claim: async () => {
-            claimCalls += 1;
-            return null;
-          },
-          ack: async () => undefined,
-          release: async () => undefined,
-          list: async () => [],
-          remove: async () => undefined,
-        },
-      }),
-    ).rejects.toThrow(/corrupt/i);
+    const stderr: string[] = [];
+    let launches = 0;
 
-    expect(enqueued).toEqual([]);
-    expect(claimCalls).toBe(0);
+    const exitCode = await dispatchEngineer(
+      { kind: 'launch' },
+      {
+        print: () => undefined,
+        printErr: (line) => stderr.push(line),
+        // Production pre-poll wiring: poll the source, record through the REAL
+        // ledger backed by the corrupt file, then enqueue. The corruption must
+        // surface from the real read, before any envelope is enqueued.
+        prePoll: async () => {
+          const ledger = createLedger(ledgerPath);
+          const envelopes = [envelope('acme/app#42')];
+          for (const e of envelopes) {
+            await ledger.record({ source: e.source, sourceRef: e.sourceRef });
+            enqueued.push(e);
+          }
+          return enqueued.length;
+        },
+        launchInteractive: async () => {
+          launches += 1;
+          return 0;
+        },
+        confirmAnother: () => false,
+      },
+    );
+
+    expect({ exitCode, launches, enqueued }).toEqual({ exitCode: 1, launches: 0, enqueued: [] });
+    expect(stderr.join('\n')).toMatch(/corrupt.*ledger|ledger.*corrupt/i);
+    expect(stderr.join('\n')).toContain(ledgerPath);
+  });
+
+  it('stops the launch when a ledger-backed source poll reports corruption', async () => {
+    const root = await freshDir('intake-ledger-launch-poll-');
+    const ledgerPath = join(root, 'engineer', 'ledger.json');
+    const stderr: string[] = [];
+    let launches = 0;
+
+    const exitCode = await dispatchEngineer(
+      { kind: 'launch' },
+      {
+        print: () => undefined,
+        printErr: (line) => stderr.push(line),
+        prePoll: async () => {
+          throw new CorruptLedgerError(ledgerPath, 'invalid JSON');
+        },
+        launchInteractive: async () => {
+          launches += 1;
+          return 0;
+        },
+        confirmAnother: () => false,
+      },
+    );
+
+    expect({ exitCode, launches }).toEqual({ exitCode: 1, launches: 0 });
+    expect(stderr.join('\n')).toMatch(/corrupt.*ledger|ledger.*corrupt/i);
   });
 });
 

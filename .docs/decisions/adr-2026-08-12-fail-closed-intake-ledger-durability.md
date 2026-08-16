@@ -69,9 +69,14 @@ currently imported by exactly one consumer (verified by grep).
 
 4. **The operator is told at the time of the corrupt read**, by a warning naming both the ledger
    path and the quarantine path, and by a non-zero exit from the invoking CLI verb. Where a
-   caller currently swallows ledger errors, that swallow is corrected as part of this work:
-   `engineer/loop.ts:258-267` wraps `ledger.record()` in a bare `catch {}` whose comment scopes
-   it to "a single malformed envelope", and a corrupt-ledger failure must not be absorbed by it.
+   caller currently swallows ledger errors, that swallow is corrected as part of this work.
+   **Amended 2026-08-16 (operator ruling, as-built audit):** the live corrupt-ledger stop sites
+   are the engineer CLI launch pre-poll and command dispatch (`engineer-cli.ts:812-824,1556`,
+   `reportCorruptLedger`) and the background intake loop's episode handling
+   (`intake/intake-loop.ts:135-148`). The originally named `engineer/loop.ts:258-267`
+   (`runEngineerMode`) has no live production caller (superseded by the agent-hosted engineer
+   flow, ADR-008); its edit was reverted rather than retained as dormant code, and the dead
+   path's cleanup is tracked as a follow-up intake.
 
 5. **Every read-modify-write is serialized by a lease** obtained from `conduct-state-lease.ts`
    at `«ledger path».lease`, following the `whileHoldingLease(read → mutate → write)` shape of

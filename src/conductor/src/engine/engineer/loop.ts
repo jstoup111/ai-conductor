@@ -33,7 +33,7 @@ import { basename } from 'node:path';
 import type { Envelope, IntakePort } from './intake/port.js';
 import type { IntakeSource } from './intake/source.js';
 import type { IntakeQueue } from './intake/queue.js';
-import { CorruptLedgerError, type Ledger } from './intake/ledger.js';
+import type { Ledger } from './intake/ledger.js';
 import { reportRouted, reportDone } from './intake/writeback.js';
 import type { RoutingProvider } from './routing.js';
 import { createRegistryReader } from '../registry.js';
@@ -240,6 +240,7 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
     authored: [],
     buildsRun: 0,
   };
+
   // ── 5.5 Intake: poll-on-launch → enqueue → process the oldest (FR-31) ───────
   // Polls every injected source once, buffers what they surface (adapters dedup
   // via the ledger), then claims and processes EXACTLY ONE envelope (the oldest).
@@ -252,7 +253,6 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
       try {
         envs = await source.poll();
       } catch (err: unknown) {
-        if (err instanceof CorruptLedgerError) throw err;
         io.print(`Intake poll failed: ${err instanceof Error ? err.message : String(err)}`);
       }
       for (const e of envs) {
@@ -260,14 +260,9 @@ export async function runEngineerMode(deps: EngineerDeps): Promise<EngineerSessi
           // record() is idempotent — guarantees a ledger entry for later routed/done
           // transitions even when a source did not itself record (record is a no-op
           // when the entry already exists, so the github adapter's own record is safe).
-          if (deps.ledger) {
-            await deps.ledger.record({ source: e.source, sourceRef: e.sourceRef });
-          }
+          if (deps.ledger) await deps.ledger.record({ source: e.source, sourceRef: e.sourceRef });
           await queue.enqueue(e);
-        } catch (err: unknown) {
-          // A corrupt ledger is a loss-of-dedup condition, not a malformed
-          // envelope: stop intake before claiming or dispatching any idea.
-          if (err instanceof CorruptLedgerError) throw err;
+        } catch {
           // A single malformed envelope must not abort the whole intake phase.
         }
       }
