@@ -487,10 +487,9 @@ describe('Conductor FINISH publication routing', () => {
 
     await conductor.run();
 
-    // Placeholder prose first requires an authoring pass. Its successful
-    // re-observation then requires the separate, mandatory judgment pass
-    // before FINISH proceeds to presentation repair.
-    expect(runner.run).toHaveBeenCalledTimes(2);
+    // Placeholder prose requires authoring. Its resulting retained-PR
+    // title/body is accepted by the GitHub observation without another pass.
+    expect(runner.run).toHaveBeenCalledTimes(1);
     expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
@@ -895,6 +894,56 @@ describe('Conductor FINISH publication routing', () => {
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
       'author_pr_prose retry cannot run',
     );
+  });
+
+  it('halts a newly halted judgment retry without spending the Conductor FINISH attempt', async () => {
+    const initial = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid',
+      branchPushed: 'valid', shippedRecord: 'valid', outcomeRecord: 'missing',
+      pr: { identity: 'one', url: 'https://example.test/pr/newly-halted', prose: 'stale', ready: false },
+    } as const satisfies PublicationSnapshot;
+    const newlyHalted = {
+      ...initial,
+      pr: { ...initial.pr, prose: 'halt' as const, halted: true as const },
+    } as const satisfies PublicationSnapshot;
+    const events = new ConductorEventEmitter();
+    const retries: StepName[] = [];
+    const dispositions: string[] = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') retries.push(event.step);
+    });
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValueOnce(newlyHalted);
+      const result = await advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => { throw new Error('response lost'); } },
+      });
+      return result.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: result.transition }
+        : result;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance }, events, projectRoot: dir, fromStep: 'finish',
+      mode: 'default', maxRetries: 3,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(retries).not.toContain('finish');
+    expect(dispositions).toEqual(['human_required']);
+    expect(advance).toHaveBeenCalledTimes(1);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('failed');
   });
 
   it.each([

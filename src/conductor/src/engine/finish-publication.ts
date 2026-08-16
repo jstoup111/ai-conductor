@@ -1256,6 +1256,15 @@ async function reconcileSelectablePublicationRetry(
   // bounded retry allowance only after a determinate observation.
   if (hasIndeterminatePublicationEvidence(freshSnapshot)) return retry;
 
+  // This is the same deterministic guard that prevents the judgment dispatch
+  // below. A PR can acquire a halt signal between a failed judgment dispatch
+  // and its reconciliation observation; in that case `judge_pr_prose` is no
+  // longer an executable retry even though the generic ordering selector would
+  // otherwise name it from its prose value alone.
+  if (freshSnapshot.pr.identity === 'one' && freshSnapshot.pr.halted === true) {
+    return { kind: 'human_required', reason: 'halt_state_pr' };
+  }
+
   const selectedTransition = nextFinishPublicationTransition(freshSnapshot);
   if (selectedTransition === retry.transition) return retry;
 

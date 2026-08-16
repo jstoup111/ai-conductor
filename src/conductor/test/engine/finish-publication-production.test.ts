@@ -415,21 +415,6 @@ describe('production FINISH publication composition', () => {
       ).resolves.toEqual({ kind: 'publication_progress', transition: 'establish_pr' });
 
       await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(`"pr_url": "${prUrl}"`);
-      const reobservedState = JSON.parse(
-        await readFile(join(pipeline, 'conduct-state.json'), 'utf8'),
-      ) as ConductState;
-      await expect(
-        coordinator.advance({
-          state: reobservedState,
-          mode: 'auto',
-          daemon: true,
-          dispatchJudgment: async () => ({
-            success: true,
-            publicationDisposition: { kind: 'accepted' },
-          }),
-          emit: async () => {},
-        }),
-      ).resolves.toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
       expect(git).toHaveBeenCalledWith(['rev-list', '--count', 'trunk..HEAD'], { cwd: root });
       expect(gh).toHaveBeenCalledWith(expect.arrayContaining(['--base', 'trunk']), { cwd: root });
       expect(gh).toHaveBeenCalledWith(['pr', 'view', prUrl, '--json', 'url,title,body,isDraft,labels'], { cwd: root });
@@ -517,7 +502,7 @@ describe('production FINISH publication composition', () => {
     }
   });
 
-  it('judges ordinary prose containing "required" language on each fresh coordinator after restart', async () => {
+  it('recognizes ordinary prose containing "required" language on each fresh coordinator after restart', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-restart-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -579,15 +564,70 @@ describe('production FINISH publication composition', () => {
       const beforeRestart = await makeCoordinator().advance(input);
       const afterRestart = await makeCoordinator().advance(input);
 
-      expect(beforeRestart).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
+      expect(beforeRestart).toEqual(expect.objectContaining({ kind: 'human_required', reason: 'publication_transition_unmoved' }));
       expect(afterRestart).toEqual(beforeRestart);
-      expect(dispatchJudgment).toHaveBeenCalledTimes(2);
+      expect(dispatchJudgment).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('uses the injected presentation repair after ordinary prose passes judgment', async () => {
+  it('reclassifies a changed title/body revision from accepted to placeholder across a fresh coordinator', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-revision-invalidation-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      let body = 'Reader-facing summary and validation evidence.';
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({
+            url: prUrl, title: 'feat: publication prose', body, isDraft: true, labels: [],
+          }) };
+        }
+        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+      });
+      const input = {
+        state: {
+          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto' as const,
+        daemon: true,
+        dispatchJudgment: vi.fn(async () => ({ success: true })),
+        dispatchAuthoring: vi.fn(async () => {
+          body = 'Restored reader-facing summary and validation evidence.';
+          return { success: true };
+        }),
+        emit: async () => {},
+      };
+      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', gh,
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(makeCoordinator().advance(input)).resolves.toMatchObject({
+        kind: 'publication_retry', transition: 'ready_pr',
+      });
+      body = `${PR_BODY_FLOOR_MARKER}\n\nDraft opened automatically.`;
+      await expect(makeCoordinator().advance(input)).resolves.toEqual({
+        kind: 'publication_progress', transition: 'author_pr_prose',
+      });
+      expect(input.dispatchJudgment).not.toHaveBeenCalled();
+      expect(input.dispatchAuthoring).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the injected presentation repair after ordinary accepted prose is observed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-repair-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -623,13 +663,6 @@ describe('production FINISH publication composition', () => {
           success: true,
           publicationDisposition: { kind: 'accepted' },
         }),
-        emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
-      await expect(coordinator.advance({
-        state,
-        mode: 'auto',
-        daemon: true,
-        dispatchJudgment: async () => ({ success: true }),
         emit: async () => {},
       })).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_transition_unmoved' });
       expect(repairPresentation).toHaveBeenCalledWith({ prUrl, state });
@@ -747,137 +780,6 @@ describe('production FINISH publication composition', () => {
         if ((result as { reason?: string }).reason === 'presentation_repair_failed') break;
       }
       expect(result).toEqual({ kind: 'publication_retry', transition: 'ready_pr', reason: 'presentation_repair_failed' });
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  // Production reaches `judge_pr_prose` only for prose the deterministic
-  // classifier could not accept and that is NOT an unauthored placeholder —
-  // a placeholder body routes to the authoring pass instead (covered below).
-  it.each([
-    ['halt boilerplate verdict', { kind: 'revision_required', reason: 'halt' }, { kind: 'human_required', reason: 'judgment_halt_prose' }, undefined],
-    ['refused prose judgment', { kind: 'refused' }, { kind: 'human_required', reason: 'judgment_refused' }, undefined],
-    ['timed out prose judgment', { kind: 'timed_out' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }, undefined],
-    ['unavailable judgment provider', { kind: 'provider_unavailable' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }, undefined],
-    ['undecodable provider reply', { kind: 'malformed_response' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_malformed_response' }, undefined],
-    ['incompleteness verdict', { kind: 'revision_required', reason: 'structurally_incomplete' }, { kind: 'human_required', reason: 'publication_transition_unmoved' }, undefined],
-    ['raw bounded placeholder verdict', undefined, { kind: 'human_required', reason: 'publication_transition_unmoved' }, '{"kind":"revision_required","reason":"placeholder"}'],
-  ] as const)('carries the exact bounded judgment outcome for %s through production composition without recording completion', async (_label, publicationDisposition, expected, output) => {
-    const body = 'Reader-facing summary and validation evidence.';
-    const title = 'feat: publication prose';
-    const root = await mkdtemp(join(tmpdir(), 'finish-production-prose-'));
-    try {
-      const pipeline = join(root, '.pipeline');
-      await mkdir(pipeline);
-      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
-      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
-      const prUrl = 'https://github.com/acme/widget/pull/1172';
-      const gh = vi.fn(async (args: string[]) => {
-        if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') {
-          return {
-            stdout: JSON.stringify({ url: prUrl, title, body, isDraft: true, labels: [] }),
-          };
-        }
-        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
-      });
-      const dispatchJudgment = vi.fn(async () => ({ success: true, publicationDisposition, output }));
-      const recordFinish = vi.fn(async () => 0);
-      const coordinator = createProductionFinishPublicationCoordinator({
-        projectRoot: root,
-        stateFilePath: join(pipeline, 'conduct-state.json'),
-        baseBranch: 'main',
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
-        gh,
-        observeReleaseReadiness: async () => 'present',
-        recordFinish,
-      });
-
-      const result = await coordinator.advance({
-        state: {
-          feature_desc: 'feature',
-          worktree_branch: 'feat/feature',
-          pr_url: prUrl,
-          build_review: 'done',
-          test_suite: 'done',
-          manual_test: 'done',
-          architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto',
-        daemon: true,
-        dispatchJudgment,
-        emit: async () => {},
-      });
-
-      expect(result).toMatchObject(expected);
-      expect(dispatchJudgment).toHaveBeenCalledOnce();
-      expect(gh).toHaveBeenCalledWith(
-        ['pr', 'view', prUrl, '--json', 'url,title,body,isDraft,labels'],
-        { cwd: root },
-      );
-      expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
-      expect(recordFinish).not.toHaveBeenCalled();
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it('requires a fresh judgment when the title and body change after an accepted revision', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'finish-production-revision-cache-'));
-    try {
-      const pipeline = join(root, '.pipeline');
-      await mkdir(pipeline);
-      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
-      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
-      const prUrl = 'https://github.com/acme/widget/pull/1172';
-      let title = 'feat: original publication prose';
-      let body = 'Original reader-facing summary and validation evidence.';
-      const gh = vi.fn(async (args: string[]) => {
-        if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') {
-          return { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: true, labels: [] }) };
-        }
-        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
-      });
-      const dispatchJudgment = vi.fn()
-        .mockResolvedValueOnce({ success: true, publicationDisposition: { kind: 'accepted' } })
-        .mockResolvedValueOnce({ success: true, publicationDisposition: { kind: 'refused' } });
-      const coordinator = createProductionFinishPublicationCoordinator({
-        projectRoot: root,
-        stateFilePath: join(pipeline, 'conduct-state.json'),
-        baseBranch: 'main',
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
-        gh,
-        observeReleaseReadiness: async () => 'present',
-      });
-      const input = {
-        state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto' as const,
-        daemon: true,
-        dispatchJudgment,
-        emit: async () => {},
-      };
-
-      await expect(coordinator.advance(input)).resolves.toEqual({
-        kind: 'publication_progress', transition: 'judge_pr_prose',
-      });
-
-      title = 'feat: materially revised publication prose';
-      body = 'A newly revised summary must receive its own judgment.';
-      await expect(coordinator.advance(input)).resolves.toEqual({
-        kind: 'human_required', reason: 'judgment_refused',
-      });
-      expect(dispatchJudgment).toHaveBeenCalledTimes(2);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

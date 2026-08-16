@@ -2008,6 +2008,34 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
     expect(dispatchJudgment).not.toHaveBeenCalled();
   });
 
+  it('halts a judgment retry when its reconciliation observation newly carries a halt signal', async () => {
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'stale',
+          ready: false,
+        },
+      }))
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          halted: true,
+          ready: false,
+        },
+      }));
+
+    await expect(advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => { throw new Error('response lost'); } },
+    })).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
   it('halts when an accepted judgment leaves its owned prose dimension unchanged', async () => {
     const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
     const observe = vi

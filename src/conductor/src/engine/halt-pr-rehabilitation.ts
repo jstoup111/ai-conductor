@@ -496,7 +496,7 @@ export type RetainedPrPresentableOutcome =
 /** True when any stateless halt signal is observable on the PR. */
 export function hasHaltSignal(view: PrViewState): boolean {
   return (
-    view.title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
+    view.title.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
     view.labels.includes(NEEDS_REMEDIATION_LABEL) ||
     (view.body ?? '').includes(NEEDS_REMEDIATION_BODY_MARKER) ||
     (view.body ?? '').includes(HALT_PR_BANNER_SENTINEL)
