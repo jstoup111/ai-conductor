@@ -22,6 +22,8 @@ Use only the supplied projection version `v2`. Its closed input contains:
 - the full changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
   ranges, anchored by `mergeBase` and `headSha`);
 - diff-derived removal evidence (`removalContext`), never an exemption; and
+- engine-parsed verify-only evidence (`verifyOnlyContext`): only a plan task listed here
+  legitimately contributes no implementation diff; and
 - the approved plan.
 
 The session runs inside the feature worktree. The diff content is not embedded: read the
