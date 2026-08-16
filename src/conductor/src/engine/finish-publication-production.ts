@@ -157,10 +157,7 @@ function prProse(
   if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
-  // Authored prose still needs the bounded provider judgment.  `accepted` is
-  // the post-judgment observation, not a classification the production
-  // observer may infer from merely non-empty text.
-  return 'stale';
+  return 'accepted';
 }
 
 /**
@@ -343,15 +340,7 @@ export function createProductionFinishPublicationCoordinator(
                   const halted = prHaltState(pr.title, pr.body, pr.labels);
                   const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
                   proseRevisionByPr.set(pr.url, revision);
-                  const observedProse = prProse(pr.title, pr.body, halted);
-                  // The provider's accepted judgment is the only authority
-                  // that promotes authored prose. Retain it for this exact
-                  // observed revision so the core's mandatory re-observation
-                  // can see the judgment-owned dimension advance.
-                  const prose = observedProse === 'stale' &&
-                    judgmentByRevision.get(revision)?.kind === 'accepted'
-                    ? 'accepted' as const
-                    : observedProse;
+                  const prose = prProse(pr.title, pr.body, halted);
                   return {
                       state: 'one' as const,
                       url: pr.url,

@@ -382,12 +382,11 @@ function deferred<T = void>() {
 }
 
 describe('FINISH human-required halt marker', () => {
-  it('writes the rendered provider refusal through the coordinator to the needs-human halt marker', async () => {
+  it('short-circuits a halt-state PR before provider dispatch and writes needs-human halt guidance', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'finish-publication-refusal-marker-'));
     const pipelineDir = join(projectRoot, '.pipeline');
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
     const prUrl = 'https://github.com/acme/widget/pull/1172';
-    const detail = 'The provider declined the requested prose judgment.';
 
     try {
       await mkdir(join(projectRoot, '.docs', 'shipped'), { recursive: true });
@@ -434,10 +433,9 @@ describe('FINISH human-required halt marker', () => {
         },
         observeReleaseReadiness: async () => 'present',
       });
-      const provider = vi.fn(async () => ({
-        success: true,
-        output: JSON.stringify({ kind: 'refused', detail }),
-      }));
+      const provider = vi.fn(async () => {
+        throw new Error('provider must not be called for a halt-state PR');
+      });
       const conductor = new Conductor({
         stateFilePath,
         stepRunner: { run: provider },

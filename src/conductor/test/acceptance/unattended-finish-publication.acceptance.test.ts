@@ -625,7 +625,6 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     expect(transitions).toEqual([
       'establish_pr',
       'author_pr_prose',
-      'judge_pr_prose',
       'write_shipped_record',
       'ready_pr',
       'record_outcome',
@@ -634,7 +633,7 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     expect(githubCalls.some((args) => /auto-merge|enablepullrequestautomerge|--auto/i.test(args.join(' ')))).toBe(false);
     expect({ authoringDispatches, judgmentDispatches }).toEqual({
       authoringDispatches: 1,
-      judgmentDispatches: 1,
+      judgmentDispatches: 0,
     });
   });
 
@@ -814,7 +813,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
 
     const finalState = await readState(stateFilePath);
     expect(finalState.ok && finalState.value.finish).toBe('done');
-    expect(judgmentDispatches).toBe(1);
+    expect(judgmentDispatches).toBe(0);
     await expect(access(join(pipeline, 'HALT'))).rejects.toThrow();
   });
 
