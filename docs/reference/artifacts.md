@@ -641,19 +641,19 @@ evidence of a prevented resume rather than a path to a later resumed invocation.
 same session-capability contract described in
 [Per-step session capability contract](../explanation/architecture.md#per-step-session-capability-contract).
 
-Readers: `conduct-ts inline --report`, `computeCostRollup` (which feeds the shipped record's `## Cost`
-block), the daemon signal emitters, the engineer-loop signal assembler, and the `retro` skill by prose.
-No dashboard and no `kpi` path reads it.
+Halt occurrences are consumed by `cost-rollup.halts`, the shipped record's `## Cost` block,
+`conduct-ts kpi`, and the engineer-loop signal assembler. `conduct-ts inline --report` renders
+neither halt nor kickback tables.
 
 > **Known limitation.** The other 27 event types — including `gate_verdict`, `loop_converged`,
 > `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`, `ci_failed`, and every
 > remaining `rebase_*` variant not listed above — are emitted for real but never persisted, because
 > the emitter dispatches only to handlers registered for that exact type. `loop_halt`,
 > `halt_marker_write_failed`, and `rebase_conflict_halt` are persisted, so `cost-rollup.halts`,
-> shipped records' `## Cost` blocks, `conduct-ts kpi`, and `aggregateHalts`/`--report` reflect real
-> halt occurrences. `.pipeline/HALT` remains the durable park signal and the daemon log remains a
-> useful immediate diagnostic. `kickback` is likewise persisted, so `aggregateKickbacks` and
-> `--report`'s kickback table reflect real occurrences.
+> shipped records' `## Cost` blocks, `conduct-ts kpi`, and the engineer-loop signal assembler can
+> consume real halt occurrences. `.pipeline/HALT` remains the durable park signal and the daemon
+> log remains a useful immediate diagnostic. `kickback` is likewise persisted, but `--report`
+> renders neither halt nor kickback tables.
 
 `build_progress` events carry an additional `tickReason` (`task-delta` | `head-moved` |
 `heartbeat`) and an explicit `headMoved` boolean, letting a reader distinguish "HEAD did not
