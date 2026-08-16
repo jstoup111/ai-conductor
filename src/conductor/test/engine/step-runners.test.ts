@@ -116,12 +116,18 @@ describe('DefaultStepRunner', () => {
     await writeFile(projectFile, 'not a directory');
     try {
       const result = await exhaustLifecycle(projectFile);
-      expect(result).toMatchObject({ success: false, haltMarkerWrite: { status: 'failed' } });
-      const marker = result.haltMarkerWrite!;
-      if (marker.status !== 'failed') throw new Error('expected failed marker write');
-      expect(result.output).toBe(
-        `Provider preparation timed out twice. Halt marker write failed at ${marker.path}: ${marker.reason}.`,
-      );
+      const expectedMarkerPath = join(projectFile, '.pipeline/HALT');
+      const expectedReason = /ENOTDIR|not a directory/i;
+      expect(result).toMatchObject({
+        success: false,
+        haltMarkerWrite: {
+          status: 'failed',
+          path: expectedMarkerPath,
+          reason: expect.stringMatching(expectedReason),
+        },
+      });
+      expect(result.output).toContain(`Halt marker write failed at ${expectedMarkerPath}:`);
+      expect(result.output).toMatch(expectedReason);
     } finally {
       await rm(temporaryDirectory, { recursive: true, force: true });
     }
