@@ -21,7 +21,8 @@ Use only the supplied projection version `v2`. Its closed input contains:
 - the lap ID, snapshot digest, and top-level `contentDigest`;
 - the full changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
   ranges, anchored by `mergeBase` and `headSha`);
-- diff-derived removal evidence (`removalContext`), never an exemption; and
+- diff-derived removal evidence (`removalContext`), which anchors exactly the preservation-
+  maintenance exception and is never an exemption for any other Completeness concern; and
 - engine-parsed preservation evidence (`preservationContext`), which names preserved behaviors
   declared for plan tasks; and
 - engine-parsed verify-only evidence (`verifyOnlyContext`): only a plan task listed here
@@ -53,6 +54,10 @@ following hold:
 
 Condition 3 produces the finding: relocation alone never exempts, because the absence of a
 surviving equivalent assertion is the defect.
+
+Evaluate this predicate per preserved-behavior clause, never per diff. It does not permit per-task
+commit reasoning: do not chase per-task SHAs, verify per-task commit reachability, or seek trailer
+corroboration. Judge from plan text, diff content, and engine-derived removal evidence only.
 
 ## Result contract (v1)
 
