@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.102.0] - 2026-08-15
+## [0.102.0] - 2026-08-16
 
 ### Added
 
@@ -65,6 +65,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Provider sessions are always fresh — the adapters replace any supplied session id and strip resume flags unconditionally, so no call path can resume a prior conversation. ([implementation PR #1596](https://github.com/jstoup111/ai-conductor/pull/1596)).
 - build_review tautology prompts are bounded by construction (path manifest + closed run verdict instead of embedded file contents and raw test output), fixing prompt-too-long failures on large features. ([implementation PR #1600](https://github.com/jstoup111/ai-conductor/pull/1600)).
 - build_review rubric dispatches enforce the judged-result schema with a bounded in-dispatch repair, and kickback routing honors operator dispositions recorded after aggregate composition. ([implementation PR #1605](https://github.com/jstoup111/ai-conductor/pull/1605)).
+- `build_review`'s rubric cache no longer misses on every rebase — a rebase that leaves diff and plan content unchanged now reuses prior rubric judgements instead of re-judging all four branches. ([implementation PR #1601](https://github.com/jstoup111/ai-conductor/pull/1601)).
 
 ## Migration
 
