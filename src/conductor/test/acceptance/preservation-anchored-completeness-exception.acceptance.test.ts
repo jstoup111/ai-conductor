@@ -115,27 +115,29 @@ function planBody(scenario: Scenario): string {
 }
 
 async function makeFixture(scenario: Scenario): Promise<Fixture> {
-  const root = await mkdtemp(join(tmpdir(), 'preservation-completeness-'));
-  scratchRoots.push(root);
+  const repository = await mkdtemp(join(tmpdir(), 'preservation-completeness-'));
+  scratchRoots.push(repository);
 
-  await git(root, 'init', '-q', '-b', 'main');
-  await git(root, 'config', 'user.email', 'acceptance@example.test');
-  await git(root, 'config', 'user.name', 'Acceptance Test');
-  await git(root, 'config', 'commit.gpgsign', 'false');
-  await git(root, 'config', 'diff.renames', 'false');
-  await writeRepoFile(root, '.gitignore', '.pipeline/\n');
-  await writeRepoFile(root, PLAN_PATH, planBody(scenario));
-  await writeRepoFile(root, 'src/feature.ts', 'export const behavior = true;\n');
+  await git(repository, 'init', '-q', '-b', 'main');
+  await git(repository, 'config', 'user.email', 'acceptance@example.test');
+  await git(repository, 'config', 'user.name', 'Acceptance Test');
+  await git(repository, 'config', 'commit.gpgsign', 'false');
+  await git(repository, 'config', 'diff.renames', 'false');
+  await writeRepoFile(repository, '.gitignore', '.pipeline/\n');
+  await writeRepoFile(repository, PLAN_PATH, planBody(scenario));
+  await writeRepoFile(repository, 'src/feature.ts', 'export const behavior = true;\n');
   if (scenario.baseCarrier !== undefined) {
-    await writeRepoFile(root, CARRIER_PATH, scenario.baseCarrier);
+    await writeRepoFile(repository, CARRIER_PATH, scenario.baseCarrier);
   }
-  await git(root, 'add', '.');
-  await git(root, 'commit', '-q', '-m', 'base behavior and approved plan');
+  await git(repository, 'add', '.');
+  await git(repository, 'commit', '-q', '-m', 'base behavior and approved plan');
 
-  await git(root, 'remote', 'add', 'origin', root);
-  await git(root, 'update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
-  await git(root, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
-  await git(root, 'checkout', '-q', '-b', `feature/${scenario.name}`);
+  await git(repository, 'remote', 'add', 'origin', repository);
+  await git(repository, 'update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+  await git(repository, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  const root = join(repository, '.worktrees', scenario.name);
+  await mkdir(dirname(root), { recursive: true });
+  await git(repository, 'worktree', 'add', '-q', '-b', `feature/${scenario.name}`, root);
 
   if (scenario.baseCarrier !== undefined) {
     await rm(join(root, CARRIER_PATH));
