@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { planContractPointers } from '../src/engine/remediation-context-pointers.js';
+import type { BuildReviewFinding } from '../src/engine/build-review-domain.js';
+import { planContractPointers, priorAttemptPointers } from '../src/engine/remediation-context-pointers.js';
 
 describe('planContractPointers', () => {
   it('renders a concise plan-contract pointer for a completeness finding anchored to Task 1', () => {
@@ -74,6 +75,48 @@ describe('planContractPointers', () => {
       ),
     ).toEqual([
       'plan contract: .docs/plans/remediation-context.md — Task 2 (anchor: src/engine/owned.ts)',
+    ]);
+  });
+
+  it('renders concise references to same-anchor findings from prior review laps', () => {
+    const currentFinding: BuildReviewFinding = {
+      concernKind: 'out-of-scope-change',
+      summary: 'The current change is outside the approved plan.',
+      evidenceLocations: ['src/engine/conductor.ts:1'],
+      anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'outside-plan' },
+    };
+    const priorLaps: readonly {
+      artifactPath: string;
+      findings: readonly { findingRef: string; finding: BuildReviewFinding }[];
+    }[] = [
+      {
+        artifactPath: '.pipeline/build-review/lap-1/scope.json',
+        findings: [{
+          findingRef: 'finding-1',
+          finding: {
+            concernKind: 'out-of-scope-change',
+            summary: 'The first lap described a different scope concern.',
+            evidenceLocations: ['src/engine/conductor.ts:10'],
+            anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'outside-plan' },
+          },
+        }],
+      },
+      {
+        artifactPath: '.pipeline/build-review/lap-2/scope.json',
+        findings: [{
+          findingRef: 'finding-2',
+          finding: {
+            concernKind: 'out-of-scope-change',
+            summary: 'The second lap described another scope concern.',
+            evidenceLocations: ['src/engine/conductor.ts:20'],
+            anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'outside-plan' },
+          },
+        }],
+      },
+    ];
+
+    expect(priorAttemptPointers([currentFinding], priorLaps)).toEqual([
+      'prior attempts (2): .pipeline/build-review/lap-1/scope.json#finding-1, .pipeline/build-review/lap-2/scope.json#finding-2',
     ]);
   });
 });
