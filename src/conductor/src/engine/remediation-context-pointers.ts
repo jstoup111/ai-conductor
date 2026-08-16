@@ -48,12 +48,12 @@ function fileAnchorFor(anchor: BuildReviewFindingAnchor): string | undefined {
   }
 }
 
-/** Renders concise references to same-identity findings from prior review laps. */
+/** Renders concise references to same-anchor findings from prior review laps. */
 export function priorAttemptPointers(
   findings: readonly BuildReviewFinding[],
   priorLaps: readonly PriorLap[],
 ): readonly string[] {
-  const priorByIdentity = new Map<string, string[]>();
+  const priorByAnchor = new Map<string, string[]>();
   for (const priorLap of priorLaps) {
     const lap = record(priorLap);
     if (!lap || typeof lap.artifactPath !== 'string' || !Array.isArray(lap.findings)) continue;
@@ -62,16 +62,21 @@ export function priorAttemptPointers(
       const entry = record(priorEntry);
       if (!entry || typeof entry.findingRef !== 'string') continue;
 
-      const identity = identityForFinding(entry.finding);
-      if (identity) priorByIdentity.set(identity.id, [...(priorByIdentity.get(identity.id) ?? []), `${lap.artifactPath}#${entry.findingRef}`]);
+      const anchorKey = anchorKeyForFinding(entry.finding);
+      if (anchorKey) priorByAnchor.set(anchorKey, [...(priorByAnchor.get(anchorKey) ?? []), `${lap.artifactPath}#${entry.findingRef}`]);
     }
   }
 
   return findings.flatMap((finding) => {
-    const identity = identityForFinding(finding);
-    const priorAttempts = identity && priorByIdentity.get(identity.id);
+    const anchorKey = anchorKeyForFinding(finding);
+    const priorAttempts = anchorKey && priorByAnchor.get(anchorKey);
     return priorAttempts ? [`prior attempts (${priorAttempts.length}): ${priorAttempts.join(', ')}`] : [];
   });
+}
+
+function anchorKeyForFinding(value: unknown): string | undefined {
+  const identity = identityForFinding(value);
+  return identity && JSON.stringify(identity.canonicalPayload.anchor);
 }
 
 function identityForFinding(value: unknown) {

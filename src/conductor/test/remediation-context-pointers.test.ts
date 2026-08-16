@@ -236,6 +236,35 @@ describe('planContractPointers', () => {
     ]);
   });
 
+  it('renders a prior-attempt pointer when a same root-cause anchor has a drifted concern kind', () => {
+    const anchor = {
+      rubric: 'rootCause' as const,
+      statedDefect: 'Equivalent prior attempts must remain visible.',
+      locus: 'src/engine/remediation-context-pointers.ts',
+      relation: 'joins findings by anchor rather than concern label',
+    };
+
+    expect(priorAttemptPointers([{
+      concernKind: 'missing-anchor-join',
+      summary: 'The current review describes the same underlying defect differently.',
+      evidenceLocations: ['src/engine/remediation-context-pointers.ts:52'],
+      anchor,
+    }], [{
+      artifactPath: '.pipeline/build-review/lap-prior/rootCause.json',
+      findings: [{
+        findingRef: 'finding-prior',
+        finding: {
+          concernKind: 'incomplete-root-cause-fix',
+          summary: 'The prior review used another concern label.',
+          evidenceLocations: ['src/engine/remediation-context-pointers.ts:52'],
+          anchor,
+        },
+      }],
+    }])).toEqual([
+      'prior attempts (1): .pipeline/build-review/lap-prior/rootCause.json#finding-prior',
+    ]);
+  });
+
   it('ignores unresolvable plan, prior-lap, and malformed finding inputs', () => {
     const scopeFinding: BuildReviewFinding = {
       concernKind: 'out-of-scope-change',
