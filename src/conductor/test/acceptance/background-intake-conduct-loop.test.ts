@@ -690,9 +690,11 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('dispatchIntakeLoop({once:true}) dispatches the real loop for exactly one tick using mocked buildIntake/notifier/sleep', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const effects: string[] = [];
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
+        effects.push('poll');
         polled.count++;
         return [makeEnvelope('o/a#1')];
       },
@@ -701,7 +703,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: { list: async () => [] } as any,
+      ledger: { list: async () => void effects.push('ledger-read') } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });
@@ -733,6 +735,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     );
 
     expect(code).toBe(0);
+    expect(effects.slice(0, 2)).toEqual(['ledger-read', 'poll']);
     expect(polled.count).toBe(1);
     expect(enqueued).toHaveLength(1);
     expect(notified).toHaveLength(1);
@@ -794,9 +797,11 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('Production push transport wiring: sends notification for new ideas', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const effects: string[] = [];
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
+        effects.push('poll');
         polled.count++;
         return [makeEnvelope('o/a#1')];
       },
@@ -805,7 +810,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: { list: async () => [] } as any,
+      ledger: { list: async () => void effects.push('ledger-read') } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });
@@ -831,6 +836,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     );
 
     expect(code).toBe(0);
+    expect(effects.slice(0, 2)).toEqual(['ledger-read', 'poll']);
     expect(polled.count).toBe(1);
     expect(enqueued).toHaveLength(1);
     expect(sleepCalls).toBe(0);
@@ -846,9 +852,11 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('Production push transport wiring: no notification when poll is empty', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const effects: string[] = [];
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
+        effects.push('poll');
         polled.count++;
         return [];
       },
@@ -857,7 +865,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: { list: async () => [] } as any,
+      ledger: { list: async () => void effects.push('ledger-read') } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });
@@ -883,6 +891,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     );
 
     expect(code).toBe(0);
+    expect(effects.slice(0, 2)).toEqual(['ledger-read', 'poll']);
     expect(polled.count).toBe(1);
     expect(enqueued).toHaveLength(0);
     expect(sleepCalls).toBe(0);
