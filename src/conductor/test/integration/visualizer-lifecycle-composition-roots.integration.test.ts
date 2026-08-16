@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as daemonEntrypoint from '../../src/daemon-cli.js';
 import { discoverPlugins } from '../../src/engine/plugin-loader.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
@@ -235,13 +235,26 @@ type DaemonVisualizerLifecycle = <T>(
 
 interface LifecycleProbeState {
   path: 'inline' | 'daemon';
+  mode: 'success' | 'startup' | 'handler';
   records: string[];
   stopGate: Promise<void>;
   markStopStarted: () => void;
+  startCalls: number;
+  handlerCalls: number;
+  stopCalls: number;
+}
+
+interface FailureContainmentOutcome {
+  path: 'inline' | 'daemon';
+  failure: 'startup' | 'handler';
+  runCompleted: boolean;
+  startCalls: number;
+  handlerCalls: number;
+  stopCalls: number;
 }
 
 describe('visualizer lifecycle composition roots', () => {
-  it('runs discovered visualizers through reachable inline and daemon entrypoint lifecycles', async () => {
+  it('runs discovered visualizers through successful and failure-isolated inline and daemon lifecycles', async () => {
     const [inlineText, daemonText] = await Promise.all([
       readFile(join(CONDUCTOR_ROOT, 'src', 'index.ts'), 'utf8'),
       readFile(join(CONDUCTOR_ROOT, 'src', 'daemon-cli.ts'), 'utf8'),
@@ -293,6 +306,7 @@ describe('visualizer lifecycle composition roots', () => {
       string,
       LifecycleProbeState | undefined
     >;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const records: string[] = [];
     const inlineLifecycle = (
       inlineEntrypoint as unknown as {
@@ -310,6 +324,7 @@ describe('visualizer lifecycle composition roots', () => {
     let daemonError: string | undefined;
     let inlineSettledBeforeStop = false;
     let daemonSettledBeforeStop = false;
+    const failureOutcomes: FailureContainmentOutcome[] = [];
 
     try {
       await mkdir(pluginDir, { recursive: true });
@@ -329,18 +344,37 @@ export default {
   name: 'lifecycle-probe',
   start(emitter) {
     const state = probe();
-    state.records.push(state.path + ':start');
+    state.startCalls += 1;
+    if (state.mode === 'success') {
+      state.records.push(state.path + ':start');
+      emitter.on('step_started', () => {
+        const current = probe();
+        current.records.push(current.path + ':event');
+      });
+      return;
+    }
     emitter.on('step_started', () => {
       const current = probe();
-      current.records.push(current.path + ':event');
+      current.handlerCalls += 1;
+      if (current.mode === 'handler') {
+        throw new Error(current.path + ' handler failed');
+      }
     });
+    if (state.mode === 'startup') {
+      throw new Error(state.path + ' startup failed');
+    }
   },
   async stop() {
     const state = probe();
-    state.records.push(state.path + ':stop-start');
+    state.stopCalls += 1;
+    if (state.mode === 'success') {
+      state.records.push(state.path + ':stop-start');
+    }
     state.markStopStarted();
     await state.stopGate;
-    state.records.push(state.path + ':stop');
+    if (state.mode === 'success') {
+      state.records.push(state.path + ':stop');
+    }
   },
 };
 `,
@@ -369,9 +403,13 @@ export default {
         });
         probeHost[probeKey] = {
           path,
+          mode: 'success',
           records,
           stopGate,
           markStopStarted,
+          startCalls: 0,
+          handlerCalls: 0,
+          stopCalls: 0,
         };
         const lifecycleOutcome = Promise.resolve().then(() => lifecycle(
           registry,
@@ -411,6 +449,50 @@ export default {
         };
       };
 
+      const runFailurePath = async (
+        path: 'inline' | 'daemon',
+        failure: 'startup' | 'handler',
+        lifecycle: InlineVisualizerLifecycle | DaemonVisualizerLifecycle,
+      ): Promise<FailureContainmentOutcome> => {
+        const emitter = new ConductorEventEmitter();
+        const state: LifecycleProbeState = {
+          path,
+          mode: failure,
+          records,
+          stopGate: Promise.resolve(),
+          markStopStarted: () => {},
+          startCalls: 0,
+          handlerCalls: 0,
+          stopCalls: 0,
+        };
+        probeHost[probeKey] = state;
+        const expectedResult = `${path}-${failure}-result`;
+        const result = await lifecycle(registry, emitter, async () => {
+          await emitter.emit({
+            type: 'step_started',
+            step: 'explore',
+            index: 0,
+          });
+          if (failure === 'handler') {
+            await emitter.emit({
+              type: 'step_started',
+              step: 'explore',
+              index: 0,
+            });
+          }
+          return expectedResult;
+        }).catch(() => undefined);
+
+        return {
+          path,
+          failure,
+          runCompleted: result === expectedResult,
+          startCalls: state.startCalls,
+          handlerCalls: state.handlerCalls,
+          stopCalls: state.stopCalls,
+        };
+      };
+
       if (inlineLifecycle !== undefined && daemonLifecycle !== undefined) {
         ({
           result: inlineResult,
@@ -422,6 +504,12 @@ export default {
           error: daemonError,
           settledBeforeStop: daemonSettledBeforeStop,
         } = await runPath('daemon', daemonLifecycle));
+        failureOutcomes.push(
+          await runFailurePath('inline', 'startup', inlineLifecycle),
+          await runFailurePath('inline', 'handler', inlineLifecycle),
+          await runFailurePath('daemon', 'startup', daemonLifecycle),
+          await runFailurePath('daemon', 'handler', daemonLifecycle),
+        );
       }
 
       expect({
@@ -470,6 +558,7 @@ export default {
         inlineSettledBeforeStop,
         daemonSettledBeforeStop,
         records,
+        failureOutcomes,
       }).toEqual({
         inlineImportsHelper: true,
         inlineRootAwaitsSeam: true,
@@ -501,10 +590,45 @@ export default {
           'daemon:stop-start',
           'daemon:stop',
         ],
+        failureOutcomes: [
+          {
+            path: 'inline',
+            failure: 'startup',
+            runCompleted: true,
+            startCalls: 1,
+            handlerCalls: 0,
+            stopCalls: 1,
+          },
+          {
+            path: 'inline',
+            failure: 'handler',
+            runCompleted: true,
+            startCalls: 1,
+            handlerCalls: 1,
+            stopCalls: 1,
+          },
+          {
+            path: 'daemon',
+            failure: 'startup',
+            runCompleted: true,
+            startCalls: 1,
+            handlerCalls: 0,
+            stopCalls: 1,
+          },
+          {
+            path: 'daemon',
+            failure: 'handler',
+            runCompleted: true,
+            startCalls: 1,
+            handlerCalls: 1,
+            stopCalls: 1,
+          },
+        ],
       });
     } finally {
       delete probeHost[probeKey];
       await rm(tempDir, { recursive: true, force: true });
+      warnSpy.mockRestore();
     }
   });
 });
