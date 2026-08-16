@@ -42,7 +42,6 @@ const scratchRoots: string[] = [];
 
 interface VerifyOnlyEntry {
   taskId: string;
-  behavior: string;
   paths: readonly string[];
 }
 
@@ -146,7 +145,6 @@ describe('acceptance: plan-marked verify-only maintenance reaches both build_rev
     );
     const expected = [{
       taskId: '3',
-      behavior: 'Document existing behavior',
       paths: [FEATURE_PATH, TEST_PATH],
     }];
 

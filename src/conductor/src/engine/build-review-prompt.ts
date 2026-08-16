@@ -35,8 +35,8 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
       ].join('\n')
     : '(none)';
   const renderedVerifyOnlyContext = verifyOnlyContext && verifyOnlyContext.length > 0
-    ? verifyOnlyContext.map(({ taskId, behavior, paths }) =>
-        `- Task ${escapeEvidence(taskId)}: behavior: ${escapeEvidence(behavior || '(untitled)')}; declared paths: ${paths.length > 0
+    ? verifyOnlyContext.map(({ taskId, paths }) =>
+        `- Task ${escapeEvidence(taskId)}: declared paths: ${paths.length > 0
           ? paths.map((path) => `\`${escapeEvidence(path)}\``).join(', ')
           : '(none declared)'}`,
       ).join('\n')

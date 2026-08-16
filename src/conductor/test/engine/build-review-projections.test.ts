@@ -53,7 +53,6 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
         verifyOnlyContext: [{
           taskId: '3',
-          behavior: 'Document existing behavior',
           paths: ['src/verified.ts', 'test/verified.test.ts'],
         }],
         operatorReseals: [{
@@ -328,7 +327,6 @@ describe('build-review rubric projections', () => {
       removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
       verifyOnlyContext: [{
         taskId: '3',
-        behavior: 'Document existing behavior',
         paths: ['src/verified.ts', 'test/verified.test.ts'],
       }],
       changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
@@ -508,8 +506,7 @@ describe('build-review rubric projections', () => {
           ...original.inputs.sourceSnapshot,
           verifyOnlyContext: [{
             taskId: '3',
-            behavior: 'Document changed existing behavior',
-            paths: ['src/verified.ts', 'test/verified.test.ts'],
+            paths: ['src/changed-verified.ts', 'test/verified.test.ts'],
           }],
         } } }),
       },

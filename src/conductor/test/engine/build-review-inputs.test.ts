@@ -313,12 +313,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         eligible: [
           {
             taskId: '3',
-            behavior: 'Verify parser behavior',
             paths: ['src/engine/autoheal.ts', 'src/engine/plan-task-parse.ts'],
           },
           {
             taskId: '4',
-            behavior: 'Verify a type-only contract',
             paths: ['src/engine/build-review-inputs.ts'],
           },
         ],
@@ -346,10 +344,11 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(verifyOnlyContext).toEqual([
         {
           taskId: '3',
-          behavior: 'Prove existing behavior',
           paths: ['src/engine/build-review-inputs.ts'],
         },
       ]);
+      expect(withMarker.sourceSnapshot.contentDigest).not.toBe(withoutMarker.sourceSnapshot.contentDigest);
+      expect(withMarker.sourceSnapshot.digest).not.toBe(withoutMarker.sourceSnapshot.digest);
       expect({
         context: Object.isFrozen(verifyOnlyContext),
         entry: Object.isFrozen(verifyOnlyContext?.[0]),
