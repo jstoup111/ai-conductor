@@ -221,6 +221,11 @@ export function createProductionFinishPublicationCoordinator(
       // Best-effort durability; the in-memory verdict still bounds this run.
     }
   };
+  // A successful coordinator authoring pass owns exactly one mandatory
+  // re-observation. Its revision is accepted without a redundant judgment;
+  // independently observed authored prose remains stale and is judged.
+  const pendingAuthoredPrUrls = new Set<string>();
+  const coordinatorAuthoredRevisions = new Set<string>();
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
@@ -339,11 +344,15 @@ export function createProductionFinishPublicationCoordinator(
                   const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
                   proseRevisionByPr.set(pr.url, revision);
                   const observedProse = prProse(pr.title, pr.body, halted);
+                  if (pendingAuthoredPrUrls.delete(pr.url) && observedProse === 'stale') {
+                    coordinatorAuthoredRevisions.add(revision);
+                  }
                   // The provider's accepted judgment is the only authority
                   // that promotes authored prose. Retain it for this exact
                   // observed revision so the core's mandatory re-observation
                   // can see the judgment-owned dimension advance.
-                  const prose = observedProse === 'stale' && judgmentByRevision.get(revision)?.kind === 'accepted'
+                  const prose = observedProse === 'stale' &&
+                    (coordinatorAuthoredRevisions.has(revision) || judgmentByRevision.get(revision)?.kind === 'accepted')
                     ? 'accepted' as const
                     : observedProse;
                   return {
@@ -392,6 +401,7 @@ export function createProductionFinishPublicationCoordinator(
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
                   await dispatchAuthoring(request);
+                  pendingAuthoredPrUrls.add(request.pullRequestUrl);
                 },
               }
             : {}),

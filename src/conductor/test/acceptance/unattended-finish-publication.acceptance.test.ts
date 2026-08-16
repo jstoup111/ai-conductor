@@ -625,7 +625,6 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     expect(transitions).toEqual([
       'establish_pr',
       'author_pr_prose',
-      'judge_pr_prose',
       'write_shipped_record',
       'ready_pr',
       'record_outcome',
@@ -634,7 +633,7 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     expect(githubCalls.some((args) => /auto-merge|enablepullrequestautomerge|--auto/i.test(args.join(' ')))).toBe(false);
     expect({ authoringDispatches, judgmentDispatches }).toEqual({
       authoringDispatches: 1,
-      judgmentDispatches: 1,
+      judgmentDispatches: 0,
     });
   });
 
@@ -726,14 +725,17 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     { label: 'foreground-auto without a PR', mode: 'auto' as const, daemon: false, prPresent: false },
     { label: 'daemon with an existing PR', mode: 'auto' as const, daemon: true, prPresent: true },
     { label: 'daemon without a PR', mode: 'auto' as const, daemon: true, prPresent: false },
-  ])('converges %s through the production coordinator with one prose judgment', async ({ mode, daemon, prPresent }) => {
+    { label: 'daemon with pre-existing authored prose', mode: 'auto' as const, daemon: true, prPresent: true, preAuthored: true },
+  ])('converges %s through the production coordinator', async ({ mode, daemon, prPresent, preAuthored = false }) => {
     conductorRoot = await mkdtemp(join(tmpdir(), 'finish-publication-pr-convergence-'));
     const pipeline = join(conductorRoot, '.pipeline');
     await mkdir(pipeline, { recursive: true });
     const stateFilePath = join(pipeline, 'conduct-state.json');
     const prUrl = 'https://github.com/acme/widget/pull/1172';
     let pullRequest: { url: string; title: string; body: string; isDraft: boolean } | undefined = prPresent
-      ? { url: prUrl, title: 'feat: draft publication', body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.', isDraft: true }
+      ? preAuthored
+        ? { url: prUrl, title: 'feat: existing authored publication', body: 'Reader-facing summary of the completed change.', isDraft: true }
+        : { url: prUrl, title: 'feat: draft publication', body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.', isDraft: true }
       : undefined;
     const state: Record<string, unknown> = {
       feature_desc: 'feature', worktree_branch: 'feat/feature', complexity_tier: 'S',
@@ -776,8 +778,10 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
         run: vi.fn(async (_step, _state, options) => {
           if (options.finishProsePass === 'judge') judgmentDispatches++;
           if (!pullRequest) throw new Error('judgment requires a PR');
-          pullRequest.title = 'feat: publish coherent finish';
-          pullRequest.body = 'Reader-facing summary of the completed change.';
+          if (options.finishProsePass !== 'judge') {
+            pullRequest.title = 'feat: publish coherent finish';
+            pullRequest.body = 'Reader-facing summary of the completed change.';
+          }
           return { success: true, publicationDisposition: { kind: 'accepted' } };
         }),
       },
@@ -809,7 +813,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
 
     const finalState = await readState(stateFilePath);
     expect(finalState.ok && finalState.value.finish).toBe('done');
-    expect(judgmentDispatches).toBe(1);
+    expect(judgmentDispatches).toBe(preAuthored ? 1 : 0);
     await expect(access(join(pipeline, 'HALT'))).rejects.toThrow();
   });
 

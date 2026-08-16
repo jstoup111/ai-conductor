@@ -1381,7 +1381,12 @@ export async function advanceFinishPublication(
   input: AdvanceFinishPublicationInput,
 ): Promise<AdvanceFinishPublicationResult> {
   const result = await advanceFinishPublicationUnreconciled(input);
-  return result.kind === 'publication_retry' && 'transition' in result
+  // An indeterminate post-effect observation cannot establish its owned
+  // dimension. It remains a bounded retry rather than proof that the named
+  // transition is no longer selectable.
+  return result.kind === 'publication_retry' &&
+    'transition' in result &&
+    result.reason !== 'publication_transition_indeterminate'
     ? reconcileSelectablePublicationRetry(result, input.observe)
     : result;
 }

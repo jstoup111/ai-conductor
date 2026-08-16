@@ -180,15 +180,9 @@ describe('Conductor FINISH publication routing', () => {
 
   it('re-enters FINISH after verified publication progress without charging a retry', async () => {
     const stepRetries: StepName[] = [];
-    const publicationProgress: Array<{ transition: string; count: number }> = [];
     const events = new ConductorEventEmitter();
     events.on('step_retry', (event) => {
       if (event.type === 'step_retry') stepRetries.push(event.step);
-    });
-    events.on('finish_publication_progress', (event) => {
-      if (event.type === 'finish_publication_progress') {
-        publicationProgress.push({ transition: event.transition, count: event.count });
-      }
     });
     const advance = vi.fn()
       .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'ready_pr' } as const)
@@ -214,12 +208,10 @@ describe('Conductor FINISH publication routing', () => {
       finish: state.ok ? state.value.finish : undefined,
       publicationAdvances: advance.mock.calls.length,
       stepRetries,
-      publicationProgress,
     }).toEqual({
       finish: 'done',
       publicationAdvances: 2,
       stepRetries: [],
-      publicationProgress: [{ transition: 'ready_pr', count: 1 }],
     });
   });
 
@@ -495,9 +487,9 @@ describe('Conductor FINISH publication routing', () => {
 
     await conductor.run();
 
-    // The ordinary prose now crosses the provider judgment boundary before
-    // FINISH can repair presentation on its following progress re-entry.
-    expect(runner.run).toHaveBeenCalledTimes(2);
+    // Coordinator-authored prose is accepted on its mandatory re-observation,
+    // so FINISH proceeds directly to presentation repair.
+    expect(runner.run).toHaveBeenCalledTimes(1);
     expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
@@ -764,18 +756,12 @@ describe('Conductor FINISH publication routing', () => {
 
   it('halts a completed but non-advancing publication transition without spending FINISH budget', async () => {
     const stepRetries: StepName[] = [];
-    const publicationProgress: Array<{ transition: string; count: number }> = [];
     const loopHalts: string[] = [];
     const dispositions: string[] = [];
     const publicationDispositions: AdvanceFinishPublicationResult[] = [];
     const events = new ConductorEventEmitter();
     events.on('step_retry', (event) => {
       if (event.type === 'step_retry') stepRetries.push(event.step);
-    });
-    events.on('finish_publication_progress', (event) => {
-      if (event.type === 'finish_publication_progress') {
-        publicationProgress.push({ transition: event.transition, count: event.count });
-      }
     });
     events.on('loop_halt', (event) => {
       if (event.type === 'loop_halt') loopHalts.push(event.reason);
@@ -830,7 +816,6 @@ describe('Conductor FINISH publication routing', () => {
     // These are Conductor-owned observations: a human-required disposition
     // terminates the FINISH retry loop before either counter can advance.
     expect(stepRetries).not.toContain('finish');
-    expect(publicationProgress).toEqual([]);
     expect(dispositions).toEqual(['human_required']);
     expect(publicationDispositions).toEqual([expect.objectContaining({ kind: 'human_required' })]);
     expect(loopHalts).toHaveLength(1);
@@ -861,15 +846,9 @@ describe('Conductor FINISH publication routing', () => {
     } as const satisfies PublicationSnapshot;
     const events = new ConductorEventEmitter();
     const retries: StepName[] = [];
-    const publicationProgress: Array<{ transition: string; count: number }> = [];
     const dispositions: string[] = [];
     events.on('step_retry', (event) => {
       if (event.type === 'step_retry') retries.push(event.step);
-    });
-    events.on('finish_publication_progress', (event) => {
-      if (event.type === 'finish_publication_progress') {
-        publicationProgress.push({ transition: event.transition, count: event.count });
-      }
     });
     events.on('finish_publication_disposition', (event) => {
       if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
@@ -909,7 +888,6 @@ describe('Conductor FINISH publication routing', () => {
     // FINISH attempt budget remained intact; coordinator call counts are not
     // that counter.
     expect(retries).not.toContain('finish');
-    expect(publicationProgress).toEqual([]);
     expect(dispositions).toEqual(['human_required']);
     const state = await readState(statePath);
     expect(state.ok && state.value.finish).toBe('failed');

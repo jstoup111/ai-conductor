@@ -147,7 +147,6 @@ describe('Story 2 — non-advancing judgment stops on its first occurrence', () 
     )).resolves.toMatchObject({
       retryReasons: [],
       publicationDispositions: ['human_required'],
-      publicationProgress: [],
       finishStatus: 'failed',
     });
   });
@@ -381,7 +380,6 @@ async function finishRetryEventsFor(
 ): Promise<{
   retryReasons: string[];
   publicationDispositions: string[];
-  publicationProgress: Array<{ transition: string; count: number }>;
   finishStatus: string | undefined;
 }> {
   const root = await mkdtemp(join(tmpdir(), 'finish-publication-halt-counter-'));
@@ -403,17 +401,11 @@ async function finishRetryEventsFor(
   const events = new ConductorEventEmitter();
   const retryReasons: string[] = [];
   const publicationDispositions: string[] = [];
-  const publicationProgress: Array<{ transition: string; count: number }> = [];
   events.on('step_retry', (event) => {
     if (event.type === 'step_retry' && event.step === 'finish') retryReasons.push(event.reason);
   });
   events.on('finish_publication_disposition', (event) => {
     if (event.type === 'finish_publication_disposition') publicationDispositions.push(event.disposition);
-  });
-  events.on('finish_publication_progress', (event) => {
-    if (event.type === 'finish_publication_progress') {
-      publicationProgress.push({ transition: event.transition, count: event.count });
-    }
   });
   const stepRunner: StepRunner = {
     run: vi.fn(async () => {
@@ -444,7 +436,6 @@ async function finishRetryEventsFor(
   return {
     retryReasons,
     publicationDispositions,
-    publicationProgress,
     finishStatus: persisted.ok ? persisted.value.finish : undefined,
   };
 }
@@ -497,7 +488,6 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
     await expect(finishRetryEventsFor(result)).resolves.toMatchObject({
       retryReasons: [],
       publicationDispositions: ['human_required'],
-      publicationProgress: [],
       finishStatus: 'failed',
     });
     const viewCall = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view');

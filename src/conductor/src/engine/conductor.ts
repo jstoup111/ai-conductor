@@ -6334,11 +6334,6 @@ export class Conductor {
               // immediately without consuming this step's attempt budget.
               publicationProgressAttempts++;
               lastPublicationTransition = route.transition;
-              await emitTracked({
-                type: 'finish_publication_progress',
-                transition: route.transition,
-                count: publicationProgressAttempts,
-              });
               if (publicationProgressAttempts >= FINISH_PUBLICATION_PROGRESS_ALLOWANCE) {
                 const reason =
                   `FINISH publication progress allowance exhausted after ` +

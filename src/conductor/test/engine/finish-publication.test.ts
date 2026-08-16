@@ -1190,26 +1190,27 @@ describe('advancedPublicationTransition', () => {
     }
     await writeState(stateFilePath, state as ConductState);
 
-    const advance = vi.fn(async () => {
-      const result = await advancedPublicationTransition(
-        'judge_pr_prose',
-        readyPublicationSnapshot({
-          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
-        }),
-        readyPublicationSnapshot({
-          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: false },
-        }),
-      );
-      return result?.kind === 'publication_retry'
-        ? result
-        : { kind: 'human_required' as const, reason: 'ambiguous_pr_identity' as const };
+    const before = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'placeholder', ready: false },
     });
+    const after = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: false },
+    });
+    const advance = vi.fn(async () => advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(after),
+      effects: {
+        authorProse: async () => undefined,
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      } as never,
+    }));
 
     try {
       await new Conductor({
         stateFilePath,
         stepRunner: { run: vi.fn(async () => ({ success: true })) },
-        finishPublication: { advance },
+        finishPublication: { advance: advance as never },
         events: new ConductorEventEmitter(),
         projectRoot,
         fromStep: 'finish',
@@ -1514,6 +1515,25 @@ describe('advanceFinishPublication PR identity', () => {
     expect(await observe.mock.results[1]?.value).toMatchObject({ pr: { identity: 'one' }, branchPushed: 'valid' });
   });
 
+  it('does not advance establish_pr when a new PR identity leaves branch evidence invalid', async () => {
+    const draft = draftPrFakes((args) => {
+      if (args[1] === 'view') return new Error('no pull requests found');
+      if (args[1] === 'create') return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+      return { stdout: '' };
+    });
+    const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }))
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
+        branchPushed: 'missing',
+      }));
+
+    await expect(advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), establishPr: draft.deps },
+    })).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_transition_unmoved' });
+  });
+
   it('opens exactly one draft PR and re-observes its identity before advancing', async () => {
     const draft = draftPrFakes((args) => {
       if (args[1] === 'view') return new Error('no pull requests found');
@@ -1605,6 +1625,18 @@ describe('advanceFinishPublication durable shipped evidence', () => {
     expect(observe).toHaveBeenCalledTimes(2);
     expect(await observe.mock.results[0]?.value).toMatchObject({ shippedRecord: 'missing' });
     expect(await observe.mock.results[1]?.value).toMatchObject({ shippedRecord: 'valid' });
+  });
+
+  it('does not advance write_shipped_record when branch evidence changes but the record remains missing', async () => {
+    const createShippedRecord = vi.fn(async () => undefined);
+    const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(shippedSnapshot({ shippedRecord: 'missing' }))
+      .mockResolvedValueOnce(shippedSnapshot({ branchPushed: 'missing', shippedRecord: 'missing' }));
+
+    await expect(advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), createShippedRecord },
+    })).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_transition_unmoved' });
   });
 
   it('creates an absent shipped record once and re-observes strict evidence before advancing', async () => {

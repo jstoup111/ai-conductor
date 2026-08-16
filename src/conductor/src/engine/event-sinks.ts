@@ -46,7 +46,6 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   finish_publication_transition: { render: true, persist: true, audit: false },
   finish_publication_blocked: { render: true, persist: true, audit: false },
   finish_publication_disposition: { render: true, persist: true, audit: false },
-  finish_publication_progress: { render: false, persist: true, audit: false },
   feature_complete: { render: false, persist: true, audit: false },
   dashboard_refresh: { render: false, persist: true, audit: false },
   protected_artifact_rebaseline: { render: true, persist: true, audit: false },

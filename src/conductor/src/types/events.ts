@@ -50,17 +50,6 @@ export type FinishPublicationEvent =
       disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';
     };
 
-/**
- * Emitted only when Conductor consumes one FINISH publication-progress slot.
- * This records Conductor-owned accounting, rather than a coordinator-local
- * transition observation.
- */
-export type FinishPublicationProgressEvent = {
-  type: 'finish_publication_progress';
-  transition: FinishPublicationTransition;
-  count: number;
-};
-
 /** Closed, non-diagnostic context for credential-park progress telemetry. */
 export type CredentialParkProgressDegradation =
   | 'credential-failure'
@@ -164,7 +153,6 @@ export type ConductorEvent =
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
   | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }
   | { type: 'step_started'; step: StepName; index: number }
-  | FinishPublicationProgressEvent
   | {
       /** A retained compatibility step ran as a deprecated no-op. */
       type: 'deprecated_step';

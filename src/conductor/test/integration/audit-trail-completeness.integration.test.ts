@@ -89,8 +89,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   finish_publication_transition: 'not-audited-by-design',
   finish_publication_blocked: 'not-audited-by-design',
   finish_publication_disposition: 'not-audited-by-design',
-  // Conductor accounting is durable event-log telemetry, not friction itself.
-  finish_publication_progress: 'not-audited-by-design',
   feature_complete: 'not-audited-by-design',
   dashboard_refresh: 'not-audited-by-design',
   protected_artifact_rebaseline: 'not-audited-by-design',
@@ -253,9 +251,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   finish_publication_disposition: {
     type: 'finish_publication_disposition', disposition: 'retry_finish',
-  },
-  finish_publication_progress: {
-    type: 'finish_publication_progress', transition: 'judge_pr_prose', count: 1,
   },
   feature_complete: { type: 'feature_complete' },
   dashboard_refresh: { type: 'dashboard_refresh' },
