@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import {
   diffParkedMarkers,
+  isPrimaryCheckout,
   resolveRealParkedDir,
   snapshotParkedMarkers,
 } from './park-leak-guard.js';
@@ -154,6 +155,24 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
     ]);
   });
 
+  it('identifies whether a checkout owns its common Git directory', async () => {
+    const root = await createGitRepository();
+    const worktree = join(root, 'linked-worktree');
+    await execa('git', ['-C', root, 'worktree', 'add', '-b', 'linked', worktree]);
+
+    await expect(Promise.all([
+      isPrimaryCheckout(root),
+      isPrimaryCheckout(worktree),
+    ])).resolves.toEqual([true, false]);
+  });
+
+  it('does not claim primary-checkout ownership outside a Git repository', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-non-git-'));
+    temporaryDirectories.push(root);
+
+    await expect(isPrimaryCheckout(root)).resolves.toBe(false);
+  });
+
   it('returns null outside a Git repository', async () => {
     const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-non-git-'));
     temporaryDirectories.push(root);
@@ -241,6 +260,7 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
     let parkedSnapshots = 0;
     vi.doMock('./park-leak-guard.js', () => ({
       resolveRealParkedDir: async () => '/real/.daemon/parked',
+      isPrimaryCheckout: async () => true,
       snapshotParkedMarkers: async () => {
         parkedSnapshots += 1;
         calls.push(parkedSnapshots === 1 ? 'park:before' : 'park:after');
