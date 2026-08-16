@@ -443,7 +443,7 @@ describe('engine/conductor', () => {
     expect(halts).toEqual([expect.objectContaining({ reason, step: 'manual_test' })]);
   });
 
-  it('prefers state.last_step over a newer breadcrumb when a central halt is raised outside the loop', async () => {
+  it('uses the active breadcrumb for a central halt and state.last_step when no breadcrumb is active', async () => {
     const halts: Array<Extract<ConductorEvent, { type: 'loop_halt' }>> = [];
     events.on('loop_halt', (event) => {
       if (event.type === 'loop_halt') halts.push(event);
@@ -465,7 +465,16 @@ describe('engine/conductor', () => {
       emitLoopHalt(reason: string): Promise<void>;
     }).emitLoopHalt(reason);
 
-    expect(halts).toEqual([expect.objectContaining({ reason, step: 'build' })]);
+    (conductor as unknown as { _breadcrumb: Record<string, never> })._breadcrumb = {};
+    const deferredReason = 'central halt outside an active step';
+    await (conductor as unknown as {
+      emitLoopHalt(reason: string): Promise<void>;
+    }).emitLoopHalt(deferredReason);
+
+    expect(halts).toEqual([
+      expect.objectContaining({ reason, step: 'manual_test' }),
+      expect.objectContaining({ reason: deferredReason, step: 'build' }),
+    ]);
   });
 
   it('constructs the persistent filesystem state store by default', () => {
