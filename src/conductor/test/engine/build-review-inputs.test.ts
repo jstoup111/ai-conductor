@@ -331,16 +331,25 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
       ]);
 
-      const withoutMarker = await assembleBuildReviewInputs(git, planPath);
-      await writeFile(planPath, `# Plan body
+      // Task 2's contract: the two assemblies are IDENTICAL except the one
+      // `**Verify-only:** yes` marker line, so the digest divergence below is
+      // attributable to the verify-only evidence and not an unrelated body change.
+      const planBodyWithout = `# Plan body
 
 ### Task 3: Prove existing behavior
-**Verify-only:** yes
 **Files:** \`src/engine/build-review-inputs.ts\`
-`, 'utf-8');
+`;
+      const planBodyWith = planBodyWithout.replace(
+        '**Files:**',
+        '**Verify-only:** yes\n**Files:**',
+      );
+      await writeFile(planPath, planBodyWithout, 'utf-8');
+      const withoutMarker = await assembleBuildReviewInputs(git, planPath);
+      await writeFile(planPath, planBodyWith, 'utf-8');
       const withMarker = await assembleBuildReviewInputs(git, planPath);
       const { verifyOnlyContext } = withMarker.sourceSnapshot;
 
+      expect(withoutMarker.sourceSnapshot.verifyOnlyContext).toEqual([]);
       expect(verifyOnlyContext).toEqual([
         {
           taskId: '3',
