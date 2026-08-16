@@ -843,29 +843,34 @@ describe('FINISH publication disposition routing', () => {
       'implementation_evidence_invalid',
       'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
       'rerun_build_verification',
+      'Implementation evidence is invalid and must be re-established before FINISH can continue.',
     ],
     [
       'implementation_evidence_indeterminate',
       'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.',
       'restore_implementation_observation',
+      'Implementation evidence could not be determined; restore its observer before FINISH can continue.',
     ],
     [
       'ship_evidence_invalid',
       'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
       'rerun_ship_validators',
+      'SHIP evidence is invalid and must be re-established before FINISH can continue.',
     ],
     [
       'ship_evidence_indeterminate',
       'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
       'restore_ship_observation',
+      'SHIP evidence could not be determined; restore its observer before FINISH can continue.',
     ],
-  ] as const)('halts evidence-invalid condition %s with its unresolved observation', async (code, message, nextAction) => {
+  ] as const)('halts evidence-invalid condition %s with its unresolved observation', async (code, message, nextAction, reason) => {
     await expect(
       routeFinishPublicationDisposition({
         kind: 'publication_retry',
         condition: { code, message, nextAction },
       }),
-    ).resolves.toMatchObject({ kind: 'halt', reason: expect.not.stringContaining('dedicated BUILD routing rule') });
+    ).resolves.toEqual({ kind: 'halt', reason });
+    expect(reason).not.toContain('dedicated BUILD routing rule');
   });
 
   it('permits only cited implementation-invalid evidence to route BUILD', async () => {

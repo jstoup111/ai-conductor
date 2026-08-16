@@ -10,6 +10,7 @@ import { readState, writeState } from '../../src/engine/state.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
+import { computeAndWriteVerdict, readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -76,16 +77,35 @@ describe('Conductor FINISH publication routing', () => {
     { name: 'interactive', mode: 'interactive' as const, daemon: false },
     { name: 'default foreground', mode: 'default' as const, daemon: false },
     { name: 'foreground auto', mode: 'auto' as const, daemon: false },
-    // Daemon-mode fencing is exercised with real validator evidence by the
-    // stale-manual-test acceptance spec below; this focused coordinator test
-    // deliberately remains in mocked-dispatch mode.
-    { name: 'foreground auto with coordinator', mode: 'auto' as const, daemon: false },
+    // Daemon mode is deliberately covered here: even in mocked-dispatch mode,
+    // wiring a coordinator must not reinstate a coordinator-only fence
+    // exemption.
+    { name: 'daemon auto with coordinator', mode: 'auto' as const, daemon: true },
   ])('starts at FINISH and lets the coordinator bound %s judgment dispatches', async ({ mode, daemon }) => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
       join(dir, '.pipeline', 'manual-test-results.md'),
-      '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+      '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
     );
+    // The daemon row reaches the real fence.  These are the minimal fresh
+    // SHIP reports it recomputes before allowing the injected coordinator.
+    await writeFile(
+      join(dir, '.pipeline', 'prd-audit.md'),
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|---|---|---|\n| FR-1 | ALIGNED | n/a | test.ts:1 | — |\n',
+    );
+    await writeFile(
+      join(dir, '.pipeline', 'architecture-review-as-built.md'),
+      '# As-Built Review\n\nVerdict: APPROVED\n',
+    );
+    if (daemon) {
+      const persisted = await readState(statePath);
+      if (!persisted.ok) throw new Error('test fixture state must be readable');
+      await writeState(statePath, {
+        ...persisted.value,
+        complexity_tier: 'M',
+        architecture_review: 'skipped',
+      });
+    }
     const calls: StepName[] = [];
     const dispositions: string[] = [];
     const events = new ConductorEventEmitter();
@@ -118,6 +138,7 @@ describe('Conductor FINISH publication routing', () => {
       fromStep: 'finish',
       mode,
       daemon,
+      ...(daemon ? { config: { steps: { manual_test: { disable: true } } } } : {}),
       git: async () => ({ stdout: '' }),
       gh: async () => ({ stdout: '' }),
       runGh: async () => ({ stdout: '' }),
@@ -131,6 +152,132 @@ describe('Conductor FINISH publication routing', () => {
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  it('keeps a done manual_test with FAIL rows non-green before the coordinator can publish', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n',
+    );
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M',
+      architecture_review: 'skipped',
+      manual_test: 'done',
+    });
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'manual_test') throw ROUTED_SENTINEL;
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance }, events,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(advance).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
+    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+  });
+
+  it('redirects several non-green validators to the earliest one without demoting a green sibling', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', track: 'product', architecture_review: 'done',
+      manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'done',
+    });
+    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
+    await writeVerdict(dir, 'architecture_review_as_built', { satisfied: true, checkedAt: 1 });
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'manual_test') throw ROUTED_SENTINEL;
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance: vi.fn() }, events,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    const after = await readState(statePath);
+    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+    expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
+    expect(after.ok && after.value.test_suite).toBe('done');
+    await expect(readFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), 'utf8')).resolves.toContain('APPROVED');
+  });
+
+  it('preserves green validator evidence across repeated docs-only FINISH laps without rerunning test_suite', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', architecture_review: 'skipped', manual_test: 'done',
+    });
+    await writeVerdict(dir, 'manual_test', { satisfied: true, checkedAt: 1 });
+    const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: PASS_EVIDENCE }));
+    await computeAndWriteVerdict(dir, 'manual_test');
+    const first = await readVerdict(dir, 'manual_test');
+    await computeAndWriteVerdict(dir, 'manual_test');
+    const second = await readVerdict(dir, 'manual_test');
+    const after = await readState(statePath);
+
+    expect(ensure).not.toHaveBeenCalled();
+    expect(after.ok && after.value.manual_test).toBe('done');
+    expect([first, second]).toEqual([
+      expect.objectContaining({ satisfied: true }),
+      expect.objectContaining({ satisfied: true }),
+    ]);
+    await expect(readFile(join(dir, '.pipeline', 'manual-test-results.md'), 'utf8')).resolves.toContain('PASS');
+  });
+
+  it('treats malformed validator evidence as non-green without deleting prior evidence', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const evidencePath = join(dir, '.pipeline', 'manual-test-results.md');
+    await writeFile(evidencePath, '| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n');
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', architecture_review: 'skipped', manual_test: 'done',
+    });
+    const first = await computeAndWriteVerdict(dir, 'manual_test');
+    const second = await computeAndWriteVerdict(dir, 'manual_test');
+    expect([first, second]).toEqual([
+      expect.objectContaining({ satisfied: false }),
+      expect.objectContaining({ satisfied: false }),
+    ]);
+    await expect(readFile(evidencePath, 'utf8')).resolves.toContain('FAIL');
   });
 
   it('retries a publication-only result at FINISH without dispatching BUILD or remediation', async () => {
