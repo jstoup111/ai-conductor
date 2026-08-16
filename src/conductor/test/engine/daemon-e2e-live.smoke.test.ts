@@ -12,6 +12,7 @@ import type {
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
+import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
@@ -634,6 +635,25 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
               provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(),
             },
           } as never),
+        },
+        // Parity with the scripted fixture's resolver stub: the disposition
+        // resolver derives the feature identity from the linked-worktree
+        // layout (`<main>/.worktrees/<slug>`), which this standalone temp
+        // repository does not have — resolveBuildReviewFeatureIdentity()
+        // returns undefined, resolveEffectiveBuildReviewVerdict() fails with
+        // "feature identity is unavailable", and the step FAILs every attempt
+        // even though all enabled rubrics judged clean (0.102.0 release gate,
+        // #1667 merge). Derive the effective verdict from the aggregate alone;
+        // there are no operator dispositions in a freshly seeded fixture.
+        buildReviewEffectiveResolver: async (_root: string, aggregate: unknown) => {
+          const effective = deriveEffectiveBuildReviewVerdict(aggregate);
+          return effective
+            ? {
+                ok: true as const,
+                feature: { version: 'v1' as const, repository: worktreeDir, feature: slug },
+                effective,
+              }
+            : { ok: false as const, reason: 'fixture aggregate is invalid' };
         },
       });
       await runDaemon(
