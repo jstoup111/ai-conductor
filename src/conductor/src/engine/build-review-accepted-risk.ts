@@ -4,6 +4,7 @@ import type { BuildReviewDispositionRecord } from './build-review-dispositions.j
 const START = '<!-- build-review-accepted-risk:start -->';
 const END = '<!-- build-review-accepted-risk:end -->';
 const SECTION = '## Accepted build-review risk';
+const POINTER = "Details are retained in the feature's local build-review disposition store.";
 
 export type BuildReviewAcceptedRiskRenderResult =
   | { readonly ok: true; readonly section: string }
@@ -21,25 +22,29 @@ function validRecord(value: BuildReviewDispositionRecord): boolean {
     value.operator.trim().length > 0 && !Number.isNaN(Date.parse(value.acceptedAt));
 }
 
-/** Deterministic publication rendering shared by retained PR and shipped record projections. */
+/**
+ * Deterministic publication rendering shared by retained PR and shipped record projections.
+ *
+ * Published surfaces carry only finding ids and rubrics (#1614). Summaries, rationales,
+ * operator identity, and timestamps stay in the local disposition store and MUST NOT be
+ * rendered here.
+ */
 export function renderBuildReviewAcceptedRisk(records: readonly BuildReviewDispositionRecord[]): BuildReviewAcceptedRiskRenderResult {
   if (records.some((record) => !validRecord(record))) {
     return { ok: false, message: 'accepted build-review risk contains an unrenderable record' };
   }
   const entries = [...records].sort((left, right) => left.finding.id.localeCompare(right.finding.id));
-  const lines = [START, SECTION];
-  for (const record of entries) {
-    lines.push(
-      '',
-      `- Finding: \`${record.finding.id}\``,
-      `  **Rubric:** ${record.finding.canonicalPayload.rubric}`,
-      `  **Summary:** ${record.summary}`,
-      `  **Rationale:** ${record.rationale}`,
-      `  **Operator:** ${record.operator}`,
-      `  **Accepted at:** ${record.acceptedAt}`,
-    );
-  }
-  lines.push(END);
+  const lines = [
+    START,
+    SECTION,
+    '',
+    `Accepted findings: ${entries.length}`,
+    '',
+    ...entries.map((record) => `- Finding: \`${record.finding.id}\` — rubric: ${record.finding.canonicalPayload.rubric}`),
+    '',
+    POINTER,
+    END,
+  ];
   return { ok: true, section: lines.join('\n') };
 }
 
