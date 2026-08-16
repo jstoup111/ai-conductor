@@ -70,6 +70,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The Tautology build-review gate no longer blocks a build when a plan task is correctly declared verify-only and its changed test does not assert new behavior. ([implementation PR #1618](https://github.com/jstoup111/ai-conductor/pull/1618)).
 - Loop halts, rebase-conflict halts, and failed halt-marker writes now persist to `.pipeline/events.jsonl`, so a halt is reconstructable from the audit ledger alone. ([implementation PR #1519](https://github.com/jstoup111/ai-conductor/pull/1519)).
 - The tautology preflight now reverts renamed files in its counterfactual instead of discarding its mechanical evidence for the whole lap. ([implementation PR #1632](https://github.com/jstoup111/ai-conductor/pull/1632)).
+- Remediation repairs now carry pointers to the governing plan task and prior same-anchor attempts, instead of being dispatched blind to the plan contract. ([implementation PR #1637](https://github.com/jstoup111/ai-conductor/pull/1637)).
 
 ### Security
 
