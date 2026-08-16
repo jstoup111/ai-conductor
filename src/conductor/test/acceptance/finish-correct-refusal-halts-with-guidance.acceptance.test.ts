@@ -1,9 +1,8 @@
 /**
  * Acceptance spec for Stories 3-4's terminal FINISH refusal flow.
  *
- * A coordinator fake requests a deterministic refused provider verdict. The
- * Conductor routes the resulting human-required disposition to the halt-marker
- * writer; production coordinator selection is covered at its own seam.
+ * The real production coordinator observes ordinary authored prose, dispatches
+ * its judgment pass, and returns the refusal that Conductor renders as HALT.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,7 +10,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ConductState, StepName } from '../../src/types/index.js';
-import type { FinishPublicationCoordinator, StepRunner } from '../../src/engine/conductor.js';
+import type { StepRunner } from '../../src/engine/conductor.js';
+import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../test-conductor.js';
@@ -61,31 +61,36 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
         },
       })),
     };
-    const coordinator: FinishPublicationCoordinator = {
-      advance: async ({ dispatchJudgment }) => {
-        const result = await dispatchJudgment({
-          kind: 'finish_pr_prose_quality',
-          pullRequestUrl: 'https://github.com/acme/widget/pull/1172',
-          qualityScope: ['title', 'body'],
-          maximumPasses: 1,
-        });
-        const disposition = result.publicationDisposition as
-          | { kind?: string; detail?: string }
-          | undefined;
-        if (disposition?.kind !== 'refused') {
-          throw new Error('expected refused prose judgment');
-        }
-        return {
-          kind: 'human_required' as const,
-          reason: 'judgment_refused' as const,
-          detail: disposition.detail,
-        };
-      },
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({
+          url: 'https://github.com/acme/widget/pull/1172',
+          title: 'feat: reader-facing publication',
+          body: 'Reader-facing summary and validation evidence.',
+          isDraft: true,
+          labels: [],
+        }) };
+      }
+      throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+    });
+    const git = async (args: string[]) => {
+      if (args[0] === 'remote') return { stdout: 'origin\n' };
+      if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/finish-correct-refusal\n' };
+      if (args[0] === 'merge-base') return { stdout: '' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
     };
     const conductor = new Conductor({
       stateFilePath,
       stepRunner: provider,
-      finishPublication: coordinator,
+      finishPublication: createProductionFinishPublicationCoordinator({
+        projectRoot,
+        stateFilePath,
+        baseBranch: 'main',
+        git,
+        gh,
+        observeReleaseReadiness: async () => 'present',
+      }),
       projectRoot,
       fromStep: 'finish',
       mode: 'auto',
@@ -93,8 +98,8 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
       maxRetries: 3,
       verifyArtifacts: false,
       events: new ConductorEventEmitter(),
-      git: async () => ({ stdout: '' }),
-      gh: async () => ({ stdout: '' }),
+      git,
+      gh,
       runGh: async () => ({ stdout: '' }),
     });
 

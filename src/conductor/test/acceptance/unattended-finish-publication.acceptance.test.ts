@@ -555,7 +555,7 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
       architecture_review_as_built: 'done',
     } as ConductState;
     const createCoordinator = () => createProductionFinishPublicationCoordinator({
-      projectRoot: conductorRoot,
+      projectRoot: conductorRoot!,
       stateFilePath: join(pipeline, 'conduct-state.json'),
       baseBranch: 'main', git, gh,
       observeReleaseReadiness: async () => 'present',
@@ -574,10 +574,9 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     let authoringDispatches = 0;
     let terminal: Awaited<ReturnType<typeof coordinator.advance>> | undefined;
 
+    const coordinator = createCoordinator();
     for (let attempt = 0; attempt < 8; attempt++) {
-      // A fresh process/coordinator must recover the accepted PR revision
-      // from GitHub, not a previous pass's in-memory judgment map.
-      terminal = await createCoordinator().advance({
+      terminal = await coordinator.advance({
         state,
         mode: 'auto',
         daemon: true,
@@ -748,6 +747,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     await writeState(stateFilePath, state as ConductState);
     await mkdir(join(conductorRoot, '.docs', 'shipped'), { recursive: true });
     await writeFile(join(conductorRoot, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+    let authoringDispatches = 0;
     let judgmentDispatches = 0;
     const gh = vi.fn(async (args: string[]) => {
       if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
@@ -777,6 +777,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       stepRunner: {
         run: vi.fn(async (_step, _state, options) => {
           if (options.finishProsePass === 'judge') judgmentDispatches++;
+          else authoringDispatches++;
           if (!pullRequest) throw new Error('judgment requires a PR');
           if (options.finishProsePass !== 'judge') {
             pullRequest.title = 'feat: publish coherent finish';
@@ -813,7 +814,9 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
 
     const finalState = await readState(stateFilePath);
     expect(finalState.ok && finalState.value.finish).toBe('done');
-    expect(judgmentDispatches).toBe(0);
+    expect(authoringDispatches).toBe(preAuthored ? 0 : 1);
+    expect(judgmentDispatches).toBe(preAuthored ? 1 : 0);
+    expect(authoringDispatches + judgmentDispatches).toBe(1);
     await expect(access(join(pipeline, 'HALT'))).rejects.toThrow();
   });
 

@@ -502,7 +502,7 @@ describe('production FINISH publication composition', () => {
     }
   });
 
-  it('recognizes ordinary prose containing "required" language on each fresh coordinator after restart', async () => {
+  it('judges ordinary prose containing "required" language on each fresh coordinator after restart', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-restart-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -564,9 +564,9 @@ describe('production FINISH publication composition', () => {
       const beforeRestart = await makeCoordinator().advance(input);
       const afterRestart = await makeCoordinator().advance(input);
 
-      expect(beforeRestart).toEqual(expect.objectContaining({ kind: 'human_required', reason: 'publication_transition_unmoved' }));
+      expect(beforeRestart).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
       expect(afterRestart).toEqual(beforeRestart);
-      expect(dispatchJudgment).not.toHaveBeenCalled();
+      expect(dispatchJudgment).toHaveBeenCalledTimes(2);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -598,7 +598,7 @@ describe('production FINISH publication composition', () => {
         } as ConductState,
         mode: 'auto' as const,
         daemon: true,
-        dispatchJudgment: vi.fn(async () => ({ success: true })),
+        dispatchJudgment: vi.fn(async () => ({ success: true, publicationDisposition: { kind: 'accepted' } })),
         dispatchAuthoring: vi.fn(async () => {
           body = 'Restored reader-facing summary and validation evidence.';
           return { success: true };
@@ -613,14 +613,14 @@ describe('production FINISH publication composition', () => {
         observeReleaseReadiness: async () => 'present',
       });
 
-      await expect(makeCoordinator().advance(input)).resolves.toMatchObject({
-        kind: 'publication_retry', transition: 'ready_pr',
+      await expect(makeCoordinator().advance(input)).resolves.toEqual({
+        kind: 'publication_progress', transition: 'judge_pr_prose',
       });
       body = `${PR_BODY_FLOOR_MARKER}\n\nDraft opened automatically.`;
       await expect(makeCoordinator().advance(input)).resolves.toEqual({
         kind: 'publication_progress', transition: 'author_pr_prose',
       });
-      expect(input.dispatchJudgment).not.toHaveBeenCalled();
+      expect(input.dispatchJudgment).toHaveBeenCalledOnce();
       expect(input.dispatchAuthoring).toHaveBeenCalledOnce();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -655,6 +655,16 @@ describe('production FINISH publication composition', () => {
         feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
         build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
       } as ConductState;
+      await expect(coordinator.advance({
+        state,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: async () => ({
+          success: true,
+          publicationDisposition: { kind: 'accepted' },
+        }),
+        emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
       await expect(coordinator.advance({
         state,
         mode: 'auto',
@@ -846,6 +856,64 @@ describe('production FINISH publication composition', () => {
       // The dedup key stays unwritten until the prose survives, so a prose
       // halt here remains re-dispatchable by the daemon.
       expect(writeShippedRecord).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['halt', { kind: 'revision_required', reason: 'halt' }, { kind: 'human_required', reason: 'judgment_halt_prose' }],
+    ['refused', { kind: 'refused', detail: 'provider declined' }, { kind: 'human_required', reason: 'judgment_refused' }],
+    ['timed_out', { kind: 'timed_out' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }],
+    ['provider_unavailable', { kind: 'provider_unavailable' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }],
+    ['undecodable', undefined, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_malformed_response' }],
+    ['incompleteness', { kind: 'revision_required', reason: 'structurally_incomplete' }, { kind: 'human_required', reason: 'publication_transition_unmoved' }],
+    ['raw-placeholder', { kind: 'revision_required', reason: 'placeholder' }, { kind: 'human_required', reason: 'publication_transition_unmoved' }],
+  ])('maps a $0 prose judgment without readying or recording the PR', async (_label, publicationDisposition, expected) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-judgment-outcome-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ url: prUrl, title: 'feat: authored publication', body: 'Reader-facing summary.', isDraft: true, labels: [] }) };
+        }
+        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+      });
+      const writeShippedRecord = vi.fn(async () => 0);
+      const recordFinish = vi.fn(async () => 0);
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        gh,
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        observeReleaseReadiness: async () => 'present',
+        writeShippedRecord,
+        recordFinish,
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: async () => ({ success: true, ...(publicationDisposition === undefined ? {} : { publicationDisposition }) }),
+        emit: async () => {},
+      })).resolves.toMatchObject(expected);
+
+      expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
+      expect(writeShippedRecord).not.toHaveBeenCalled();
+      expect(recordFinish).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

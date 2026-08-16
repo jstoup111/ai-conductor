@@ -148,6 +148,7 @@ function prProse(
   title: unknown,
   body: unknown,
   halted: boolean,
+  acceptedRevision: boolean,
 ): 'accepted' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
@@ -157,11 +158,11 @@ function prProse(
   if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
-  // A non-placeholder, non-halt title/body is the retained PR's observable
-  // accepted revision. It survives coordinator recreation because the PR is
-  // the authority; the in-memory revision cache only de-duplicates an
-  // in-flight judgment for a revision that actually needs one.
-  return 'accepted';
+  // Existing prose is a judgment candidate until this coordinator either
+  // authored that exact revision or received an accepted judgment for it.
+  // The PR remains the observation authority; this cache only records the
+  // bounded provider work performed by this coordinator lifetime.
+  return acceptedRevision ? 'accepted' : 'stale';
 }
 
 /**
@@ -227,6 +228,8 @@ export function createProductionFinishPublicationCoordinator(
   // independently observed authored prose remains stale and is judged.
   const pendingAuthoredPrUrls = new Set<string>();
   const coordinatorAuthoredRevisions = new Set<string>();
+  const acceptedProseRevisionByPr = new Map<string, string>();
+  const authoredProsePendingByPr = new Set<string>();
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
@@ -344,7 +347,16 @@ export function createProductionFinishPublicationCoordinator(
                   const halted = prHaltState(pr.title, pr.body, pr.labels);
                   const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
                   proseRevisionByPr.set(pr.url, revision);
-                  const prose = prProse(pr.title, pr.body, halted);
+                  if (authoredProsePendingByPr.delete(pr.url) && !halted) {
+                    const observedProse = prProse(pr.title, pr.body, false, false);
+                    if (observedProse !== 'placeholder') acceptedProseRevisionByPr.set(pr.url, revision);
+                  }
+                  const prose = prProse(
+                    pr.title,
+                    pr.body,
+                    halted,
+                    acceptedProseRevisionByPr.get(pr.url) === revision,
+                  );
                   return {
                       state: 'one' as const,
                       url: pr.url,
@@ -391,6 +403,7 @@ export function createProductionFinishPublicationCoordinator(
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
                   await dispatchAuthoring(request);
+                  authoredProsePendingByPr.add(request.pullRequestUrl);
                 },
               }
             : {}),
@@ -401,6 +414,9 @@ export function createProductionFinishPublicationCoordinator(
             const cached = digest === undefined ? undefined : judgmentByRevision.get(digest);
             if (cached) return cached;
             const result = decodePrProseJudgment(await dispatchJudgment(request));
+            if (revision !== undefined && result.kind === 'accepted') {
+              acceptedProseRevisionByPr.set(request.pullRequestUrl, revision);
+            }
             if (digest !== undefined && (result.kind === 'accepted' || result.kind === 'revision_required' || result.kind === 'refused')) {
               judgmentByRevision.set(digest, result);
               await persistJudgmentStore();
