@@ -697,11 +697,13 @@ type AuditRecord = {
 
 `at` is epoch milliseconds, not the ISO `ts` used by `events.jsonl`, and `event` is a derived string,
 not a raw event type. `phase` is omitted for an `operator`-origin record — an interactive reseal runs
-outside any step's phase. It subscribes to nine source events (`gate_verdict`, `step_retry`,
+outside any step's phase. It subscribes to eleven source events (`gate_verdict`, `step_retry`,
 `kickback`, `loop_halt`, `step_completed`, `halt_cleared`, `protected_artifact_reseal`,
-`protected_artifact_reseal_refused`, `halt_marker_write_failed`) and emits nine strings (`gate_pass`,
+`protected_artifact_reseal_refused`, `halt_marker_write_failed`,
+`remediation_sealed_artifact_redirect`, `verdict_freshness`) and emits ten strings (`gate_pass`,
 `gate_fail`, `retry`, `kickback`, `intervention`, `halt_cleared`, `reseal`, `reseal_refused`,
-`halt_marker_write_failed`). A write failure drops a
+`halt_marker_write_failed`, `verdict_freshness`). `remediation_sealed_artifact_redirect` is
+subscribed but intentionally emits no audit record. A write failure drops a
 `WRITE-FAILED` marker beside it and, for
 [`conduct-ts reseal`](cli.md#conduct-ts-reseal) specifically, fails the reseal itself — its writer is
 constructed fail-closed, unlike every step-attributed writer, because a reseal whose audit record was
