@@ -281,6 +281,43 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       });
     });
 
+    it('derives verify-only context only for eligible plan task headers', async () => {
+      await writeFile(planPath, `# Plan
+
+### Task 3: Verify parser behavior
+**Verify-only:** yes
+**Files:** \`src/engine/autoheal.ts\`, \`src/engine/plan-task-parse.ts\`
+
+### Task 4: Verify a type-only contract
+**Type:** implementation+verification
+**Files:** \`src/engine/build-review-inputs.ts\`
+
+### Task 5: Maybe verify later
+**Verify-only:** maybe
+**Files:** \`src/ignored.ts\`
+`, 'utf-8');
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: '' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+      await writeFile(planPath, '**Verify-only:** yes\n**Files:** `src/headerless.ts`\n', 'utf-8');
+      const headerlessInputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect({
+        eligible: inputs.verifyOnlyContext,
+        headerless: headerlessInputs.verifyOnlyContext,
+      }).toEqual({
+        eligible: [
+          { taskId: '3', paths: ['src/engine/autoheal.ts', 'src/engine/plan-task-parse.ts'] },
+          { taskId: '4', paths: ['src/engine/build-review-inputs.ts'] },
+        ],
+        headerless: [],
+      });
+    });
+
     it('stale base: fetches, recomputes merge-base against the refreshed ref, fresh=false', async () => {
       const { git } = fakeGit([
         { match: ['remote'], result: { exitCode: 0, stdout: 'origin\n' } },

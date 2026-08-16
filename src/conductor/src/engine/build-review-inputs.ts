@@ -12,6 +12,8 @@ import { deriveBuildReviewRemovals, type BuildReviewRemovalContext } from './bui
 import { readOperatorReseals, type OperatorReseal } from './protected-artifact-seal.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
+import { parsePlanTaskVerifyOnly } from './autoheal.js';
+import { parsePlanTaskPaths } from './plan-task-parse.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -53,6 +55,8 @@ export interface BuildReviewInputs {
   acceptedWidenings?: AcceptedScopeWidening[];
   /** Diff-derived removal evidence for the grader, never an exemption. */
   removalContext?: BuildReviewRemovalContext;
+  /** Engine-parsed verify-only plan task evidence for the grader, never an exemption. */
+  verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
   /** Operator-authorized protected-artifact reseals from the feature seal. */
   operatorReseals?: OperatorReseal[];
   /**
@@ -69,6 +73,12 @@ export interface BuildReviewInputs {
   testSuiteProof?: FullSuitePassEvidence;
   /** Immutable identity of every source value shared by the rubric fan-out. */
   sourceSnapshot?: BuildReviewSourceSnapshot;
+}
+
+/** One plan task declared as verify-only, with its parser-derived paths. */
+export interface BuildReviewVerifyOnlyContext {
+  readonly taskId: string;
+  readonly paths: readonly string[];
 }
 
 /** Inputs returned after the proof gate has frozen a source snapshot. */
@@ -254,6 +264,11 @@ export async function assembleBuildReviewInputs(
 
   const planBody = await readFile(planPath, 'utf-8');
 
+  const planTaskPaths = parsePlanTaskPaths(planBody);
+  const verifyOnlyContext = [...parsePlanTaskVerifyOnly(planBody)]
+    .filter(([, verifyOnly]) => verifyOnly)
+    .map(([taskId]) => ({ taskId, paths: [...(planTaskPaths.get(taskId) ?? [])] }));
+
   const featureRoot = dirname(dirname(dirname(planPath)));
   const planIsInFeatureRoot =
     basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs';
@@ -315,6 +330,7 @@ export async function assembleBuildReviewInputs(
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
     removalContext,
+    verifyOnlyContext,
     repairContext,
     acceptedWidenings: [...sourceSnapshot.acceptedWidenings],
     operatorReseals,
