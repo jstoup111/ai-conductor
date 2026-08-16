@@ -11,6 +11,17 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.103.0] - 2026-08-16
+
+### Added
+
+- Plan tasks can now declare a `Preserves:` behavior clause, and build-review's Completeness gate recognizes when a preserved behavior's coverage survives a relocation or refactor instead of flagging it as a regression. ([implementation PR #1656](https://github.com/jstoup111/ai-conductor/pull/1656)).
+- Daemon-managed provider sessions can no longer invoke conduct-ts orchestration commands; only session-sanctioned worker subcommands are permitted. ([implementation PR #1599](https://github.com/jstoup111/ai-conductor/pull/1599)).
+
+### Fixed
+
+- Remediation tasks now reach the builder on daemon features whose specs were authored externally — the plan-append no longer silently no-ops when engine-state.json is absent. ([implementation PR #1671](https://github.com/jstoup111/ai-conductor/pull/1671)).
+
 ## [0.102.0] - 2026-08-16
 
 ### Added
