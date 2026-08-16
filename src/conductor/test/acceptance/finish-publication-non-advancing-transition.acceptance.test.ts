@@ -504,7 +504,7 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
     expect(viewCall?.join(' ')).toContain('labels');
   });
 
-  it('treats an empty label list as no halt signal and continues publication progress', async () => {
+  it('treats an empty label list as no halt signal and sends ordinary prose to judgment', async () => {
     const { result, dispatchJudgment, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
@@ -513,14 +513,14 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
       labels: [],
     }, { shippedRecordPresent: false });
 
-    expect(result).toEqual({ kind: 'publication_progress', transition: 'write_shipped_record' });
-    expect(dispatchJudgment).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledOnce();
     expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
       expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
     );
   });
 
-  it('treats a documentation label as no halt signal and continues publication progress', async () => {
+  it('treats a documentation label as no halt signal and sends ordinary prose to judgment', async () => {
     const { result, dispatchJudgment, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
@@ -529,8 +529,8 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
       labels: [{ name: 'documentation' }],
     }, { shippedRecordPresent: false });
 
-    expect(result).toEqual({ kind: 'publication_progress', transition: 'write_shipped_record' });
-    expect(dispatchJudgment).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledOnce();
     expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
       expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
     );
