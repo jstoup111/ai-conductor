@@ -20,6 +20,7 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
     repairContext = [],
     acceptedWidenings = [],
     removalContext,
+    verifyOnlyContext,
     operatorReseals,
   } = inputs;
   const escapeEvidence = (value: string) => value.replaceAll('`', '\\`');
@@ -32,6 +33,13 @@ export function buildGraderPrompt(inputs: BuildReviewInputs): string {
         ...removalContext.removedMembers.map(({ declaration, member }) =>
           `- Removed member: ${escapeEvidence(declaration)}.${escapeEvidence(member)}`),
       ].join('\n')
+    : '(none)';
+  const renderedVerifyOnlyContext = verifyOnlyContext && verifyOnlyContext.length > 0
+    ? verifyOnlyContext.map(({ taskId, paths }) =>
+        `- Task ${escapeEvidence(taskId)}: declared paths: ${paths.length > 0
+          ? paths.map((path) => `\`${escapeEvidence(path)}\``).join(', ')
+          : '(none declared)'}`,
+      ).join('\n')
     : '(none)';
   const renderedRepairContext = repairContext.length > 0
     ? repairContext.map((repair) =>
@@ -179,5 +187,12 @@ The following removals are diff-derived evidence, not an exemption. Evaluate
 them only under the Tautology exception rules stated above:
 
 ${renderedRemovalContext}
+
+## Engine-parsed verify-only tasks
+
+The following plan-derived tasks are evidence, not an exemption. Use this
+evidence only when judging the diff; it grants no exemption on its own:
+
+${renderedVerifyOnlyContext}
 `;
 }

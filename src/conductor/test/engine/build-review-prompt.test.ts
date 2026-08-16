@@ -372,6 +372,24 @@ describe('buildGraderPrompt', () => {
     expect(empty).toMatch(/Engine-derived removal evidence[\s\S]*\(none\)/);
   });
 
+  it('renders verify-only task evidence without granting an exemption, escaping declared paths', () => {
+    const populated = buildGraderPrompt({
+      ...inputs,
+      verifyOnlyContext: [{
+        taskId: '4',
+        paths: ['src/conductor/src/engine/already`present.ts', 'src/conductor/test/engine/already-present.test.ts'],
+      }],
+    });
+    const empty = buildGraderPrompt({ ...inputs, verifyOnlyContext: [] });
+
+    expect(populated).toMatch(/Engine-parsed verify-only tasks/i);
+    expect(populated).toMatch(/evidence,? not an exemption/i);
+    expect(populated).toContain('Task 4');
+    expect(populated).toContain('src/conductor/src/engine/already\\`present.ts');
+    expect(populated).toContain('src/conductor/test/engine/already-present.test.ts');
+    expect(empty).toMatch(/Engine-parsed verify-only tasks[\s\S]*\(none\)/);
+  });
+
   it('defines removal maintenance through all three per-test conditions', () => {
     const prompt = buildGraderPrompt(inputs);
     expect(prompt).toMatch(/all three conditions/i);
