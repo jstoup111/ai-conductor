@@ -64,7 +64,7 @@ function runDaemonDepsWithinVisualizerLifecycle(sourceText: string): {
       ts.isAwaitExpression(node)
       && ts.isCallExpression(node.expression)
       && ts.isIdentifier(node.expression.expression)
-      && node.expression.expression.text === 'withRegisteredVisualizers'
+      && node.expression.expression.text === 'runDaemonVisualizerLifecycle'
     ) {
       const callback = node.expression.arguments[2];
       if (
@@ -80,7 +80,7 @@ function runDaemonDepsWithinVisualizerLifecycle(sourceText: string): {
 
   if (deps === undefined) {
     throw new Error(
-      'expected awaited withRegisteredVisualizers callback to invoke runDaemon with an object literal',
+      'expected awaited runDaemonVisualizerLifecycle callback to invoke runDaemon with an object literal',
     );
   }
   return { source, deps };
