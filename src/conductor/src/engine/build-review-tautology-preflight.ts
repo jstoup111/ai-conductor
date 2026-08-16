@@ -165,14 +165,31 @@ function changedPaths(diff: string): string[] {
   return [...paths].sort();
 }
 
+/**
+ * Rename pairs in the diff, keyed by the post-rename (b/) path. A rename chunk
+ * carries `rename from`/`rename to` and no `new file mode`, so without this map
+ * a renamed file is indistinguishable from a missing merge-base file and the
+ * whole preflight fails (#1624). The counterfactual must restore the OLD path's
+ * merge-base bytes, not merely delete the new path — deleting a renamed
+ * production module would fail the counterfactual run for the wrong reason.
+ */
+function renamedPaths(diff: string): ReadonlyMap<string, string> {
+  const renames = new Map<string, string>();
+  const chunks = diff.split(/^diff --git /m);
+  for (const chunk of chunks) {
+    const from = /^rename from (.+)$/m.exec(chunk);
+    const to = /^rename to (.+)$/m.exec(chunk);
+    if (from && to) renames.set(to[1]!, from[1]!);
+  }
+  return renames;
+}
+
 function addedPaths(diff: string): ReadonlySet<string> {
   const added = new Set<string>();
   const chunks = diff.split(/^diff --git /m);
   for (const chunk of chunks) {
     const header = /^a\/(.+) b\/(.+)$/m.exec(chunk);
-    const absentAtMergeBase = /^new file mode /m.test(chunk)
-      || (/^rename from /m.test(chunk) && /^rename to /m.test(chunk));
-    if (header && absentAtMergeBase) added.add(header[2]!);
+    if (header && /^new file mode /m.test(chunk)) added.add(header[2]!);
   }
   return added;
 }
@@ -289,6 +306,7 @@ export async function materializeTautologyPreflight(
   const paths = changedPaths(deps.diff);
   const classified = classifyTautologyPaths(paths);
   const added = addedPaths(deps.diff);
+  const renames = renamedPaths(deps.diff);
   const sourceIdentities = { mergeBase: deps.mergeBase, headSha: deps.headSha };
   if (deps.scopedWorkingDirectory.trim().length === 0) {
     return failure('missing-scoped-configuration', paths, classified.tests, sourceIdentities);
@@ -348,6 +366,21 @@ export async function materializeTautologyPreflight(
         break;
       }
       if (mergeBaseContent === undefined) {
+        // Renamed at HEAD: the merge-base bytes live at the OLD path. Revert
+        // the rename in the counterfactual — restore the old path, drop the
+        // new one — instead of failing the whole preflight (#1624).
+        const renamedFrom = renames.get(path);
+        if (renamedFrom !== undefined) {
+          const oldContent = await deps.readMergeBaseFile(renamedFrom);
+          if (oldContent === undefined) {
+            result = failure('missing-merge-base-file', paths, classified.tests, sourceIdentities);
+            break;
+          }
+          manifest.push({ path: renamedFrom, mergeBaseBlobSha: gitBlobSha(oldContent) });
+          await deps.writeFile(join(checkout, renamedFrom), oldContent);
+          await (deps.removeFile ?? ((target) => rm(target, { force: true })))(join(checkout, path));
+          continue;
+        }
         if (!added.has(path)) {
           result = failure('missing-merge-base-file', paths, classified.tests, sourceIdentities);
           break;
