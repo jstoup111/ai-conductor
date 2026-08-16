@@ -2471,7 +2471,20 @@ export class Conductor {
       };
     }
 
-    const planPath = await this.getActivePlanPath();
+    // Resolve the plan through the full identity ladder (engine-state, then
+    // slug-scoped convention), not engine-state alone: engineer-specced daemon
+    // features enter the pipeline at build with DECIDE pre-done, so the plan
+    // step's recordActivePlanPath never runs, engine-state.json never exists,
+    // and getActivePlanPath() returns null on every remediation round — the
+    // task append below silently no-oped for every such feature while the
+    // remediate step kept authoring precise repair tasks no builder ever saw.
+    // resolveFeaturePlanPath also returns an absolute path, which
+    // appendRemediationTasks reads directly (the raw engine-state string was
+    // cwd-relative and only worked when cwd happened to be the project root).
+    const planPath =
+      (await this.getActivePlanPath()) ??
+      (await resolveFeaturePlanPath(this.projectRoot, state.feature_desc)) ??
+      null;
     const sealedArtifactsByGapId = new Map<string, string>();
     if (planPath) {
       for (const gap of plan.gaps) {
@@ -2533,7 +2546,18 @@ export class Conductor {
           } catch {
             // Log but continue — seeding failure doesn't block remediation routing
           }
+        } else {
+          this.log?.(
+            `WARNING: remediation task append failed (${allTasks.length} task(s) dropped): ${appendResult.error}`,
+          );
         }
+      } else {
+        // Fail-open stays (routing must not be blocked by append plumbing),
+        // but never silently: a dropped append means the builder re-enters
+        // with none of the remediation tasks it was just told to deliver.
+        this.log?.(
+          `WARNING: remediation task append skipped — no plan path resolved; ${allTasks.length} remediation task(s) never reached the plan or task list`,
+        );
       }
     }
 
