@@ -190,7 +190,13 @@ export function buildVisualizers(
   emitter: ConductorEventEmitter,
 ): VisualizerPlugin[] {
   for (const vis of visualizers) {
-    vis.start(emitter);
+    try {
+      vis.start(emitter);
+    } catch (err: unknown) {
+      console.warn(
+        `[visualizer] visualizer '${vis.name}' start() error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
   return visualizers;
 }

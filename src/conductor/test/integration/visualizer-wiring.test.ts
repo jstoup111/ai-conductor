@@ -46,6 +46,26 @@ describe('Visualizer wiring helpers', () => {
     expect(vis1.lastEmitter).toBe(emitter);
   });
 
+  it('continues starting visualizers when one start() throws synchronously', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const emitter = new ConductorEventEmitter();
+    const throwingVisualizer: VisualizerPlugin = {
+      name: 'throwing',
+      start: () => {
+        throw new Error('visualizer start failed');
+      },
+      stop: async () => {},
+    };
+    const nextVisualizer = new FakeVisualizer();
+
+    try {
+      buildVisualizers([throwingVisualizer, nextVisualizer], emitter);
+      expect(nextVisualizer.startCalled).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('stopVisualizers calls stop() on each visualizer', async () => {
     const { stopVisualizers } = await import('../../src/index.js');
     const vis = new FakeVisualizer();
