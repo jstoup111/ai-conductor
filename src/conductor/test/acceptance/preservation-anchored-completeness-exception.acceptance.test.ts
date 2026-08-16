@@ -374,6 +374,29 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
 
   it('judges each clause independently in a mixed relocation-and-loss diff', async () => {
     const judged = await judgeScenario({
+      name: 'mixed-two-clauses',
+      preserves: ['wrapper transparency', 'failed preflight never dispatches'],
+      baseCarrier: [
+        'expect(wrapper.transparent).toBe(true);',
+        'expect(dispatches).toBe(0);',
+      ].join('\n'),
+      replacements: {
+        'test/provider-leg.test.ts': 'expect(wrapper.transparent).toBe(true);\n',
+      },
+      expectedLost: ['failed preflight never dispatches'],
+    });
+
+    expect(judged.result.findings).toHaveLength(1);
+    expect(judged.result.findings?.[0]?.anchor).toEqual({
+      rubric: 'completeness',
+      planTask: '9',
+      missingOutcome: 'failed preflight never dispatches',
+    });
+    expect(judged.result.findings?.[0]?.anchor.missingOutcome).not.toBe('wrapper transparency');
+  });
+
+  it('judges each clause independently in a three-clause mixed relocation-and-loss diff', async () => {
+    const judged = await judgeScenario({
       name: 'mixed-per-clause',
       preserves: ['wrapper transparency', 'failed preflight never dispatches', 'optional member remains absent'],
       baseCarrier: [
@@ -397,6 +420,31 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       missingOutcome: 'failed preflight never dispatches',
     });
     expect(judged.result.findings?.[0]?.anchor.missingOutcome).not.toBe('wrapper transparency');
+  });
+
+  it('keeps separately lost preserved behaviors on distinct finding anchors', async () => {
+    const judged = await judgeScenario({
+      name: 'distinct-lost-anchors',
+      preserves: ['failed preflight never dispatches', 'optional member remains absent'],
+      baseCarrier: [
+        'expect(dispatches).toBe(0);',
+        'expect(wrapper.optionalMember).toBeUndefined();',
+      ].join('\n'),
+      expectedLost: ['failed preflight never dispatches', 'optional member remains absent'],
+    });
+
+    expect(judged.result.findings?.map((entry) => entry.anchor)).toEqual([
+      {
+        rubric: 'completeness',
+        planTask: '9',
+        missingOutcome: 'failed preflight never dispatches',
+      },
+      {
+        rubric: 'completeness',
+        planTask: '9',
+        missingOutcome: 'optional member remains absent',
+      },
+    ]);
   });
 
   it('grants no exemption when removal evidence exists without a preservation clause', async () => {
