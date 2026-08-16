@@ -864,13 +864,12 @@ describe('FINISH publication disposition routing', () => {
       'SHIP evidence could not be determined; restore its observer before FINISH can continue.',
     ],
   ] as const)('halts evidence-invalid condition %s with its unresolved observation', async (code, message, nextAction, reason) => {
-    await expect(
-      routeFinishPublicationDisposition({
-        kind: 'publication_retry',
-        condition: { code, message, nextAction },
-      }),
-    ).resolves.toEqual({ kind: 'halt', reason });
-    expect(reason).not.toContain('dedicated BUILD routing rule');
+    const result = await routeFinishPublicationDisposition({
+      kind: 'publication_retry',
+      condition: { code, message, nextAction },
+    });
+    expect(result).toEqual({ kind: 'halt', reason });
+    expect(result.kind === 'halt' && result.reason).not.toContain('dedicated BUILD routing rule');
   });
 
   it('permits only cited implementation-invalid evidence to route BUILD', async () => {
