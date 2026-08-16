@@ -19,6 +19,28 @@ diff --git a/src/api.ts b/src/api.ts
     });
   });
 
+  it('records assertion lines removed from retained test files with their paths', () => {
+    expect(deriveBuildReviewRemovals(`diff --git a/test/provider.test.ts b/test/provider.test.ts
+@@ -1,3 +1,2 @@
+ expect(unrelated.stays).toBe(true);
+-expect(wrapper.transparent).toBe(true);
+`)).toMatchObject({
+      deletedFiles: [],
+      removedTestAssertions: [{ path: 'test/provider.test.ts', line: 'expect(wrapper.transparent).toBe(true);' }],
+    });
+  });
+
+  it('records assertion lines removed from retained colocated test files', () => {
+    expect(deriveBuildReviewRemovals(`diff --git a/src/foo.test.ts b/src/foo.test.ts
+@@ -1,3 +1,2 @@
+ expect(unrelated.stays).toBe(true);
+-expect(wrapper.transparent).toBe(true);
+`)).toMatchObject({
+      deletedFiles: [],
+      removedTestAssertions: [{ path: 'src/foo.test.ts', line: 'expect(wrapper.transparent).toBe(true);' }],
+    });
+  });
+
   it('attributes removed interface, type, and enum members from hunk context', () => {
     expect(deriveBuildReviewRemovals(`diff --git a/src/contracts.ts b/src/contracts.ts
 @@ -20,8 +20,7 @@ export interface ReviewContract {

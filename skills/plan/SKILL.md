@@ -102,6 +102,8 @@ repo-relative paths corroborate precisely and never collide.
 
 **Verify-only:** [yes, or omit — see 3b below]
 
+**Preserves:** [optional behavior or contract whose coverage must not regress — see 3c below]
+
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
 
@@ -161,6 +163,20 @@ work-happened floor that flags any plan task with no `Task:`-trailered commit as
 (warning only, never a HALT). If you're authoring a task you know will legitimately produce
 no commit of its own, mark it `**Verify-only:** yes` here so the floor recognizes it and
 doesn't flag it.
+
+### 3c. `Preserves:` Marker
+
+A task block MAY include an optional, non-empty `**Preserves:** <behavior>` line to name a
+behavior or contract whose coverage must not regress. State the behavior-level boundary, not its
+current carrier: never name a test case, file, or `it(...)` title.
+
+For example, `**Preserves:** the TokenMeter wrapper reports its metric transparently` names a
+behavior. Reject `confirm the file's existing ungated self-check cases pass unchanged`: it names
+file-local test cases rather than a behavior or contract, so it is not a valid preservation
+declaration.
+
+An absent or empty `**Preserves:**` value grants no preservation; ordinary holistic judgment
+applies unchanged.
 
 ### 4. Task Ordering Rules
 

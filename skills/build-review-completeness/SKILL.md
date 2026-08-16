@@ -21,7 +21,10 @@ Use only the supplied projection version `v2`. Its closed input contains:
 - the lap ID, snapshot digest, and top-level `contentDigest`;
 - the full changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
   ranges, anchored by `mergeBase` and `headSha`);
-- diff-derived removal evidence (`removalContext`), never an exemption; and
+- diff-derived removal evidence (`removalContext`), which anchors exactly the preservation-
+  maintenance exception and is never an exemption for any other Completeness concern; and
+- engine-parsed preservation evidence (`preservationContext`), which names preserved behaviors
+  declared for plan tasks; and
 - engine-parsed verify-only evidence (`verifyOnlyContext`): only a plan task listed here
   legitimately contributes no implementation diff; and
 - the approved plan.
@@ -40,6 +43,24 @@ do not reduce the judgement to individual commits or task records.
 
 Identify each missing deliverable that prevents a plan outcome from being delivered. Keep unrelated
 gaps separate so the result preserves every independently actionable omission.
+
+Preservation maintenance uses a closed three-condition predicate. A declared behavior plus removal
+of its carrier establishes the maintenance case. Apply it only when all of the following hold:
+
+1. `preservationContext` names the preserved behavior for a plan task;
+2. the engine-derived removal evidence shows this diff deleted the carrier or, through
+   `removedTestAssertions` from retained test files, moved the active assertion that distinguished
+   that behavior at merge base; and
+3. an equivalent survivor is an active assertion that distinguishes the preserved behavior anywhere
+   in the post-diff tree.
+
+When all three hold, suppress the carrier-specific plan gap: the equivalent assertion survives, so
+relocation is not incomplete. A weakened, assertion-free, different-behavior, commented-out, or
+skipped replacement is not an equivalent survivor. When conditions 1 and 2 hold but no equivalent
+assertion survives, emit the preserved-behavior finding; do not grant either anchor half alone.
+
+Evaluate this predicate per preserved-behavior clause, never per diff. Do not use task-history
+attribution: judge only from plan text, diff content, and engine-derived removal evidence.
 
 ## Result contract (v1)
 
