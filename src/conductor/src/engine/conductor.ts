@@ -2743,7 +2743,10 @@ export class Conductor {
 
   /** Emit a HALT event with the most recently advanced conductor step. */
   private async emitLoopHalt(reason: string, prUrl?: string): Promise<void> {
-    const candidate = resolveLastStep(this.haltState, this._breadcrumb);
+    // While the loop is active, the breadcrumb identifies the step that is
+    // actually halting. Persisted state can still name the previously settled
+    // step, so use it only when no active breadcrumb is available.
+    const candidate = this._breadcrumb.lastAdvancedStep ?? resolveLastStep(this.haltState, {});
     const step =
       ALL_STEPS.some(({ name }) => name === candidate) ||
       Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, candidate)
