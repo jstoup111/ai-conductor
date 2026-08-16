@@ -605,6 +605,23 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
         planPath,
         providerKey: 'claude',
         mode: 'auto',
+        // Parity with the scripted fixture (daemon-e2e-fixture.test.ts): this
+        // fixture has no runnable scoped-test command in its isolated
+        // temporary repository, so the tautology preflight (#1618) fails
+        // instantly with missing-scoped-configuration and the infrastructure
+        // failure blocks the effective verdict — the walk then never writes
+        // DONE (release-gate failure on the 0.102.0 merge, both attempts).
+        // Disable only the tautology branch; the other three fan-out branches
+        // still run against the live provider.
+        config: { build_review: { maxParallel: 4, rubrics: { tautology: { enabled: false } } } },
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT',
+            evidence: {
+              provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(),
+            },
+          } as never),
+        },
       });
       await runDaemon(
         {
