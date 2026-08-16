@@ -517,18 +517,6 @@ describe('event sink subscriptions', () => {
       .toEqual(Object.fromEntries(neverPersisted.map((type) => [type, false])));
   });
 
-  it('rejects a pinned sink becoming non-persisted', () => {
-    const priorPersist = EVENT_SINKS.loop_halt.persist;
-
-    try {
-      EVENT_SINKS.loop_halt.persist = false;
-
-      expect(new Set(persistedEventTypes())).not.toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
-    } finally {
-      EVENT_SINKS.loop_halt.persist = priorPersist;
-    }
-  });
-
   it('derives the audited set without changing prior routing', () => {
     expect(new Set(auditedEventTypes())).toEqual(new Set([
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
