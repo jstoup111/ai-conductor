@@ -282,20 +282,26 @@ describe('Conductor FINISH publication routing', () => {
       complexity_tier: 'M',
       track: 'technical',
       architecture_review: 'skipped',
-      manual_test: 'skipped',
-      prd_audit: 'skipped',
-      architecture_review_as_built: 'skipped',
+      manual_test: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
     });
+    for (const step of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+      await writeVerdict(dir, step, { satisfied: true, checkedAt: Date.now() });
+    }
     const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: PASS_EVIDENCE }));
     const inspect = vi.fn(async () => ({ status: 'CURRENT' as const, evidence: PASS_EVIDENCE }));
-    const finishDispatches: StepName[] = [];
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
     const coordinator = {
       advance: vi.fn(async () => ({ kind: 'complete' } as const)),
     };
     const events = new ConductorEventEmitter();
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
     const makeConductor = () => new Conductor({
       stateFilePath: statePath,
-      stepRunner: { run: vi.fn(async (step) => { finishDispatches.push(step); return { success: true }; }) },
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
       finishPublication: coordinator,
       events,
       projectRoot: dir,
@@ -303,24 +309,36 @@ describe('Conductor FINISH publication routing', () => {
       mode: 'default',
       daemon: true,
       fullSuiteVerifier: { ensure, inspect },
-      onCheckpoint: async () => 'quit',
       git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
     });
 
-    await makeConductor().run();
+    const persistedState = (await readState(statePath));
+    if (!persistedState.ok) throw new Error('test fixture state must be readable');
+    const firstLap = await (makeConductor() as unknown as {
+      nonGreenFinishValidators(state: ConductState): Promise<unknown[]>;
+    }).nonGreenFinishValidators(persistedState.value);
+    const firstLapVerdicts = await readAllVerdicts(dir);
+    const afterFirstLap = await readState(statePath);
+    const secondLapState = await readState(statePath);
+    if (!secondLapState.ok) throw new Error('test fixture state must be readable');
+    const secondLap = await (makeConductor() as unknown as {
+      nonGreenFinishValidators(state: ConductState): Promise<unknown[]>;
+    }).nonGreenFinishValidators(secondLapState.value);
 
     const verdicts = await readAllVerdicts(dir);
     const after = await readState(statePath);
-    expect(finishDispatches).toEqual([]);
-    expect(coordinator.advance).toHaveBeenCalledOnce();
+    expect(coordinator.advance).not.toHaveBeenCalled();
+    expect(firstLap).toEqual([]);
+    expect(secondLap).toEqual([]);
     expect(ensure).not.toHaveBeenCalled();
     expect(inspect).not.toHaveBeenCalled();
-    expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['skipped', 'skipped', 'skipped']);
-    expect(['manual_test', 'prd_audit', 'architecture_review_as_built'].map((step) => verdicts[step as StepName])).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
+    expect(afterFirstLap.ok && [afterFirstLap.value.manual_test, afterFirstLap.value.prd_audit, afterFirstLap.value.architecture_review_as_built]).toEqual(['done', 'done', 'done']);
+    expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['done', 'done', 'done']);
+    for (const step of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+      expect(firstLapVerdicts[step]).toMatchObject({ satisfied: true });
+      expect(verdicts[step]).toMatchObject({ satisfied: true });
+    }
+    expect(kickbacks).toEqual([]);
     await expect(readFile(join(dir, '.pipeline', 'manual-test-results.md'), 'utf8')).resolves.toContain('PASS');
   });
 
