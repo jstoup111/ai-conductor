@@ -22,6 +22,11 @@ without an operator override.
 #### Happy Path
 - Given any `BuildReviewInputs`, when `buildGraderPrompt` assembles the prompt, then
   the Tautology exceptions section enumerates exactly three closed-list entries and
+
+> **Amended 2026-08-15 by #1579:** the closed list now enumerates four entries — the fourth is
+> verify-only maintenance (`adr-2026-08-15-verify-only-anchored-tautology-exemption.md`). The
+> list remains explicitly closed; this criterion's fixture-relocation predicate is unchanged.
+
   the third is fixture relocation, defined by a per-test predicate requiring all of:
   (a) the changed test's diff shows a rename/relocation of a fixture path, including
   the observed fixture-construction form where a removed `writeFile(oldPath, content)`
