@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -198,7 +198,7 @@ describe('Conductor FINISH publication routing', () => {
       ...persisted.value,
       complexity_tier: 'M',
       architecture_review: 'skipped',
-      manual_test: 'done',
+      manual_test: 'stale',
     });
     const events = new ConductorEventEmitter();
     const kickbacks: Array<{ from: StepName; to: StepName }> = [];
@@ -237,7 +237,10 @@ describe('Conductor FINISH publication routing', () => {
       complexity_tier: 'M', track: 'product', architecture_review: 'done',
       manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'done',
     });
-    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
+    const architectureEvidence = join(dir, '.pipeline', 'architecture-review-as-built.md');
+    await writeFile(architectureEvidence, '# As-Built Review\n\nVerdict: APPROVED\n');
+    const freshMtime = new Date(Date.now() + 5_000);
+    await utimes(architectureEvidence, freshMtime, freshMtime);
     await writeVerdict(dir, 'architecture_review_as_built', { satisfied: true, checkedAt: 1 });
     const events = new ConductorEventEmitter();
     const kickbacks: Array<{ from: StepName; to: StepName }> = [];
@@ -246,21 +249,26 @@ describe('Conductor FINISH publication routing', () => {
     });
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
-        if (step === 'manual_test') throw ROUTED_SENTINEL;
+        if (step === 'prd_audit') throw ROUTED_SENTINEL;
         return { success: true };
       }),
     };
 
     await new Conductor({
-      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance: vi.fn() }, events,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      finishPublication: { advance: vi.fn(async () => ({ kind: 'complete' } as const)) },
+      events,
       projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
       git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
     }).run();
 
     const after = await readState(statePath);
+    const verdicts = await readAllVerdicts(dir);
     expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
     expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
-    expect(after.ok && after.value.test_suite).toBe('done');
+    expect(after.ok && after.value.architecture_review_as_built).toBe('done');
+    expect(verdicts.architecture_review_as_built).toMatchObject({ satisfied: true });
     await expect(readFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), 'utf8')).resolves.toContain('APPROVED');
   });
 
@@ -292,17 +300,33 @@ describe('Conductor FINISH publication routing', () => {
     const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: PASS_EVIDENCE }));
     const inspect = vi.fn(async () => ({ status: 'CURRENT' as const, evidence: PASS_EVIDENCE }));
     const kickbacks: Array<{ from: StepName; to: StepName }> = [];
-    const coordinator = {
-      advance: vi.fn(async () => ({ kind: 'complete' } as const)),
-    };
     const events = new ConductorEventEmitter();
     events.on('kickback', (event) => {
       if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
     });
-    const makeConductor = () => new Conductor({
+    let finishRuns = 0;
+    const runnerRun = vi.fn(async (step: StepName) => {
+      if (step === 'manual_test') {
+        await writeFile(
+          join(dir, '.pipeline', 'manual-test-results.md'),
+          '# Manual Test Results\n\n## Attempt 2 — 2026-08-16T00:00:00Z\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+        );
+        return { success: true };
+      }
+      if (step === 'finish') {
+        finishRuns++;
+        return finishRuns === 1
+          ? { success: false, publicationDisposition: { kind: 'publication_progress', transition: 'ready_pr' } }
+          : { success: true, publicationDisposition: { kind: 'complete' } };
+      }
+      return { success: true };
+    });
+    const runner: StepRunner = {
+      run: runnerRun,
+    };
+    const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: { run: vi.fn(async () => ({ success: true })) },
-      finishPublication: coordinator,
+      stepRunner: runner,
       events,
       projectRoot: dir,
       fromStep: 'finish',
@@ -312,33 +336,18 @@ describe('Conductor FINISH publication routing', () => {
       git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
     });
 
-    const persistedState = (await readState(statePath));
-    if (!persistedState.ok) throw new Error('test fixture state must be readable');
-    const firstLap = await (makeConductor() as unknown as {
-      nonGreenFinishValidators(state: ConductState): Promise<unknown[]>;
-    }).nonGreenFinishValidators(persistedState.value);
-    const firstLapVerdicts = await readAllVerdicts(dir);
-    const afterFirstLap = await readState(statePath);
-    const secondLapState = await readState(statePath);
-    if (!secondLapState.ok) throw new Error('test fixture state must be readable');
-    const secondLap = await (makeConductor() as unknown as {
-      nonGreenFinishValidators(state: ConductState): Promise<unknown[]>;
-    }).nonGreenFinishValidators(secondLapState.value);
+    await conductor.run();
 
     const verdicts = await readAllVerdicts(dir);
     const after = await readState(statePath);
-    expect(coordinator.advance).not.toHaveBeenCalled();
-    expect(firstLap).toEqual([]);
-    expect(secondLap).toEqual([]);
+    expect(runnerRun.mock.calls.map(([step]) => step)).toEqual(['manual_test', 'finish', 'finish']);
     expect(ensure).not.toHaveBeenCalled();
     expect(inspect).not.toHaveBeenCalled();
-    expect(afterFirstLap.ok && [afterFirstLap.value.manual_test, afterFirstLap.value.prd_audit, afterFirstLap.value.architecture_review_as_built]).toEqual(['done', 'done', 'done']);
     expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['done', 'done', 'done']);
     for (const step of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
-      expect(firstLapVerdicts[step]).toMatchObject({ satisfied: true });
       expect(verdicts[step]).toMatchObject({ satisfied: true });
     }
-    expect(kickbacks).toEqual([]);
+    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
     await expect(readFile(join(dir, '.pipeline', 'manual-test-results.md'), 'utf8')).resolves.toContain('PASS');
   });
 

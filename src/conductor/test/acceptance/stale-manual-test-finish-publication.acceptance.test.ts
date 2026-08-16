@@ -15,10 +15,8 @@
  */
 
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
@@ -30,8 +28,6 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const roots: string[] = [];
-const execFileAsync = promisify(execFile);
-
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -143,6 +139,7 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       mode: 'auto',
       daemon: true,
       fromStep: 'finish',
+      maxRetries: 1,
       verifyArtifacts: false,
       finishPublication: createProductionFinishPublicationCoordinator({
         projectRoot: root,
@@ -183,13 +180,10 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     const pipeline = join(root, '.pipeline');
     const stateFilePath = join(pipeline, 'conduct-state.json');
     await mkdir(pipeline, { recursive: true });
-    await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: root });
-    await execFileAsync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=Test', 'commit', '--allow-empty', '-q', '-m', 'init'], { cwd: root });
-
     const state: Record<string, unknown> = {
       feature_desc: 'stale-manual-test-discovered-at-finish-is-unroutab',
       worktree_branch: 'feat/stale-manual-test',
-      complexity_tier: 'M',
+      complexity_tier: 'L',
       track: 'technical',
     };
     for (const step of ALL_STEPS) {
@@ -198,7 +192,8 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     }
     Object.assign(state, {
       architecture_review: 'skipped',
-      manual_test: 'done',
+      build_review: 'skipped',
+      manual_test: 'stale',
       prd_audit: 'skipped',
       architecture_review_as_built: 'skipped',
       retro: 'skipped',
@@ -206,10 +201,9 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     });
     await writeState(stateFilePath, state as ConductState);
     await writeFile(
-      join(pipeline, 'manual-test-results.md'),
-      '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 2 | FAIL |\n',
+      join(pipeline, 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
     );
-
     let manualTestRuns = 0;
     let buildRuns = 0;
     const runner: StepRunner = {
@@ -225,7 +219,15 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
           buildRuns++;
           await writeFile(
             join(pipeline, 'task-status.json'),
-            JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+            JSON.stringify({
+              tasks: [
+                { id: 't1', status: 'completed' },
+                ...Array.from({ length: buildRuns }, (_, index) => ({
+                  id: `progress-${index + 1}`,
+                  status: 'completed',
+                })),
+              ],
+            }),
           );
         }
         return { success: true };
@@ -243,31 +245,28 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       events,
       mode: 'auto',
       daemon: true,
-      fromStep: 'build',
-      verifyArtifacts: false,
-      config: {
-        kickback_escalation: { enabled: false },
-        steps: {
-          test_suite: { disable: true },
-        },
-      },
+      fromStep: 'finish',
+      maxRetries: 1,
+      verifyArtifacts: true,
+      finishPublication: { advance: vi.fn(async () => ({ kind: 'complete' } as const)) },
+      config: { kickback_escalation: { enabled: false } },
       fullSuiteVerifier: PASSING_FULL_SUITE_VERIFIER,
       sleepFn: async () => undefined,
       git: async () => ({ stdout: '' }),
       gh: async () => ({ stdout: '' }),
     });
-    const fenceState = await readState(stateFilePath);
-    if (!fenceState.ok) throw new Error('test fixture state must be readable');
-    const fence = await (conductor as unknown as {
-      nonGreenFinishValidators(state: ConductState): Promise<Array<{ name: StepName }>>;
-    }).nonGreenFinishValidators(fenceState.value);
-    expect(fence).toMatchObject([{ name: 'manual_test', verdict: { satisfied: false } }]);
+    await conductor.run();
 
-    // The production FINISH fence reads the persistent FAIL evidence and
-    // selects manual_test. The integration gate-loop suite drives the same
-    // selected validator through its bounded two-kickback HALT path.
-    expect(manualTestRuns).toBe(0);
-    expect(buildRuns).toBe(0);
-    expect(kickbacks).toEqual([]);
+    expect(kickbacks).toEqual([
+      { from: 'finish', to: 'manual_test' },
+      { from: 'manual_test', to: 'build' },
+      { from: 'manual_test', to: 'build' },
+    ]);
+    expect(manualTestRuns).toBe(3);
+    expect(buildRuns).toBe(2);
+    await expect(readFile(join(pipeline, 'HALT'), 'utf8')).resolves.toContain(
+      'manual-test FAIL unresolved after 2 build kickback(s) (cap 2)',
+    );
+    await expect(readFile(join(pipeline, 'HALT.class'), 'utf8')).resolves.toBe('mechanical');
   });
 });
