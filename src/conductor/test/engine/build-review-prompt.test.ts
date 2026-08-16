@@ -389,6 +389,7 @@ each plan task to a specific commit.`;
       ...inputs,
       verifyOnlyContext: [{
         taskId: '4',
+        behavior: 'Document an already-present contract',
         paths: ['src/conductor/src/engine/already`present.ts', 'src/conductor/test/engine/already-present.test.ts'],
       }],
     });
@@ -397,6 +398,7 @@ each plan task to a specific commit.`;
     expect(populated).toMatch(/Engine-parsed verify-only tasks/i);
     expect(populated).toMatch(/evidence,? not an exemption/i);
     expect(populated).toContain('Task 4');
+    expect(populated).toContain('Document an already-present contract');
     expect(populated).toContain('src/conductor/src/engine/already\\`present.ts');
     expect(populated).toContain('src/conductor/test/engine/already-present.test.ts');
     expect(empty).toMatch(/Engine-parsed verify-only tasks[\s\S]*\(none\)/);

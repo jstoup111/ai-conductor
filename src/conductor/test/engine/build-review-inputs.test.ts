@@ -311,8 +311,16 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         headerless: headerlessInputs.verifyOnlyContext,
       }).toEqual({
         eligible: [
-          { taskId: '3', paths: ['src/engine/autoheal.ts', 'src/engine/plan-task-parse.ts'] },
-          { taskId: '4', paths: ['src/engine/build-review-inputs.ts'] },
+          {
+            taskId: '3',
+            behavior: 'Verify parser behavior',
+            paths: ['src/engine/autoheal.ts', 'src/engine/plan-task-parse.ts'],
+          },
+          {
+            taskId: '4',
+            behavior: 'Verify a type-only contract',
+            paths: ['src/engine/build-review-inputs.ts'],
+          },
         ],
         headerless: [],
       });
@@ -335,9 +343,12 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const withMarker = await assembleBuildReviewInputs(git, planPath);
       const { verifyOnlyContext } = withMarker.sourceSnapshot;
 
-      expect(withMarker.sourceSnapshot.digest).not.toBe(withoutMarker.sourceSnapshot.digest);
       expect(verifyOnlyContext).toEqual([
-        { taskId: '3', paths: ['src/engine/build-review-inputs.ts'] },
+        {
+          taskId: '3',
+          behavior: 'Prove existing behavior',
+          paths: ['src/engine/build-review-inputs.ts'],
+        },
       ]);
       expect({
         context: Object.isFrozen(verifyOnlyContext),

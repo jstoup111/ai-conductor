@@ -13,7 +13,7 @@ import { readOperatorReseals, type OperatorReseal } from './protected-artifact-s
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskVerifyOnly } from './autoheal.js';
-import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { parsePlanTaskPaths, parsePlanTaskTitles } from './plan-task-parse.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -75,9 +75,11 @@ export interface BuildReviewInputs {
   sourceSnapshot?: BuildReviewSourceSnapshot;
 }
 
-/** One plan task declared as verify-only, with its parser-derived paths. */
+/** One plan task declared as verify-only, with compact parser-derived review anchors. */
 export interface BuildReviewVerifyOnlyContext {
   readonly taskId: string;
+  /** The task-header behavior description; empty only for an untitled task. */
+  readonly behavior: string;
   readonly paths: readonly string[];
 }
 
@@ -268,9 +270,14 @@ export async function assembleBuildReviewInputs(
   const planBody = await readFile(planPath, 'utf-8');
 
   const planTaskPaths = parsePlanTaskPaths(planBody);
+  const planTaskTitles = parsePlanTaskTitles(planBody);
   const verifyOnlyContext = [...parsePlanTaskVerifyOnly(planBody)]
     .filter(([, verifyOnly]) => verifyOnly)
-    .map(([taskId]) => ({ taskId, paths: [...(planTaskPaths.get(taskId) ?? [])] }));
+    .map(([taskId]) => ({
+      taskId,
+      behavior: planTaskTitles.get(taskId) ?? '',
+      paths: [...(planTaskPaths.get(taskId) ?? [])],
+    }));
 
   const featureRoot = dirname(dirname(dirname(planPath)));
   const planIsInFeatureRoot =
@@ -318,6 +325,7 @@ export async function assembleBuildReviewInputs(
     }),
     verifyOnlyContext: Object.freeze(verifyOnlyContext.map((context) => Object.freeze({
       taskId: context.taskId,
+      behavior: context.behavior,
       paths: Object.freeze([...context.paths]),
     }))),
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;

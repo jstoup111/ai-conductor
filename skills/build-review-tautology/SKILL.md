@@ -19,7 +19,7 @@ Use only the supplied projection version `v2`. Its closed input contains:
 - the changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
   ranges, anchored by `mergeBase` and `headSha`) and changed-test selectors;
 - diff-derived removal evidence (`removalContext`), never an exemption;
-- engine-parsed verify-only task evidence (`verifyOnlyContext`), never an exemption;
+- engine-parsed verify-only task evidence (`verifyOnlyContext`: task ID, compact behavior description, and declared paths), never an exemption;
 - the current code-valid `test_suite` PASS;
 - the reverted-production manifest (`revertedProductionManifest`): per reverted production file,
   its path and merge-base git blob sha. File content is never embedded — recover any file's

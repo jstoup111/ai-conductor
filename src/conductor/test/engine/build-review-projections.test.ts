@@ -51,7 +51,11 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
         }],
         acceptedWidenings: [{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }],
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
-        verifyOnlyContext: [{ taskId: '3', paths: ['src/verified.ts', 'test/verified.test.ts'] }],
+        verifyOnlyContext: [{
+          taskId: '3',
+          behavior: 'Document existing behavior',
+          paths: ['src/verified.ts', 'test/verified.test.ts'],
+        }],
         operatorReseals: [{
           paths: ['.docs/stories/resealed-story.md'],
           reason: 'Operator approved this exact protected-artifact amendment.',
@@ -322,7 +326,11 @@ describe('build-review rubric projections', () => {
         hunks: [{ oldStart: 1, oldCount: 2, newStart: 1, newCount: 3 }],
       }],
       removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
-      verifyOnlyContext: [{ taskId: '3', paths: ['src/verified.ts', 'test/verified.test.ts'] }],
+      verifyOnlyContext: [{
+        taskId: '3',
+        behavior: 'Document existing behavior',
+        paths: ['src/verified.ts', 'test/verified.test.ts'],
+      }],
       changedTestSelectors: expect.any(Array), testSuiteProof: expect.any(Object),
       revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }],
       preflightEvidence: expect.any(Object), repairContext: expect.any(Array),
@@ -498,7 +506,11 @@ describe('build-review rubric projections', () => {
         name: 'verify-only context', affectedRubrics: ['tautology', 'scope', 'rootCause', 'completeness'],
         changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
           ...original.inputs.sourceSnapshot,
-          verifyOnlyContext: [{ taskId: '3', paths: ['src/changed-verified.ts'] }],
+          verifyOnlyContext: [{
+            taskId: '3',
+            behavior: 'Document changed existing behavior',
+            paths: ['src/verified.ts', 'test/verified.test.ts'],
+          }],
         } } }),
       },
       {

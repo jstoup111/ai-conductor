@@ -15,6 +15,7 @@ export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
 const PATH_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yml|yaml|sh|rb|py|go|rs|html|css|scss|vue|toml)$/i;
 const BACKTICK_TOKEN = /`([^`\s]+)`/g;
+const TASK_TITLE_HEADER = /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)|(T\d[A-Za-z0-9._-]*))(?::\s+|\s+[—–]\s+)(.+)$/;
 
 /**
  * Plan task paths with provenance for explicit `**Files:**` declarations.
@@ -75,6 +76,24 @@ function expandTaskIds(raw: string): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * The compact behavior description declared by each titled plan task.
+ *
+ * Consumers use this only as review evidence; an untitled or malformed task
+ * deliberately has no inferred description.
+ */
+export function parsePlanTaskTitles(text: string): ReadonlyMap<string, string> {
+  const titles = new Map<string, string>();
+  for (const line of text.split('\n')) {
+    const match = line.match(TASK_TITLE_HEADER);
+    if (!match) continue;
+    for (const id of expandTaskIds(match[1] ?? match[2]!)) {
+      titles.set(id, match[3]!.trim());
+    }
+  }
+  return titles;
 }
 
 export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTaskPaths {
