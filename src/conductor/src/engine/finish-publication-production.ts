@@ -6,7 +6,8 @@
  * `finish-publication.ts`; this module is deliberately only its real-boundary
  * adapter.
  */
-import { access, lstat, readFile } from 'node:fs/promises';
+import { access, lstat, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -173,6 +174,43 @@ export function createProductionFinishPublicationCoordinator(
   // session, while an unchanged deficient one cannot burn retries.
   const proseRevisionByPr = new Map<string, string>();
   const judgmentByRevision = new Map<string, PrProseJudgmentResult>();
+  // The retained verdicts must survive the coordinator: the daemon builds a
+  // fresh coordinator per dispatch, and losing the map made an already-judged,
+  // unchanged revision pay a new judgment session on every resume — the exact
+  // extra attempt Outcome-style convergence guarantees forbid. Verdicts are
+  // keyed by a digest of the revision (never raw title/body bytes) in a
+  // .pipeline verdict artifact, the same durability pattern as the gate
+  // verdicts. Persistence is best-effort: an unreadable or unwritable store
+  // degrades to the old per-process behavior, never to a failed judgment.
+  const judgmentStorePath = join(pipelineDir, 'prose-judgment.json');
+  const revisionDigest = (revision: string): string =>
+    createHash('sha256').update(revision, 'utf8').digest('hex');
+  let judgmentStoreSeeded: Promise<void> | undefined;
+  const seedJudgmentStore = (): Promise<void> =>
+    (judgmentStoreSeeded ??= (async () => {
+      try {
+        const parsed: unknown = JSON.parse(await readFile(judgmentStorePath, 'utf8'));
+        const records = (parsed as { records?: Record<string, PrProseJudgmentResult> }).records;
+        if (records && typeof records === 'object') {
+          for (const [digest, result] of Object.entries(records)) {
+            if (result && typeof result.kind === 'string') judgmentByRevision.set(digest, result);
+          }
+        }
+      } catch {
+        // Missing or malformed store: start empty, exactly as before.
+      }
+    })());
+  const persistJudgmentStore = async (): Promise<void> => {
+    try {
+      await writeFile(
+        judgmentStorePath,
+        JSON.stringify({ version: 1, records: Object.fromEntries(judgmentByRevision) }, null, 2),
+        'utf8',
+      );
+    } catch {
+      // Best-effort durability; the in-memory verdict still bounds this run.
+    }
+  };
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
@@ -331,12 +369,15 @@ export function createProductionFinishPublicationCoordinator(
               }
             : {}),
           dispatchJudgment: async (request) => {
+            await seedJudgmentStore();
             const revision = proseRevisionByPr.get(request.pullRequestUrl);
-            const cached = revision === undefined ? undefined : judgmentByRevision.get(revision);
+            const digest = revision === undefined ? undefined : revisionDigest(revision);
+            const cached = digest === undefined ? undefined : judgmentByRevision.get(digest);
             if (cached) return cached;
             const result = decodePrProseJudgment(await dispatchJudgment(request));
-            if (revision !== undefined && (result.kind === 'accepted' || result.kind === 'revision_required' || result.kind === 'refused')) {
-              judgmentByRevision.set(revision, result);
+            if (digest !== undefined && (result.kind === 'accepted' || result.kind === 'revision_required' || result.kind === 'refused')) {
+              judgmentByRevision.set(digest, result);
+              await persistJudgmentStore();
             }
             return result;
           },
