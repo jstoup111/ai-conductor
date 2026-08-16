@@ -45,12 +45,15 @@ export class ConductorEventEmitter {
       try {
         const out = handler(event);
         if (out && typeof (out as Promise<void>).then === 'function') {
-          pending.push(
-            (out as Promise<void>).catch((error: unknown) => {
-              if (isolation) this.failIsolation(isolation, error);
+          if (isolation) {
+            void (out as Promise<void>).catch((error: unknown) => {
+              this.failIsolation(isolation, error);
+            });
+          } else {
+            pending.push((out as Promise<void>).catch(() => {
               /* swallow async handler errors */
-            }),
-          );
+            }));
+          }
         }
       } catch (error) {
         if (isolation) this.failIsolation(isolation, error);
@@ -82,10 +85,15 @@ export class ConductorEventEmitter {
       try {
         const out = handler(event);
         if (out && typeof (out as Promise<void>).then === 'function') {
-          pending.push((out as Promise<void>).catch((error: unknown) => {
-            if (isolation) this.failIsolation(isolation, error);
-            else failures.push(error);
-          }));
+          if (isolation) {
+            void (out as Promise<void>).catch((error: unknown) => {
+              this.failIsolation(isolation, error);
+            });
+          } else {
+            pending.push((out as Promise<void>).catch((error: unknown) => {
+              failures.push(error);
+            }));
+          }
         }
       } catch (error) {
         if (isolation) this.failIsolation(isolation, error);

@@ -129,6 +129,39 @@ describe('Visualizer wiring helpers', () => {
     }
   });
 
+  it('does not stall event delivery when a visualizer listener never settles', async () => {
+    vi.useFakeTimers();
+    const emitter = new ConductorEventEmitter();
+    const visualizer: VisualizerPlugin = {
+      name: 'never-settling-listener',
+      start: (visualizerEmitter) => {
+        visualizerEmitter.on(
+          'step_started',
+          () => new Promise<void>(() => {}),
+        );
+      },
+      stop: async () => {},
+    };
+
+    try {
+      buildVisualizers([visualizer], emitter);
+      const outcome = Promise.race([
+        emitter
+          .emit({ type: 'step_started', step: 'explore', index: 0 })
+          .then(() => 'delivered' as const),
+        new Promise<'timed-out'>((resolve) => {
+          setTimeout(() => resolve('timed-out'), 25);
+        }),
+      ]);
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(await outcome).toBe('delivered');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stopVisualizers calls stop() on each visualizer', async () => {
     const { stopVisualizers } = await import('../../src/index.js');
     const vis = new FakeVisualizer();
