@@ -458,7 +458,17 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
 
     expect(judged.projection.preservationContext ?? []).toEqual([]);
     expect(judged.projection.removalContext.deletedFiles).toContain(CARRIER_PATH);
-    expect(judged.result.findings?.[0]?.anchor.missingOutcome).toBe(behavior);
+    expect(judged.result).toMatchObject({
+      kind: 'judged',
+      contractVersion: 'v1',
+      findings: [{
+        anchor: {
+          rubric: 'completeness',
+          planTask: '9',
+          missingOutcome: behavior,
+        },
+      }],
+    });
   });
 
   it('grants no exemption when a clause names behavior with no merge-base carrier', async () => {
@@ -473,6 +483,16 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
 
     expect(judged.projection.preservationContext).toEqual([{ taskId: '9', behavior }]);
     expect(judged.projection.removalContext.deletedFiles).toEqual([]);
-    expect(judged.result.findings?.[0]?.anchor.missingOutcome).toBe(behavior);
+    expect(judged.result).toMatchObject({
+      kind: 'judged',
+      contractVersion: 'v1',
+      findings: [{
+        anchor: {
+          rubric: 'completeness',
+          planTask: '9',
+          missingOutcome: behavior,
+        },
+      }],
+    });
   });
 });
