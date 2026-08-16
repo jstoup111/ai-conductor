@@ -242,7 +242,11 @@ describe('ClaudeProvider', () => {
         await provider.invoke({ ...baseOptions, dangerouslySkipPermissions: true });
         const [command, , options] = mockExeca.mock.calls[0] as [string, string[], any];
         expect(command).toBe('claude');
-        expect(options.env?.CODEX_HOME).toBeUndefined();
+        // Claude adds no Codex-specific overlay of its own: the child env is
+        // exactly the inherited parent env (which may carry CODEX_HOME) plus
+        // the daemon-session marker — same inheritance as the pre-marker
+        // behavior where env was left undefined for execa to inherit.
+        expect(options.env).toEqual({ ...process.env, CONDUCT_DAEMON_SESSION: '1' });
       } finally {
         if (priorHome === undefined) delete process.env.CODEX_HOME;
         else process.env.CODEX_HOME = priorHome;
@@ -1165,13 +1169,18 @@ describe('ClaudeProvider', () => {
       expect(opts.env.CLAUDE_CODE_EFFORT_LEVEL).toBe('xhigh');
     });
 
-    it('omits env overlay when effort is not set (inherits parent env)', async () => {
+    it('passes only the parent env plus the daemon-session marker when effort is not set', async () => {
       mockExeca.mockResolvedValue({ stdout: '', exitCode: 0, failed: false } as any);
 
       await provider.invoke({ ...baseOptions });
 
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
-      expect(opts.env).toBeUndefined();
+      // The env is always passed now (it carries CONDUCT_DAEMON_SESSION=1 for
+      // the conduct-ts entry guard) but adds no effort override: parent env
+      // plus exactly the marker.
+      expect(opts.env.CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined();
+      expect(opts.env.CONDUCT_DAEMON_SESSION).toBe('1');
+      expect(opts.env).toEqual({ ...process.env, CONDUCT_DAEMON_SESSION: '1' });
     });
 
     it('invokeInteractive also forwards the effort env var', async () => {

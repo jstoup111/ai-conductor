@@ -8,6 +8,7 @@ import {
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
+import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
@@ -757,15 +758,18 @@ export class ClaudeProvider implements LLMProvider {
    * frontmatter, and (b) it cascades to subagents spawned inside the session
    * (so e.g. assess's CTO subagents inherit the parent step's effort).
    *
-   * Returns undefined when no override is needed so execa uses the default
-   * inherited environment.
+   * Every session env additionally carries the daemon-session marker
+   * (CONDUCT_DAEMON_SESSION=1): any Claude session spawned through this
+   * adapter is engine-managed, and the conduct-ts entry guard uses the
+   * marker to refuse recursive conductor invocations from inside it (see
+   * daemon-session.ts). Boundary enforcement, same pattern as
+   * enforceFreshSessionOptions — no config off-switch.
    */
-  private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv | undefined {
-    if (!options.effort && !options.selfHost?.env) return undefined;
-    return {
+  private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv {
+    return withDaemonSessionMarker({
       ...process.env,
       ...options.selfHost?.env,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
-    };
+    });
   }
 }

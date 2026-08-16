@@ -20,6 +20,7 @@ import {
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
+import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
@@ -803,9 +804,16 @@ export class CodexProvider implements LLMProvider {
     return args;
   }
 
-  private invocationEnv(options: InvokeOptions, authentication: SelectedAuthentication): NodeJS.ProcessEnv | undefined {
+  private invocationEnv(options: InvokeOptions, authentication: SelectedAuthentication): NodeJS.ProcessEnv {
     const auth = authentication.apiKey ? { CODEX_API_KEY: authentication.apiKey } : undefined;
-    return options.selfHost ? { ...options.selfHost.env, ...auth } : auth;
+    // Every session env carries the daemon-session marker: any Codex session
+    // spawned through this adapter is engine-managed, and the conduct-ts
+    // entry guard refuses recursive conductor invocations from inside it
+    // (see daemon-session.ts). Applied last so neither self-host env nor auth
+    // can unset it.
+    return withDaemonSessionMarker(
+      options.selfHost ? { ...options.selfHost.env, ...auth } : auth,
+    );
   }
 
   private selfHostArgs(options: InvokeOptions): readonly string[] {

@@ -84,6 +84,21 @@ already-applied=<n>`.
 Commands that are advisory by contract always exit 0 regardless of outcome: `overlap-scan`, `kpi`,
 `shipped-record`, `shipment-evidence audit`, and `render-diagrams` in its default (non-`--check`) mode.
 
+## Daemon-session refusal
+
+Every provider session the engine dispatches (daemon builds, reviews, interactive-conductor steps,
+self-host candidates — both providers, invoke and interactive paths) carries
+`CONDUCT_DAEMON_SESSION=1` in its environment. When that marker is present, `conduct-ts` refuses to
+run — printing `conduct-ts may not be invoked from inside a daemon-managed session; the engine owns
+all conductor operations for this run` and exiting 1 — before any subcommand parsing. This exists
+because dispatched maker sessions have recursively invoked the conductor (including `daemon
+park`/`unpark`/`restart` and `reseal`), corrupting the run that dispatched them; the engine that
+started the session owns all conductor operations for it. The only exceptions are the
+session-sanctioned worker commands the harness's own skills and hooks require a session to run —
+`scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`, `closeout-event`, and
+`derive-feedback` — which stay available under the marker. There is no config off-switch;
+enforcement lives in `src/conductor/src/execution/daemon-session.ts`.
+
 ## `conduct-ts build-review`
 
 ```bash
