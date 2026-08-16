@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.104.0] - 2026-08-16
+## [0.102.0] - 2026-08-16
 
 ### Added
 
@@ -76,6 +76,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - FINISH prose judgments persist per revision, so resumed publications re-observe accepted prose instead of paying a new judgment attempt. ([implementation PR #1653](https://github.com/jstoup111/ai-conductor/pull/1653)).
 - The release gate no longer rejects a valid Migration section when the draft PR's unreplaced Closes placeholder comment follows it. ([implementation PR #1658](https://github.com/jstoup111/ai-conductor/pull/1658)).
 - Release-PR maintenance no longer wedges when a prior release PR merged but its publication failed. ([implementation PR #1662](https://github.com/jstoup111/ai-conductor/pull/1662)).
+- Release renders now base the next version on the last published tag, so failed publishes no longer consume version numbers or leave phantom changelog sections. ([implementation PR #1665](https://github.com/jstoup111/ai-conductor/pull/1665)).
 
 ### Security
 
@@ -102,75 +103,6 @@ branches never edit either file (see `docs/contributing/releases.md`).
 "$HARNESS_DIR/bin/install" --update
 ```
 
-## [0.103.0] - 2026-08-16
-
-### Added
-
-- A plan can declare that a task replicates an existing source file under a rename map, and BUILD mechanically copies and verifies that replication with a new blocking `build_review` gate instead of relying on an LLM to reproduce it from scratch. ([implementation PR #1451](https://github.com/jstoup111/ai-conductor/pull/1451)).
-- Add a `conduct-ts build-tail` rollup command and pipeline closeout-event telemetry that decompose build-step timing into task execution, remediation, and closeout, surfaced in the terminal UI and OTel export. ([implementation PR #1395](https://github.com/jstoup111/ai-conductor/pull/1395)).
-- Operators can now run `conduct-ts reseal` from an interactive terminal to re-fingerprint approved, amended protected DECIDE artifacts, with every reseal and refusal recorded in the audit trail. ([implementation PR #1454](https://github.com/jstoup111/ai-conductor/pull/1454)).
-- conflict-check and coherence-check now detect and block contradictions between approved ADRs and stories before they reach BUILD, with the ADR corpus scoped by the new `conflict_check.adr_corpus` config key (default `change_set`, or `repo_wide` to compare against every approved decision). ([implementation PR #1453](https://github.com/jstoup111/ai-conductor/pull/1453)).
-- build_review's grader now sees and judges operator-authorized protected-artifact reseal rationale instead of grading the diff blind to it. ([implementation PR #1556](https://github.com/jstoup111/ai-conductor/pull/1556)).
-- Split `build_review` into four independently configurable rubrics (tautology, scope, root cause, completeness) that run concurrently, retire the wiring rubric, and let an operator accept one specific finding with a mandatory rationale via `conduct-ts build-review findings` and `accept` so it no longer blocks later review laps. ([implementation PR #1563](https://github.com/jstoup111/ai-conductor/pull/1563)).
-
-### Changed
-
-- Unattended runs now use the daemon while foreground auto mode exits with migration guidance. ([implementation PR #1509](https://github.com/jstoup111/ai-conductor/pull/1509)).
-- The daemon dashboard now shows dispatch elapsed time, last test outcome, and acceptance-spec RED-evidence status for in-progress features, and acceptance-spec RED evidence records failing-test identity and provenance so remediations can be verified or explicitly waived. ([implementation PR #1485](https://github.com/jstoup111/ai-conductor/pull/1485)).
-- build_review rubric branches now carry weighted default efforts (rootCause medium, others high); explicit rubric or step config overrides. ([implementation PR #1591](https://github.com/jstoup111/ai-conductor/pull/1591)).
-- The tdd skill now scopes RED cycles away from removals and requires a pre-diff failure check before a task commits a new or changed test. ([implementation PR #1633](https://github.com/jstoup111/ai-conductor/pull/1633)).
-
-### Deprecated
-
-- Deprecates the per-task Wired-into contract layer in favor of the build_review wiring rubric while retaining compatibility for existing plan annotations and wiring_check state. ([implementation PR #1517](https://github.com/jstoup111/ai-conductor/pull/1517)).
-
-### Removed
-
-- build_review no longer judges wiring reachability. The gate scores four rubric items (tautology, scope, root cause, completeness); the retired `wiring` verdict and config keys are ignored rather than rejected, so in-flight verdicts and existing consumer configs keep working. ([implementation PR #1577](https://github.com/jstoup111/ai-conductor/pull/1577)).
-
-### Fixed
-
-- Spec PRs opened into a repository that requires a release disposition now always declare one, so its required release-metadata check no longer fails on every landed spec. ([implementation PR #1448](https://github.com/jstoup111/ai-conductor/pull/1448)).
-- `Wired-into:` inert waivers accept `Task N` (a task in the same plan) and bare `#N` issue refs, and an unrecognized ref is now rejected at authoring time instead of failing the build as a missing file. ([implementation PR #1469](https://github.com/jstoup111/ai-conductor/pull/1469)).
-- Self-host builds no longer halt when a concurrent Codex session opens or closes a thread, which wrote transient lock files into the fingerprinted provider-state directory. ([implementation PR #1470](https://github.com/jstoup111/ai-conductor/pull/1470)).
-- A rebase that only pulls in unrelated base-branch changes no longer discards the build_review verdict, cutting the harness's largest LLM cost; the feature's own code or tests still re-open it. ([implementation PR #1473](https://github.com/jstoup111/ai-conductor/pull/1473)).
-- The daemon repairs a feature's retained PR after a transient HALT instead of leaving it stuck as an unrecoverable "needs-remediation" placeholder. ([implementation PR #1468](https://github.com/jstoup111/ai-conductor/pull/1468)).
-- Finish no longer halts with "release metadata is malformed or non-canonical" when its publication spans more than one dispatch. ([implementation PR #1499](https://github.com/jstoup111/ai-conductor/pull/1499)).
-- The prd_audit gate now fails closed when the audit report is missing a verdict row for any functional requirement in the feature's approved PRD, instead of passing on a partial report. ([implementation PR #1457](https://github.com/jstoup111/ai-conductor/pull/1457)).
-- Protected artifact seal rotation no longer refuses when a base-ahead path was never touched by the feature, avoiding false "seal rebaseline refused" halts. ([implementation PR #1498](https://github.com/jstoup111/ai-conductor/pull/1498)).
-- `conduct-ts scoped-run` now runs in `test_suite.working_directory` and rebases project-root-relative selectors onto it, so scoped test runs work in monorepo layouts. ([implementation PR #1520](https://github.com/jstoup111/ai-conductor/pull/1520)).
-- A rebase no longer halts for human review when a feature commit is dropped because the base already landed an equivalent change. ([implementation PR #1544](https://github.com/jstoup111/ai-conductor/pull/1544)).
-- build_review now terminates in an operator-visible halt after a bounded number of cumulative kickbacks instead of churning indefinitely, and no longer grades removal maintenance as a tautology. ([implementation PR #1526](https://github.com/jstoup111/ai-conductor/pull/1526)).
-- build_review no longer flags diff-required fixture relocations as Tautology failures when a production hunk in the same diff forces the path move. ([implementation PR #1546](https://github.com/jstoup111/ai-conductor/pull/1546)).
-- build_review no longer flags diff-required fixture relocations as Tautology failures when a production hunk in the same diff forces the path move. ([implementation PR #1549](https://github.com/jstoup111/ai-conductor/pull/1549)).
-- Rebase-invalidated test failures are now durably matched to the base advance that caused them via the event spine, so build_review reliably receives repair context instead of losing it to an overwritten transient signal. ([implementation PR #1543](https://github.com/jstoup111/ai-conductor/pull/1543)).
-- Self-host daemon runs now sweep and reclaim leaked provider scratch homes left behind by abruptly interrupted attempts, instead of leaving them to accumulate. ([implementation PR #1495](https://github.com/jstoup111/ai-conductor/pull/1495)).
-- Build reviews now give actionable retry feedback when a PASS verdict contradicts its rubric flags. ([implementation PR #1560](https://github.com/jstoup111/ai-conductor/pull/1560)).
-- Fix build reviews that repeatedly halt after a clean pass because rubric booleans are inverted. ([implementation PR #1562](https://github.com/jstoup111/ai-conductor/pull/1562)).
-- PRD audit now resolves date-prefixed PRD filenames for the active feature. ([implementation PR #1566](https://github.com/jstoup111/ai-conductor/pull/1566)).
-- Spec and implementation PRs no longer fail the release-metadata check when their issue-linking trailer follows a trailing Migration section. ([implementation PR #1569](https://github.com/jstoup111/ai-conductor/pull/1569)).
-- Fresh installs and updates now follow a stable branch that advances only after a release is fully published. ([implementation PR #1561](https://github.com/jstoup111/ai-conductor/pull/1561)).
-- `remediate` now routes a build_review gap to `build` when an existing approved-plan task already admits the fix, instead of incorrectly halting for a needless re-plan. ([implementation PR #1571](https://github.com/jstoup111/ai-conductor/pull/1571)).
-- An operator-authorized protected-artifact reseal now survives later seal rebaselining, instead of halting the feature every time its base branch moves. ([implementation PR #1576](https://github.com/jstoup111/ai-conductor/pull/1576)).
-- build_review's tautology preflight counts a reverted-tree test collection failure as RED instead of infrastructure, and rubric sessions' JSON verdicts parse through prose or markdown wrapping. ([implementation PR #1593](https://github.com/jstoup111/ai-conductor/pull/1593)).
-- build_review rubric sessions receive the changed-file list and hunk line ranges instead of the full embedded diff, reading the worktree directly — cutting per-branch prompt size ~95% and stabilizing grader output on large diffs. ([implementation PR #1595](https://github.com/jstoup111/ai-conductor/pull/1595)).
-- Provider sessions are always fresh — the adapters replace any supplied session id and strip resume flags unconditionally, so no call path can resume a prior conversation. ([implementation PR #1596](https://github.com/jstoup111/ai-conductor/pull/1596)).
-- build_review tautology prompts are bounded by construction (path manifest + closed run verdict instead of embedded file contents and raw test output), fixing prompt-too-long failures on large features. ([implementation PR #1600](https://github.com/jstoup111/ai-conductor/pull/1600)).
-- build_review rubric dispatches enforce the judged-result schema with a bounded in-dispatch repair, and kickback routing honors operator dispositions recorded after aggregate composition. ([implementation PR #1605](https://github.com/jstoup111/ai-conductor/pull/1605)).
-- `build_review`'s rubric cache no longer misses on every rebase — a rebase that leaves diff and plan content unchanged now reuses prior rubric judgements instead of re-judging all four branches. ([implementation PR #1601](https://github.com/jstoup111/ai-conductor/pull/1601)).
-- The Tautology build-review gate no longer blocks a build when a plan task is correctly declared verify-only and its changed test does not assert new behavior. ([implementation PR #1618](https://github.com/jstoup111/ai-conductor/pull/1618)).
-- Loop halts, rebase-conflict halts, and failed halt-marker writes now persist to `.pipeline/events.jsonl`, so a halt is reconstructable from the audit ledger alone. ([implementation PR #1519](https://github.com/jstoup111/ai-conductor/pull/1519)).
-- The tautology preflight now reverts renamed files in its counterfactual instead of discarding its mechanical evidence for the whole lap. ([implementation PR #1632](https://github.com/jstoup111/ai-conductor/pull/1632)).
-- Remediation repairs now carry pointers to the governing plan task and prior same-anchor attempts, instead of being dispatched blind to the plan contract. ([implementation PR #1637](https://github.com/jstoup111/ai-conductor/pull/1637)).
-- Intake commands now fail closed with a clear error and an untouched ledger when the intake ledger is corrupt, instead of risking silent data loss. ([implementation PR #1541](https://github.com/jstoup111/ai-conductor/pull/1541)).
-- Claude usage lines now count cached input, so per-dispatch and feature token totals reflect real prompt volume. ([implementation PR #1641](https://github.com/jstoup111/ai-conductor/pull/1641)).
-- FINISH prose judgments persist per revision, so resumed publications re-observe accepted prose instead of paying a new judgment attempt. ([implementation PR #1653](https://github.com/jstoup111/ai-conductor/pull/1653)).
-- The release gate no longer rejects a valid Migration section when the draft PR's unreplaced Closes placeholder comment follows it. ([implementation PR #1658](https://github.com/jstoup111/ai-conductor/pull/1658)).
-
-### Security
-
-- Shipped records and retained PR bodies list accepted build-review findings by id only; summaries, rationales, operator identity, and timestamps stay in the local disposition store. ([implementation PR #1615](https://github.com/jstoup111/ai-conductor/pull/1615)).
-
 ## Migration
 
 ```bash migration
@@ -191,74 +123,6 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ```bash migration
 "$HARNESS_DIR/bin/install" --update
 ```
-
-## [0.102.0] - 2026-08-16
-
-### Added
-
-- A plan can declare that a task replicates an existing source file under a rename map, and BUILD mechanically copies and verifies that replication with a new blocking `build_review` gate instead of relying on an LLM to reproduce it from scratch. ([implementation PR #1451](https://github.com/jstoup111/ai-conductor/pull/1451)).
-- Add a `conduct-ts build-tail` rollup command and pipeline closeout-event telemetry that decompose build-step timing into task execution, remediation, and closeout, surfaced in the terminal UI and OTel export. ([implementation PR #1395](https://github.com/jstoup111/ai-conductor/pull/1395)).
-- Operators can now run `conduct-ts reseal` from an interactive terminal to re-fingerprint approved, amended protected DECIDE artifacts, with every reseal and refusal recorded in the audit trail. ([implementation PR #1454](https://github.com/jstoup111/ai-conductor/pull/1454)).
-- conflict-check and coherence-check now detect and block contradictions between approved ADRs and stories before they reach BUILD, with the ADR corpus scoped by the new `conflict_check.adr_corpus` config key (default `change_set`, or `repo_wide` to compare against every approved decision). ([implementation PR #1453](https://github.com/jstoup111/ai-conductor/pull/1453)).
-- build_review's grader now sees and judges operator-authorized protected-artifact reseal rationale instead of grading the diff blind to it. ([implementation PR #1556](https://github.com/jstoup111/ai-conductor/pull/1556)).
-- Split `build_review` into four independently configurable rubrics (tautology, scope, root cause, completeness) that run concurrently, retire the wiring rubric, and let an operator accept one specific finding with a mandatory rationale via `conduct-ts build-review findings` and `accept` so it no longer blocks later review laps. ([implementation PR #1563](https://github.com/jstoup111/ai-conductor/pull/1563)).
-
-### Changed
-
-- Unattended runs now use the daemon while foreground auto mode exits with migration guidance. ([implementation PR #1509](https://github.com/jstoup111/ai-conductor/pull/1509)).
-- The daemon dashboard now shows dispatch elapsed time, last test outcome, and acceptance-spec RED-evidence status for in-progress features, and acceptance-spec RED evidence records failing-test identity and provenance so remediations can be verified or explicitly waived. ([implementation PR #1485](https://github.com/jstoup111/ai-conductor/pull/1485)).
-- build_review rubric branches now carry weighted default efforts (rootCause medium, others high); explicit rubric or step config overrides. ([implementation PR #1591](https://github.com/jstoup111/ai-conductor/pull/1591)).
-- The tdd skill now scopes RED cycles away from removals and requires a pre-diff failure check before a task commits a new or changed test. ([implementation PR #1633](https://github.com/jstoup111/ai-conductor/pull/1633)).
-
-### Deprecated
-
-- Deprecates the per-task Wired-into contract layer in favor of the build_review wiring rubric while retaining compatibility for existing plan annotations and wiring_check state. ([implementation PR #1517](https://github.com/jstoup111/ai-conductor/pull/1517)).
-
-### Removed
-
-- build_review no longer judges wiring reachability. The gate scores four rubric items (tautology, scope, root cause, completeness); the retired `wiring` verdict and config keys are ignored rather than rejected, so in-flight verdicts and existing consumer configs keep working. ([implementation PR #1577](https://github.com/jstoup111/ai-conductor/pull/1577)).
-
-### Fixed
-
-- Spec PRs opened into a repository that requires a release disposition now always declare one, so its required release-metadata check no longer fails on every landed spec. ([implementation PR #1448](https://github.com/jstoup111/ai-conductor/pull/1448)).
-- `Wired-into:` inert waivers accept `Task N` (a task in the same plan) and bare `#N` issue refs, and an unrecognized ref is now rejected at authoring time instead of failing the build as a missing file. ([implementation PR #1469](https://github.com/jstoup111/ai-conductor/pull/1469)).
-- Self-host builds no longer halt when a concurrent Codex session opens or closes a thread, which wrote transient lock files into the fingerprinted provider-state directory. ([implementation PR #1470](https://github.com/jstoup111/ai-conductor/pull/1470)).
-- A rebase that only pulls in unrelated base-branch changes no longer discards the build_review verdict, cutting the harness's largest LLM cost; the feature's own code or tests still re-open it. ([implementation PR #1473](https://github.com/jstoup111/ai-conductor/pull/1473)).
-- The daemon repairs a feature's retained PR after a transient HALT instead of leaving it stuck as an unrecoverable "needs-remediation" placeholder. ([implementation PR #1468](https://github.com/jstoup111/ai-conductor/pull/1468)).
-- Finish no longer halts with "release metadata is malformed or non-canonical" when its publication spans more than one dispatch. ([implementation PR #1499](https://github.com/jstoup111/ai-conductor/pull/1499)).
-- The prd_audit gate now fails closed when the audit report is missing a verdict row for any functional requirement in the feature's approved PRD, instead of passing on a partial report. ([implementation PR #1457](https://github.com/jstoup111/ai-conductor/pull/1457)).
-- Protected artifact seal rotation no longer refuses when a base-ahead path was never touched by the feature, avoiding false "seal rebaseline refused" halts. ([implementation PR #1498](https://github.com/jstoup111/ai-conductor/pull/1498)).
-- `conduct-ts scoped-run` now runs in `test_suite.working_directory` and rebases project-root-relative selectors onto it, so scoped test runs work in monorepo layouts. ([implementation PR #1520](https://github.com/jstoup111/ai-conductor/pull/1520)).
-- A rebase no longer halts for human review when a feature commit is dropped because the base already landed an equivalent change. ([implementation PR #1544](https://github.com/jstoup111/ai-conductor/pull/1544)).
-- build_review now terminates in an operator-visible halt after a bounded number of cumulative kickbacks instead of churning indefinitely, and no longer grades removal maintenance as a tautology. ([implementation PR #1526](https://github.com/jstoup111/ai-conductor/pull/1526)).
-- build_review no longer flags diff-required fixture relocations as Tautology failures when a production hunk in the same diff forces the path move. ([implementation PR #1546](https://github.com/jstoup111/ai-conductor/pull/1546)).
-- build_review no longer flags diff-required fixture relocations as Tautology failures when a production hunk in the same diff forces the path move. ([implementation PR #1549](https://github.com/jstoup111/ai-conductor/pull/1549)).
-- Rebase-invalidated test failures are now durably matched to the base advance that caused them via the event spine, so build_review reliably receives repair context instead of losing it to an overwritten transient signal. ([implementation PR #1543](https://github.com/jstoup111/ai-conductor/pull/1543)).
-- Self-host daemon runs now sweep and reclaim leaked provider scratch homes left behind by abruptly interrupted attempts, instead of leaving them to accumulate. ([implementation PR #1495](https://github.com/jstoup111/ai-conductor/pull/1495)).
-- Build reviews now give actionable retry feedback when a PASS verdict contradicts its rubric flags. ([implementation PR #1560](https://github.com/jstoup111/ai-conductor/pull/1560)).
-- Fix build reviews that repeatedly halt after a clean pass because rubric booleans are inverted. ([implementation PR #1562](https://github.com/jstoup111/ai-conductor/pull/1562)).
-- PRD audit now resolves date-prefixed PRD filenames for the active feature. ([implementation PR #1566](https://github.com/jstoup111/ai-conductor/pull/1566)).
-- Spec and implementation PRs no longer fail the release-metadata check when their issue-linking trailer follows a trailing Migration section. ([implementation PR #1569](https://github.com/jstoup111/ai-conductor/pull/1569)).
-- Fresh installs and updates now follow a stable branch that advances only after a release is fully published. ([implementation PR #1561](https://github.com/jstoup111/ai-conductor/pull/1561)).
-- `remediate` now routes a build_review gap to `build` when an existing approved-plan task already admits the fix, instead of incorrectly halting for a needless re-plan. ([implementation PR #1571](https://github.com/jstoup111/ai-conductor/pull/1571)).
-- An operator-authorized protected-artifact reseal now survives later seal rebaselining, instead of halting the feature every time its base branch moves. ([implementation PR #1576](https://github.com/jstoup111/ai-conductor/pull/1576)).
-- build_review's tautology preflight counts a reverted-tree test collection failure as RED instead of infrastructure, and rubric sessions' JSON verdicts parse through prose or markdown wrapping. ([implementation PR #1593](https://github.com/jstoup111/ai-conductor/pull/1593)).
-- build_review rubric sessions receive the changed-file list and hunk line ranges instead of the full embedded diff, reading the worktree directly — cutting per-branch prompt size ~95% and stabilizing grader output on large diffs. ([implementation PR #1595](https://github.com/jstoup111/ai-conductor/pull/1595)).
-- Provider sessions are always fresh — the adapters replace any supplied session id and strip resume flags unconditionally, so no call path can resume a prior conversation. ([implementation PR #1596](https://github.com/jstoup111/ai-conductor/pull/1596)).
-- build_review tautology prompts are bounded by construction (path manifest + closed run verdict instead of embedded file contents and raw test output), fixing prompt-too-long failures on large features. ([implementation PR #1600](https://github.com/jstoup111/ai-conductor/pull/1600)).
-- build_review rubric dispatches enforce the judged-result schema with a bounded in-dispatch repair, and kickback routing honors operator dispositions recorded after aggregate composition. ([implementation PR #1605](https://github.com/jstoup111/ai-conductor/pull/1605)).
-- `build_review`'s rubric cache no longer misses on every rebase — a rebase that leaves diff and plan content unchanged now reuses prior rubric judgements instead of re-judging all four branches. ([implementation PR #1601](https://github.com/jstoup111/ai-conductor/pull/1601)).
-- The Tautology build-review gate no longer blocks a build when a plan task is correctly declared verify-only and its changed test does not assert new behavior. ([implementation PR #1618](https://github.com/jstoup111/ai-conductor/pull/1618)).
-- Loop halts, rebase-conflict halts, and failed halt-marker writes now persist to `.pipeline/events.jsonl`, so a halt is reconstructable from the audit ledger alone. ([implementation PR #1519](https://github.com/jstoup111/ai-conductor/pull/1519)).
-- The tautology preflight now reverts renamed files in its counterfactual instead of discarding its mechanical evidence for the whole lap. ([implementation PR #1632](https://github.com/jstoup111/ai-conductor/pull/1632)).
-- Remediation repairs now carry pointers to the governing plan task and prior same-anchor attempts, instead of being dispatched blind to the plan contract. ([implementation PR #1637](https://github.com/jstoup111/ai-conductor/pull/1637)).
-- Intake commands now fail closed with a clear error and an untouched ledger when the intake ledger is corrupt, instead of risking silent data loss. ([implementation PR #1541](https://github.com/jstoup111/ai-conductor/pull/1541)).
-- Claude usage lines now count cached input, so per-dispatch and feature token totals reflect real prompt volume. ([implementation PR #1641](https://github.com/jstoup111/ai-conductor/pull/1641)).
-- FINISH prose judgments persist per revision, so resumed publications re-observe accepted prose instead of paying a new judgment attempt. ([implementation PR #1653](https://github.com/jstoup111/ai-conductor/pull/1653)).
-
-### Security
-
-- Shipped records and retained PR bodies list accepted build-review findings by id only; summaries, rationales, operator identity, and timestamps stay in the local disposition store. ([implementation PR #1615](https://github.com/jstoup111/ai-conductor/pull/1615)).
 
 ## Migration
 
