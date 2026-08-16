@@ -39,6 +39,11 @@ projections/skills), and lands the maker-side authoring boundaries. 11 tasks.
   parallel, then the three authoring skills (independent).
 - The two prior-story amendment notes and the conflict report were authored in DECIDE and travel
   in the spec commit — they are not build tasks (sealed-artifact prohibition).
+- **Conflict report canonical path (operator amendment, 2026-08-16):** the report lives at
+  `.docs/conflicts/2026-08-15-tautology-fails-are-unfixable-when-planned-behavio.md` — renamed
+  from its original topic stem so the engine's normalized-stem artifact association binds it to
+  this feature (#1617). The rename commit is operator-authorized, in-plan surface; it must be
+  preserved, not reverted to the topic-stem name.
 
 ## Prerequisites
 
