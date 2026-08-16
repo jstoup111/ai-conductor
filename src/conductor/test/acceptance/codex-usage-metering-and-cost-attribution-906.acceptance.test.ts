@@ -829,8 +829,8 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
       }
       expect(artifacts).toContain('renders neither halt nor kickback tables');
       expect(stalledRunbook).toContain('renders neither halt nor kickback tables');
-      expect(artifacts).not.toMatch(/aggregateHalts\/--report.*reflect real halt occurrences/);
-      expect(artifacts).not.toMatch(/--report['’]s kickback table/);
+      expect(artifacts).not.toMatch(/`aggregateHalts` always returns/);
+      expect(artifacts).not.toMatch(/kickback table do reflect real/);
     });
 
     it('Story 6 NP-1: an older record with no providers: sub-block renders top-level totals without error', async () => {
