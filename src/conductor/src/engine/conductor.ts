@@ -2686,7 +2686,10 @@ export class Conductor {
     let planPointers: readonly string[] = [];
     if (activePlanPath) {
       try {
-        const plan = await readFile(join(this.projectRoot, activePlanPath), 'utf-8');
+        const plan = await readFile(
+          isAbsolute(activePlanPath) ? activePlanPath : join(this.projectRoot, activePlanPath),
+          'utf-8',
+        );
         planPointers = planContractPointers(findings, plan, activePlanPath);
       } catch {
         // Plan evidence is advisory; preserve independent prior-attempt pointers.

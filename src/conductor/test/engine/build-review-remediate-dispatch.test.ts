@@ -21,6 +21,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
 
   async function dispatchPointerContext(options: {
     readonly activePlan: boolean;
+    readonly absoluteActivePlanPath?: boolean;
     readonly priorArtifacts: Readonly<Record<string, string>>;
     readonly planTask?: string;
     readonly priorLapDirectory?: boolean;
@@ -72,9 +73,10 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
       },
     });
     if (options.activePlan) {
-      const activePlanPath = '.docs/plans/active-remediation-plan.md';
+      const relativePlanPath = '.docs/plans/active-remediation-plan.md';
+      const activePlanPath = options.absoluteActivePlanPath ? join(dir, relativePlanPath) : relativePlanPath;
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, activePlanPath), '### Task 42: Preserve the remediation context contract\n');
+      await writeFile(join(dir, relativePlanPath), '### Task 42: Preserve the remediation context contract\n');
       await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath }));
     }
     for (const [file, contents] of Object.entries(options.priorArtifacts)) {
@@ -320,6 +322,21 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     expect(remediationContext).not.toContain('plan contract:');
     expect(remediationContext).not.toContain('prior attempts:');
     expect(remediationContext).not.toContain('error');
+  });
+
+  it('loads an absolute active plan path before adding its plan-contract pointer', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-review-remediate-absolute-plan-'));
+    const remediationContext = await dispatchPointerContext({
+      activePlan: true,
+      absoluteActivePlanPath: true,
+      priorArtifacts: {},
+      priorLapDirectory: false,
+    });
+
+    expect(remediationContext).toContain(
+      `plan contract: ${join(dir, '.docs', 'plans', 'active-remediation-plan.md')} — Task 42 ` +
+      '(anchor: pass plan and prior-attempt pointers to remediation)',
+    );
   });
 
   it('retains a same-anchor prior-attempt pointer without an active plan', async () => {
