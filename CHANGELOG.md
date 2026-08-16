@@ -71,6 +71,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Loop halts, rebase-conflict halts, and failed halt-marker writes now persist to `.pipeline/events.jsonl`, so a halt is reconstructable from the audit ledger alone. ([implementation PR #1519](https://github.com/jstoup111/ai-conductor/pull/1519)).
 - The tautology preflight now reverts renamed files in its counterfactual instead of discarding its mechanical evidence for the whole lap. ([implementation PR #1632](https://github.com/jstoup111/ai-conductor/pull/1632)).
 - Remediation repairs now carry pointers to the governing plan task and prior same-anchor attempts, instead of being dispatched blind to the plan contract. ([implementation PR #1637](https://github.com/jstoup111/ai-conductor/pull/1637)).
+- Intake commands now fail closed with a clear error and an untouched ledger when the intake ledger is corrupt, instead of risking silent data loss. ([implementation PR #1541](https://github.com/jstoup111/ai-conductor/pull/1541)).
+- Claude usage lines now count cached input, so per-dispatch and feature token totals reflect real prompt volume. ([implementation PR #1641](https://github.com/jstoup111/ai-conductor/pull/1641)).
 
 ### Security
 
