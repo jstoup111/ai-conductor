@@ -133,7 +133,7 @@ describe('loadStore()', () => {
       vi.useRealTimers();
     }
 
-    await expect({
+    expect({
       collision: await readFile(`${ledgerPath}.corrupt-1786622400000`),
       resolved: await readFile(`${ledgerPath}.corrupt-1786622400001`),
     }).toEqual({
