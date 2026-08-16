@@ -35,6 +35,7 @@ export type HaltDisposition = HaltClass | 'legacy' | 'unclassified';
 /** Outcome of a best-effort halt-marker write. */
 export type HaltMarkerWriteResult =
   | { status: 'written' }
+  | { status: 'partial'; writtenPath: string; path: string; reason: string }
   | { status: 'failed'; path: string; reason: string };
 
 /**
@@ -64,14 +65,21 @@ export async function writeHaltMarker(
       if (error.code !== 'ENOENT') throw error;
     });
     await writeFile(markerPath, body, 'utf-8');
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    await events?.emit({ type: 'halt_marker_write_failed', path: markerPath, reason }).catch(() => {});
+    return { status: 'failed', path: markerPath, reason };
+  }
+
+  try {
     await writeFile(haltClassTempPath, haltClass, 'utf-8');
     await rename(haltClassTempPath, haltClassPath);
     return { status: 'written' };
   } catch (error) {
     await unlink(haltClassTempPath).catch(() => {});
     const reason = error instanceof Error ? error.message : String(error);
-    await events?.emit({ type: 'halt_marker_write_failed', path: markerPath, reason }).catch(() => {});
-    return { status: 'failed', path: markerPath, reason };
+    await events?.emit({ type: 'halt_marker_write_failed', path: haltClassPath, reason }).catch(() => {});
+    return { status: 'partial', writtenPath: markerPath, path: haltClassPath, reason };
   }
 }
 

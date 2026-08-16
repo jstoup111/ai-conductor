@@ -57,7 +57,9 @@ export async function preflightBuildAuthCheck(
   const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
   if (!haltExists) {
     const markerWrite = await writeHaltMarker(projectRoot, haltReason + '\n', 'needs-human', events);
-    if (markerWrite.status === 'failed') {
+    if (markerWrite.status === 'partial') {
+      haltReason += `\n\nHALT was written, but HALT.class write failed at ${markerWrite.path}: ${markerWrite.reason}`;
+    } else if (markerWrite.status === 'failed') {
       haltReason += `\n\nHALT marker write failed: ${markerWrite.reason}`;
     }
   }
