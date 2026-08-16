@@ -12,10 +12,10 @@ output: 102536
 cache_read: 15454691
 cache_creation: 554937
 cost_usd: 8.2491
-dispatches: 35
+dispatches: 37
 retries: 7
 halts: 3
-unmetered: count: 10, duration_ms: 0
+unmetered: count: 12, duration_ms: 0
 cost_unmetered: count: 16
 providers:
   codex: input: 13542241, output: 51528, cache_read: 12606720, cache_creation: 0, cost_usd: 0, dispatches: 16, cost_unmetered: 16
