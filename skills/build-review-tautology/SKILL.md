@@ -19,6 +19,7 @@ Use only the supplied projection version `v2`. Its closed input contains:
 - the changed diff by reference (`changedFiles`: per-file path, change kind, and hunk line
   ranges, anchored by `mergeBase` and `headSha`) and changed-test selectors;
 - diff-derived removal evidence (`removalContext`), never an exemption;
+- engine-parsed verify-only task evidence (`verifyOnlyContext`), never an exemption;
 - the current code-valid `test_suite` PASS;
 - the reverted-production manifest (`revertedProductionManifest`): per reverted production file,
   its path and merge-base git blob sha. File content is never embedded — recover any file's
@@ -48,11 +49,15 @@ Interpret the preflight classification precisely:
 - `infrastructure-failure` is not a finding. Do not invent evidence, downgrade it to a pass, or
   convert it into content criticism.
 
-The only exceptions are rebase repair, removal maintenance, and fixture relocation. Apply their
-diff-derived criteria exactly as supplied by the projection; a selector outside those criteria is
-measured normally. A fixture relocation requires both the test-path move and a production path
-handling/classification change that makes the former path lose its prior meaning; a move alone is
-not an exception.
+The only exceptions are rebase repair, removal maintenance, fixture relocation, and verify-only
+maintenance. Apply their diff-derived criteria exactly as supplied by the projection; a selector
+outside those criteria is measured normally. A fixture relocation requires both the test-path move
+and a production path handling/classification change that makes the former path lose its prior
+meaning; a move alone is not an exception. Evaluate verify-only maintenance per changed test, never
+per diff: it qualifies only when (1) `verifyOnlyContext` lists a verify-only task; (2) the changed
+test's lines reference that task's plan-declared files or the behavior the task verifies; and (3)
+the change adds no assertion about behavior this diff introduces. A non-qualifying
+pre-diff-passing test, including an unanchored test, is measured normally.
 
 For every changed test evaluated under the fixture-relocation exception, return exactly one
 audit-only `relocationAudit` entry on PASS or FAIL:
