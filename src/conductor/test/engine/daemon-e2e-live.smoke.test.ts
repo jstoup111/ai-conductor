@@ -577,7 +577,14 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
       // uncommitted paths and the completion gate halts the fixture dirty
       // (0.103.0 release-gate failure — "17 uncommitted paths:
       // .pipeline/build-review.json …", visible via the embedded diagnostics).
-      await writeFile(join(worktreeDir, '.gitignore'), '.pipeline/\n.daemon/\n');
+      // Mirror the harness repo's full runtime-dir ignore set — each missing
+      // entry is a future dirty-tree halt as another pipeline step writes its
+      // runtime state (0.103.0 gate: .pipeline caches; 0.102.0 retry gate:
+      // .memory notes).
+      await writeFile(
+        join(worktreeDir, '.gitignore'),
+        ['.pipeline/', '.daemon/', '.memory/', '.memory*.bak/', '.worktrees/', '.claude/'].join('\n') + '\n',
+      );
       await execa('git', ['add', '-A'], { cwd: worktreeDir });
       await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], {
         cwd: worktreeDir,
