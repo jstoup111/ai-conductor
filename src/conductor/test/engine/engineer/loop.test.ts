@@ -1215,3 +1215,49 @@ describe('Owner-gate: autonomous authoring threads owner deps into runAuthoring 
     expect(marker).toContain('Owner: dave');
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Per-envelope failure isolation: malformed input does not abort later envelopes.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('intake capture: per-envelope failure isolation', () => {
+  it('continues after a malformed envelope fails to enqueue', async () => {
+    await writeRegistry([]);
+
+    const { runEngineerMode } = await loadLoop();
+    const envelopes = [
+      { source: 'github-issues', sourceRef: 'org/repo#1', text: 'first' },
+      { source: 'github-issues', sourceRef: 'org/repo#2', text: 'second' },
+      { source: 'github-issues', sourceRef: 'org/repo#3', text: 'third' },
+    ];
+    const record = vi.fn(async () => undefined);
+    const successfullyEnqueued: string[] = [];
+    const enqueue = vi.fn(async (envelope: (typeof envelopes)[number]) => {
+      if (envelope.sourceRef === 'org/repo#2') throw new Error('malformed envelope');
+      successfullyEnqueued.push(envelope.sourceRef);
+    });
+
+    await runEngineerMode({
+      route: noopProvider,
+      io: scriptedIo(['exit']).io,
+      registryPath,
+      engineerDir,
+      sources: [{ poll: async () => envelopes }],
+      ledger: { record } as any,
+      queue: {
+        enqueue,
+        claim: async () => undefined,
+        ack: async () => undefined,
+        release: async () => undefined,
+      },
+    });
+
+    expect(record).toHaveBeenCalledTimes(3);
+    expect(enqueue.mock.calls.map(([envelope]) => envelope.sourceRef)).toEqual([
+      'org/repo#1',
+      'org/repo#2',
+      'org/repo#3',
+    ]);
+    expect(successfullyEnqueued).toEqual(['org/repo#1', 'org/repo#3']);
+  });
+});
