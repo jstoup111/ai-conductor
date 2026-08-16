@@ -20,7 +20,7 @@ const EMPTY_REMOVALS = (): BuildReviewRemovalContext => ({
 
 const exportedDeclaration = /^\s*export\s+(?:declare\s+)?(?:const|let|var|function|class|interface|type|enum|namespace|module)\s+([A-Za-z_$][\w$]*)\b/;
 const exportedType = /^\s*export\s+(?:declare\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)\b/;
-const testPath = /(?:^|\/)(?:test|tests|__tests__)\/.+\.(?:[cm]?[jt]sx?)$/;
+const testPath = /(?:^|\/)(?:(?:test|tests|__tests__)\/.+|[^/]+\.(?:test|spec))\.(?:[cm]?[jt]sx?)$/;
 const activeAssertion = /\b(?:expect|assert)\s*(?:\.|\()/;
 
 function hunkDeclaration(header: string): string | undefined {
