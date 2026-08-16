@@ -22,6 +22,8 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
   async function dispatchPointerContext(options: {
     readonly activePlan: boolean;
     readonly priorArtifacts: Readonly<Record<string, string>>;
+    readonly planTask?: string;
+    readonly priorLapDirectory?: boolean;
   }): Promise<string | undefined> {
     if (!dir) throw new Error('test directory was not initialized');
     const statePath = join(dir, '.pipeline', 'state.json');
@@ -30,7 +32,9 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
       if (step.name !== 'build_review') state[step.name] = 'done';
     }
     await writeState(statePath, state as ConductState);
-    await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+    if (options.priorLapDirectory ?? true) {
+      await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
+    }
     await writeFile(
       join(dir, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '42', status: 'completed' }] }),
@@ -44,7 +48,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
       evidenceLocations: ['src/engine/conductor.ts:7500'],
       anchor: {
         rubric: 'completeness',
-        planTask: '42',
+        planTask: options.planTask ?? '42',
         missingOutcome: 'pass plan and prior-attempt pointers to remediation',
       },
     };
@@ -295,6 +299,27 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     expect(remediationContext).toMatch(
       /plan contract: \.docs\/plans\/active-remediation-plan\.md — Task 42 \(anchor: pass plan and prior-attempt pointers to remediation\)\nprior attempts \(1\): \.pipeline\/build-review\/lap-prior\/completeness\.json#\S+/,
     );
+  });
+
+  it('keeps the remediation dispatch context byte-identical when both pointer joins miss', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-review-remediate-pointer-miss-'));
+    const remediationContext = await dispatchPointerContext({
+      activePlan: true,
+      planTask: 'drifted-task',
+      priorArtifacts: {},
+      priorLapDirectory: false,
+    });
+
+    expect(remediationContext).toBe(
+      'build_review FAILED on completeness:\n' +
+      '[completeness] missing-outcome\n[completeness] missing-outcome\n' +
+      'The plan task requires review. Check the approved plan’s existing tasks before ' +
+      'proposing a plan-level change. Active plan: .docs/plans/active-remediation-plan.md. ' +
+      'Plan remediation per the /remediate skill and write .pipeline/remediation.json.',
+    );
+    expect(remediationContext).not.toContain('plan contract:');
+    expect(remediationContext).not.toContain('prior attempts:');
+    expect(remediationContext).not.toContain('error');
   });
 
   it('retains a same-anchor prior-attempt pointer without an active plan', async () => {
