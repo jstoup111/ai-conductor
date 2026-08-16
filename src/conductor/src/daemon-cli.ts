@@ -34,6 +34,7 @@ import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
+import { withRegisteredVisualizers } from './engine/visualizer-lifecycle.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
@@ -553,6 +554,14 @@ export function buildProgressReKickDeps(
       return liveResolvedCount > lastResolvedCount;
     },
   };
+}
+
+export function runDaemonVisualizerLifecycle<T>(
+  pluginRegistry: PluginRegistry,
+  emitter: ConductorEventEmitter,
+  run: () => Promise<T>,
+): Promise<T> {
+  return withRegisteredVisualizers(pluginRegistry, emitter, run);
 }
 
 /**
@@ -1453,7 +1462,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         makeWatchHaltClearedSeam(worktreeBase)(slug, onCleared)
     : undefined;
 
-  const result = await runDaemon(
+  const result = await runDaemonVisualizerLifecycle(
+    registry,
+    events,
+    () => runDaemon(
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
@@ -2003,6 +2015,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       isSelfHost,
       autoRestartOnStaleEngine: config?.auto_restart_on_stale_engine ?? false,
     },
+    ),
   );
 
   subscriber.stop();

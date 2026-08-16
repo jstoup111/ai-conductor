@@ -86,6 +86,12 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins } from './engine/plugin-loader.js';
 import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
+import {
+  buildVisualizers,
+  startRegisteredVisualizers,
+  stopVisualizers,
+  withRegisteredVisualizers,
+} from './engine/visualizer-lifecycle.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
@@ -179,36 +185,20 @@ import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
 import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
 
-// ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
+export {
+  buildVisualizers,
+  startRegisteredVisualizers,
+  stopVisualizers,
+  withRegisteredVisualizers,
+};
 
-/**
- * Start every visualizer plugin by calling `.start(emitter)`. Returns the same
- * array (for chaining). Called immediately after EventPersister is started.
- */
-export function buildVisualizers(
-  visualizers: VisualizerPlugin[],
+export function runInlineVisualizerLifecycle<T>(
+  registry: PluginRegistry,
   emitter: ConductorEventEmitter,
-): VisualizerPlugin[] {
-  for (const vis of visualizers) {
-    vis.start(emitter);
-  }
-  return visualizers;
-}
-
-/**
- * Stop every visualizer plugin, swallowing individual errors so one failing
- * exporter cannot prevent the others from flushing.
- */
-export async function stopVisualizers(visualizers: VisualizerPlugin[]): Promise<void> {
-  await Promise.all(
-    visualizers.map((vis) =>
-      vis.stop().catch((err: unknown) => {
-        console.warn(
-          `[otel] visualizer '${vis.name}' stop() error: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }),
-    ),
-  );
+  run: () => Promise<T>,
+  builtIns: VisualizerPlugin[] = [],
+): Promise<T> {
+  return withRegisteredVisualizers(registry, emitter, run, builtIns);
 }
 
 /**
@@ -1220,7 +1210,7 @@ async function main(): Promise<void> {
   auditWriter.subscribe(events);
 
   // Wire visualizer plugins (FR-1 gate: OTel visualizer only when enabled).
-  const visualizerList: VisualizerPlugin[] = [];
+  const builtInVisualizers: VisualizerPlugin[] = [];
   const otelResolved = resolveOtelConfig(config ?? {}, pipelineDir);
   if (otelResolved.enabled) {
     const otelVis = createOtelVisualizer(
@@ -1233,11 +1223,10 @@ async function main(): Promise<void> {
       events,
     );
     if (otelVis) {
-      visualizerList.push(otelVis);
+      builtInVisualizers.push(otelVis);
     }
   }
-  buildVisualizers(visualizerList, events);
-
+  await runInlineVisualizerLifecycle(registry, events, async () => {
   const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
@@ -1354,9 +1343,9 @@ async function main(): Promise<void> {
   });
 
   await conductor.run();
+  }, builtInVisualizers);
 
   persister.stop();
-  await stopVisualizers(visualizerList);
   subscriber.stop();
 }
 

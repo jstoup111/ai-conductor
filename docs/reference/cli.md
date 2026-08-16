@@ -154,7 +154,10 @@ user config, reads or creates `.pipeline/conduct-session-id`, discovers plugins 
 `$HOME/.ai-conductor/plugins` and `<projectRoot>/.ai-conductor/plugins`, appends to
 `.pipeline/events.jsonl` and `.pipeline/audit-trail/events.jsonl`, may run the `/bootstrap` and
 `/assess` prelude, spawns `bin/update --auto` in the background with all failures swallowed, and
-creates or cleans git worktrees. OTel export is opt-in and off unless configured.
+creates or cleans git worktrees. It starts every compatible discovered `visualizer` plugin on the live
+event bus and flushes each one at shutdown; OTel export is opt-in and off unless configured. The
+visualizer contract and failure posture are in
+[extending the harness](../contributing/extending.md#add-a-visualizer-plugin).
 
 ## `conduct-ts daemon`
 
@@ -208,6 +211,12 @@ reporting an error.
 
 When a tmux session for the repo already exists, a bare `daemon` run wires a self-restart handler so a
 queued restart respawns the pane at the next idle boundary instead of exiting.
+
+A daemon run discovers the same global and project plugins as `inline` and starts every compatible
+`visualizer` on the daemon-wide event bus. Feature-scoped events already forwarded to that bus reach
+the plugins live. The daemon flushes the started plugins when the run drains or stops; plugin startup,
+handler, and shutdown failures are isolated as described in
+[extending the harness](../contributing/extending.md#add-a-visualizer-plugin).
 
 ### `daemon status`
 

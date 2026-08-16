@@ -10,8 +10,19 @@ export type EventHandler = (event: ConductorEvent) => void | Promise<void>;
 
 type HandlerMap = Map<ConductorEvent['type'], Set<EventHandler>>;
 
+interface HandlerIsolation {
+  handlers: Array<{ type: ConductorEvent['type']; handler: EventHandler }>;
+  failed: boolean;
+  onFailure: (error: unknown) => void;
+}
+
 export class ConductorEventEmitter {
   private handlers: HandlerMap = new Map();
+  private activeIsolation: HandlerIsolation | undefined;
+  private handlerIsolations = new Map<
+    ConductorEvent['type'],
+    Map<EventHandler, HandlerIsolation>
+  >();
 
   /**
    * Dispatch `event` to every registered handler and await any Promises they
@@ -23,19 +34,29 @@ export class ConductorEventEmitter {
     if (!handlers || handlers.size === 0) return;
 
     // Snapshot so once-handlers removing themselves during iteration don't break us.
-    const snapshot = [...handlers];
+    const isolations = this.handlerIsolations.get(event.type);
+    const snapshot = [...handlers].map((handler) => ({
+      handler,
+      isolation: isolations?.get(handler),
+    }));
     const pending: Promise<void>[] = [];
-    for (const handler of snapshot) {
+    for (const { handler, isolation } of snapshot) {
+      if (isolation?.failed) continue;
       try {
         const out = handler(event);
         if (out && typeof (out as Promise<void>).then === 'function') {
-          pending.push(
-            (out as Promise<void>).catch(() => {
+          if (isolation) {
+            void (out as Promise<void>).catch((error: unknown) => {
+              this.failIsolation(isolation, error);
+            });
+          } else {
+            pending.push((out as Promise<void>).catch(() => {
               /* swallow async handler errors */
-            }),
-          );
+            }));
+          }
         }
-      } catch {
+      } catch (error) {
+        if (isolation) this.failIsolation(isolation, error);
         /* swallow sync handler errors */
       }
     }
@@ -54,16 +75,29 @@ export class ConductorEventEmitter {
 
     const failures: unknown[] = [];
     const pending: Promise<void>[] = [];
-    for (const handler of [...handlers]) {
+    const isolations = this.handlerIsolations.get(event.type);
+    const snapshot = [...handlers].map((handler) => ({
+      handler,
+      isolation: isolations?.get(handler),
+    }));
+    for (const { handler, isolation } of snapshot) {
+      if (isolation?.failed) continue;
       try {
         const out = handler(event);
         if (out && typeof (out as Promise<void>).then === 'function') {
-          pending.push((out as Promise<void>).catch((error: unknown) => {
-            failures.push(error);
-          }));
+          if (isolation) {
+            void (out as Promise<void>).catch((error: unknown) => {
+              this.failIsolation(isolation, error);
+            });
+          } else {
+            pending.push((out as Promise<void>).catch((error: unknown) => {
+              failures.push(error);
+            }));
+          }
         }
       } catch (error) {
-        failures.push(error);
+        if (isolation) this.failIsolation(isolation, error);
+        else failures.push(error);
       }
     }
     await Promise.all(pending);
@@ -77,11 +111,39 @@ export class ConductorEventEmitter {
       set = new Set();
       this.handlers.set(type, set);
     }
+    const added = !set.has(handler);
     set.add(handler);
+    if (added && this.activeIsolation) {
+      let isolations = this.handlerIsolations.get(type);
+      if (!isolations) {
+        isolations = new Map();
+        this.handlerIsolations.set(type, isolations);
+      }
+      isolations.set(handler, this.activeIsolation);
+      this.activeIsolation.handlers.push({ type, handler });
+    }
   }
 
   off(type: ConductorEvent['type'], handler: EventHandler): void {
     this.handlers.get(type)?.delete(handler);
+    this.handlerIsolations.get(type)?.delete(handler);
+  }
+
+  withIsolatedHandlerRegistrations(
+    register: () => void,
+    onFailure: (error: unknown) => void,
+  ): void {
+    const isolation: HandlerIsolation = { handlers: [], failed: false, onFailure };
+    const previousIsolation = this.activeIsolation;
+    this.activeIsolation = isolation;
+    try {
+      register();
+    } catch (error) {
+      this.failIsolation(isolation, error);
+      throw error;
+    } finally {
+      this.activeIsolation = previousIsolation;
+    }
   }
 
   once(type: ConductorEvent['type'], handler: EventHandler): void {
@@ -96,5 +158,16 @@ export class ConductorEventEmitter {
     return new Promise((resolve) => {
       this.once(type, resolve);
     });
+  }
+
+  private failIsolation(isolation: HandlerIsolation, error: unknown): void {
+    if (isolation.failed) return;
+    isolation.failed = true;
+    for (const { type, handler } of isolation.handlers) this.off(type, handler);
+    try {
+      isolation.onFailure(error);
+    } catch {
+      /* warning/reporting failures must not escape event delivery */
+    }
   }
 }

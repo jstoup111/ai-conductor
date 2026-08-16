@@ -74,7 +74,7 @@ Flat `engine/` files cluster by filename prefix. Use the prefix to find the subs
 | config | `config.ts`, `resolved-config.ts`, `user-config.ts` |
 | `full-suite-*` | `full-suite-executor.ts`, `full-suite-verifier.ts`, `full-suite-evidence.ts`, `full-suite-fingerprint.ts` |
 | markers | `halt-marker.ts`, `park-marker.ts`, `pause-marker.ts`, `phase-marker.ts`, `restart-marker.ts`, `restart-intent.ts` |
-| plugins | `plugin-loader.ts`, `plugin-registry.ts`, `plugin-manifest.ts` |
+| plugins | `plugin-loader.ts`, `plugin-registry.ts`, `plugin-manifest.ts`, `visualizer-lifecycle.ts` |
 | memory | `memory-store.ts`, `memory-cli.ts`, `memory-migrate.ts`, `local-memory-provider.ts` |
 | worktree / git | `worktree.ts`, `worktree-prepare.ts`, `worktree-shared.ts`, `git-hook-assets.ts` |
 
