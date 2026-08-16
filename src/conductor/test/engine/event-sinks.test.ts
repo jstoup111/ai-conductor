@@ -517,16 +517,16 @@ describe('event sink subscriptions', () => {
       .toEqual(Object.fromEntries(neverPersisted.map((type) => [type, false])));
   });
 
-  it('rejects an unrelated sink becoming persisted', () => {
-    const unrelatedPersistenceMutation = {
-      ...EVENT_SINKS,
-      retry_decision: { ...EVENT_SINKS.retry_decision, persist: true },
-    };
-    const persistedAfterMutation = Object.entries(unrelatedPersistenceMutation)
-      .filter(([, sinks]) => sinks.persist)
-      .map(([type]) => type);
+  it('rejects a pinned sink becoming non-persisted', () => {
+    const priorPersist = EVENT_SINKS.loop_halt.persist;
 
-    expect(new Set(persistedAfterMutation)).not.toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
+    try {
+      EVENT_SINKS.loop_halt.persist = false;
+
+      expect(new Set(persistedEventTypes())).not.toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
+    } finally {
+      EVENT_SINKS.loop_halt.persist = priorPersist;
+    }
   });
 
   it('derives the audited set without changing prior routing', () => {
