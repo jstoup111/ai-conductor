@@ -133,7 +133,7 @@ Completeness must be judged holistically: read the plan and the diff as a
 whole and form a judgement of whether the diff, taken together, delivers
 everything the plan describes.
 
-A task listed in the Engine-parsed verify-only tasks block legitimately contributes no implementation diff.
+A task listed in the Engine-parsed verify-only block legitimately contributes no implementation diff.
 
 Do NOT reason about completeness on a
 per-task basis — you must never chase individual task SHAs, verify

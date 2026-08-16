@@ -158,8 +158,8 @@ each plan task to a specific commit.`;
     expect(prompt).toContain(
       'Completeness: every planned task\'s work is present in the diff',
     );
-    expect(prompt).toContain(
-      'A task listed in the Engine-parsed verify-only tasks block legitimately contributes no implementation diff.',
+    expect(prompt).toMatch(
+      /listed in the engine-parsed verify-only block.*no implementation diff/i,
     );
     expect(prompt).toContain(holisticJudgement);
     expect(prompt).toContain(forbiddenPerTaskChasing);
