@@ -201,7 +201,7 @@ describe('build-review finding identity', () => {
       first,
       { rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface', anchor: { rubric: 'scope', relation: 'outside-plan' } },
     ])).toBeUndefined();
-    expect(canonicalizeBuildReviewFindingSet([{ ...first, contractVersion: 'v2' }])).toBeUndefined();
+    expect(canonicalizeBuildReviewFindingSet([{ ...first, contractVersion: 'v3' }])).toBeUndefined();
     expect(canonicalizeBuildReviewFindingSet([first, first])).toBeUndefined();
     expect(canonicalizeBuildReviewFindingSet([{ ...first, id: firstId }, { ...second, id: firstId }])).toBeUndefined();
   });

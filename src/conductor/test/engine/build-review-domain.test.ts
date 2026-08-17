@@ -20,7 +20,7 @@ describe('build-review domain', () => {
     expect(parseBuildReviewLapId('lap with spaces')).toBeUndefined();
 
     expect(parseBuildReviewRubricContractVersion('v1')).toBe('v1');
-    expect(parseBuildReviewRubricContractVersion('v2')).toBeUndefined();
+    expect(parseBuildReviewRubricContractVersion('v2')).toBe('v2');
   });
 
   it('accepts only the typed anchors belonging to each rubric', () => {
@@ -243,10 +243,10 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     expect(describeBuildReviewJudgedResultRejection('just prose', 'scope', expected)).toContain('not a single JSON object');
     expect(describeBuildReviewJudgedResultRejection({ verdict: 'PASS' }, 'scope', expected)).toContain('"kind" must be exactly the string "judged"');
     expect(describeBuildReviewJudgedResultRejection({
-      kind: 'judged', rubric: 'scope', contractVersion: 'v1', lapId: 'lap-other', snapshotDigest: expected.snapshotDigest, findings: [],
+      kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: 'lap-other', snapshotDigest: expected.snapshotDigest, findings: [],
     }, 'scope', expected)).toContain('must echo the projection\'s lapId "lap-a237" verbatim');
     expect(describeBuildReviewJudgedResultRejection({
-      kind: 'judged', rubric: 'scope', contractVersion: 'v1', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
       findings: [], verdict: 'FAIL',
     }, 'scope', expected)).toContain('contradicts the findings array');
   });

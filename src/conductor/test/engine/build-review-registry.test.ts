@@ -12,28 +12,28 @@ describe('engine/build-review-registry', () => {
     expect(BUILD_REVIEW_RUBRIC_REGISTRY).toEqual({
       tautology: {
         skillName: 'build-review-tautology',
-        contractVersion: 'v1',
+        contractVersion: 'v2',
         projectionVersion: 'v2',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
       },
       scope: {
         skillName: 'build-review-scope',
-        contractVersion: 'v1',
+        contractVersion: 'v2',
         projectionVersion: 'v2',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
       },
       rootCause: {
         skillName: 'build-review-root-cause',
-        contractVersion: 'v1',
+        contractVersion: 'v2',
         projectionVersion: 'v2',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
       },
       completeness: {
         skillName: 'build-review-completeness',
-        contractVersion: 'v1',
+        contractVersion: 'v2',
         projectionVersion: 'v2',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',

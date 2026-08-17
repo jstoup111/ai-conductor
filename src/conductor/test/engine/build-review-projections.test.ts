@@ -365,7 +365,7 @@ describe('build-review rubric projections', () => {
       expect(projection).not.toHaveProperty('operatorReseals');
     }
     for (const projection of Object.values(projections)) {
-      expect(projection.contractVersion).toBe('v1');
+      expect(projection.contractVersion).toBe('v2');
       expect(projection.contentDigest).toBe('sha256:content');
       expect(projection.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     }

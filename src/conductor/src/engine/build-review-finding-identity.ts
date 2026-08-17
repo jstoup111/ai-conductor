@@ -5,11 +5,12 @@ import {
   normalizeBuildReviewFindingVocabularyMember,
   parseBuildReviewRubricContractVersion,
   type BuildReviewFindingAnchor,
+  type BuildReviewRubricContractVersion,
 } from './build-review-domain.js';
 
 export interface BuildReviewFindingIdentityInput {
   readonly rubric: BuildReviewRubricId;
-  readonly contractVersion: 'v1';
+  readonly contractVersion: BuildReviewRubricContractVersion;
   readonly concernKind: string;
   readonly anchor: BuildReviewFindingAnchor;
 }
@@ -23,7 +24,7 @@ type BuildReviewFindingCanonicalAnchor =
 /** The complete, version-bound payload persisted alongside a finding hash. */
 export interface BuildReviewFindingCanonicalPayload {
   readonly rubric: BuildReviewRubricId;
-  readonly contractVersion: 'v1';
+  readonly contractVersion: BuildReviewRubricContractVersion;
   readonly concernKind: string;
   readonly anchor: BuildReviewFindingCanonicalAnchor;
 }

@@ -13,7 +13,7 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   return {
     version: 1,
     rubric: "scope",
-    contractVersion: "v1",
+    contractVersion: "v2",
     projectionVersion: "v2",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
@@ -22,7 +22,7 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
       rubric: "scope",
       lapId: "lap-a" as never,
       snapshotDigest,
-      contractVersion: "v1" as never,
+      contractVersion: "v2" as never,
       findings: [],
       verdict: "PASS",
     },
@@ -65,7 +65,7 @@ describe("build-review semantic cache", () => {
   it("classifies stored v1 entries through the read seam against the current v2 projection identity", async () => {
     const currentLookup = {
       rubric: "scope",
-      contractVersion: "v1",
+      contractVersion: "v2",
       projectionVersion: "v2",
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
@@ -125,7 +125,7 @@ describe("build-review semantic cache", () => {
       path,
       lookup: classifyBuildReviewCacheLookup(foreignCandidate, {
         rubric: "scope",
-        contractVersion: "v1",
+        contractVersion: "v2",
         projectionVersion: "v2",
         projectionDigest: freshEntry.projectionDigest,
         policyFingerprint: freshEntry.policyFingerprint,
@@ -167,17 +167,17 @@ describe("build-review semantic cache", () => {
       result: {
         ...entry().result,
         findings: [{
-          concernKind: "missing approved outcome",
-          summary: "The approved outcome is missing from src/a.ts.",
+          concernKind: "out-of-plan-change",
+          summary: "src/a.ts is outside the approved plan.",
           evidenceLocations: ["src/a.ts:1"],
-          anchor: { rubric: "scope" as const, path: "src/a.ts", relation: "outside-plan" },
+          anchor: { rubric: "scope" as const, path: "src/a.ts", relation: "out-of-plan-change" },
         }],
         verdict: "FAIL" as const,
       },
     };
     const request = {
       rubric: "scope" as const,
-      contractVersion: "v1" as const,
+      contractVersion: "v2" as const,
       projectionVersion: "v2" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
@@ -229,7 +229,7 @@ describe("build-review semantic cache", () => {
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {
     const request = {
       rubric: "scope" as const,
-      contractVersion: "v1" as const,
+      contractVersion: "v2" as const,
       projectionVersion: "v2" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
@@ -244,7 +244,7 @@ describe("build-review semantic cache", () => {
     expect([
       classifyBuildReviewCacheLookup(undefined, request),
       classifyBuildReviewCacheLookup({ ...entry(), rubric: "completeness" }, request),
-      classifyBuildReviewCacheLookup({ ...entry(), contractVersion: "v2" } as never, request),
+      classifyBuildReviewCacheLookup({ ...entry(), contractVersion: "v1", result: { ...entry().result, contractVersion: "v1" } } as never, request),
       classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v1" } as never, request),
       classifyBuildReviewCacheLookup({ ...entry(), projectionDigest: "sha256:changed-input" }, request),
       classifyBuildReviewCacheLookup({ ...entry(), policyFingerprint: "sha256:changed-provider-model-effort-fallback-retry" }, request),
@@ -252,7 +252,7 @@ describe("build-review semantic cache", () => {
     ]).toEqual([
       { kind: "miss", reason: "missing" },
       { kind: "miss", reason: "invalid-entry" },
-      { kind: "miss", reason: "invalid-entry" },
+      { kind: "miss", reason: "contract-version-mismatch" },
       { kind: "miss", reason: "projection-version-mismatch" },
       { kind: "miss", reason: "projection-digest-mismatch" },
       { kind: "miss", reason: "policy-fingerprint-mismatch" },

@@ -4,7 +4,10 @@ import type { BuildReviewRubricId } from '../types/config.js';
 export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' };
 
 /** A validated version of the engine-owned rubric result contract. */
-export type BuildReviewRubricContractVersion = 'v1' & { readonly __brand: 'BuildReviewRubricContractVersion' };
+export type BuildReviewRubricContractVersion = 'v1' | 'v2';
+
+/** The contract version newly dispatched and emitted by this engine. */
+export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v2' as const;
 
 /** The only intentional non-judgement outcomes. */
 export type BuildReviewSkipReason = 'disabled';
@@ -153,7 +156,7 @@ export function parseBuildReviewLapId(value: unknown): BuildReviewLapId | undefi
 }
 
 export function parseBuildReviewRubricContractVersion(value: unknown): BuildReviewRubricContractVersion | undefined {
-  return value === 'v1' ? value as BuildReviewRubricContractVersion : undefined;
+  return value === 'v1' || value === 'v2' ? value as BuildReviewRubricContractVersion : undefined;
 }
 
 function parseAnchor(value: unknown): BuildReviewFindingAnchor | undefined {
@@ -263,7 +266,7 @@ const ANCHOR_FIELDS: Record<BuildReviewRubricId, readonly string[]> = {
  */
 export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId): string {
   const anchorFields = ANCHOR_FIELDS[rubric].map((field) => `"${field}": "<string>"`).join(', ');
-  return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "v1", ' +
+  return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "v2", ' +
     '"lapId": "<echo the projection lapId verbatim>", "snapshotDigest": "<echo the projection snapshotDigest verbatim>", ' +
     '"findings": [{"concernKind": "<string>", "summary": "<non-empty actionable string>", ' +
     '"evidenceLocations": ["<path:line or path:line:column>"], ' +
@@ -289,7 +292,7 @@ export function describeBuildReviewJudgedResultRejection(
   if (source.kind !== 'judged') problems.push(`top-level "kind" must be exactly the string "judged" (got ${(JSON.stringify(source.kind) ?? 'no kind field').slice(0, 64)})`);
   if (source.rubric !== rubric) problems.push(`"rubric" must be "${rubric}"`);
   if (source.lapId !== expected.lapId) problems.push(`"lapId" must echo the projection's lapId "${expected.lapId}" verbatim`);
-  if (parseBuildReviewRubricContractVersion(source.contractVersion) === undefined) problems.push('"contractVersion" must be "v1"');
+  if (source.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) problems.push('"contractVersion" must be "v2"');
   if (source.snapshotDigest !== expected.snapshotDigest) problems.push('"snapshotDigest" must echo the projection\'s snapshotDigest verbatim');
   if (!Array.isArray(source.findings)) {
     problems.push('"findings" must be an array (empty when no concern was found)');

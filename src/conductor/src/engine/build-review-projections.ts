@@ -57,7 +57,7 @@ export interface ChangedFileReference {
 
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
-  readonly contractVersion: 'v1';
+  readonly contractVersion: 'v2';
   readonly projectionVersion: 'v2';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
