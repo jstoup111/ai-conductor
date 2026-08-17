@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { createVitest } from 'vitest/node';
 
+import { runSmokeEntryPoint } from '../../scripts/smoke.js';
 import type { SmokeCapability } from '../../src/engine/smoke-capability.js';
 import { runSmokeCli } from '../../src/engine/smoke-runner.js';
 import { LIVE_E2E_PROVIDERS } from '../fixtures/live-e2e-providers.js';
@@ -32,9 +33,25 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
 
 describe('structural: smoke test entry point', () => {
   it('forwards both the smoke config and matrix-selected file to the smoke command', async () => {
-    const entryPoint = await readFile(join(conductorRoot, 'scripts/smoke.ts'), 'utf8');
+    const runSmokeCommand = vi.fn();
+    const originalArgv = process.argv;
 
-    expect(entryPoint).toMatch(/await\s+runSmokeCommand\(\s*process\.argv\.slice\(2\)\s*\)/);
+    process.argv = [
+      'node',
+      'scripts/smoke.ts',
+      'vitest.smoke.config.ts',
+      'test/engine/daemon-e2e-live-claude.smoke.test.ts',
+    ];
+    try {
+      await runSmokeEntryPoint(undefined, runSmokeCommand);
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runSmokeCommand).toHaveBeenCalledWith([
+      'vitest.smoke.config.ts',
+      'test/engine/daemon-e2e-live-claude.smoke.test.ts',
+    ]);
   });
 
   it('fails before running Vitest when smoke discovery is empty', async () => {
