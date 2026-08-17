@@ -112,11 +112,10 @@ class ThrowawayProviderHome implements ProviderHome {
 
   childEnv(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = { ...this.parentEnv };
-    // Never inherit a live provider home or either provider's ambient credential.
+    // Never inherit a live provider home or Claude's ambient credential token.
     delete env.CLAUDE_CONFIG_DIR;
     delete env.CODEX_HOME;
     delete env.CLAUDE_CODE_OAUTH_TOKEN;
-    delete env.CODEX_API_KEY;
     env[HOME_VARIABLE[this.provider]] = this.homeDir;
     return { ...env, ...this.additions };
   }
