@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.103.0] - 2026-08-16
+## [0.103.0] - 2026-08-17
 
 ### Added
 
@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Fixed
 
 - Remediation tasks now reach the builder on daemon features whose specs were authored externally — the plan-append no longer silently no-ops when engine-state.json is absent. ([implementation PR #1671](https://github.com/jstoup111/ai-conductor/pull/1671)).
+- The engine now commits its own remediation plan appends, and build completion refuses to pass while an engine-appended rem-* task heading is missing from the plan. ([implementation PR #1675](https://github.com/jstoup111/ai-conductor/pull/1675)).
 
 ## [0.102.0] - 2026-08-16
 
