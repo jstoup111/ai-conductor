@@ -1833,6 +1833,42 @@ describe('engine/artifacts', () => {
         expect(result.reason).toMatch(/empty|no tasks/i);
       });
 
+      describe('engine-appended remediation task removal guard', () => {
+        it('blocks completion when a recorded rem-* heading is missing from the plan', async () => {
+          // The rem task's heading was deleted from the plan — its id no
+          // longer derives from plan text, so without the guard the
+          // predicate would complete without it.
+          await writePlan('### Task 1: First task\n');
+          await writeTasks([{ id: '1', status: 'completed' }]);
+          await createFile(
+            '.pipeline/engine-state.json',
+            JSON.stringify({ appendedRemediationTaskIds: ['rem-build-review-1'] }),
+          );
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result.done).toBe(false);
+          expect(result.reason).toMatch(/rem-build-review-1/);
+          expect(result.reason).toMatch(/removed from plan/);
+        });
+
+        it('completes normally when the recorded rem-* heading is present and completed', async () => {
+          await writePlan(
+            '### Task 1: First task\n### Task rem-build-review-1: Deliver the prescription\n',
+          );
+          await writeTasks([
+            { id: '1', status: 'completed' },
+            { id: 'rem-build-review-1', status: 'completed' },
+          ]);
+          await createFile(
+            '.pipeline/engine-state.json',
+            JSON.stringify({ appendedRemediationTaskIds: ['rem-build-review-1'] }),
+          );
+          const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
+          const result = await checkStepCompletion(dir, 'build', ctx);
+          expect(result).toEqual({ done: true });
+        });
+      });
+
       it('re-seeds .pipeline/task-status.json when deleted mid-run', async () => {
         // Use correct task header format: ### Task N: Title
         await writePlan('### Task 1: First task\n**Story:** 1\n\n### Task 2: Second task\n**Story:** 2\n');

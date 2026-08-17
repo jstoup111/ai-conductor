@@ -121,6 +121,15 @@ gate's dispositions. `build` deliberately does not: a build agent rewriting its 
 what it implemented is the scope violation `build_review` exists to catch, and the repair routes to
 the `plan` step, which an autonomous run may not enter.
 
+When the engine appends remediation tasks to the plan after a `remediate` round, it commits that
+amendment itself (`chore(plan): record appended remediation tasks`) — the appended heading is engine
+bookkeeping, not builder work, and leaving it uncommitted would fail the build step's clean-tree
+completion check. The engine also records every appended task id in
+`.pipeline/engine-state.json` (`appendedRemediationTaskIds`), and the build completion predicate
+refuses completion while any recorded id's `### Task <id>` heading is missing from the plan:
+deleting a remediation task never completes it. The guard disarms only when the engine-state file is
+absent (e.g. a recreated worktree), never on a plan edit.
+
 **Protected-artifact seal.** `.pipeline/protected-artifact-seal.json` fingerprints every file under
 `.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, and `.docs/stories` against a
 baseline commit:

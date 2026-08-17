@@ -546,6 +546,56 @@ export async function resolveArtifactFiles(
  *    Callers fail closed (the build gate reports an actionable reason rather
  *    than evaluating someone else's task list).
  */
+/**
+ * Record engine-appended remediation task ids in .pipeline/engine-state.json
+ * (cumulative union across remediation rounds). The build completion
+ * predicate reads this list back and refuses completion while any recorded
+ * id's `### Task <id>` heading is missing from the plan — closing the hole
+ * where a builder deletes the appended task instead of delivering it.
+ */
+export async function recordAppendedRemediationTaskIds(
+  projectRoot: string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+  const engineStatePath = join(pipelineDir, 'engine-state.json');
+
+  let engineState: Record<string, unknown> = {};
+  try {
+    const existing = await readFile(engineStatePath, 'utf-8');
+    engineState = JSON.parse(existing) as Record<string, unknown>;
+  } catch {
+    engineState = {};
+  }
+
+  const prior = Array.isArray(engineState.appendedRemediationTaskIds)
+    ? engineState.appendedRemediationTaskIds.filter((v): v is string => typeof v === 'string')
+    : [];
+  engineState.appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
+
+  await writeFile(engineStatePath, JSON.stringify(engineState, null, 2) + '\n');
+}
+
+/**
+ * Read the recorded engine-appended remediation task ids (empty when the
+ * engine-state file is absent or carries none — fail-open by design: a
+ * recreated worktree loses .pipeline and simply disarms the removal guard).
+ */
+export async function readAppendedRemediationTaskIds(projectRoot: string): Promise<string[]> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (Array.isArray(parsed?.appendedRemediationTaskIds)) {
+      return parsed.appendedRemediationTaskIds.filter((v: unknown): v is string => typeof v === 'string');
+    }
+  } catch {
+    // absent/invalid → no recorded ids
+  }
+  return [];
+}
+
 export async function resolveFeaturePlanPath(
   projectRoot: string,
   featureDesc: string | undefined,
@@ -1968,6 +2018,27 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
       if (planTaskIds.length === 0) {
         return { done: false, reason: 'no tasks in plan' };
+      }
+
+      // Engine-appended remediation tasks must not be deleted from the plan.
+      // Task ids are derived from plan text, so removing a `### Task rem-*`
+      // heading would silently drop the task from this predicate — letting a
+      // builder "complete" a remediation round by deleting its work item.
+      // The engine records every id it appends (engine-state.json); any
+      // recorded id missing from the plan blocks completion until the
+      // heading is restored. Fail-open when nothing was recorded (absent
+      // engine-state — e.g. a recreated worktree — simply disarms the guard).
+      {
+        const recorded = await readAppendedRemediationTaskIds(ctx.projectRoot);
+        const removed = recorded.filter((id) => !planTaskIds.includes(id));
+        if (removed.length > 0) {
+          const names = removed.slice(0, 3).join(', ');
+          const more = removed.length > 3 ? ` (+${removed.length - 3} more)` : '';
+          return {
+            done: false,
+            reason: `engine-appended remediation task heading(s) removed from plan: ${names}${more} — restore the ### Task heading(s); deleting a remediation task never completes it`,
+          };
+        }
       }
 
       const statusPath = join(ctx.projectRoot, '.pipeline/task-status.json');
