@@ -29,7 +29,7 @@ import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '..
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
-import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -3679,6 +3679,19 @@ TIER: M`,
     });
 
     it('leaves no verdict artifact after a vocabulary rejection survives its repair turn', async () => {
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 0,
+            cumulative: 0,
+            treeHash: null,
+            lastReason: '',
+            priorVerdict: true,
+            resolvedBefore: 0,
+          },
+        },
+      });
       const invoke = vi.fn().mockResolvedValue({
         success: true,
         output: JSON.stringify({
@@ -3703,7 +3716,9 @@ TIER: M`,
       expect(result.success).toBe(false);
       await expect(access(join(dir, '.pipeline/build-review.json'))).rejects.toThrow();
       expect(invoke).toHaveBeenCalledTimes(8);
-      expect((await readKickbackLedger(dir)).gates.build_review).toBeUndefined();
+      const kickbackLedger = await readKickbackLedger(dir);
+      expect(kickbackLedger.gates.build_review?.count).toBe(0);
+      expect(kickbackLedger.gates.build_review?.cumulative).toBe(0);
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
