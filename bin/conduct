@@ -159,7 +159,9 @@ PY
   local tmp
   tmp=$(mktemp --suffix=.md 2>/dev/null || mktemp -t changelog.XXXXXX.md)
   printf '%s\n' "$preview" > "$tmp"
-  render_md "$tmp"
+  # Keep the update confirmation's stdin available. A configured markdown
+  # viewer may page or otherwise consume it before the following y/n prompt.
+  cat "$tmp"
   rm -f "$tmp"
 }
 
