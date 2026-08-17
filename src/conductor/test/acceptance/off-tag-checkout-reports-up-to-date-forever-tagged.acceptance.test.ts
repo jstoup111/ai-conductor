@@ -31,7 +31,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-const REPO_ROOT = join(process.cwd(), '..', '..');
+const REPO_ROOT = process.env.OFF_TAG_ACCEPTANCE_REPO_ROOT ?? join(process.cwd(), '..', '..');
 const REAL_UPDATE = join(REPO_ROOT, 'bin', 'update');
 const REAL_CONDUCT = join(REPO_ROOT, 'bin', 'conduct');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
@@ -67,6 +67,7 @@ async function command(
   const result = await execa(executable, args, {
     cwd: options.cwd,
     env: options.env,
+    extendEnv: options.env === undefined,
     input: options.input,
     reject: false,
     timeout: 10_000,
@@ -153,10 +154,12 @@ async function runEntry(
 ): Promise<CommandResult> {
   const executable = entry === 'update' ? fixture.update : fixture.conduct;
   const args = entry === 'update' ? [] : ['--update'];
+  const env = { ...process.env };
+  delete env.CONDUCT_DAEMON_SESSION;
   return command(executable, args, {
     cwd: fixture.root,
     env: {
-      ...process.env,
+      ...env,
       HOME: home,
       PATH: `${join(fixture.root, 'bin')}:${process.env.PATH ?? '/usr/bin:/bin'}`,
     },
@@ -208,16 +211,21 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
     await git(fixture.root, 'tag', 'v0.4.0');
     await publish(fixture);
     await git(fixture.root, 'checkout', '-q', offTag);
-    const home = await makeHome('past-with-newer', { update_channel: 'tagged' });
+    const updateHome = await makeHome('past-with-newer-update', { update_channel: 'tagged' });
+    const conductHome = await makeHome('past-with-newer-conduct', { update_channel: 'tagged' });
 
-    const result = await runEntry(fixture, home);
+    const update = await runEntry(fixture, updateHome);
+    const conduct = await runEntry(fixture, conductHome, 'conduct');
 
-    expect(result.exitCode).toBe(0);
-    expect(result.output).toMatch(/identity.*v0\.3\.0\+1.*checkout/i);
-    expect(result.output).toMatch(/v0\.3\.0 → v0\.4\.0/);
-    expect(result.output).toMatch(/git checkout.*v0\.4\.0.*bin\/migrate/is);
-    expect(result.output).not.toMatch(/Update to .*\[y\/n\]/i);
-    expect(await configValue(home, 'current_version')).toBe('v0.3.0');
+    for (const result of [update, conduct]) {
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toMatch(/identity.*v0\.3\.0\+1.*checkout/i);
+      expect(result.output).toMatch(/v0\.3\.0 → v0\.4\.0/);
+      expect(result.output).toMatch(/git checkout.*v0\.4\.0.*bin\/migrate/is);
+      expect(result.output).not.toMatch(/Update to .*\[y\/n\]/i);
+    }
+    expect(await configValue(updateHome, 'current_version')).toBe('v0.3.0');
+    expect(await configValue(conductHome, 'current_version')).toBe('v0.3.0');
     expect(await git(fixture.root, 'rev-parse', 'HEAD')).toBe(offTag);
   });
 
@@ -227,19 +235,27 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
     await commit(fixture.root, 'next release');
     await git(fixture.root, 'tag', 'v0.4.0');
     await publish(fixture);
-    const home = await makeHome('exact-tag', {
+    const updateHome = await makeHome('exact-tag-update', {
+      update_channel: 'tagged',
+      current_version: 'v9.9.9',
+    });
+    const conductHome = await makeHome('exact-tag-conduct', {
       update_channel: 'tagged',
       current_version: 'v9.9.9',
     });
 
-    const result = await runEntry(fixture, home);
+    const update = await runEntry(fixture, updateHome);
+    const conduct = await runEntry(fixture, conductHome, 'conduct');
 
-    expect(result.exitCode).toBe(0);
-    expect(result.output).toMatch(/identity.*v0\.4\.0.*checked-out tag/i);
-    expect(result.output).toMatch(/up to date/i);
-    expect(result.output).not.toMatch(/commits past|update available|v9\.9\.9/);
-    expect(identityLines(result.output)).toHaveLength(1);
-    expect(await configValue(home, 'current_version')).toBe('v0.4.0');
+    for (const result of [update, conduct]) {
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toMatch(/identity.*v0\.4\.0.*checked-out tag/i);
+      expect(result.output).toMatch(/up to date/i);
+      expect(result.output).not.toMatch(/commits past|update available|v9\.9\.9/);
+      expect(identityLines(result.output)).toHaveLength(1);
+    }
+    expect(await configValue(updateHome, 'current_version')).toBe('v0.4.0');
+    expect(await configValue(conductHome, 'current_version')).toBe('v0.4.0');
   });
 
   it('declines to guess when release tags exist but none is reachable from HEAD', async () => {
@@ -255,15 +271,22 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
       update_channel: 'tagged',
       current_version: 'v0.3.0',
     });
+    const conductHome = await makeHome('unreachable-tag-conduct', {
+      update_channel: 'tagged',
+    });
 
     const emptyResult = await runEntry(fixture, emptyHome);
     const recordedResult = await runEntry(fixture, recordedHome);
+    const conductResult = await runEntry(fixture, conductHome, 'conduct');
 
-    expect(emptyResult.exitCode).toBe(0);
-    expect(emptyResult.output).toMatch(/identity.*unverifiable/i);
-    expect(emptyResult.output).not.toMatch(/update available|update to/i);
-    expect(identityLines(emptyResult.output)).toHaveLength(1);
+    for (const result of [emptyResult, conductResult]) {
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toMatch(/identity.*unverifiable/i);
+      expect(result.output).not.toMatch(/update available|update to/i);
+      expect(identityLines(result.output)).toHaveLength(1);
+    }
     expect(await configValue(emptyHome, 'current_version')).toBe('');
+    expect(await configValue(conductHome, 'current_version')).toBe('');
 
     expect(recordedResult.exitCode).toBe(0);
     expect(recordedResult.output).toMatch(/identity.*unverifiable/i);
