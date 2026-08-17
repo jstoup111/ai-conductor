@@ -26,10 +26,10 @@ jobs:
           set -euo pipefail
           if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || [ -n "$CODEX_API_KEY" ]; then
             echo "### Live daemon E2E: at least one provider credential is available" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          else
+            echo "### Live daemon E2E: no provider credential is available" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          echo "### Live daemon E2E: no provider credential is available" >> "$GITHUB_STEP_SUMMARY"
-          exit 1
   live-daemon-e2e:
     name: Live daemon E2E (${{ matrix.provider }})
     needs: require-live-provider-credential
