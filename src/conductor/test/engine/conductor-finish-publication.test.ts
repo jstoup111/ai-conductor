@@ -198,12 +198,16 @@ describe('Conductor FINISH publication routing', () => {
       ...persisted.value,
       complexity_tier: 'M',
       architecture_review: 'skipped',
-      manual_test: 'stale',
+      manual_test: 'done',
     });
     const events = new ConductorEventEmitter();
     const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    const gateVerdicts: Array<{ step: StepName; reason?: string }> = [];
     events.on('kickback', (event) => {
       if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    events.on('gate_verdict', (event) => {
+      if (event.type === 'gate_verdict') gateVerdicts.push({ step: event.step, reason: event.reason });
     });
     const advance = vi.fn(async () => ({ kind: 'complete' } as const));
     const runner: StepRunner = {
@@ -222,6 +226,10 @@ describe('Conductor FINISH publication routing', () => {
     expect(advance).not.toHaveBeenCalled();
     expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
     expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+    expect(gateVerdicts).toEqual([{
+      step: 'manual_test',
+      reason: 'manual test evidence contains FAIL rows',
+    }]);
   });
 
   it('redirects several non-green validators to the earliest one without demoting a green sibling', async () => {
@@ -278,6 +286,7 @@ describe('Conductor FINISH publication routing', () => {
       join(dir, '.pipeline', 'manual-test-results.md'),
       '# Manual Test Results\n\n## Attempt 1 — 2026-08-16T00:00:00Z\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
     );
+    await writeFile(join(dir, '.pipeline', 'manual-test-fail-evidence.json'), JSON.stringify({ codeStamp: 'baseline' }));
     const persisted = await readState(statePath);
     if (!persisted.ok) throw new Error('test fixture state must be readable');
     await writeFile(
@@ -285,6 +294,8 @@ describe('Conductor FINISH publication routing', () => {
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | test.ts:1 | — |\n',
     );
     await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
+    await writeFile(join(dir, '.pipeline', 'prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
     await writeState(statePath, {
       ...persisted.value,
       complexity_tier: 'M',
@@ -304,50 +315,71 @@ describe('Conductor FINISH publication routing', () => {
     events.on('kickback', (event) => {
       if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
     });
-    let finishRuns = 0;
     const runnerRun = vi.fn(async (step: StepName) => {
-      if (step === 'manual_test') {
-        await writeFile(
-          join(dir, '.pipeline', 'manual-test-results.md'),
-          '# Manual Test Results\n\n## Attempt 2 — 2026-08-16T00:00:00Z\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
-        );
-        return { success: true };
-      }
       if (step === 'finish') {
-        finishRuns++;
-        return finishRuns === 1
-          ? { success: false, publicationDisposition: { kind: 'publication_progress', transition: 'ready_pr' } }
-          : { success: true, publicationDisposition: { kind: 'complete' } };
+        return { success: true };
       }
       return { success: true };
     });
     const runner: StepRunner = {
       run: runnerRun,
     };
+    const finishPublication = {
+      advance: vi.fn(async ({ dispatchJudgment }) => {
+        await dispatchJudgment({
+          kind: 'finish_pr_prose_quality',
+          pullRequestUrl: 'https://example.test/pr/17',
+          qualityScope: ['title', 'body'],
+          maximumPasses: 1,
+        });
+        return { kind: 'complete' } as const;
+      }),
+    };
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
+      finishPublication,
       events,
       projectRoot: dir,
       fromStep: 'finish',
       mode: 'default',
       daemon: true,
       fullSuiteVerifier: { ensure, inspect },
-      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+      git: async (args) => ({
+        stdout: args[0] === 'diff' ? 'docs/notes.md\n' : '',
+        exitCode: 0,
+      }),
+      gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
     });
 
-    await conductor.run();
+    const firstLapState = await readState(statePath);
+    if (!firstLapState.ok) throw new Error('test fixture state must be readable');
+    const finishFence = conductor as unknown as {
+      nonGreenFinishValidators(state: ConductState): Promise<unknown[]>;
+      runFinishPublication(state: ConductState, options: never): Promise<{ success: boolean }>;
+    };
+    const firstLap = await finishFence.nonGreenFinishValidators(firstLapState.value);
+    const firstFinish = await finishFence.runFinishPublication(firstLapState.value, {} as never);
+    const secondLapState = await readState(statePath);
+    if (!secondLapState.ok) throw new Error('test fixture state must be readable');
+    const secondLap = await finishFence.nonGreenFinishValidators(secondLapState.value);
+    const secondFinish = await finishFence.runFinishPublication(secondLapState.value, {} as never);
 
     const verdicts = await readAllVerdicts(dir);
     const after = await readState(statePath);
-    expect(runnerRun.mock.calls.map(([step]) => step)).toEqual(['manual_test', 'finish', 'finish']);
+    expect(firstLap).toEqual([]);
+    expect(secondLap).toEqual([]);
+    expect(firstFinish.success).toBe(true);
+    expect(secondFinish.success).toBe(true);
+    expect(runnerRun.mock.calls.map(([step]) => step)).toEqual(['finish', 'finish']);
+    expect(finishPublication.advance).toHaveBeenCalledTimes(2);
     expect(ensure).not.toHaveBeenCalled();
     expect(inspect).not.toHaveBeenCalled();
     expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['done', 'done', 'done']);
     for (const step of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
       expect(verdicts[step]).toMatchObject({ satisfied: true });
     }
-    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+    expect(kickbacks).toEqual([]);
     await expect(readFile(join(dir, '.pipeline', 'manual-test-results.md'), 'utf8')).resolves.toContain('PASS');
   });
 
