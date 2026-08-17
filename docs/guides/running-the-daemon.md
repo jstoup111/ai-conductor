@@ -187,8 +187,13 @@ necessarily the repo default.
   dispatch. `grep ' via '` over the log answers "which provider ran this step" without inspecting
   process argv. A provider skipped from a cached availability result dispatches no process and is
   not logged; a fallback between providers still prints its own `⚠ PROVIDER FALLBACK` line.
-- **`·   finish: total usage — <dispatches>, <cost>, <in>→<out> tok, <n> unmetered`** is logged once,
-  when the feature's `finish` step completes. It is the sum of every dispatch that feature recorded
+- **`·   finish: total usage — <dispatches>, <cost>, <fresh> fresh + <cached> cached→<out> tok, <n> unmetered`**
+  is logged once,
+  when the feature's `finish` step completes. `<fresh>` counts non-cached input tokens; `<cached>`
+  counts prompt-cache reads and creation — the conversation an agentic dispatch resubmits on every
+  internal tool call, billed at a fraction of fresh input (the `+ <cached> cached` part is omitted
+  when no cache volume was tracked). Per-dispatch provider lines qualify the same way with a
+  `(N% cached)` suffix. It is the sum of every dispatch that feature recorded
   in its own `.pipeline/events.jsonl` — so it spans the whole build, including steps run in earlier
   daemon dispatches, not just the session that happened to reach `finish`. After finish usage is
   persisted, the engine refreshes the committed `.docs/shipped/<slug>.md` `## Cost` block from the
