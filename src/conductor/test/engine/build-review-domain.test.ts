@@ -209,6 +209,14 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     }
   });
 
+  it('has no other-style catch-all member in any finding vocabulary', () => {
+    expect(
+      Object.values(BUILD_REVIEW_FINDING_VOCABULARIES)
+        .flatMap((vocabulary) => vocabulary.members)
+        .some((member) => /(?:^|[-_])other(?:$|[-_])/.test(member)),
+    ).toBe(false);
+  });
+
   it('names the tautology vocabulary when a prose violationKind is outside it', () => {
     const rejection = describeBuildReviewJudgedResultRejection({
       kind: 'judged', rubric: 'tautology', contractVersion: 'v2', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,

@@ -1821,6 +1821,23 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `build_review evidence write failed for ${writeFailure.rubric}: ${writeFailure.reason}` };
     }
 
+    // A result that still violates the judged contract after its one repair
+    // turn is not a reviewer decision about the diff.  Do not publish it as
+    // a fresh FAIL aggregate: completion deliberately classifies a missing
+    // verdict as `absent`, which re-dispatches this rubric without consuming
+    // the build_review kickback budget.
+    const rejectedAfterRepair = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
+      branch.kind === 'infrastructure-failure' &&
+      branch.reason === 'invalid-provider-result' &&
+      branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true,
+    );
+    if (rejectedAfterRepair) {
+      return {
+        success: false,
+        output: `build_review ${rejectedAfterRepair.rubric} rubric rejected after repair: ${rejectedAfterRepair.detail}`,
+      };
+    }
+
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
         const artifact = await this.buildReviewArtifactReader(

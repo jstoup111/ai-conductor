@@ -3668,6 +3668,33 @@ TIER: M`,
       })).toEqual({ allowed: true });
     });
 
+    it('leaves no verdict artifact after a vocabulary rejection survives its repair turn', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: JSON.stringify({
+          kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: 'lap-head',
+          snapshotDigest: 'sha256:source', findings: [{
+            concernKind: 'other', summary: 'A rejected catch-all.',
+            evidenceLocations: ['src/example.ts:1'],
+            anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'other' },
+          }],
+        }),
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        { gitRunner: scriptedGit(), planPath, ...tautologyOptIn(), ...currentBuildReviewProof() },
+      );
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(false);
+      await expect(access(join(dir, '.pipeline/build-review.json'))).rejects.toThrow();
+      expect(invoke).toHaveBeenCalledTimes(8);
+    });
+
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
