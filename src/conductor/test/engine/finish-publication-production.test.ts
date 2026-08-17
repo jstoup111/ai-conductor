@@ -502,7 +502,7 @@ describe('production FINISH publication composition', () => {
     }
   });
 
-  it('judges ordinary prose containing "required" language on each fresh coordinator after restart', async () => {
+  it('restores an accepted judgment for ordinary prose containing "required" language after restart', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-restart-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -565,9 +565,9 @@ describe('production FINISH publication composition', () => {
       const afterRestart = await makeCoordinator().advance(input);
 
       expect(beforeRestart).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
-      expect(afterRestart).toEqual(beforeRestart);
       // Durable per-revision verdicts: the restarted coordinator re-observes
       // the persisted acceptance instead of paying a second judgment session.
+      expect(afterRestart).not.toMatchObject({ kind: 'publication_progress', transition: 'judge_pr_prose' });
       expect(dispatchJudgment).toHaveBeenCalledTimes(1);
     } finally {
       await rm(root, { recursive: true, force: true });
