@@ -4,13 +4,18 @@ import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ProviderHomeProvisionError } from '../../src/engine/self-host/provider-home.js';
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { InvokeOptions, LLMProvider, SelfHostAuthContext } from '../../src/execution/llm-provider.js';
 import type { LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import {
   provisionLiveProviderHome,
 } from './live-provider-home.js';
+import { ProvisionedHome } from './live-e2e-run-body.js';
+
+vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+  dumpPipelineDiagnostics: vi.fn(),
+}));
 
 const execFileAsync = promisify(execFile);
 const claudeDescriptor = { id: 'claude' } as Pick<LiveE2EProviderDescriptor, 'id'>;
@@ -71,6 +76,58 @@ describe('provisionLiveProviderHome', () => {
         expect(home.provider).toBe(id);
         expect(authContexts).toEqual([{ provider: id, homeDir: home.homeDir }]);
         expect(home.childEnv()[credentialEnvVar]).toBe(`${id}-provider-owned-token`);
+      } finally {
+        await home.teardown();
+      }
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['claude', 'CLAUDE_CODE_OAUTH_TOKEN'],
+    ['codex', 'CODEX_API_KEY'],
+  ] as const)('uses the selected %s provider auth to construct the home injected into both invoke paths', async (id, credentialEnvVar) => {
+    const sourceRoot = await createSourceCheckout();
+    const prepareSelfHostAuth = vi.fn(async (_context: SelfHostAuthContext) => ({
+      env: { [credentialEnvVar]: `${id}-isolated-token` },
+      args: [`--${id}-isolated`],
+    }));
+    const provider: LLMProvider = {
+      prepareSelfHostAuth,
+      invoke: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
+      invokeInteractive: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
+    };
+    const descriptor = { id } as LiveE2EProviderDescriptor;
+    const options = { prompt: 'fixture', sessionId: 'fixture', resume: false } satisfies InvokeOptions;
+
+    try {
+      const home = await provisionLiveProviderHome(sourceRoot, descriptor, provider);
+      try {
+        const selfHost = {
+          executable: id,
+          env: home.childEnv(),
+          args: home.childArgs(),
+          teardown: home.teardown,
+        };
+        const provisioned = new ProvisionedHome(provider, selfHost);
+
+        await provisioned.invoke(options);
+        await provisioned.invokeInteractive(options);
+
+        expect({
+          provider: home.provider,
+          authProviders: prepareSelfHostAuth.mock.calls.map(([context]) => context.provider),
+          authHomes: prepareSelfHostAuth.mock.calls.map(([context]) => context.homeDir),
+          invokeSelfHost: vi.mocked(provider.invoke).mock.calls[0]?.[0].selfHost,
+          interactiveSelfHost: vi.mocked(provider.invokeInteractive).mock.calls[0]?.[0].selfHost,
+        }).toEqual({
+          provider: id,
+          authProviders: [id],
+          authHomes: [home.homeDir],
+          invokeSelfHost: selfHost,
+          interactiveSelfHost: selfHost,
+        });
       } finally {
         await home.teardown();
       }

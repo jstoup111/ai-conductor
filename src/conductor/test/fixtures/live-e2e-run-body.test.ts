@@ -381,13 +381,37 @@ describe('live E2E failure diagnostics', () => {
     }
   });
 
-  it.each([
-    ['absent worktree', 'absent'],
-    ['missing daemon log', 'missing-log'],
-    ['empty daemon log', 'empty-log'],
-  ] as const)('reports an %s without masking the original failure', async (_scenario, setup) => {
+  it('redacts credential-shaped text from an unavailable worktree diagnostic', async () => {
     const { dumpLiveE2EFailureDiagnostics } = await import('./live-e2e-run-body.js') as {
-      dumpLiveE2EFailureDiagnostics: (worktreeDir: string) => Promise<void>;
+      dumpLiveE2EFailureDiagnostics: (worktreeDir: string, credentialValues?: readonly string[]) => Promise<void>;
+    };
+    const credential = 'sk-live-e2e-path-secret';
+    const stderr: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderr.push(args.map(String).join(' '));
+    });
+
+    try {
+      await dumpLiveE2EFailureDiagnostics(`/tmp/${credential}/missing-worktree`, [credential]);
+
+      expect(stderr.join('\n')).toEqual(expect.stringContaining('live worktree not found at /tmp/[redacted]/missing-worktree'));
+      expect(stderr.join('\n')).not.toContain(credential);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ['surviving absent worktree', 'absent'],
+    ['surviving missing daemon log', 'missing-log'],
+    ['surviving empty daemon log', 'empty-log'],
+  ] as const)('reports a %s through the shared failure path without masking the original failure', async (_scenario, setup) => {
+    const { withLiveE2EFailureDiagnostics } = await import('./live-e2e-run-body.js') as {
+      withLiveE2EFailureDiagnostics: <T>(
+        worktreeDir: string | undefined,
+        credentialValues: readonly string[],
+        run: () => Promise<T>,
+      ) => Promise<T>;
     };
     const worktreeDir = await mkdtemp(`${tmpdir()}/live-e2e-diagnostics-`);
     const stderr: string[] = [];
@@ -409,7 +433,12 @@ describe('live E2E failure diagnostics', () => {
         return '';
       });
 
-      await expect(dumpLiveE2EFailureDiagnostics(worktreeDir)).resolves.toBeUndefined();
+      const originalFailure = new Error('daemon outcome failed after preflight');
+      await expect(withLiveE2EFailureDiagnostics(
+        worktreeDir,
+        [],
+        async () => { throw originalFailure; },
+      )).rejects.toThrow(originalFailure.message);
 
       const output = stderr.join('\n');
       expect({

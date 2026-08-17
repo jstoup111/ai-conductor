@@ -294,28 +294,28 @@ export async function dumpLiveE2EFailureDiagnostics(
   worktreeDir: string | undefined,
   credentialValues: readonly string[] = [],
 ): Promise<void> {
-  if (!worktreeDir) {
-    console.error('live worktree was not created; pipeline diagnostics unavailable.');
-    return;
-  }
-  if (!existsSync(worktreeDir)) {
-    console.error(`live worktree not found at ${worktreeDir}; pipeline diagnostics unavailable.`);
-    return;
-  }
-
-  const logPath = join(worktreeDir, '.daemon/daemon.log');
-  const daemonLog = await readFile(logPath, 'utf8').catch(() => null);
-  if (daemonLog === null) {
-    console.error(`daemon log not found at ${logPath}`);
-  } else if (daemonLog.trim().length === 0) {
-    console.error(`daemon log is empty at ${logPath}`);
-  }
-
   const originalError = console.error;
   console.error = (...args: unknown[]) => {
     originalError(...args.map((argument) => redactLiveE2ECredentialValues(argument, credentialValues)));
   };
   try {
+    if (!worktreeDir) {
+      console.error('live worktree was not created; pipeline diagnostics unavailable.');
+      return;
+    }
+    if (!existsSync(worktreeDir)) {
+      console.error(`live worktree not found at ${worktreeDir}; pipeline diagnostics unavailable.`);
+      return;
+    }
+
+    const logPath = join(worktreeDir, '.daemon/daemon.log');
+    const daemonLog = await readFile(logPath, 'utf8').catch(() => null);
+    if (daemonLog === null) {
+      console.error(`daemon log not found at ${logPath}`);
+    } else if (daemonLog.trim().length === 0) {
+      console.error(`daemon log is empty at ${logPath}`);
+    }
+
     await dumpPipelineDiagnostics(worktreeDir);
   } catch {
     console.error('live E2E pipeline diagnostics failed; diagnostic details redacted.');
