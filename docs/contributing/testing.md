@@ -357,9 +357,11 @@ real `bin/setup`, which may install dependencies. Select one production smoke fi
 `npm run smoke -- <smoke_file>`. `npm run smoke` runs in advisory mode by default
 (`SMOKE_MODE` unset or anything but `gate`): a file whose capability is unmet — no toolchain binary
 or that provider's credential — is skipped, not failed, and a run that executed zero smoke assertions
-for a file still fails that file. Set `SMOKE_MODE=gate` for the fail-closed release variant: every
-unmet capability fails its file outright, and the whole run fails if no `credentialed` file actually
-executed — an all-skipped credentialed tier can never pass a gate run. `SMOKE_FORCE_SKIP` (comma-
+for a file still fails that file. Set `SMOKE_MODE=gate` for the fail-closed release variant: a complete-tier
+run fails when any required capability is unmet, and it requires at least one executed
+`credentialed:claude` or `credentialed:codex` file — an all-skipped credentialed tier can never pass.
+A selected credentialed file whose credential is absent is instead a passing non-gating skip; when its
+credential is present, that selected leg must execute and remains gate-enforced. `SMOKE_FORCE_SKIP` (comma-
 separated `capability:<name>` or `file:<path>` entries) forces an operator override in either mode;
 in gate mode a forced skip still counts as a failure. Every run ends with one `smoke ledger:` line per
 file naming its capability and outcome (`ran`, `skipped (unmet: …)`, or `failed (evidence: …)`).

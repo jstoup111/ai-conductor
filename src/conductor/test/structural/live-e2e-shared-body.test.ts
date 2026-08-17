@@ -1,29 +1,28 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
+import { LIVE_E2E_PROVIDERS, type LiveE2EProviderDescriptor } from '../fixtures/live-e2e-providers.js';
+import { runLiveE2ERunBody } from '../fixtures/live-e2e-run-body.js';
+
+vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+  dumpPipelineDiagnostics: vi.fn(),
+}));
 
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const sharedBodyPath = join(structuralRoot, '../fixtures/live-e2e-run-body.ts');
-const liveLegsPath = join(structuralRoot, '../engine');
-
 const LITERAL_PROVIDER_IDS = new Set(['claude', 'codex']);
 
 describe('structural: shared live E2E body', () => {
-  it('keeps provider selection, authentication, and diagnostics in the shared body', async () => {
+  it('has no provider-specific branch in the shared body', async () => {
     const source = await readFile(sharedBodyPath, 'utf8');
     const parsed = ts.createSourceFile(sharedBodyPath, source, ts.ScriptTarget.Latest, true);
     const providerSpecificBranches: string[] = [];
-    const functionSource = (name: string): string => {
-      const declaration = parsed.statements.find((statement): statement is ts.FunctionDeclaration =>
-        ts.isFunctionDeclaration(statement) && statement.name?.text === name,
-      );
-      return declaration ? source.slice(declaration.getStart(parsed), declaration.end) : '';
-    };
-    const runBodySource = functionSource('runLiveE2ERunBody');
-    const diagnosticsSource = functionSource('runWithLiveE2EFailureDiagnostics');
 
     const visit = (node: ts.Node): void => {
       if (ts.isBinaryExpression(node) && [
@@ -53,64 +52,64 @@ describe('structural: shared live E2E body', () => {
     };
     visit(parsed);
 
-    expect({
-      providerSpecificBranches,
-      constructsProviderFromDescriptor: runBodySource.includes('createLiveProvider(descriptor, credential)'),
-      validatesDescriptorAuthentication: runBodySource.includes('assertDescriptorAuthenticationSource(descriptor, provider)'),
-      wrapsFailuresInSharedDiagnostics: runBodySource.includes("runWithLiveE2EFailureDiagnostics(() => worktreeDir, [credential ?? ''], async () =>"),
-      dumpsDiagnosticsBeforeRethrowing: /catch \(error\) \{\s*await dumpLiveE2EFailureDiagnostics\(resolveWorktreeDir\(\), credentialValues\);\s*throw redactLiveE2EFailure\(error, credentialValues\);/s.test(diagnosticsSource),
-    }).toEqual({
-      providerSpecificBranches: [],
-      constructsProviderFromDescriptor: true,
-      validatesDescriptorAuthentication: true,
-      wrapsFailuresInSharedDiagnostics: true,
-      dumpsDiagnosticsBeforeRethrowing: true,
-    });
+    expect(providerSpecificBranches).toEqual([]);
   });
 
-  it('keeps the real provider legs to descriptor selection and one shared body call', async () => {
-    const legNames = (await readdir(liveLegsPath)).filter((name) => /^daemon-e2e-live-.*\.smoke\.test\.ts$/.test(name)).sort();
+  it('executes every descriptor through equivalent provider selection, authentication, and diagnostics outcomes', async () => {
+    const originalCredentials = new Map(
+      LIVE_E2E_PROVIDERS.map((descriptor) => [descriptor.credentialEnvVar, process.env[descriptor.credentialEnvVar]]),
+    );
+    const selections = vi.fn();
+    const authenticationChecks = vi.fn();
 
-    expect(legNames).toEqual([
-      'daemon-e2e-live-claude.smoke.test.ts',
-      'daemon-e2e-live-codex.smoke.test.ts',
-    ]);
+    try {
+      vi.mocked(dumpPipelineDiagnostics).mockClear();
+      vi.mocked(dumpPipelineDiagnostics).mockResolvedValue('');
+      const outcomes = await Promise.all(LIVE_E2E_PROVIDERS.map(async (registeredDescriptor) => {
+        process.env[registeredDescriptor.credentialEnvVar] = `${registeredDescriptor.id}-credential`;
+        const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+        const descriptor: LiveE2EProviderDescriptor = {
+          ...registeredDescriptor,
+          createProvider: () => {
+            selections(registeredDescriptor.id);
+            return provider;
+          },
+          expectedAuthenticationSource: 'test-source',
+          resolveAuthenticationSource: async (candidate) => {
+            authenticationChecks(registeredDescriptor.id, candidate);
+            return 'test-source';
+          },
+          assertCredentialAvailable: () => {},
+        };
 
-    const providerIndexes = {
-      'daemon-e2e-live-claude.smoke.test.ts': 0,
-      'daemon-e2e-live-codex.smoke.test.ts': 1,
-    } as const;
-
-    await Promise.all(legNames.map(async (name) => {
-      const source = await readFile(join(liveLegsPath, name), 'utf8');
-      const parsed = ts.createSourceFile(name, source, ts.ScriptTarget.Latest, true);
-      const executableStatements = parsed.statements.filter((statement) => !ts.isImportDeclaration(statement));
-      const providerDeclaration = executableStatements.find((statement) => ts.isVariableStatement(statement) &&
-        statement.declarationList.declarations.some((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'provider'));
-      const sharedBodyCalls = executableStatements.filter((statement) => ts.isExpressionStatement(statement) &&
-        ts.isCallExpression(statement.expression) && ts.isIdentifier(statement.expression.expression) &&
-        statement.expression.expression.text === 'defineLiveE2EProviderSmoke' && statement.expression.arguments.length === 1 &&
-        ts.isIdentifier(statement.expression.arguments[0]) && statement.expression.arguments[0].text === 'provider').length;
-      const providerInitializer = providerDeclaration !== undefined && ts.isVariableStatement(providerDeclaration)
-        ? providerDeclaration.declarationList.declarations[0]?.initializer
-        : undefined;
-      const providerIndex = providerInitializer !== undefined && ts.isElementAccessExpression(providerInitializer) &&
-        ts.isNumericLiteral(providerInitializer.argumentExpression)
-        ? Number(providerInitializer.argumentExpression.text)
-        : undefined;
+        return runLiveE2ERunBody(descriptor, 1, {
+          binaryAvailable: () => true,
+          provisionProviderHome: async (): Promise<never> => {
+            throw new Error('equivalent injected live-provider outcome');
+          },
+        }).then(
+          () => 'completed',
+          (error: unknown) => error instanceof Error ? error.message : String(error),
+        );
+      }));
 
       expect({
-        statementCount: executableStatements.length,
-        selectsDescriptor: providerInitializer !== undefined && ts.isElementAccessExpression(providerInitializer) &&
-          ts.isIdentifier(providerInitializer.expression) && providerInitializer.expression.text === 'LIVE_E2E_PROVIDERS',
-        providerIndex,
-        sharedBodyCalls,
+        outcomes,
+        selections: selections.mock.calls.map(([id]) => id),
+        authenticationChecks: authenticationChecks.mock.calls.map(([id]) => id),
+        diagnostics: vi.mocked(dumpPipelineDiagnostics).mock.calls.length,
       }).toEqual({
-        statementCount: 4,
-        selectsDescriptor: true,
-        providerIndex: providerIndexes[name as keyof typeof providerIndexes],
-        sharedBodyCalls: 1,
+        outcomes: ['equivalent injected live-provider outcome', 'equivalent injected live-provider outcome'],
+        selections: ['claude', 'codex'],
+        authenticationChecks: ['claude', 'codex'],
+        diagnostics: 2,
       });
-    }));
+    } finally {
+      vi.mocked(dumpPipelineDiagnostics).mockReset();
+      for (const [credentialEnvVar, credential] of originalCredentials) {
+        if (credential === undefined) delete process.env[credentialEnvVar];
+        else process.env[credentialEnvVar] = credential;
+      }
+    }
   });
 });

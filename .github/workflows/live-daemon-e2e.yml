@@ -30,6 +30,36 @@ jobs:
             echo "### Live daemon E2E: no provider credential is available" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+  complete-smoke-tier:
+    name: Complete release smoke tier
+    needs: require-live-provider-credential
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - name: Install smoke toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes tmux
+          npm install --global @anthropic-ai/claude-code @openai/codex
+      - name: Install conductor dependencies
+        run: npm ci
+        working-directory: src/conductor
+      - name: Build conductor
+        run: npm run build
+        working-directory: src/conductor
+      - name: Run complete release smoke tier in gate mode
+        run: SMOKE_MODE=gate npm run smoke
+        working-directory: src/conductor
   live-daemon-e2e:
     name: Live daemon E2E (${{ matrix.provider }})
     needs: require-live-provider-credential

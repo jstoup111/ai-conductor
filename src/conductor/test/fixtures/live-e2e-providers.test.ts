@@ -24,6 +24,24 @@ describe('LIVE_E2E_PROVIDERS', () => {
     expect(claude?.assertCredentialAvailable(undefined)).toBeUndefined();
   });
 
+  it('resolves the real Claude authentication source from its construction-time credential', async () => {
+    const claude = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'claude');
+    const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+
+    try {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'live-claude-token';
+      const oauthProvider = claude!.createProvider();
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      const missingProvider = claude!.createProvider();
+
+      await expect(claude!.resolveAuthenticationSource(oauthProvider)).resolves.toBe('oauth-token');
+      await expect(claude!.resolveAuthenticationSource(missingProvider)).resolves.toBe('missing');
+    } finally {
+      if (priorToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+    }
+  });
+
   it('declares the complete Codex live-leg descriptor', () => {
     const codex = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'codex');
 
