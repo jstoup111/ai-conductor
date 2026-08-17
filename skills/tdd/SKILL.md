@@ -35,7 +35,7 @@ RED → DOMAIN → GREEN → DOMAIN → COMMIT
  │       │        │        │        │
  │       │        │        │        └─ Scoped affected-test union green, clean tree, commit
  │       │        │        └─ Review implementation for domain integrity
- │       │        └─ Implement minimally (scope check: ~20 lines, 1 file, 1 function)
+ │       │        └─ Implement the smallest behavior-complete change within scope
  │       └─ Review test for primitive obsession, invalid states
  └─ Write ONE failing test, watch it fail
 ```
@@ -137,7 +137,8 @@ production call site of any security/correctness derivation, with real adversari
 
 **Agent:** Generator (source-files-only context) — use
 `steps.build.tdd.green.model` when configured (see RED's advisory model selection rule).
-**Goal:** Write the simplest code that makes the failing test pass.
+**Goal:** Write the smallest behavior-complete code change that makes the failing test pass and
+conforms to the applicable recorded basis.
 
 1. **Scope check BEFORE writing code:**
    - Will this change touch ~20 lines or fewer? → Proceed
@@ -145,9 +146,12 @@ production call site of any security/correctness derivation, with real adversari
    - Will it touch more than 1 function? → Consider drill-down
    - If scope check fails → Write a unit test for the smaller piece and run a nested TDD cycle
 
-2. Write the minimum code to pass the test
-3. Run the test — **watch it pass**
-4. The agent derives the selectors for the affected/scoped test set (the task's own tests + the files this change touches) and runs `conduct-ts scoped-run <selectors...>`. The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
+2. When an applicable recorded basis is present, conform to its relevant semantic traits. A
+   verified no-fit or operator-authorized bounded departure follows its documented approach;
+   when no applicable basis exists, no pattern conformance is required.
+3. Write the smallest behavior-complete code change to pass the test
+4. Run the test — **watch it pass**
+5. The agent derives the selectors for the affected/scoped test set (the task's own tests + the files this change touches) and runs `conduct-ts scoped-run <selectors...>`. The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
 
 A known failure in that scoped set blocks the current GREEN phase; fix it here
 rather than deferring it to a later gate. If one of the repository's documented
@@ -156,9 +160,12 @@ the exact trigger and invoke the configured aggregate verifier. Never call a
 raw project aggregate command directly.
 
 **Rules:**
-- Simplest code that passes. Not the "best" code — that's for refactoring.
+- The smallest behavior-complete change must conform to an applicable recorded basis; a passing
+  change that materially departs from that basis without its recorded no-fit or authorized
+  departure is incomplete. This does not authorize behavior beyond the failing test.
 - Don't implement behavior not required by a failing test.
 - Don't fix other things you notice. Note them for a future task.
+- Do not refactor during GREEN; refactoring remains a separate batch-boundary activity.
 - If tech-context loaded: follow stack conventions (e.g., Rails model/controller patterns)
 
 **When GREEN won't go green — escalate to debugging, do not thrash.**
@@ -392,14 +399,17 @@ Between TDD phases, the orchestrator outputs ONLY:
 
 No narration, no explanation of what just happened, no preview of what comes next.
 
-### Spec Coverage Rule: Every File Gets a Spec
+### Test Coverage Rule: Behavior and Failure Boundaries
 
-**Every file in `app/` (or `src/`) must have a corresponding spec file.** Hard gate.
+Coverage follows the behavior or failure boundary being added, changed, or fixed — never a
+one-to-one correspondence with production files. Choose the lowest sufficient test layer that
+proves the criterion. Use acceptance/system coverage only for a distinct multi-step externally
+observable flow that cannot be proven sufficiently below it; do not duplicate lower-layer negative
+variants or existing sufficient proof.
 
-- Models/services/jobs → unit specs (`spec/models/`, `spec/services/`, `spec/jobs/`)
-- Controllers → request specs (`spec/requests/`)
-- Both layers required. During RED: if the task creates/modifies a file in `app/`, verify the
-  corresponding spec exists. If not, create it as part of this TDD cycle.
+New behavior and bug fixes still begin with RED. A production-file change alone does not require a
+mirror test, and ordinary natural-language guidance does not create behavior to test. A declared
+exact replication still follows its full delta cycle and required scoped verification.
 
 ## Verification
 
@@ -416,5 +426,5 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Type-check passes before commit (typed stacks — run as the Phase 4 pre-check; skipped for stacks with no compile step)
 - [ ] Working tree clean at commit
 - [ ] One behavior per cycle (not multiple changes lumped together)
-- [ ] Every `app/` file has a corresponding spec file (unit + request where applicable)
+- [ ] Coverage proves each changed behavior or failure boundary at the lowest sufficient layer
 - [ ] Non-obvious gotchas or new patterns persisted to `.memory/` (if encountered this cycle)
