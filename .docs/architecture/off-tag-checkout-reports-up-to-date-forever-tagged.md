@@ -170,6 +170,63 @@ sequenceDiagram
     end
 ```
 
+> **Amended 2026-08-17 by #1437:** this sequence shows only the `conduct-ts` → `bin/update --auto`
+> runtime. It is one of **two** production runtimes, and omitting the second was read downstream as
+> the `bin/conduct` copy being unreachable. The second runtime is rooted in `bin/conduct` itself:
+>
+> ```mermaid
+> sequenceDiagram
+>     autonumber
+>     participant Op as Operator
+>     participant Sym as ~/.local/bin/conduct<br/>(bin/install:1274-1290)
+>     participant C as bin/conduct
+>     participant H as harness-common.sh<br/>resolve_harness_identity
+>     participant G as git (local checkout)
+>
+>     Op->>Sym: conduct «args»  (or conduct --update)
+>     Sym->>C: exec bin/conduct
+>     C->>C: check_harness_update  (top level, :2760; --update, :2720)
+>     C->>C: dispatch channel (:336-358) → tagged (:356)
+>     C->>H: check_harness_update_tagged (:193-274) resolves identity (:204-205)
+>     H->>G: read checkout
+>     G-->>H: kind, identity, baseline, distance, source
+>     H-->>C: same tuple bin/update receives
+>     C->>Op: same identity line and same decision branch as bin/update
+> ```
+>
+> Neither runtime calls the other. `conduct` and `conduct-ts` are separately symlinked by
+> `bin/install` (`:1274-1290` and `:1303-1320`); the only edge between them is the advisory
+> heads-up at `bin/conduct:2745-2753`, which runs `conduct` → mention of `conduct-ts`, never the
+> reverse. **No TypeScript caller for `bin/conduct:193-274` is owed, and adding one would invert
+> the deployment boundary.**
+
+## Duplicate placement — why the mirror stays in production scope
+
+> **Amended 2026-08-17 by #1437:** added to close the entry-point question the component-placement
+> diagram below left implicit.
+
+`bin/conduct`'s tagged-update copy is not scaffolding, not a test fixture, and not a
+later-feature stub. It is live behavior on a shipped CLI, so it carries the same correctness
+obligation as `bin/update`, and the same defect if it drifts. That fixes three things:
+
+1. **Scope.** The mirror stays inside this feature's changed production scope. It is not removed,
+   not deferred to #226, and not exempted from the identity rewrite.
+2. **Parity is the invariant, not resemblance.** Both copies must produce identical output and
+   identical decision effects — including cache persistence — from identical checkout and config
+   inputs, across the undeterminable, post-release, up-to-date, offer, and prompt branches.
+3. **Delegation is the mechanism.** Neither copy may resolve a tag to an identity inline
+   (`git describe`, `git tag --merged`, `rev-list --count`); both call `resolve_harness_identity`.
+   This is Condition 1 of the approved review, and it is what makes #226's later deletion a removal
+   of a call site rather than of logic.
+
+**Owning surfaces for the BUILD kickback.** Implementation: `bin/update` and `bin/conduct`
+(tagged-check bodies and their pre-resolver guards). Tests: `test/test_harness_integrity.sh`
+check 24 (`:1459-1499`) for the static parity and delegation guards — which must be falsifiable
+against the pre-diff `git describe` form, not merely satisfied by it; `test/test_bin_update.sh`
+for behavioral fixtures including the no-reachable-release-tag case; and
+`src/conductor/test/acceptance/off-tag-checkout-reports-up-to-date-forever-tagged.acceptance.test.ts`
+for cross-caller parity driven from identical inputs. None of these owes a reachability change.
+
 ## Component placement
 
 ```mermaid
@@ -191,12 +248,19 @@ flowchart LR
         Tests["test/test_bin_update.sh<br/>two #1005 assertions rewritten"]
     end
 
+    subgraph Roots["Production entry points (bin/install symlinks both)"]
+        CondBin["~/.local/bin/conduct<br/>bin/install:1274-1290"]
+        CondTs["~/.local/bin/conduct-ts<br/>bin/install:1303-1320"]
+    end
+
     Update --> Resolve
     Conduct --> Resolve
     Install --> Resolve
     Update -.->|write only| CfgSet
     Auto --> Update
     Tests --> Update
+    CondBin --> Conduct
+    CondTs --> Auto
 
     style Resolve fill:#d1e7dd,stroke:#0a6
     style Install fill:#fff3cd,stroke:#b8860b
@@ -205,6 +269,13 @@ flowchart LR
 Placing `resolve_harness_identity` in `harness-common.sh` is what makes the `bin/conduct`
 mirror a one-line call rather than a second copy of the logic, and lets `bin/install` reuse
 the same rule instead of keeping its own contradictory one.
+
+> **Amended 2026-08-17 by #1437:** the `Roots` subgraph above is added — both callers are rooted
+> in their own installed CLI, and neither root reaches the other. The design-time citations in the
+> `Callers` subgraph have since drifted with the implementation; the authoritative current
+> locations are `bin/update:126` and `bin/conduct:193` for `check_harness_update_tagged`, and
+> `bin/install:891` for `detect_current_version`. The original labels are preserved above as the
+> design-time record.
 
 ## Boundary with #1400 / #1412 (in flight, do not entangle)
 
