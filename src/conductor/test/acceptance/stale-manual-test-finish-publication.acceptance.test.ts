@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { PASSING_FULL_SUITE_VERIFIER } from '../test-conductor.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
-import { computeAndWriteVerdict } from '../../src/engine/gate-verdicts.js';
+import { computeAndWriteVerdict, readVerdict } from '../../src/engine/gate-verdicts.js';
 import { gateVerdictStillValid } from '../../src/engine/gate-code-validity.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -130,6 +130,10 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       );
       const preRunVerdict = await computeAndWriteVerdict(root, 'manual_test');
       expect(preRunVerdict.satisfied).toBe(true);
+      await expect(readVerdict(root, 'manual_test')).resolves.toMatchObject({ satisfied: true });
+      await expect(readFile(join(pipeline, 'manual-test-fail-evidence.json'), 'utf8')).resolves.toBe(
+        JSON.stringify({ codeStamp: preShipTailCodeStamp }),
+      );
 
       await commit(root, { 'src/feature.ts': 'export const feature = 2;\n' }, 'rebase: apply ship-tail changes');
       const postRebaseHead = (
