@@ -151,20 +151,29 @@ async function runEntry(
   fixture: HarnessFixture,
   home: string,
   entry: 'update' | 'conduct' = 'update',
+  options: { tty?: boolean; input?: string } = {},
 ): Promise<CommandResult> {
   const executable = entry === 'update' ? fixture.update : fixture.conduct;
   const args = entry === 'update' ? [] : ['--update'];
   const env = { ...process.env };
   delete env.CONDUCT_DAEMON_SESSION;
-  return command(executable, args, {
+  const commandOptions = {
     cwd: fixture.root,
     env: {
       ...env,
       HOME: home,
       PATH: `${join(fixture.root, 'bin')}:${process.env.PATH ?? '/usr/bin:/bin'}`,
     },
-    input: '',
-  });
+    input: options.input ?? '',
+  };
+  if (!options.tty) {
+    return command(executable, args, commandOptions);
+  }
+
+  const quotedCommand = [executable, ...args]
+    .map((part) => `'${part.replaceAll("'", "'\\\"'\\\"'")}'`)
+    .join(' ');
+  return command('script', ['--quiet', '--return', '--command', quotedCommand, '/dev/null'], commandOptions);
 }
 
 async function configValue(home: string, key: string): Promise<string> {
@@ -175,6 +184,41 @@ async function configValue(home: string, key: string): Promise<string> {
 
 function identityLines(output: string): string[] {
   return output.split('\n').filter((line) => /identity/i.test(line));
+}
+
+function decisionOutput(entry: 'update' | 'conduct', output: string): string {
+  if (entry === 'update') {
+    return output;
+  }
+  return output.replace(
+    /\x1b\[[0-9;]*m\[conduct\]\x1b\[0m Forcing harness update check\.\.\.\r?\n/,
+    '',
+  );
+}
+
+function decisionConfig(config: string): string {
+  return config.replace(/^(\s*last_checked_at:\s*).*/m, '$1<recorded>');
+}
+
+async function assertTaggedEntryParity(
+  fixture: HarnessFixture,
+  name: string,
+  fields: Record<string, string>,
+  options: { tty?: boolean; input?: string } = {},
+): Promise<void> {
+  const updateHome = await makeHome(`${name}-update`, fields);
+  const conductHome = await makeHome(`${name}-conduct`, fields);
+  const before = await git(fixture.root, 'rev-parse', 'HEAD');
+
+  const update = await runEntry(fixture, updateHome, 'update', options);
+  const conduct = await runEntry(fixture, conductHome, 'conduct', options);
+
+  expect(conduct.exitCode).toBe(update.exitCode);
+  expect(decisionOutput('conduct', conduct.output)).toBe(decisionOutput('update', update.output));
+  expect(decisionConfig(await readFile(join(conductHome, '.ai-conductor', 'config.yml'), 'utf8'))).toBe(
+    decisionConfig(await readFile(join(updateHome, '.ai-conductor', 'config.yml'), 'utf8')),
+  );
+  expect(await git(fixture.root, 'rev-parse', 'HEAD')).toBe(before);
 }
 
 describe('off-tag checkout reports its real update identity (#1437)', () => {
@@ -328,26 +372,53 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
     expect(identityLines(result.output)).toHaveLength(1);
   });
 
-  it('keeps bin/update and bin/conduct on the same post-release decision', async () => {
-    const fixture = await makeHarness('entry-parity');
-    await git(fixture.root, 'tag', 'v0.4.0');
-    await commit(fixture.root, 'post-release');
-    await publish(fixture);
-    const updateHome = await makeHome('entry-parity-update', {
+  it('keeps bin/update and bin/conduct exactly aligned for every tagged decision', async () => {
+    const undeterminable = await makeHarness('entry-parity-undeterminable');
+    await git(undeterminable.root, 'tag', 'v0.4.0');
+    await publish(undeterminable);
+    await git(undeterminable.root, 'checkout', '-q', '--orphan', 'orphan');
+    await git(undeterminable.root, 'commit', '-q', '--allow-empty', '-m', 'orphan checkout');
+    await assertTaggedEntryParity(undeterminable, 'entry-parity-undeterminable', {
       update_channel: 'tagged',
+      current_version: 'v0.3.0',
     });
-    const conductHome = await makeHome('entry-parity-conduct', {
+
+    const postRelease = await makeHarness('entry-parity-post-release');
+    await git(postRelease.root, 'tag', 'v0.4.0');
+    await commit(postRelease.root, 'post-release');
+    await publish(postRelease);
+    await assertTaggedEntryParity(postRelease, 'entry-parity-post-release', {
       update_channel: 'tagged',
     });
 
-    const update = await runEntry(fixture, updateHome, 'update');
-    const conduct = await runEntry(fixture, conductHome, 'conduct');
+    const upToDate = await makeHarness('entry-parity-up-to-date');
+    await git(upToDate.root, 'tag', 'v0.4.0');
+    await publish(upToDate);
+    await assertTaggedEntryParity(upToDate, 'entry-parity-up-to-date', {
+      update_channel: 'tagged',
+      current_version: 'v9.9.9',
+    });
 
-    expect(update.exitCode).toBe(0);
-    expect(conduct.exitCode).toBe(0);
-    expect(update.output).toMatch(/identity.*v0\.4\.0\+1.*checkout/i);
-    expect(conduct.output).toMatch(/identity.*v0\.4\.0\+1.*checkout/i);
-    expect(update.output).toMatch(/1 commits? past v0\.4\.0.*no newer release/i);
-    expect(conduct.output).toMatch(/1 commits? past v0\.4\.0.*no newer release/i);
+    const offer = await makeHarness('entry-parity-offer');
+    await git(offer.root, 'tag', 'v0.3.0');
+    const offTag = await commit(offer.root, 'between releases');
+    await commit(offer.root, 'next release');
+    await git(offer.root, 'tag', 'v0.4.0');
+    await publish(offer);
+    await git(offer.root, 'checkout', '-q', offTag);
+    await assertTaggedEntryParity(offer, 'entry-parity-offer', { update_channel: 'tagged' });
+
+    const prompt = await makeHarness('entry-parity-prompt');
+    await git(prompt.root, 'tag', 'v0.3.0');
+    await commit(prompt.root, 'next release');
+    await git(prompt.root, 'tag', 'v0.4.0');
+    await publish(prompt);
+    await git(prompt.root, 'checkout', '-q', 'v0.3.0');
+    await assertTaggedEntryParity(
+      prompt,
+      'entry-parity-prompt',
+      { update_channel: 'tagged' },
+      { tty: true, input: 'n\n' },
+    );
   });
 });
