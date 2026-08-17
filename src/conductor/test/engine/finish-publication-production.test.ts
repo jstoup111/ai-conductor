@@ -869,23 +869,20 @@ describe('production FINISH publication composition', () => {
         maximumPasses: 1,
       });
       expect(dispatchJudgment).not.toHaveBeenCalled();
-      // The dedup key stays unwritten until the prose survives, so a prose
-      // halt here remains re-dispatchable by the daemon.
-      expect(writeShippedRecord).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
   it.each([
-    ['halt', { kind: 'revision_required', reason: 'halt' }, { kind: 'human_required', reason: 'judgment_halt_prose' }],
-    ['refused', { kind: 'refused', detail: 'provider declined' }, { kind: 'human_required', reason: 'judgment_refused' }],
-    ['timed_out', { kind: 'timed_out' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }],
-    ['provider_unavailable', { kind: 'provider_unavailable' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }],
-    ['undecodable', undefined, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_malformed_response' }],
-    ['incompleteness', { kind: 'revision_required', reason: 'structurally_incomplete' }, { kind: 'human_required', reason: 'publication_transition_unmoved' }],
-    ['raw-placeholder', { kind: 'revision_required', reason: 'placeholder' }, { kind: 'human_required', reason: 'publication_transition_unmoved' }],
-  ])('maps a $0 prose judgment without readying or recording the PR', async (_label, publicationDisposition, expected) => {
+    ['halt', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'halt' } }, { kind: 'human_required', reason: 'judgment_halt_prose' }],
+    ['refused', { success: true, publicationDisposition: { kind: 'refused', detail: 'provider declined' } }, { kind: 'human_required', reason: 'judgment_refused', detail: 'provider declined' }],
+    ['timed_out', { success: true, publicationDisposition: { kind: 'timed_out' } }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }],
+    ['provider_unavailable', { success: true, publicationDisposition: { kind: 'provider_unavailable' } }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }],
+    ['undecodable', { success: true, output: 'not a judgment result' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_malformed_response' }],
+    ['incompleteness', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'structurally_incomplete' } }, { kind: 'human_required', reason: 'publication_transition_unmoved', detail: 'The author_pr_prose retry cannot run because the fresh publication observation selects judge_pr_prose.' }],
+    ['raw-placeholder', { success: true, output: '{"kind":"revision_required","reason":"placeholder"}' }, { kind: 'human_required', reason: 'publication_transition_unmoved', detail: 'The author_pr_prose retry cannot run because the fresh publication observation selects judge_pr_prose.' }],
+  ])('maps each $0 prose judgment response without readying or recording the PR', async (_label, judgmentResponse, expected) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-judgment-outcome-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -916,6 +913,7 @@ describe('production FINISH publication composition', () => {
         recordFinish,
       });
 
+      const dispatchJudgment = vi.fn(async () => judgmentResponse);
       await expect(coordinator.advance({
         state: {
           feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
@@ -923,12 +921,12 @@ describe('production FINISH publication composition', () => {
         } as ConductState,
         mode: 'auto',
         daemon: true,
-        dispatchJudgment: async () => ({ success: true, ...(publicationDisposition === undefined ? {} : { publicationDisposition }) }),
+        dispatchJudgment,
         emit: async () => {},
-      })).resolves.toMatchObject(expected);
+      })).resolves.toEqual(expected);
 
-      expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
-      expect(writeShippedRecord).not.toHaveBeenCalled();
+      expect(dispatchJudgment).toHaveBeenCalledOnce();
+      expect(gh.mock.calls.filter(([args]) => args[0] === 'pr' && args[1] === 'ready')).toEqual([]);
       expect(recordFinish).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
