@@ -109,13 +109,28 @@ describe('build-review domain', () => {
   it('accepts only each rubric’s contract-defined concern-to-anchor classification pair', () => {
     const base = { kind: 'judged', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v2', summary: 'x', evidenceLocations: ['src/a.ts:1'] };
     const cases = [
-      { rubric: 'scope', concernKind: 'not-authorized-by-plan', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } },
-      { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'assertion-insensitive-to-production' } },
-      { rubric: 'rootCause', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' } },
-      { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'other' } },
+      {
+        valid: { rubric: 'scope', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' } },
+        invalid: { rubric: 'scope', concernKind: 'not-authorized-by-plan', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } },
+      },
+      {
+        valid: { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'source-text-mirror' } },
+        invalid: { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'assertion-insensitive-to-production' } },
+      },
+      {
+        valid: { rubric: 'rootCause', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'symptom-only-fix' } },
+        invalid: { rubric: 'rootCause', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' } },
+      },
+      {
+        valid: { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' } },
+        invalid: { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'other' } },
+      },
     ] as const;
-    for (const finding of cases) {
-      expect(parseBuildReviewJudgedResult({ ...base, rubric: finding.rubric, findings: [{ ...finding, summary: base.summary, evidenceLocations: base.evidenceLocations }] })).toBeUndefined();
+    for (const { valid, invalid } of cases) {
+      expect(parseBuildReviewJudgedResult({ ...base, rubric: valid.rubric, findings: [{ ...valid, summary: base.summary, evidenceLocations: base.evidenceLocations }] })).toMatchObject({
+        findings: [{ concernKind: valid.concernKind }],
+      });
+      expect(parseBuildReviewJudgedResult({ ...base, rubric: invalid.rubric, findings: [{ ...invalid, summary: base.summary, evidenceLocations: base.evidenceLocations }] })).toBeUndefined();
     }
   });
 
