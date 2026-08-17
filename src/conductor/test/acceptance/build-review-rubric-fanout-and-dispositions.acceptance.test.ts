@@ -331,7 +331,7 @@ describe('acceptance: independent build_review rubric execution', () => {
           concernKind: 'out-of-plan-change',
           summary: 'src/feature.ts changes an unresolved surface.',
           evidenceLocations: ['src/feature.ts:1'],
-          anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'out-of-plan-change' },
+          anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'not-authorized-by-plan' },
         }] : [];
         return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v2', findings, verdict: findings.length ? 'FAIL' : 'PASS' }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
@@ -354,7 +354,7 @@ describe('acceptance: independent build_review rubric execution', () => {
             concernKind: 'out-of-plan-change',
             summary: 'src/feature.ts changes behavior outside the approved plan.',
             evidenceLocations: ['src/feature.ts:1', '.docs/plans/fixture.md:3'],
-            anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'out-of-plan-change' },
+            anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'not-authorized-by-plan' },
           }]
           : [];
         return {

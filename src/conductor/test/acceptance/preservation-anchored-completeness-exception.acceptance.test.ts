@@ -431,6 +431,7 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       planTask: '9',
       missingSurface: CARRIER_PATH,
       missingOutcome: 'wrapper transparency',
+      missingKind: 'missing-deliverable',
     });
     expect(judged.success).toBe(false);
   });
@@ -459,6 +460,7 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
           planTask: '9',
           missingSurface: CARRIER_PATH,
           missingOutcome: behavior,
+          missingKind: 'missing-deliverable',
         },
       }],
     });
@@ -484,6 +486,7 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       planTask: '9',
       missingSurface: CARRIER_PATH,
       missingOutcome: 'failed preflight never dispatches',
+      missingKind: 'missing-deliverable',
     });
     expect(judged.result.findings?.[0]?.anchor.missingOutcome).not.toBe('wrapper transparency');
   });
@@ -511,6 +514,7 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       planTask: '9',
       missingSurface: CARRIER_PATH,
       missingOutcome: 'failed preflight never dispatches',
+      missingKind: 'missing-deliverable',
     });
     expect(judged.result.findings?.[0]?.anchor.missingOutcome).not.toBe('wrapper transparency');
   });

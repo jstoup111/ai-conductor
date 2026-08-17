@@ -99,7 +99,7 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
                 summary: 'orphanedProductionSurface in src/orphan.ts adds production behavior outside the approved plan.',
                 evidenceLocations: ['src/orphan.ts:1'],
                 anchor: {
-                  rubric: 'scope', path: 'src/orphan.ts', relation: 'out-of-plan-change',
+                  rubric: 'scope', path: 'src/orphan.ts', relation: 'not-authorized-by-plan',
                 },
               }]
             : [],

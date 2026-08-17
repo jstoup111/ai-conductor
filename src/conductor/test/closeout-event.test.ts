@@ -47,7 +47,7 @@ describe('ConductorEvent union includes pipeline closeout events', () => {
       concernKind: 'out-of-plan-change',
       summary: 'src/a.ts is outside the plan',
       evidenceLocations: ['src/a.ts:1'],
-      anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'out-of-plan-change' },
+      anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     };
     const identity = canonicalizeBuildReviewFindingIdentity({
       ...finding,
@@ -60,8 +60,8 @@ describe('ConductorEvent union includes pipeline closeout events', () => {
       results: {
         tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
         scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [finding], verdict: 'FAIL' },
-        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
-        completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
+        rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
       },
     });
     const engineRecords = [
