@@ -79,6 +79,50 @@ const INFRASTRUCTURE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
 ]);
 const LAP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+/**
+ * The closed classification vocabulary for each rubric. Classification fields
+ * within a rubric share this set; subject fields remain report prose.
+ */
+export const BUILD_REVIEW_FINDING_VOCABULARIES: Readonly<Record<BuildReviewRubricId, Readonly<Record<'members', readonly string[]>>>> = Object.freeze({
+  scope: Object.freeze({
+    members: Object.freeze(['out-of-plan-change', 'not-authorized-by-plan']),
+  }),
+  tautology: Object.freeze({
+    members: Object.freeze([
+      'assertion-insensitive-to-production',
+      'test-does-not-exercise-changed-behavior',
+      'assertion-derived-from-test-data',
+      'source-text-mirror',
+    ]),
+  }),
+  rootCause: Object.freeze({
+    members: Object.freeze([
+      'root-cause-unaddressed',
+      'symptom-only-fix',
+      'provenance-sensitive-cache-identity',
+    ]),
+  }),
+  completeness: Object.freeze({
+    members: Object.freeze(['missing-deliverable']),
+  }),
+});
+
+/** Normalize harmless grader spelling variance before closed-set lookup. */
+export function normalizeBuildReviewFindingVocabularyMember(value: string): string {
+  return value.toLowerCase().replaceAll('_', '-');
+}
+
+function assertUnambiguousBuildReviewFindingVocabularies(): void {
+  for (const [rubric, vocabulary] of Object.entries(BUILD_REVIEW_FINDING_VOCABULARIES)) {
+    const normalizedMembers = vocabulary.members.map(normalizeBuildReviewFindingVocabularyMember);
+    if (new Set(normalizedMembers).size !== normalizedMembers.length) {
+      throw new Error(`build-review finding vocabulary for ${rubric} contains colliding normalized members`);
+    }
+  }
+}
+
+assertUnambiguousBuildReviewFindingVocabularies();
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
