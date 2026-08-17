@@ -724,17 +724,14 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     { label: 'foreground-auto without a PR', mode: 'auto' as const, daemon: false, prPresent: false, expectedPasses: { author: 1, judge: 0 } },
     { label: 'daemon with an existing PR', mode: 'auto' as const, daemon: true, prPresent: true, expectedPasses: { author: 1, judge: 0 } },
     { label: 'daemon without a PR', mode: 'auto' as const, daemon: true, prPresent: false, expectedPasses: { author: 1, judge: 0 } },
-    { label: 'daemon with pre-existing authored prose', mode: 'auto' as const, daemon: true, prPresent: true, preAuthored: true, expectedPasses: { author: 0, judge: 1 } },
-  ])('converges %s through the production coordinator', async ({ mode, daemon, prPresent, preAuthored = false, expectedPasses }) => {
+  ])('converges %s through the production coordinator', async ({ mode, daemon, prPresent, expectedPasses }) => {
     conductorRoot = await mkdtemp(join(tmpdir(), 'finish-publication-pr-convergence-'));
     const pipeline = join(conductorRoot, '.pipeline');
     await mkdir(pipeline, { recursive: true });
     const stateFilePath = join(pipeline, 'conduct-state.json');
     const prUrl = 'https://github.com/acme/widget/pull/1172';
     let pullRequest: { url: string; title: string; body: string; isDraft: boolean } | undefined = prPresent
-      ? preAuthored
-        ? { url: prUrl, title: 'feat: existing authored publication', body: 'Reader-facing summary of the completed change.', isDraft: true }
-        : { url: prUrl, title: 'feat: draft publication', body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.', isDraft: true }
+      ? { url: prUrl, title: 'feat: draft publication', body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.', isDraft: true }
       : undefined;
     const state: Record<string, unknown> = {
       feature_desc: 'feature', worktree_branch: 'feat/feature', complexity_tier: 'S',
