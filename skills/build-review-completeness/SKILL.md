@@ -44,6 +44,32 @@ do not reduce the judgement to individual commits or task records.
 Identify each missing deliverable that prevents a plan outcome from being delivered. Keep unrelated
 gaps separate so the result preserves every independently actionable omission.
 
+## Remediation-lap calibration
+
+The approved plan may carry engine-appended `### Task rem-*` headings from earlier remediation
+rounds. Judge them by the same standard as original tasks — delivered or not — under these bounds,
+which exist because repeated laps must converge instead of regenerating scope from their own
+repairs:
+
+- **A rem-* task's outcome is its own text, completely.** Do not derive further implied outcomes
+  from the diff surface a remediation round added. Test files, fixtures, and assertions introduced
+  as a repair are deliverables to verify against their task's text — never a new contract whose
+  own qualities generate additional findings.
+- **Delivered means it distinguishes the behavior; style is not a gap.** Raise a finding against a
+  remediation-authored test only when the deliverable is absent, asserts a different behavior than
+  its task names, or cannot fail when the production change it covers is reverted to its merge-base
+  form. A test that meets that bar through a structural check, a substring match, or a fixture is
+  delivered; preferring an executable assertion, an AST scan, or a production-constructed subject
+  is a style improvement and is not a missing deliverable.
+- **Documentation lag from later laps consolidates.** When a later remediation round changed a
+  design an earlier round documented, raise at most one finding per affected document, and only
+  where the document affirmatively contradicts shipped behavior. Phrasing that merely predates the
+  latest repair round is not a gap.
+
+Before emitting any finding anchored to a `rem-*` task, apply this convergence test: would the
+finding have been valid against exactly what that task's text asked for? If it demands more, it is
+scope expansion — omit it.
+
 Preservation maintenance uses a closed three-condition predicate. A declared behavior plus removal
 of its carrier establishes the maintenance case. Apply it only when all of the following hold:
 
