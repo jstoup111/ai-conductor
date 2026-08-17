@@ -52,14 +52,21 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
   });
 
   it('writes the refusal message, next action, and provider detail as a needs-human HALT', async () => {
+    const refusedJudgments: Array<{ finishProsePass?: string }> = [];
     const provider: StepRunner = {
-      run: vi.fn(async () => ({
-        success: true,
-        publicationDisposition: {
-          kind: 'refused',
-          detail: BLOCKER,
-        },
-      })),
+      run: vi.fn(async (step, _state, options) => {
+        if (step !== 'finish' || options.finishProsePass !== 'judge') {
+          throw new Error(`unexpected provider dispatch: ${step} ${options.finishProsePass ?? 'default'}`);
+        }
+        refusedJudgments.push({ finishProsePass: options.finishProsePass });
+        return {
+          success: true,
+          publicationDisposition: {
+            kind: 'refused',
+            detail: BLOCKER,
+          },
+        };
+      }),
     };
     const gh = vi.fn(async (args: string[]) => {
       if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
@@ -106,6 +113,7 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
     await conductor.run();
 
     expect(provider.run).toHaveBeenCalledOnce();
+    expect(refusedJudgments).toEqual([{ finishProsePass: 'judge' }]);
     expect(provider.run).toHaveBeenCalledWith(
       'finish',
       expect.any(Object),
@@ -114,7 +122,7 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
     const halt = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf8');
     expect(halt).toContain('The PR prose judgment was refused and requires an operator decision.');
     expect(halt).toContain('Next action: Review the refusal and decide how to continue publication.');
-    expect(halt).toContain(BLOCKER);
+    expect(halt).toContain(`Detail: ${BLOCKER}`);
     await expect(readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf8'))
       .resolves.toBe('needs-human');
   });
