@@ -261,11 +261,12 @@ describe('Conductor FINISH publication routing', () => {
         return { success: true };
       }),
     };
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
 
     await new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
-      finishPublication: { advance: vi.fn(async () => ({ kind: 'complete' } as const)) },
+      finishPublication: { advance },
       events,
       projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
       git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
@@ -273,8 +274,10 @@ describe('Conductor FINISH publication routing', () => {
 
     const after = await readState(statePath);
     const verdicts = await readAllVerdicts(dir);
+    expect(advance).not.toHaveBeenCalled();
     expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
     expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
+    expect(after.ok && after.value.finish).not.toBe('in_progress');
     expect(after.ok && after.value.architecture_review_as_built).toBe('done');
     expect(verdicts.architecture_review_as_built).toMatchObject({ satisfied: true });
     await expect(readFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), 'utf8')).resolves.toContain('APPROVED');
@@ -428,6 +431,7 @@ describe('Conductor FINISH publication routing', () => {
 
     expect(advance).not.toHaveBeenCalled();
     expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+    await expect(readFile(evidencePath, 'utf8')).resolves.toContain('MAYBE');
     const verdict = await readAllVerdicts(dir);
     expect(verdict.manual_test).toMatchObject({ satisfied: false });
   });

@@ -58,7 +58,6 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
   RUN_TMP_ROOT_PREFIX,
   '.', // dotfiles/dotdirs: .X11-unix, .ICE-unix, .font-unix, …
   'self-host-', // live provider homes owned by the running daemon
-  'bsp-apt-download.log', // Best Stock Picker's concurrent setup/download diagnostic
   'claude-', // active Claude Code session scratchpads
   'cc-daemon-', // daemon tmux session scratch
   'systemd-', // systemd-private-*, systemd-*.service-*
