@@ -61,6 +61,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_rubric_infrastructure_failure: 'not-audited-by-design',
   build_review_disposition_accepted: 'not-audited-by-design',
   build_review_disposition_refused: 'not-audited-by-design',
+  build_review_disposition_version_invalidated: 'friction-mapped',
   build_review_outer_verdict: 'not-audited-by-design',
   step_started: 'not-audited-by-design',
   deprecated_step: 'not-audited-by-design',
@@ -159,6 +160,7 @@ const EVENT_FIXTURES: { [K in AuditedEventType]: Extract<ConductorEvent, { type:
   build_review_rubric_infrastructure_failure: { type: 'build_review_rubric_infrastructure_failure', rubric: 'scope', lapId: 'lap-1', reason: 'provider-error' },
   build_review_disposition_accepted: { type: 'build_review_disposition_accepted', feature: 'feature', lapId: 'lap-1', findingId: 'sha256:x', operator: 'operator' },
   build_review_disposition_refused: { type: 'build_review_disposition_refused', feature: 'feature', reason: 'non-tty' },
+  build_review_disposition_version_invalidated: { type: 'build_review_disposition_version_invalidated', feature: 'feature', findingId: 'sha256:x', rubric: 'scope', contractVersion: 'v1' },
   build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
   step_started: { type: 'step_started', step: 'build', index: 0 },
   deprecated_step: {
@@ -609,6 +611,7 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
       build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false },
       build_review_disposition_accepted: { render: false, persist: false, audit: false },
       build_review_disposition_refused: { render: false, persist: false, audit: false },
+      build_review_disposition_version_invalidated: { render: false, persist: true, audit: true },
       build_review_outer_verdict: { render: false, persist: true, audit: false },
     } satisfies Partial<Record<ConductorEvent['type'], { render: boolean; persist: boolean; audit: boolean }>>;
     expect(Object.fromEntries(Object.keys(buildReviewSinkExpectations).map((type) => [

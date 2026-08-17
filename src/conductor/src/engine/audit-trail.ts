@@ -170,6 +170,12 @@ export class AuditTrailWriter {
           reason: event.reason || 'step retry',
           attempt: event.attempt,
         };
+      case 'build_review_disposition_version_invalidated':
+        return {
+          origin: 'build',
+          event: event.type,
+          reason: `${event.rubric} disposition ${event.findingId} uses superseded ${event.contractVersion}`,
+        };
       case 'kickback':
         return {
           origin: event.to,

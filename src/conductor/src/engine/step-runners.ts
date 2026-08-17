@@ -1867,7 +1867,9 @@ export class DefaultStepRunner implements StepRunner {
     if (!publication.ok) {
       return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
     }
-    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate);
+    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
+      emit: (event) => this.events?.emit(event),
+    });
     await this.events?.emit({
       type: 'build_review_outer_verdict',
       lapId,

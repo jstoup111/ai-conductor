@@ -18,6 +18,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   // the same occurrence in the engine ledger.
   build_review_disposition_accepted: { render: false, persist: false, audit: false },
   build_review_disposition_refused: { render: false, persist: false, audit: false },
+  build_review_disposition_version_invalidated: { render: false, persist: true, audit: true },
   build_review_outer_verdict: { render: false, persist: true, audit: false },
   step_started: { render: true, persist: true, audit: false },
   containment_check_unresolved: { render: false, persist: true, audit: false },

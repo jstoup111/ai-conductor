@@ -11,9 +11,9 @@ const worktree = '/repo/.worktrees/feature';
 const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
 
 function aggregate() {
-  const finding = { concernKind: 'unplanned', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+  const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'out-of-plan-change' } };
   const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness', findings = rubric === 'scope' ? [finding] : []) => ({
-    kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
+    kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never,
     findings, verdict: findings.length ? 'FAIL' as const : 'PASS' as const,
   });
   return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
@@ -31,13 +31,30 @@ describe('live build-review effective resolver', () => {
 
   it('resolves only exact same-feature disposition payloads after strict raw join', async () => {
     const raw = aggregate();
-    const accepted = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' } })!;
+    const accepted = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v2', concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } })!;
     const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
       ...identityDeps,
       createStore: () => ({ list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: accepted, sourceLapId: lapId, summary: 'old prose', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }) }),
     });
     expect(result).toMatchObject({ ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [accepted.id], unresolvedFindingIds: [] } });
     expect(raw.verdict).toBe('FAIL');
+  });
+
+  it('reports a stored superseded-contract disposition without letting it bind again', async () => {
+    const raw = aggregate();
+    const superseded = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } })!;
+    const emitted: unknown[] = [];
+    const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: superseded, sourceLapId: lapId, summary: 'old prose', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }) }),
+      emit: async (event) => { emitted.push(event); },
+    });
+
+    expect(emitted).toEqual([{
+      type: 'build_review_disposition_version_invalidated', feature: 'feature', findingId: superseded.id,
+      rubric: 'scope', contractVersion: 'v1',
+    }]);
+    expect(result).toMatchObject({ ok: true, effective: { rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [expect.any(String)] } });
   });
 
   it('fails closed for an invalid aggregate, unavailable identity, unreadable state, or foreign state', async () => {
