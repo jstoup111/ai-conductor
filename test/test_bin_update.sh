@@ -1367,28 +1367,35 @@ assert "undeterminable checkout: stale record does not resurrect an offer" \
 assert "undeterminable checkout: leaves pre-existing currentVersion untouched" \
   "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
 
-# ─── Task 13: no reachable release tag ────────────────────────────────────
+# ─── Remediation completeness 2: tagless repository ───────────────────────
 
 echo ""
-echo -e "${BOLD}Task 13 — no reachable release tag${NC}"
+echo -e "${BOLD}Remediation completeness 2 — tagless repository${NC}"
 
-# v0.3.0 remains in this repository but is not merged into the orphan HEAD.
-# This is deliberately distinct from the earlier behavior coverage: it proves
-# the fixture's Git precondition before asserting the user-visible outcome.
-REPO=$(make_repo "t13-no-reachable-tag")
-git -C "$REPO" checkout -q --orphan no-release-history
-git -C "$REPO" reset -q
-printf 'orphan checkout\n' > "$REPO/README.md"
-git -C "$REPO" add README.md
-git -C "$REPO" commit -q -m "orphan checkout"
+# Unlike the orphan fixtures above, this repository contains no release tag in
+# any ref. This pins the no-release-tag early-return regression independently
+# of reachability from a repository that happens to hold tags elsewhere.
+REPO=$(make_repo "rem-completeness-2-tagless")
+git -C "$REPO" tag -d v0.3.0 >/dev/null
+assert "tagless fixture: contains no v*.*.* release tags anywhere" \
+  "$([ -z "$(git -C "$REPO" tag -l 'v*.*.*')" ] && echo 0 || echo 1)"
+
 HOME_DIR=$(make_isolated_home)
-
 run_update "$REPO" "$HOME_DIR"
-assert "no-reachable-tag fixture: reports an unverifiable identity" \
+assert "tagless bin/update: reports an unverifiable identity" \
   "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
-assert "no-reachable-tag fixture: offers no update" \
+assert "tagless bin/update: offers no update" \
   "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
-assert "no-reachable-tag fixture: writes no currentVersion" \
+assert "tagless bin/update: writes no currentVersion" \
+  "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
+
+HOME_DIR=$(make_isolated_home)
+run_conduct_update "$REPO" "$HOME_DIR"
+assert "tagless bin/conduct: reports an unverifiable identity" \
+  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
+assert "tagless bin/conduct: offers no update" \
+  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
+assert "tagless bin/conduct: writes no currentVersion" \
   "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
 
 # ─── Story 5: no-TTY guidance ───────────────────────────────────────────────
