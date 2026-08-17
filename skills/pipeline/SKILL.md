@@ -228,9 +228,22 @@ conductor's logging and audit trail.
 - The task description and acceptance criteria (from the plan)
 - File paths to modify (from the plan's "Files likely touched")
 - The TDD skill instructions
+- A focused **current-HEAD pattern basis** when the task affects an established local pattern:
+  current-checkout paths for the relevant target and exemplar, stable symbol or role hints that
+  locate the behavior despite code movement, and the semantic traits the task must preserve or
+  change. This basis covers only the affected task; it does not include the full plan, unrelated
+  stories, or prior-task history. The implementer reads the named files at the current HEAD before
+  acting.
 
 The implementer does NOT receive the full plan, all stories, or prior task history.
 The implementer handles the commit as part of the TDD COMMIT phase.
+
+**Pattern-basis staleness:** A path, symbol, or exemplar named by the handoff is a locating aid,
+not frozen source text. If the exemplar has moved, find and verify the semantic equivalent in the
+current checkout. If no equivalent can be verified and that uncertainty would change the approach,
+return `NEEDS_CONTEXT` to the orchestrator. Do not guess, copy obsolete code, or widen the task's
+scope. This rule governs ordinary semantic pattern reuse only; it does not alter the declared
+replication copy task's resolved source, rename-map, preflight, or exact-copy requirements.
 
 **No branch hygiene by the implementer — stay on the branch as-is.** Every dispatch prompt MUST
 instruct the implementer to NOT run `git fetch`, `git pull`, `git rebase`, or switch
@@ -240,10 +253,11 @@ blocked the commit. The **only** sanctioned rebase is the daemon's finish-time r
 (9.0, with conflict → HALT + CHANGELOG auto-resolver); it is daemon-gated and runs outside the
 per-task loop. Implementation agents never integrate upstream themselves.
 
-**Context efficiency:** Do not inline file contents in subagent prompts. Provide: file path,
-line range of interest, and method signature. The subagent reads files as needed. For
-sequential tasks on the same files, reuse the existing host-native implementer session instead of
-spawning a new agent — this preserves file cache and avoids redundant reads.
+**Context efficiency:** Do not inline file contents in subagent prompts. Provide current-checkout
+paths, stable symbol or role hints, and the relevant semantic traits; never use line ranges as a
+handoff contract. The subagent reads the current HEAD files as needed. For sequential tasks on the
+same files, reuse the existing host-native implementer session instead of spawning a new agent —
+this preserves file cache and avoids redundant reads.
 
 **Scope discipline:** Implementers MUST only modify lines directly related to their assigned task.
 Changes to unrelated code in the same file (e.g., changing a CI command while fixing a service
@@ -302,6 +316,12 @@ this marker; a missing or malformed line 1 blocks the dispatch. Provide the eval
 - The named **`BATCH_AFFECTED_TESTS` union and its result summary** (pass/fail counts + failure
   snippets, not full verbose output), or the full-suite fallback result when the union was indeterminate
 - The tech-context review checklist if loaded in session
+- The same focused **current-HEAD pattern basis** supplied to each affected task's implementer:
+  current-checkout paths, stable symbol or role hints, and the relevant semantic traits. The
+  evaluator reads those files at current HEAD and applies the same staleness rule: locate and
+  verify a moved exemplar's semantic equivalent; if none can be verified and the review approach
+  would materially change, return `NEEDS_CONTEXT` rather than guessing, relying on obsolete code,
+  or widening the review scope.
 - **Prior known issues** (batch 2+) — collect findings from previous `audit-trail/batch-*/review.json`
   files and pass as a deduplicated list. This prevents the evaluator from re-raising the same
   finding across batches. Findings that appear in 2+ consecutive reviews auto-escalate in severity.
