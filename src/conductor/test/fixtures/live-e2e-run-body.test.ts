@@ -15,6 +15,30 @@ vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 
+describe('ProvisionedHome', () => {
+  it.each(['invoke', 'invokeInteractive'] as const)('injects its isolated self-host settings into %s', async (method) => {
+    const { ProvisionedHome } = await import('./live-e2e-run-body.js') as {
+      ProvisionedHome: new (provider: LLMProvider, selfHost: NonNullable<InvokeOptions['selfHost']>) => LLMProvider;
+    };
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
+      invokeInteractive: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
+    };
+    const selfHost = {
+      executable: 'selected-provider', env: { SELECTED_PROVIDER_HOME: '/tmp/provider-home' }, args: ['--isolated'], teardown: vi.fn(),
+    };
+    const provisioned = new ProvisionedHome(provider, selfHost);
+    const options = {
+      prompt: 'fixture', sessionId: 'fixture', resume: false,
+      selfHost: { executable: 'wrong', env: {}, args: [], teardown: vi.fn() },
+    } satisfies InvokeOptions;
+
+    await provisioned[method](options);
+
+    expect(provider[method]).toHaveBeenCalledWith({ ...options, selfHost });
+  });
+});
+
 describe('runLiveE2ERunBody authentication source', () => {
   it('reports an absent Codex binary as an unmet toolchain requirement before provisioning a home', async () => {
     const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
@@ -360,7 +384,8 @@ describe('withProvisionedLiveProviderHome', () => {
     const { withProvisionedLiveProviderHome } = await import('./live-e2e-run-body.js') as {
       withProvisionedLiveProviderHome: <T>(
         sourceRoot: string,
-        credential: string | undefined,
+        descriptor: LiveE2EProviderDescriptor,
+        provider: LLMProvider,
         provision: NonNullable<LiveE2ERunBodyDependencies['provisionProviderHome']>,
         run: (home: { homeDir: string }) => Promise<T>,
       ) => Promise<T>;
@@ -387,7 +412,8 @@ describe('withProvisionedLiveProviderHome', () => {
 
       const outcome = await withProvisionedLiveProviderHome(
         checkoutDir,
-        'live-codex-key',
+        { id: 'codex' } as LiveE2EProviderDescriptor,
+        { invoke: vi.fn(), invokeInteractive: vi.fn() },
         provision,
         async (home) => {
           expect(home.homeDir).toBe(homeDir);

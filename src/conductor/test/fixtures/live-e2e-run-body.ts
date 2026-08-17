@@ -130,11 +130,12 @@ export function reportLiveE2ESpend(
  */
 export async function withProvisionedLiveProviderHome<T>(
   sourceRoot: string,
-  credential: string | undefined,
+  descriptor: LiveE2EProviderDescriptor,
+  provider: LLMProvider,
   provision: typeof provisionLiveProviderHome,
   run: (home: ProviderHome) => Promise<T>,
 ): Promise<T> {
-  const home = await provision(sourceRoot, credential);
+  const home = await provision(sourceRoot, descriptor, provider);
   try {
     return await run(home);
   } finally {
@@ -374,7 +375,8 @@ export async function runLiveE2ERunBody(
         await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
         await withProvisionedLiveProviderHome(
       fileURLToPath(new URL('../../../../', import.meta.url)),
-      process.env[descriptor.credentialEnvVar],
+      descriptor,
+      provider,
       dependencies.provisionProviderHome ?? provisionLiveProviderHome,
       async (providerHome) => {
         provisioned = new ProvisionedHome(provider, {

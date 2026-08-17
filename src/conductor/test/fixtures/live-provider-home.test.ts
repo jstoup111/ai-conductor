@@ -6,12 +6,15 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { ProviderHomeProvisionError } from '../../src/engine/self-host/provider-home.js';
-import type { ResolvedSelfHostProvider } from '../../src/engine/self-host/provider-home.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import {
   provisionLiveProviderHome,
 } from './live-provider-home.js';
 
 const execFileAsync = promisify(execFile);
+const claudeDescriptor = { id: 'claude' } as Pick<LiveE2EProviderDescriptor, 'id'>;
+const claudeProvider: Pick<LLMProvider, 'prepareSelfHostAuth'> = {};
 
 async function git(sourceRoot: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', args, { cwd: sourceRoot });
@@ -36,7 +39,7 @@ async function withLiveProviderHome<T>(
   sourceRoot: string,
   use: (home: Awaited<ReturnType<typeof provisionLiveProviderHome>>) => Promise<T>,
 ): Promise<T> {
-  const home = await provisionLiveProviderHome(sourceRoot);
+  const home = await provisionLiveProviderHome(sourceRoot, claudeDescriptor, claudeProvider);
   try {
     return await use(home);
   } finally {
@@ -45,21 +48,29 @@ async function withLiveProviderHome<T>(
 }
 
 describe('provisionLiveProviderHome', () => {
-  it('uses the supplied provider to prepare auth for its isolated home', async () => {
+  it.each([
+    ['claude', 'CLAUDE_CODE_OAUTH_TOKEN'],
+    ['codex', 'CODEX_API_KEY'],
+  ] as const)('uses the selected %s descriptor provider to prepare auth for its isolated home', async (id, credentialEnvVar) => {
     const sourceRoot = await createSourceCheckout();
     const authContexts: Array<{ provider: string; homeDir: string }> = [];
-    const provider: ResolvedSelfHostProvider = {
-      id: 'codex',
-      prepareSelfHostAuth: async (context) => {
-        authContexts.push(context);
-        return { env: { CODEX_API_KEY: 'provider-owned-token' } };
-      },
+    const prepareSelfHostAuth = async (context: { provider: 'claude' | 'codex'; homeDir: string }) => {
+      authContexts.push(context);
+      return { env: { [credentialEnvVar]: `${id}-provider-owned-token` }, args: [] };
     };
+    const provider = {
+      invoke: async () => ({ success: true, output: '', exitCode: 0 }),
+      invokeInteractive: async () => undefined,
+      prepareSelfHostAuth,
+    } satisfies LLMProvider;
+    const descriptor = { id } as Pick<LiveE2EProviderDescriptor, 'id'>;
 
     try {
-      const home = await provisionLiveProviderHome(sourceRoot, provider);
+      const home = await provisionLiveProviderHome(sourceRoot, descriptor, provider);
       try {
-        expect(authContexts).toEqual([{ provider: 'codex', homeDir: home.homeDir }]);
+        expect(home.provider).toBe(id);
+        expect(authContexts).toEqual([{ provider: id, homeDir: home.homeDir }]);
+        expect(home.childEnv()[credentialEnvVar]).toBe(`${id}-provider-owned-token`);
       } finally {
         await home.teardown();
       }
@@ -76,7 +87,7 @@ describe('provisionLiveProviderHome', () => {
       await mkdir(join(skillsDir, 'pipeline'), { recursive: true });
       await writeFile(join(skillsDir, 'pipeline', 'SKILL.md'), '# Pipeline\n');
 
-      const home = await provisionLiveProviderHome(sourceRoot);
+      const home = await provisionLiveProviderHome(sourceRoot, claudeDescriptor, claudeProvider);
       try {
         expect(home.childEnv().CLAUDE_CONFIG_DIR).toBe(home.homeDir);
         await expect(
@@ -100,7 +111,8 @@ describe('provisionLiveProviderHome', () => {
     try {
       const error = await provisionLiveProviderHome(
         sourceRoot,
-        undefined,
+        claudeDescriptor,
+        claudeProvider,
         homesRoot,
       ).catch((caught: unknown) => caught);
 
@@ -128,7 +140,7 @@ describe('provisionLiveProviderHome', () => {
       }).catch((error: unknown) => (error as { homeDir: string }).homeDir);
       await expect(access(thrownHomeDir)).rejects.toThrow();
 
-      const home = await provisionLiveProviderHome(sourceRoot);
+      const home = await provisionLiveProviderHome(sourceRoot, claudeDescriptor, claudeProvider);
       await home.teardown();
       await home.teardown();
       await expect(access(home.homeDir)).rejects.toThrow();
@@ -141,17 +153,17 @@ describe('provisionLiveProviderHome', () => {
   it('keeps the Claude credential off a non-Claude provider leg', async () => {
     const sourceRoot = await createSourceCheckout();
     const authContexts: Array<{ provider: string; homeDir: string }> = [];
-    const codexProvider: ResolvedSelfHostProvider = {
-      id: 'codex',
+    const codexProvider: Pick<LLMProvider, 'prepareSelfHostAuth'> = {
       prepareSelfHostAuth: async (context) => {
         authContexts.push(context);
-        return { env: { CODEX_API_KEY: 'codex-fixture-token' } };
+        return { env: { CODEX_API_KEY: 'codex-fixture-token' }, args: [] };
       },
     };
 
     try {
       const home = await provisionLiveProviderHome(
         sourceRoot,
+        { id: 'codex' },
         codexProvider,
       );
       try {
@@ -184,16 +196,16 @@ describe('provisionLiveProviderHome', () => {
 
     try {
       const [claudeHome, codexHome] = await Promise.all([
-        provisionLiveProviderHome(sourceRoot, {
-          id: 'claude',
+        provisionLiveProviderHome(sourceRoot, { id: 'claude' }, {
           prepareSelfHostAuth: async () => ({
             env: { CLAUDE_CODE_OAUTH_TOKEN: 'claude-leg-token' },
+            args: [],
           }),
         }),
-        provisionLiveProviderHome(sourceRoot, {
-          id: 'codex',
+        provisionLiveProviderHome(sourceRoot, { id: 'codex' }, {
           prepareSelfHostAuth: async () => ({
             env: { CODEX_API_KEY: 'codex-leg-key' },
+            args: [],
           }),
         }),
       ]);
