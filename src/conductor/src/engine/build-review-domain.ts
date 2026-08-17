@@ -133,6 +133,12 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function parseFindingVocabularyMember(value: unknown, rubric: BuildReviewRubricId): string | undefined {
+  if (!nonEmptyString(value)) return undefined;
+  const normalized = normalizeBuildReviewFindingVocabularyMember(value);
+  return BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.includes(normalized) ? normalized : undefined;
+}
+
 function evidenceLocation(value: unknown): value is string {
   return nonEmptyString(value) && /^(?:[^\n:]+\/)*[^\n:]+:\d+(?::\d+)?$/.test(value);
 }
@@ -153,18 +159,24 @@ function parseAnchor(value: unknown): BuildReviewFindingAnchor | undefined {
   const source = record(value);
   if (!source || !rubricId(source.rubric)) return undefined;
   switch (source.rubric) {
-    case 'tautology':
-      return nonEmptyString(source.changedTest) && nonEmptyString(source.exercisedBehavior) && nonEmptyString(source.violationKind)
-        ? { rubric: source.rubric, changedTest: source.changedTest, exercisedBehavior: source.exercisedBehavior, violationKind: source.violationKind }
+    case 'tautology': {
+      const violationKind = parseFindingVocabularyMember(source.violationKind, source.rubric);
+      return nonEmptyString(source.changedTest) && nonEmptyString(source.exercisedBehavior) && violationKind
+        ? { rubric: source.rubric, changedTest: source.changedTest, exercisedBehavior: source.exercisedBehavior, violationKind }
         : undefined;
-    case 'scope':
-      return nonEmptyString(source.path) && nonEmptyString(source.relation)
-        ? { rubric: source.rubric, path: source.path, relation: source.relation }
+    }
+    case 'scope': {
+      const relation = parseFindingVocabularyMember(source.relation, source.rubric);
+      return nonEmptyString(source.path) && relation
+        ? { rubric: source.rubric, path: source.path, relation }
         : undefined;
-    case 'rootCause':
-      return nonEmptyString(source.statedDefect) && nonEmptyString(source.locus) && nonEmptyString(source.relation)
-        ? { rubric: source.rubric, statedDefect: source.statedDefect, locus: source.locus, relation: source.relation }
+    }
+    case 'rootCause': {
+      const relation = parseFindingVocabularyMember(source.relation, source.rubric);
+      return nonEmptyString(source.statedDefect) && nonEmptyString(source.locus) && relation
+        ? { rubric: source.rubric, statedDefect: source.statedDefect, locus: source.locus, relation }
         : undefined;
+    }
     case 'completeness':
       return nonEmptyString(source.planTask) && nonEmptyString(source.missingOutcome)
         ? { rubric: source.rubric, planTask: source.planTask, missingOutcome: source.missingOutcome }
@@ -178,10 +190,11 @@ function parseFindings(value: unknown, rubric: BuildReviewRubricId): readonly Bu
   for (const candidate of value) {
     const source = record(candidate);
     const anchor = source && parseAnchor(source.anchor);
-    if (!source || !nonEmptyString(source.concernKind) || !nonEmptyString(source.summary) ||
+    const concernKind = source && parseFindingVocabularyMember(source.concernKind, rubric);
+    if (!source || !concernKind || !nonEmptyString(source.summary) ||
       !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 ||
       source.evidenceLocations.some((location) => !evidenceLocation(location)) || !anchor || anchor.rubric !== rubric) return undefined;
-    findings.push({ concernKind: source.concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations]), anchor });
+    findings.push({ concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations]), anchor });
   }
   return findings;
 }

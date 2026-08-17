@@ -34,8 +34,8 @@ describe('build-review domain', () => {
     expect(anchors).toHaveLength(4);
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
-      findings: [{ concernKind: 'unplanned-surface', summary: 'src/a.ts is outside the approved plan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' } }],
-    })).toMatchObject({ verdict: 'FAIL', findings: [{ concernKind: 'unplanned-surface' }] });
+      findings: [{ concernKind: 'out-of-plan-change', summary: 'src/a.ts is outside the approved plan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' } }],
+    })).toMatchObject({ verdict: 'FAIL', findings: [{ concernKind: 'out-of-plan-change' }] });
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{ concernKind: 'wrong-anchor', anchor: { rubric: 'retired', entryPoint: 'bin/tool', target: 'src/main.ts', relation: 'unreachable' } }],
@@ -46,19 +46,63 @@ describe('build-review domain', () => {
     const parsed = parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{
-        concernKind: 'unplanned-surface',
+        concernKind: 'out-of-plan-change',
         summary: 'src/a.ts is outside the approved plan.',
         evidenceLocations: ['src/a.ts:8', '.docs/plans/feature.md:21'],
-        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
       }],
     }) as unknown as { findings: readonly [{ summary: string; evidenceLocations: readonly string[] }] } | undefined;
 
     expect(parsed?.findings[0]).toEqual({
-      concernKind: 'unplanned-surface',
+      concernKind: 'out-of-plan-change',
       summary: 'src/a.ts is outside the approved plan.',
       evidenceLocations: ['src/a.ts:8', '.docs/plans/feature.md:21'],
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     });
+  });
+
+  it('normalizes closed classifications and rejects values outside the owning rubric vocabulary', () => {
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [{
+        concernKind: 'OUT_OF_PLAN_CHANGE', summary: 'The path is outside the plan.', evidenceLocations: ['src/a.ts:8'],
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'NOT_AUTHORIZED_BY_PLAN' },
+      }],
+    })).toMatchObject({ findings: [{ concernKind: 'out-of-plan-change', anchor: { relation: 'not-authorized-by-plan' } }] });
+
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [{
+        concernKind: 'TEST_DOES_NOT_EXERCISE_CHANGED_BEHAVIOR', summary: 'The assertion remains green.', evidenceLocations: ['test/a.test.ts:8'],
+        anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'writes an event', violationKind: 'ASSERTION_INSENSITIVE_TO_PRODUCTION' },
+      }],
+    })).toMatchObject({ findings: [{ concernKind: 'test-does-not-exercise-changed-behavior', anchor: { exercisedBehavior: 'writes an event', violationKind: 'assertion-insensitive-to-production' } }] });
+
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'rootCause', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [{
+        concernKind: 'SYMPTOM_ONLY_FIX', summary: 'The defect remains.', evidenceLocations: ['src/a.ts:8'],
+        anchor: { rubric: 'rootCause', statedDefect: 'events are omitted', locus: 'handler', relation: 'ROOT_CAUSE_UNADDRESSED' },
+      }],
+    })).toMatchObject({ findings: [{ concernKind: 'symptom-only-fix', anchor: { statedDefect: 'events are omitted', relation: 'root-cause-unaddressed' } }] });
+
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'completeness', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [{
+        concernKind: 'MISSING_DELIVERABLE', summary: 'A deliverable is absent.', evidenceLocations: ['src/a.ts:8'],
+        anchor: { rubric: 'completeness', planTask: '4', missingOutcome: 'writes the result' },
+      }],
+    })).toMatchObject({ findings: [{ concernKind: 'missing-deliverable', anchor: { missingOutcome: 'writes the result' } }] });
+
+    for (const [rubric, finding] of [
+      ['scope', { concernKind: 'unrecognized', summary: 'x', evidenceLocations: ['src/a.ts:8'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'unrecognized' } }],
+      ['tautology', { concernKind: 'assertion-insensitive-to-production', summary: 'x', evidenceLocations: ['test/a.test.ts:8'], anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'unrecognized' } }],
+      ['rootCause', { concernKind: 'root-cause-unaddressed', summary: 'x', evidenceLocations: ['src/a.ts:8'], anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'handler', relation: 'unrecognized' } }],
+    ] as const) {
+      expect(parseBuildReviewJudgedResult({
+        kind: 'judged', rubric, lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1', findings: [finding],
+      })).toBeUndefined();
+    }
   });
 
   it.each([
@@ -71,9 +115,9 @@ describe('build-review domain', () => {
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{
-        concernKind: 'unplanned-surface',
+        concernKind: 'out-of-plan-change',
         ...payload,
-        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
       }],
     })).toBeUndefined();
   });
