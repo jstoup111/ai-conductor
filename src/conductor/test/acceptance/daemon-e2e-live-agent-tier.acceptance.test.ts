@@ -110,9 +110,10 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(workflow).toMatch(/fail-fast:\s*false/);
     expect(workflow).toMatch(/include:[\s\S]*provider:\s*claude[\s\S]*provider:\s*codex/);
     expect(workflow).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
-    expect(workflow).toMatch(/CREDENTIAL_ENV:\s*\$\{\{\s*matrix\.credential_env\s*\}\}/);
+    expect(workflow).toMatch(/export\s+"\$\{\{\s*matrix\.credential_env\s*\}\}=\$LIVE_PROVIDER_CREDENTIAL"/);
     expect(workflow).toMatch(/SMOKE_MODE=gate\s+npm\s+run\s+smoke\s+--\s+"\$\{\{\s*matrix\.smoke_file\s*\}\}"/);
-    expect(workflow).toMatch(/if\s+\[\s+-z\s+"\$LIVE_PROVIDER_CREDENTIAL"\s+\];\s+then[\s\S]*exit\s+0/);
+    expect(workflow).toMatch(/unset\s+LIVE_PROVIDER_CREDENTIAL/);
+    expect(workflow).not.toMatch(/exit\s+0/);
 
     const ciGate = ci.slice(ci.indexOf('ci-gate:'));
     expect(ciGate).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
@@ -130,7 +131,8 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       requiredSource(join(CONDUCTOR_ROOT, 'vitest.smoke.config.ts')),
     ]);
 
-    expect(workflow).toMatch(/env\s+"\$CREDENTIAL_ENV=\$LIVE_PROVIDER_CREDENTIAL"\s+SMOKE_MODE=gate\s+npm\s+run\s+smoke\s+--/);
+    expect(workflow).toMatch(/SMOKE_MODE=gate\s+npm\s+run\s+smoke\s+--\s+"\$\{\{\s*matrix\.smoke_file\s*\}\}"/);
+    expect(workflow).not.toMatch(/(?:npx\s+)?vitest\s+run/);
     expect(JSON.parse(packageJson).scripts.smoke)
       .toBe('node --import tsx scripts/smoke.ts vitest.smoke.config.ts');
     expect(smokeConfig).toMatch(/environment:\s*['"]node['"]/);

@@ -108,4 +108,26 @@ describe('runSmokeCli selection', () => {
       selectedFile: 'test/engine/daemon-e2e-live-codex.smoke.test.ts',
     })).rejects.toThrow('Selected smoke file was not discovered: test/engine/daemon-e2e-live-codex.smoke.test.ts');
   });
+
+  it('records a selected credential-absent leg as a non-gating skip without weakening full-tier enforcement', async () => {
+    const emit = vi.fn();
+    const codexFile = 'test/engine/daemon-e2e-live-codex.smoke.test.ts';
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [
+        { file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts', source: "const smokeCapability = 'credentialed:claude';" },
+        { file: codexFile, source: "const smokeCapability = 'credentialed:codex';" },
+      ],
+      runVitest: vi.fn(),
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: {},
+      emit,
+      selectedFile: codexFile,
+    })).resolves.toBeUndefined();
+
+    expect(emit).toHaveBeenCalledWith(
+      `smoke ledger: ${codexFile} [credentialed:codex] skipped (unmet: CODEX_API_KEY)`,
+    );
+  });
 });

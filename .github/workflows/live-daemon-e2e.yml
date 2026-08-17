@@ -60,11 +60,12 @@ jobs:
         working-directory: src/conductor
       - name: Run complete release smoke tier in gate mode
         env:
-          CREDENTIAL_ENV: ${{ matrix.credential_env }}
           LIVE_PROVIDER_CREDENTIAL: ${{ secrets[matrix.credential_env] }}
         run: |
-          if [ -z "$LIVE_PROVIDER_CREDENTIAL" ]; then
-            exit 0
+          set -euo pipefail
+          if [ -n "$LIVE_PROVIDER_CREDENTIAL" ]; then
+            export "${{ matrix.credential_env }}=$LIVE_PROVIDER_CREDENTIAL"
           fi
-          env "$CREDENTIAL_ENV=$LIVE_PROVIDER_CREDENTIAL" SMOKE_MODE=gate npm run smoke -- "${{ matrix.smoke_file }}"
+          unset LIVE_PROVIDER_CREDENTIAL
+          SMOKE_MODE=gate npm run smoke -- "${{ matrix.smoke_file }}"
         working-directory: src/conductor

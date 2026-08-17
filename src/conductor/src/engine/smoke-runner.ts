@@ -115,7 +115,12 @@ async function runSmoke({
 
   emitSmokeOutcomeLedger(ledger, emit);
   if (failure !== undefined) throw failure;
-  if (mode === 'gate') assertGateCredentialedExecution(executedCapabilities);
+  // A matrix leg selects exactly one credentialed file. Its absent credential is
+  // an attributable non-gating skip; the aggregate proof belongs to full-tier
+  // gate runs, where every discovered credentialed leg was considered together.
+  if (mode === 'gate' && selectedFile === undefined) {
+    assertGateCredentialedExecution(executedCapabilities);
+  }
 }
 
 interface VitestJsonReport {
