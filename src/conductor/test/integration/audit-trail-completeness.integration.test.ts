@@ -469,17 +469,11 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     await writeState(statePath, { complexity_tier: 'S' } as ConductState);
 
     const mod = await loadWriter();
-    const sinks = await import('../../src/engine/event-sinks.js');
     const AuditTrailWriter = mod.AuditTrailWriter as new (root: string) => {
       subscribe(emitter: ConductorEventEmitter): void;
     };
     const writer = new AuditTrailWriter(dir);
     writer.subscribe(events);
-
-    expect(sinks.EVENT_SINKS.containment_check_unresolved).toMatchObject({
-      persist: true,
-      audit: false,
-    });
 
     const stepsRun: StepName[] = [];
     const deprecatedSteps: Array<Extract<ConductorEvent, { type: 'deprecated_step' }>> = [];
@@ -649,5 +643,28 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
 
     const records = await readRecords(dir);
     expect(records).toHaveLength(0);
+  });
+
+  it('a persisted but unaudited containment check produces no audit record', async () => {
+    const { EVENT_SINKS } = await import('../../src/engine/event-sinks.js');
+    expect(EVENT_SINKS.containment_check_unresolved).toMatchObject({
+      persist: true,
+      audit: false,
+    });
+
+    const mod = await loadWriter();
+    const AuditTrailWriter = mod.AuditTrailWriter as new (root: string) => {
+      subscribe(emitter: ConductorEventEmitter): void;
+    };
+    new AuditTrailWriter(dir).subscribe(events);
+
+    await events.emit({
+      type: 'containment_check_unresolved',
+      failure: 'evaluation-failed',
+      taskId: '3',
+      ts: 1_000,
+    });
+
+    expect(await readRecords(dir)).toHaveLength(0);
   });
 });
