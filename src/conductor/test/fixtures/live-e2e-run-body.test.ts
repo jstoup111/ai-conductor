@@ -182,6 +182,7 @@ describe('runLiveE2ERunBody authentication source', () => {
       vi.mocked(dumpPipelineDiagnostics).mockClear();
       vi.mocked(dumpPipelineDiagnostics).mockImplementation(async () => {
         console.error('pipeline readiness diagnostic:', process.env.CODEX_API_KEY);
+        return '';
       });
 
       await expect(runLiveE2ERunBody(descriptor, 1, {
@@ -380,6 +381,7 @@ describe('live E2E failure diagnostics', () => {
       vi.mocked(dumpPipelineDiagnostics).mockClear();
       vi.mocked(dumpPipelineDiagnostics).mockImplementation(async () => {
         console.error('task status at the surviving pipeline path');
+        return '';
       });
 
       await expect(dumpLiveE2EFailureDiagnostics(worktreeDir)).resolves.toBeUndefined();
