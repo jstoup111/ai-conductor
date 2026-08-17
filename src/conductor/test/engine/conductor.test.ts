@@ -13203,7 +13203,7 @@ describe('appendRemediationTasks', () => {
 
     const result = await appendRemediationTasks(dir, planPath, remediationList);
 
-    expect(result).toEqual({ success: true });
+    expect(result).toMatchObject({ success: true });
     const content = await readFile(planPath, 'utf-8');
     expect(content).toContain('### Task rem-fr10-1: Fix the thing in file.ts:123');
   });
@@ -13240,7 +13240,7 @@ describe('appendRemediationTasks', () => {
       log: (msg) => logMessages.push(msg),
     });
 
-    expect(result).toEqual({ success: true });
+    expect(result).toMatchObject({ success: true });
     const content = await readFile(planPath, 'utf-8');
     expect(content).toContain('### Task task-001: Some task without prefix');
     expect(logMessages.some((m) => m.includes('prefix') || m.includes('gate-source'))).toBe(true);
@@ -13259,7 +13259,7 @@ describe('appendRemediationTasks', () => {
 
     const result = await appendRemediationTasks(dir, planPath, remediationList);
 
-    expect(result).toEqual({ success: true });
+    expect(result).toMatchObject({ success: true });
     const content = await readFile(planPath, 'utf-8');
 
     // Verify it matches the TASK_ID_PATTERN regex: [A-Za-z0-9._-]+
@@ -13288,7 +13288,7 @@ describe('appendRemediationTasks', () => {
 
     const result = await appendRemediationTasks(dir, planPath, remediationList);
 
-    expect(result).toEqual({ success: true });
+    expect(result).toMatchObject({ success: true });
     const content = await readFile(planPath, 'utf-8');
     const firstIndex = content.indexOf('### Task rem-test-1:');
     const secondIndex = content.indexOf('### Task rem-test-2:');
@@ -13334,7 +13334,7 @@ describe('appendRemediationTasks', () => {
       ];
 
       const result = await appendRemediationTasks(dir, planPath, remediationList);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       const content = await readFile(planPath, 'utf-8');
       expect(content).toContain('### Task rem-fr10-1:');
@@ -13353,11 +13353,11 @@ describe('appendRemediationTasks', () => {
 
       // First append
       let result = await appendRemediationTasks(dir, planPath, remediationList);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       // Second append with same id
       result = await appendRemediationTasks(dir, planPath, remediationList);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       const content = await readFile(planPath, 'utf-8');
       const matches = content.match(/### Task rem-fr10-1:/g);
@@ -13376,7 +13376,7 @@ describe('appendRemediationTasks', () => {
         },
       ];
       let result = await appendRemediationTasks(dir, planPath, firstList);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       let content = await readFile(planPath, 'utf-8');
       expect(content).toContain('Original title for rem-fr10-1');
@@ -13389,7 +13389,7 @@ describe('appendRemediationTasks', () => {
         },
       ];
       result = await appendRemediationTasks(dir, planPath, secondList);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       content = await readFile(planPath, 'utf-8');
       // Original should be preserved
@@ -13422,10 +13422,10 @@ describe('appendRemediationTasks', () => {
       ];
 
       let result = await appendRemediationTasks(dir, planPath, gateOneList);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       result = await appendRemediationTasks(dir, planPath, gateTwoList);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       const content = await readFile(planPath, 'utf-8');
 
@@ -13476,13 +13476,13 @@ Some description here.
 
       // Multiple appends
       let result = await appendRemediationTasks(dir, planPath, remediationList1);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       result = await appendRemediationTasks(dir, planPath, remediationList2);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       result = await appendRemediationTasks(dir, planPath, remediationList3);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       const content = await readFile(planPath, 'utf-8');
 
@@ -13538,7 +13538,7 @@ Initial task content.
       // Step 2: Trigger remediation flow
       // 2a. Call appendRemediationTasks() with the gap-derived tasks
       let result = await appendRemediationTasks(dir, planPath, remediationTasks);
-      expect(result).toEqual({ success: true });
+      expect(result).toMatchObject({ success: true });
 
       // Verify the task was appended to the plan
       let planContent = await readFile(planPath, 'utf-8');

@@ -138,6 +138,7 @@ import {
   resolveArtifactFiles,
   extraArtifactGlobs,
   resolveFeaturePlanPath,
+  recordAppendedRemediationTaskIds,
   STEP_ARTIFACT_GLOBS,
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
@@ -2540,11 +2541,53 @@ export class Conductor {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks);
         if (appendResult.success) {
           appendAttempted = true;
+          // Record the appended ids so the build completion predicate can
+          // reject a later removal of their headings from the plan.
+          try {
+            await recordAppendedRemediationTaskIds(this.projectRoot, appendResult.appendedIds);
+          } catch (err) {
+            this.log?.(
+              `WARNING: failed to record appended remediation task ids (removal guard disarmed): ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
           // Re-seed task-status.json with the appended tasks marked as pending
           try {
             await seedTaskStatus(this.projectRoot, planPath);
           } catch {
             // Log but continue — seeding failure doesn't block remediation routing
+          }
+          // Commit the engine's own plan amendment. Left uncommitted, the
+          // dirty plan fails the build step's clean-tree completion check,
+          // and builders (correctly) refuse to commit a protected artifact
+          // they did not modify — burning build retries on bookkeeping.
+          // Scoped to the plan path only; a failure logs and falls open,
+          // matching the append-plumbing policy above (routing must not
+          // block on bookkeeping).
+          try {
+            const git = makeGitRunner(this.projectRoot);
+            await git(['add', '--', planPath]);
+            const staged = await git(['diff', '--cached', '--quiet', '--', planPath]);
+            if (staged.exitCode !== 0) {
+              // Pathspec-scoped: commits only the plan file even if other
+              // paths happen to be staged.
+              const commit = await git([
+                'commit',
+                '-m',
+                'chore(plan): record appended remediation tasks',
+                '--no-verify',
+                '--',
+                planPath,
+              ]);
+              if (commit.exitCode !== 0) {
+                this.log?.(
+                  `WARNING: remediation plan amendment commit failed — plan left uncommitted: ${commit.stderr || commit.stdout}`,
+                );
+              }
+            }
+          } catch (err) {
+            this.log?.(
+              `WARNING: remediation plan amendment commit failed — plan left uncommitted: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }
         } else {
           this.log?.(
@@ -10143,7 +10186,7 @@ export async function appendRemediationTasks(
   planPath: string,
   remediationList: Array<{ id: string; title: string }>,
   options?: { log?: (msg: string) => void },
-): Promise<{ success: true } | { success: false; error: string }> {
+): Promise<{ success: true; appendedIds: string[] } | { success: false; error: string }> {
   const log = options?.log ?? (() => {});
 
   // TASK_ID_PATTERN from autoheal.ts: [A-Za-z0-9._-]+
@@ -10197,6 +10240,11 @@ export async function appendRemediationTasks(
 
   // Determine which tasks to append (idempotent upsert semantics)
   const tasksToAppend: Array<{ id: string; title: string; finalId: string }> = [];
+  // Every requested task's id AS IT EXISTS IN THE PLAN after this call —
+  // whether newly appended, hash-suffixed, or already present. Callers
+  // record these so the build completion predicate can reject a later
+  // removal of the heading from the plan.
+  const appendedIds: string[] = [];
 
   for (const task of remediationList) {
     const existing = existingTasks.get(task.id);
@@ -10206,6 +10254,7 @@ export async function appendRemediationTasks(
       if (existing.title === task.title) {
         // Same ID, same content → idempotent, skip
         log(`Task ${task.id} already exists with same content, skipping`);
+        appendedIds.push(task.id);
         continue;
       } else {
         // Same ID, different content → create content-hash suffix to distinguish
@@ -10220,6 +10269,7 @@ export async function appendRemediationTasks(
         // Check if the suffixed ID already exists
         if (existingTasks.has(suffixedId)) {
           log(`Task ${suffixedId} already exists with same content, skipping`);
+          appendedIds.push(suffixedId);
           continue;
         }
 
@@ -10227,10 +10277,12 @@ export async function appendRemediationTasks(
           `Task ${task.id} exists with different content, using suffix: ${suffixedId}`,
         );
         tasksToAppend.push({ id: task.id, title: task.title, finalId: suffixedId });
+        appendedIds.push(suffixedId);
       }
     } else {
       // New task ID, append as-is
       tasksToAppend.push({ id: task.id, title: task.title, finalId: task.id });
+      appendedIds.push(task.id);
     }
   }
 
@@ -10266,5 +10318,5 @@ export async function appendRemediationTasks(
     };
   }
 
-  return { success: true };
+  return { success: true, appendedIds };
 }
