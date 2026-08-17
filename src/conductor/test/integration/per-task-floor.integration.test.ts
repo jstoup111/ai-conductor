@@ -87,7 +87,7 @@ function passingProvider(): { provider: LLMProvider; invokeCalls: InvokeOptions[
           rubric: projection.rubric,
           lapId: projection.lapId,
           snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v1',
+          contractVersion: 'v2',
           findings: [],
         }),
         exitCode: 0,
