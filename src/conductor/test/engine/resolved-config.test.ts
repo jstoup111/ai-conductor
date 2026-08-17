@@ -97,6 +97,23 @@ describe('engine/resolved-config', () => {
       expect(resolved.enabled).toBe(true);
     });
 
+    it('defaults the tautology rubric off and the other three rubrics on (#1682)', () => {
+      const resolved = resolveBuildReviewConfig(undefined);
+      expect({
+        tautology: resolved.rubrics.tautology.enabled,
+        scope: resolved.rubrics.scope.enabled,
+        rootCause: resolved.rubrics.rootCause.enabled,
+        completeness: resolved.rubrics.completeness.enabled,
+      }).toEqual({ tautology: false, scope: true, rootCause: true, completeness: true });
+    });
+
+    it('honors an explicit tautology opt-in over the off default', () => {
+      const config: HarnessConfig = {
+        build_review: { rubrics: { tautology: { enabled: true } } },
+      } as HarnessConfig;
+      expect(resolveBuildReviewConfig(config).rubrics.tautology.enabled).toBe(true);
+    });
+
     it('defaults perTaskFloor to true when field is absent', () => {
       const config: HarnessConfig = { build_review: { enabled: true } } as HarnessConfig;
       const resolved = resolveBuildReviewConfig(config);

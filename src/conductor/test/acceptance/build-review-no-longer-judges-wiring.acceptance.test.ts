@@ -112,7 +112,7 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const config: HarnessConfig = {
-      build_review: { enabled: true, perTaskFloor: false },
+      build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
     };
     const buildReviewRunner = new DefaultStepRunner(provider, 'maker-session', dir, {
       config,

@@ -109,7 +109,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     });
   });
 
-  it('dispatches four isolated rubric sessions from one immutable review lap by default', async () => {
+  it('dispatches four isolated rubric sessions from one immutable review lap when tautology is opted in', async () => {
     const { dir, planPath } = await fixtureRepo();
     const prompts: string[] = [];
     let active = 0;
@@ -126,7 +126,7 @@ describe('acceptance: independent build_review rubric execution', () => {
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const config = {
-      build_review: { enabled: true, perTaskFloor: false },
+      build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
       wiring: { entry_points: ['src/feature.ts'] },
     } as HarnessConfig;
     const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
@@ -187,7 +187,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     };
     const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
       config: {
-        build_review: { enabled: true, perTaskFloor: false },
+        build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
         wiring: { entry_points: ['src/feature.ts'] },
       } as HarnessConfig,
       planPath,
@@ -221,7 +221,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
     persister.start();
     const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
-      config: { build_review: { enabled: true, perTaskFloor: false }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+      config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
       events, planPath, pipelineDir: join(dir, '.pipeline'),
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' } } as never) },
     });
@@ -293,7 +293,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     persister.start();
     const runner = new DefaultStepRunner(codex, 'maker-session', dir, {
       providerKey: 'codex', providerRuntimes: runtimes, sessionStore: new ProviderSessionStore({ createSessionId: (() => { let id = 0; return () => `review-session-${++id}`; })() }), events, planPath, pipelineDir: join(dir, '.pipeline'),
-      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { llm_provider: 'claude' }, scope: { llm_provider: 'codex' }, rootCause: { llm_provider: 'claude', effort: 'medium' }, completeness: {} } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+      config: { llm_provider: ['codex', 'claude'], build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true, llm_provider: 'claude' }, scope: { llm_provider: 'codex' }, rootCause: { llm_provider: 'claude', effort: 'medium' }, completeness: {} } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) },
     });
     const result = await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'mixed-policy', track: 'product' });
@@ -336,7 +336,7 @@ describe('acceptance: independent build_review rubric execution', () => {
         return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings, verdict: findings.length ? 'FAIL' : 'PASS' }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
-    const runner = new DefaultStepRunner(provider, 'maker-session', dir, { planPath, pipelineDir: join(dir, '.pipeline'), config: { build_review: { enabled: true, perTaskFloor: false }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig, buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) } });
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, { planPath, pipelineDir: join(dir, '.pipeline'), config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig, buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) } });
     const result = await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'blocking-branch', track: 'product' });
     const completion = await checkStepCompletion(dir, 'build_review', { sessionStartedAt: Date.now() - 1_000 });
     expect({ result: result.success, done: completion.done, route: completion.routeClass }).toEqual({ result: false, done: false, route: 'named-route' });
@@ -370,7 +370,7 @@ describe('acceptance: independent build_review rubric execution', () => {
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const runner = new DefaultStepRunner(provider, 'maker-session', dir, {
-      config: { build_review: { enabled: true, perTaskFloor: false }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+      config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
       planPath,
       pipelineDir: join(dir, '.pipeline'),
       buildReviewInputOptions: {

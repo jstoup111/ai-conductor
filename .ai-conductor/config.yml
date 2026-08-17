@@ -49,7 +49,10 @@ build_progress_halt:
 # rootCause inherits the engine's medium-effort default (narrowest rubric).
 build_review:
   rubrics:
+    # tautology is opt-in engine-wide (#1682: its scoped-run preflight only
+    # recognizes Vitest/pytest output); this repo runs Vitest, so enable it.
     tautology:
+      enabled: true
       llm_provider: claude
       model: opus
       effort: high

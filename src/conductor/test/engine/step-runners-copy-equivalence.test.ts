@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 
@@ -59,6 +60,8 @@ describe('build_review copy equivalence', () => {
       runner: new DefaultStepRunner(provider, 'session', projectDir, {
         planPath,
         gitRunner,
+        // #1682: tautology defaults off; these tests exercise four-rubric laps.
+        config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
         buildReviewInputOptions: {
           inspectTestSuite: async () => ({
             status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
