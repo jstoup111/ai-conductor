@@ -624,7 +624,8 @@ from a `remediate` or `build_review` disposition asking for a DECIDE revision.
    gate that caused it is wrong, and amending the plan to match it makes things worse.
 2. Make the plan edit yourself in the feature worktree. When BUILD discovered that an approved DECIDE
    assertion must change, add the correction beside the original rather than rewriting it — see
-   [amendment requests](#amendment-requests) above.
+   [amendment requests](#amendment-requests) above. Story artifacts under `.docs/stories/` are the
+   exception: replace the superseded assertion in place instead, with no amendment note.
 3. Clear the halt so the feature resumes into BUILD:
    ```bash
    rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
@@ -666,7 +667,8 @@ original assertion before BUILD starts again:
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-The note is additive: retain the original text and create no separate record.
+The note is additive: retain the original text and create no separate record. Story artifacts under
+`.docs/stories/` are the exception: replace the superseded assertion in place with no amendment note.
 
 **Annotate history-shaped artifacts; rewrite state-shaped ones.** The additive-note rule above is
 for artifacts that downstream machinery reads as *history* — a plan's executed tasks are the ledger

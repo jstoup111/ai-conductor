@@ -167,17 +167,19 @@ rotation proceeds for the rest. An indeterminate authorship probe still fails cl
 rotation. The engine records each rotation in `rebaselines` and logs the trigger, old and new
 commits, and paths.
 
-An accepted-artifact correction belongs to DECIDE, before that first BUILD entry. DECIDE writes the
-additive note beside the original assertion:
+An accepted-artifact correction belongs to DECIDE, before that first BUILD entry. For every protected
+artifact except stories, DECIDE writes the additive note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-The original assertion remains present, and no separate amendment artifact is created. This places the
-correction in the initial seal baseline. `conduct-ts plan-protected-targets <plan-path>` prevents a
-plan from assigning the same mutation to BUILD, and the land gate independently refuses a violating
-plan.
+The original assertion remains present, and no separate amendment artifact is created. Story artifacts
+under `.docs/stories/` are the exception: DECIDE replaces the superseded assertion in place and leaves
+no amendment record — git history and the spec PR carry the correction's provenance. Either way, this
+places the correction in the initial seal baseline. `conduct-ts plan-protected-targets <plan-path>`
+prevents a plan from assigning the same mutation to BUILD, and the land gate independently refuses a
+violating plan.
 
 An operator-approved plan or architecture amendment committed after first BUILD leaves this
 baseline stale by design. Review the amendment, then reseal the reviewed paths with

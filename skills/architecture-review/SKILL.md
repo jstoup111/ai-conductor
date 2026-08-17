@@ -48,16 +48,17 @@ Only a genuine structural gap (a missing component/seam/boundary) may re-open ar
 story-phrasing nit or a coverage gap. The conductor caps re-openings and HALTs for a human on excess.
 
 **Accepted-artifact amendment:** When this review concludes that an accepted DECIDE assertion is
-falsified, amend that artifact during the DECIDE pass; do not instruct a later phase to make the
-change. Add this note beside the original assertion:
+falsified, amend that non-story artifact during the DECIDE pass; do not instruct a later phase to
+make the change. Add this note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-The note is additive: the original assertion remains preserved; never rewrite or delete it, and create
-no separate record. The amended artifact is then part of the spec-branch baseline before
-BUILD begins.
+For every non-story artifact, the note is additive: the original assertion remains preserved; never
+rewrite or delete it, and create no separate record. Story artifacts under `.docs/stories/` are the
+exception: replace superseded assertions in place without an amendment record. The amended artifact is
+then part of the spec-branch baseline before BUILD begins.
 
 ### Lightweight Mode (Medium Complexity Tier)
 
