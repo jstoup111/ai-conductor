@@ -56,6 +56,14 @@ function credentialedSmokeCapability(
   return capability as CredentialedSmokeCapability;
 }
 
+/** Pairs every production manifest provider with its closed credentialed capability. */
+function liveCredentialedSmokeCapabilities(): readonly (readonly [
+  CredentialedSmokeCapability,
+  (typeof LIVE_E2E_PROVIDERS)[number],
+])[] {
+  return LIVE_E2E_PROVIDERS.map((provider) => [credentialedSmokeCapability(provider.id), provider]);
+}
+
 /** The executable required by each smoke file that needs the toolchain capability. */
 const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
   'test/backlog-priority.smoke.test.ts': 'gh',
@@ -104,8 +112,7 @@ function resolveAdvisorySmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, AdvisorySmokeCapabilityResolution> {
   const credentialedCapabilities = Object.fromEntries(
-    LIVE_E2E_PROVIDERS.map(({ id, credentialEnvVar }) => {
-      const capability = credentialedSmokeCapability(id);
+    liveCredentialedSmokeCapabilities().map(([capability, { credentialEnvVar }]) => {
       return [
         capability,
         forceSkipsCapability(environment, capability)
@@ -182,8 +189,7 @@ function resolveGateSmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, GateSmokeCapabilityResolution> {
   const credentialedCapabilities = Object.fromEntries(
-    LIVE_E2E_PROVIDERS.map(({ id, binaryName, credentialEnvVar }) => {
-      const capability = credentialedSmokeCapability(id);
+    liveCredentialedSmokeCapabilities().map(([capability, { id, binaryName, credentialEnvVar }]) => {
       return [
         capability,
         forceSkipsCapability(environment, capability)
