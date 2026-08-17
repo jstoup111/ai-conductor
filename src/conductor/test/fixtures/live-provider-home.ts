@@ -14,6 +14,12 @@ export async function provisionLiveProviderHome(
   provider: Pick<LLMProvider, 'prepareSelfHostAuth'>,
   baseDir?: string,
 ): Promise<ProviderHome> {
+  // The live fixture owns cross-provider credential isolation.  The selected
+  // provider repopulates its credential through prepareSelfHostAuth below;
+  // neither ambient credential is allowed to leak into the other leg.
+  const parentEnv = { ...process.env };
+  delete parentEnv.CLAUDE_CODE_OAUTH_TOKEN;
+  delete parentEnv.CODEX_API_KEY;
   const selectedProvider: ResolvedSelfHostProvider = {
     id: descriptor.id,
     prepareSelfHostAuth: provider.prepareSelfHostAuth
@@ -24,6 +30,7 @@ export async function provisionLiveProviderHome(
   return provisionProviderHome({
     provider: selectedProvider,
     worktreeRoot: sourceRoot,
+    parentEnv,
     // This fixture models an opt-in live smoke, not a daemon self-host
     // dispatch. Supply an explicit temporary base so production's mandatory
     // scratch-lease identity remains a compile-time requirement.
