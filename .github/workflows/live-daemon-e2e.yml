@@ -14,8 +14,25 @@ permissions:
   contents: read
 
 jobs:
+  require-live-provider-credential:
+    name: Require a live-provider credential
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require at least one provider credential
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || [ -n "$CODEX_API_KEY" ]; then
+            echo "### Live daemon E2E: at least one provider credential is available" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "### Live daemon E2E: no provider credential is available" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
   live-daemon-e2e:
     name: Live daemon E2E (${{ matrix.provider }})
+    needs: require-live-provider-credential
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:

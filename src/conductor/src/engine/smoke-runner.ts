@@ -79,6 +79,7 @@ async function runSmoke({
 
   const ledger: SmokeOutcomeLedgerEntry[] = [];
   const executedCapabilities: SmokeCapability[] = [];
+  let selectedCredentialedLegRequiresExecution = false;
   let failure: Error | undefined;
 
   for (const { file, capability } of selectedFiles) {
@@ -94,6 +95,10 @@ async function runSmoke({
         failure ??= new Error(`Smoke gate unmet for ${file}: ${resolution.unmet}`);
       }
       continue;
+    }
+
+    if (selectedFile !== undefined && capability.startsWith('credentialed:')) {
+      selectedCredentialedLegRequiresExecution = true;
     }
 
     try {
@@ -115,10 +120,10 @@ async function runSmoke({
 
   emitSmokeOutcomeLedger(ledger, emit);
   if (failure !== undefined) throw failure;
-  // A matrix leg selects exactly one credentialed file. Its absent credential is
-  // an attributable non-gating skip; the aggregate proof belongs to full-tier
-  // gate runs, where every discovered credentialed leg was considered together.
-  if (mode === 'gate' && selectedFile === undefined) {
+  // A selected matrix leg with an absent credential remains an attributable
+  // non-gating skip. Once its credential resolves, however, it must execute
+  // assertions just like a complete gate run.
+  if (mode === 'gate' && (selectedFile === undefined || selectedCredentialedLegRequiresExecution)) {
     assertGateCredentialedExecution(executedCapabilities);
   }
 }

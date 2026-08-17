@@ -18,16 +18,26 @@ function job(value: unknown, label: string): WorkflowJob {
 }
 
 describe('structural: release workflow', () => {
-  it('makes every live-provider workflow matrix leg select, gate, and report only itself', async () => {
+  it('requires one live-provider credential while every matrix leg selects, gates, and reports only itself', async () => {
     const source = await readFile(resolve(REPO_ROOT, '.github/workflows/live-daemon-e2e.yml'), 'utf8');
     const workflow = job(loadYaml(source), 'live daemon E2E workflow');
     const jobs = job(workflow.jobs, 'live daemon E2E workflow jobs');
+    const credentialRequirement = job(jobs['require-live-provider-credential'], 'live credential requirement job');
     const liveE2E = job(jobs['live-daemon-e2e'], 'live daemon E2E job');
     const strategy = job(liveE2E.strategy, 'live daemon E2E strategy');
     const matrix = job(strategy.matrix, 'live daemon E2E matrix');
+    const credentialRequirementStep = (credentialRequirement.steps as Array<Record<string, unknown>>)[0];
     const steps = liveE2E.steps as Array<Record<string, unknown>>;
     const credentialCheck = steps.find((step) => step.name === 'Check live-provider credentials');
     const smoke = steps.find((step) => step.name === 'Run complete release smoke tier in gate mode');
+
+    expect(job(credentialRequirementStep?.env, 'live credential requirement environment')).toEqual({
+      CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
+      CODEX_API_KEY: '${{ secrets.CODEX_API_KEY }}',
+    });
+    expect(String(credentialRequirementStep?.run))
+      .toMatch(/CLAUDE_CODE_OAUTH_TOKEN[\s\S]*CODEX_API_KEY[\s\S]*exit 1/);
+    expect(liveE2E.needs).toBe('require-live-provider-credential');
 
     expect(matrix.include).toEqual([
       {

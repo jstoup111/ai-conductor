@@ -108,6 +108,22 @@ describe('runSmokeCli selection', () => {
     expect(runVitest).toHaveBeenCalledWith(codexFile);
   });
 
+  it('fails a credential-present selected gate leg when Vitest executes no assertions', async () => {
+    const codexFile = 'test/engine/daemon-e2e-live-codex.smoke.test.ts';
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [
+        { file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts', source: "const smokeCapability = 'credentialed:claude';" },
+        { file: codexFile, source: "const smokeCapability = 'credentialed:codex';" },
+      ],
+      runVitest: async () => ({ executedAssertions: false, output: '' }),
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: { CODEX_API_KEY: 'present' },
+      selectedFile: codexFile,
+    })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
+  });
+
   it('rejects a selected smoke file that discovery did not validate', async () => {
     await expect(runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => [
