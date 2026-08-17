@@ -37,6 +37,31 @@ describe('ProvisionedHome', () => {
 
     expect(provider[method]).toHaveBeenCalledWith({ ...options, selfHost });
   });
+
+  it('transparently preserves absent optional provider capabilities while metering invokes', async () => {
+    const { TokenMeter } = await import('./live-e2e-run-body.js') as {
+      TokenMeter: new (provider: LLMProvider) => LLMProvider;
+    };
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, output: '', exitCode: 0 })),
+      invokeInteractive: vi.fn(async () => undefined),
+    };
+    const meter = new TokenMeter(provider);
+
+    await meter.invoke({ prompt: 'fixture', sessionId: 'fixture', resume: false });
+
+    expect({
+      readiness: meter.readiness,
+      prepareSelfHostAuth: meter.prepareSelfHostAuth,
+      resolveSelfHostExecutable: meter.resolveSelfHostExecutable,
+      invokes: vi.mocked(provider.invoke).mock.calls.length,
+    }).toEqual({
+      readiness: undefined,
+      prepareSelfHostAuth: undefined,
+      resolveSelfHostExecutable: undefined,
+      invokes: 1,
+    });
+  });
 });
 
 describe('runLiveE2ERunBody authentication source', () => {
@@ -502,6 +527,26 @@ describe('live E2E preflight dispatch boundary', () => {
     expect({ preflight: preflight.mock.calls, dispatches: dispatch.mock.calls.length }).toEqual({
       preflight: [['/tmp/live-home', 'codex']],
       dispatches: 0,
+    });
+  });
+
+  it('keeps a post-preflight outcome failure distinct from the successful preflight', async () => {
+    const { dispatchAfterLivePreflight } = await import('./live-e2e-run-body.js') as {
+      dispatchAfterLivePreflight: (
+        home: { homeDir: string },
+        dispatch: () => Promise<void>,
+        providerKey: string,
+        preflight: (homeDir: string, providerKey?: string) => Promise<void>,
+      ) => Promise<void>;
+    };
+    const preflight = vi.fn(async () => {});
+    const dispatch = vi.fn(async () => { throw new Error('daemon outcome failed after preflight'); });
+
+    await expect(dispatchAfterLivePreflight({ homeDir: '/tmp/live-home' }, dispatch, 'claude', preflight))
+      .rejects.toThrow('daemon outcome failed after preflight');
+    expect({ preflight: preflight.mock.calls, dispatches: dispatch.mock.calls.length }).toEqual({
+      preflight: [['/tmp/live-home', 'claude']],
+      dispatches: 1,
     });
   });
 });
