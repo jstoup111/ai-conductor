@@ -319,6 +319,7 @@ describe('Conductor FINISH publication routing', () => {
       if (step === 'finish') {
         return { success: true };
       }
+      if (step === 'manual_test') throw ROUTED_SENTINEL;
       return { success: true };
     });
     const runner: StepRunner = {
@@ -365,22 +366,35 @@ describe('Conductor FINISH publication routing', () => {
     const secondLap = await finishFence.nonGreenFinishValidators(secondLapState.value);
     const secondFinish = await finishFence.runFinishPublication(secondLapState.value, {} as never);
 
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 2 — 2026-08-16T00:00:00Z\n\n| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n',
+    );
+    const failedLapState = await readState(statePath);
+    if (!failedLapState.ok) throw new Error('test fixture state must be readable');
+    const failedLap = await finishFence.nonGreenFinishValidators(failedLapState.value);
+    await conductor.run();
+
     const verdicts = await readAllVerdicts(dir);
     const after = await readState(statePath);
     expect(firstLap).toEqual([]);
     expect(secondLap).toEqual([]);
+    expect(failedLap).toEqual([expect.objectContaining({
+      name: 'manual_test',
+      reason: 'manual test evidence contains FAIL rows',
+    })]);
     expect(firstFinish.success).toBe(true);
     expect(secondFinish.success).toBe(true);
-    expect(runnerRun.mock.calls.map(([step]) => step)).toEqual(['finish', 'finish']);
+    expect(runnerRun.mock.calls.map(([step]) => step)).toEqual(['finish', 'finish', 'manual_test']);
     expect(finishPublication.advance).toHaveBeenCalledTimes(2);
     expect(ensure).not.toHaveBeenCalled();
     expect(inspect).not.toHaveBeenCalled();
-    expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['done', 'done', 'done']);
-    for (const step of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+    expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['in_progress', 'done', 'done']);
+    expect(verdicts.manual_test).toMatchObject({ satisfied: false });
+    for (const step of ['prd_audit', 'architecture_review_as_built'] as const) {
       expect(verdicts[step]).toMatchObject({ satisfied: true });
     }
-    expect(kickbacks).toEqual([]);
-    await expect(readFile(join(dir, '.pipeline', 'manual-test-results.md'), 'utf8')).resolves.toContain('PASS');
+    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
   });
 
   it('treats malformed validator evidence as non-green without deleting prior evidence', async () => {
