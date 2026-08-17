@@ -1488,15 +1488,27 @@ else
   assert "bin/update and bin/conduct share checkout-derived tagged identity behavior" 0
 fi
 
-duplicate_tag_identity_resolution=0
+tagged_identity_delegation_violation=0
 for tagged_update_script in "${HARNESS_DIR}/bin/update" "${HARNESS_DIR}/bin/conduct"; do
-  direct_resolution=$(grep -nE 'tag[[:space:]]+--merged[[:space:]]+HEAD|rev-list[[:space:]]+--count[[:space:]].*\$baseline.*HEAD' "$tagged_update_script" || true)
-  if [ -n "$direct_resolution" ]; then
-    echo "    duplicate tag-to-identity resolution in ${tagged_update_script#"${HARNESS_DIR}/"}: ${direct_resolution}"
-    duplicate_tag_identity_resolution=1
+  tagged_check=$(awk '
+    /^check_harness_update_tagged\(\)/ { capture=1 }
+    capture { print }
+    capture && /^}$/ { exit }
+  ' "$tagged_update_script")
+
+  resolver_call_count=$(grep -cE 'resolve_harness_identity[[:space:]]+"\$HARNESS_DIR"' <<<"$tagged_check" || true)
+  if [ "$resolver_call_count" -ne 1 ]; then
+    echo "    ${tagged_update_script#"${HARNESS_DIR}/"} must call resolve_harness_identity exactly once (found ${resolver_call_count})"
+    tagged_identity_delegation_violation=1
+  fi
+
+  inline_identity_resolution=$(grep -nE 'git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+(describe|tag[[:space:]]+--merged|rev-list[[:space:]]+--count)' <<<"$tagged_check" || true)
+  if [ -n "$inline_identity_resolution" ]; then
+    echo "    inline checkout identity resolution in ${tagged_update_script#"${HARNESS_DIR}/"}: ${inline_identity_resolution}"
+    tagged_identity_delegation_violation=1
   fi
 done
-assert "bin/update and bin/conduct delegate tag-to-identity resolution to resolve_harness_identity" "$duplicate_tag_identity_resolution"
+assert "bin/update and bin/conduct delegate all checkout identity resolution to resolve_harness_identity" "$tagged_identity_delegation_violation"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 
