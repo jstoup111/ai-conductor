@@ -235,13 +235,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     });
   });
 
-  it.each([
-    ['scope-FAIL route', {}],
-    ['kickback-to-build no-op', { kickbackLedger: { version: 1, gates: { build_review: { count: 2, cumulative: 2, treeHash: 'same', lastReason: 'same', priorVerdict: true, resolvedBefore: 0 } } } }],
-    ['cumulative cap', { kickbackLedger: { version: 1, gates: { build_review: { count: 1, cumulative: 5, treeHash: 'prior', lastReason: 'prior', priorVerdict: true, resolvedBefore: 0 } } } }],
-    ['completeness needs-human', { completenessFailure: true, remediateRefusal: true }],
-    ['per-gate unresolved halt', { kickbackLedger: { version: 1, gates: { build_review: { count: 2, cumulative: 2, treeHash: 'prior', lastReason: 'prior', priorVerdict: false, resolvedBefore: 0 } } } }],
-  ])('re-enters build_review instead of terminal routing when effective PASS reaches %s', async (_exit, options) => {
+  async function expectEffectivePassToReenter(options?: Parameters<typeof fixture>[1]) {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { dispatched, kickbacks, buildReviewRuns } = await fixture(resolver, options);
     expect(resolver).toHaveBeenCalled();
@@ -249,5 +243,67 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     expect(kickbacks).toEqual([]);
     expect(buildReviewRuns()).toBe(2);
     await expect(readFile(join(dir!, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
+  }
+
+  it('re-enters build_review instead of scope-FAIL routing when the effective verdict is PASS', async () => {
+    await expectEffectivePassToReenter();
+  });
+
+  it('re-enters build_review instead of the kickback-to-build no-op HALT when the effective verdict is PASS', async () => {
+    await expectEffectivePassToReenter({
+      kickbackLedger: {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 2,
+            cumulative: 2,
+            treeHash: 'same',
+            lastReason: 'same',
+            priorVerdict: true,
+            resolvedBefore: 0,
+          },
+        },
+      },
+    });
+  });
+
+  it('re-enters build_review instead of the cumulative-cap HALT when the effective verdict is PASS', async () => {
+    await expectEffectivePassToReenter({
+      kickbackLedger: {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 1,
+            cumulative: 5,
+            treeHash: 'prior',
+            lastReason: 'prior',
+            priorVerdict: true,
+            resolvedBefore: 0,
+          },
+        },
+      },
+    });
+  });
+
+  it('re-enters build_review instead of the completeness needs-human HALT when the effective verdict is PASS', async () => {
+    await expectEffectivePassToReenter({ completenessFailure: true, remediateRefusal: true });
+  });
+
+  it('re-enters build_review instead of the per-gate unresolved HALT when the effective verdict is PASS', async () => {
+    await expectEffectivePassToReenter({
+      kickbackLedger: {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 2,
+            cumulative: 2,
+            treeHash: 'prior',
+            lastReason: 'prior',
+            priorVerdict: false,
+            resolvedBefore: 0,
+          },
+        },
+      },
+    });
   });
 });
