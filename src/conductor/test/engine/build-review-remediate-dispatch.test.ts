@@ -23,7 +23,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     readonly activePlan: boolean;
     readonly absoluteActivePlanPath?: boolean;
     readonly priorArtifacts: Readonly<Record<string, string>>;
-    readonly planTask?: string;
+    readonly activePlanTask?: string;
     readonly priorLapDirectory?: boolean;
   }): Promise<string | undefined> {
     if (!dir) throw new Error('test directory was not initialized');
@@ -49,9 +49,10 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
       evidenceLocations: ['src/engine/conductor.ts:7500'],
       anchor: {
         rubric: 'completeness',
-        planTask: options.planTask ?? '42',
+        planTask: '42',
         missingSurface: 'src/engine/conductor.ts',
         missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+        missingKind: 'missing-deliverable',
       },
     };
     const judged = (lapId = currentLapId) => ({
@@ -77,7 +78,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
       const relativePlanPath = '.docs/plans/active-remediation-plan.md';
       const activePlanPath = options.absoluteActivePlanPath ? join(dir, relativePlanPath) : relativePlanPath;
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, relativePlanPath), '### Task 42: Preserve the remediation context contract\n');
+      await writeFile(join(dir, relativePlanPath), `### Task ${options.activePlanTask ?? '42'}: Preserve the remediation context contract\n`);
       await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath }));
     }
     for (const [file, contents] of Object.entries(options.priorArtifacts)) {
@@ -227,6 +228,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
         planTask: '42',
         missingSurface: 'src/engine/conductor.ts',
         missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+        missingKind: 'missing-deliverable',
       },
     };
     const judged = (
@@ -309,7 +311,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     dir = await mkdtemp(join(tmpdir(), 'build-review-remediate-pointer-miss-'));
     const remediationContext = await dispatchPointerContext({
       activePlan: true,
-      planTask: 'drifted-task',
+      activePlanTask: 'drifted-task',
       priorArtifacts: {},
       priorLapDirectory: false,
     });
@@ -362,6 +364,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
                 rubric: 'completeness', planTask: '42',
                 missingSurface: 'src/engine/conductor.ts',
                 missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+                missingKind: 'missing-deliverable',
               },
             }], verdict: 'FAIL',
           },
@@ -391,6 +394,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
             rubric: 'completeness', planTask: '42',
             missingSurface: 'src/engine/conductor.ts',
             missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+            missingKind: 'missing-deliverable',
           },
         }], verdict: 'FAIL',
       },

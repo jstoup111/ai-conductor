@@ -222,18 +222,14 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     );
   });
 
-  it.each([
-    ['tautology', 'violationKind'],
-    ['scope', 'relation'],
-    ['rootCause', 'relation'],
-    ['completeness', undefined],
-  ] as const)('renders every allowed %s vocabulary member into its dispatch schema', (rubric, classificationField) => {
+  it.each(['tautology', 'scope', 'rootCause', 'completeness'] as const)('renders every allowed %s vocabulary member into its dispatch schema', (rubric) => {
     const shape = renderBuildReviewJudgedResultShape(rubric);
-    const allowedMembers = BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds.join(' | ');
+    const vocabulary = BUILD_REVIEW_FINDING_VOCABULARIES[rubric];
+    const allowedMembers = vocabulary.concernKinds.join(' | ');
 
     expect(shape).toContain(`"concernKind": "<one of: ${allowedMembers}>"`);
-    if (classificationField) {
-      const anchorMembers = BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields[classificationField].filter((member) => member !== 'out-of-plan-change').join(' | ');
+    for (const [classificationField, members] of Object.entries(vocabulary.anchorFields)) {
+      const anchorMembers = members.filter((member) => member !== 'out-of-plan-change').join(' | ');
       expect(shape).toContain(`"${classificationField}": "<one of: ${anchorMembers}>"`);
     }
   });
