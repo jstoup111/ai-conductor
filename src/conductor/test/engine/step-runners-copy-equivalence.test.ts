@@ -39,7 +39,7 @@ describe('build_review copy equivalence', () => {
         success: true,
         output: JSON.stringify({
           kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [],
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v2', findings: [],
         }),
         exitCode: 0,
       };
@@ -123,14 +123,14 @@ describe('build_review copy equivalence', () => {
       const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
       return { success: true, output: JSON.stringify({
         kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-        snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS',
+        snapshotDigest: projection.snapshotDigest, contractVersion: 'v2', findings: [], verdict: 'PASS',
       }), exitCode: 0 };
     });
     const { runner: subject } = runner(invoke);
 
     await expect(subject.run('build_review', {})).resolves.toMatchObject({
       success: false,
-      output: expect.stringMatching(/invalid-provider-result/i),
+      output: expect.stringMatching(/judged-result contract not satisfied/i),
     });
 
     malformed = false;

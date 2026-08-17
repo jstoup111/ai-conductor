@@ -148,7 +148,7 @@ function createFixtureAgentFake(
         success: true,
         output: JSON.stringify({
           kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS',
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v2', findings: [], verdict: 'PASS',
         }),
         exitCode: 0,
       };
