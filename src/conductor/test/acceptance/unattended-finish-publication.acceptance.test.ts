@@ -716,16 +716,16 @@ afterEach(async () => {
 
 describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', () => {
   it.each([
-    { label: 'interactive with an existing PR', mode: 'interactive' as const, daemon: false, prPresent: true },
-    { label: 'interactive without a PR', mode: 'interactive' as const, daemon: false, prPresent: false },
-    { label: 'default foreground with an existing PR', mode: 'default' as const, daemon: false, prPresent: true },
-    { label: 'default foreground without a PR', mode: 'default' as const, daemon: false, prPresent: false },
-    { label: 'foreground-auto with an existing PR', mode: 'auto' as const, daemon: false, prPresent: true },
-    { label: 'foreground-auto without a PR', mode: 'auto' as const, daemon: false, prPresent: false },
-    { label: 'daemon with an existing PR', mode: 'auto' as const, daemon: true, prPresent: true },
-    { label: 'daemon without a PR', mode: 'auto' as const, daemon: true, prPresent: false },
-    { label: 'daemon with pre-existing authored prose', mode: 'auto' as const, daemon: true, prPresent: true, preAuthored: true },
-  ])('converges %s through the production coordinator', async ({ mode, daemon, prPresent, preAuthored = false }) => {
+    { label: 'interactive with an existing PR', mode: 'interactive' as const, daemon: false, prPresent: true, expectedPasses: { author: 1, judge: 0 } },
+    { label: 'interactive without a PR', mode: 'interactive' as const, daemon: false, prPresent: false, expectedPasses: { author: 1, judge: 0 } },
+    { label: 'default foreground with an existing PR', mode: 'default' as const, daemon: false, prPresent: true, expectedPasses: { author: 1, judge: 0 } },
+    { label: 'default foreground without a PR', mode: 'default' as const, daemon: false, prPresent: false, expectedPasses: { author: 1, judge: 0 } },
+    { label: 'foreground-auto with an existing PR', mode: 'auto' as const, daemon: false, prPresent: true, expectedPasses: { author: 1, judge: 0 } },
+    { label: 'foreground-auto without a PR', mode: 'auto' as const, daemon: false, prPresent: false, expectedPasses: { author: 1, judge: 0 } },
+    { label: 'daemon with an existing PR', mode: 'auto' as const, daemon: true, prPresent: true, expectedPasses: { author: 1, judge: 0 } },
+    { label: 'daemon without a PR', mode: 'auto' as const, daemon: true, prPresent: false, expectedPasses: { author: 1, judge: 0 } },
+    { label: 'daemon with pre-existing authored prose', mode: 'auto' as const, daemon: true, prPresent: true, preAuthored: true, expectedPasses: { author: 0, judge: 1 } },
+  ])('converges %s through the production coordinator', async ({ mode, daemon, prPresent, preAuthored = false, expectedPasses }) => {
     conductorRoot = await mkdtemp(join(tmpdir(), 'finish-publication-pr-convergence-'));
     const pipeline = join(conductorRoot, '.pipeline');
     await mkdir(pipeline, { recursive: true });
@@ -747,8 +747,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     await writeState(stateFilePath, state as ConductState);
     await mkdir(join(conductorRoot, '.docs', 'shipped'), { recursive: true });
     await writeFile(join(conductorRoot, '.docs', 'shipped', 'feature.md'), 'shipped\n');
-    let authoringDispatches = 0;
-    let judgmentDispatches = 0;
+    const prosePasses = { author: 0, judge: 0 };
     const gh = vi.fn(async (args: string[]) => {
       if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
       if (args[0] === 'pr' && args[1] === 'view') {
@@ -776,8 +775,8 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       stateFilePath,
       stepRunner: {
         run: vi.fn(async (_step, _state, options) => {
-          if (options.finishProsePass === 'judge') judgmentDispatches++;
-          else authoringDispatches++;
+          if (options.finishProsePass === 'author') prosePasses.author++;
+          if (options.finishProsePass === 'judge') prosePasses.judge++;
           if (!pullRequest) throw new Error('judgment requires a PR');
           if (options.finishProsePass !== 'judge') {
             pullRequest.title = 'feat: publish coherent finish';
@@ -814,9 +813,8 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
 
     const finalState = await readState(stateFilePath);
     expect(finalState.ok && finalState.value.finish).toBe('done');
-    expect(authoringDispatches).toBe(preAuthored ? 0 : 1);
-    expect(judgmentDispatches).toBe(preAuthored ? 1 : 0);
-    expect(authoringDispatches + judgmentDispatches).toBe(1);
+    expect(prosePasses).toEqual(expectedPasses);
+    expect(prosePasses.author + prosePasses.judge).toBe(1);
     await expect(access(join(pipeline, 'HALT'))).rejects.toThrow();
   });
 
