@@ -1,3 +1,3 @@
-import { runSmokeCli } from '../src/engine/smoke-runner.js';
+import { runSmokeCommand } from '../src/engine/smoke-runner.js';
 
-await runSmokeCli(process.argv[2], { selectedFile: process.argv[3] });
+await runSmokeCommand(process.argv.slice(2));

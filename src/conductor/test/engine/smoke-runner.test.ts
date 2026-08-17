@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { discoverSmokeFiles, runSmokeCli } from '../../src/engine/smoke-runner.js';
+import { discoverSmokeFiles, runSmokeCli, runSmokeCommand } from '../../src/engine/smoke-runner.js';
 
 describe('discoverSmokeFiles', () => {
   it('isolates discovery, then restores the caller environment and cleans up after success', async () => {
@@ -78,6 +78,15 @@ describe('discoverSmokeFiles', () => {
 });
 
 describe('runSmokeCli selection', () => {
+  it('maps the production CLI config and one matrix smoke file to the runner selection', async () => {
+    const runner = vi.fn(async () => {});
+    const selectedFile = 'test/engine/daemon-e2e-live-codex.smoke.test.ts';
+
+    await runSmokeCommand(['vitest.smoke.config.ts', selectedFile], runner);
+
+    expect(runner).toHaveBeenCalledWith('vitest.smoke.config.ts', { selectedFile });
+  });
+
   it('discovers and validates all smoke files, then runs only the selected credentialed leg', async () => {
     const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
     const claudeFile = 'test/engine/daemon-e2e-live-claude.smoke.test.ts';

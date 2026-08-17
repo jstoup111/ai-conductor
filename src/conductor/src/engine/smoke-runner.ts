@@ -243,3 +243,15 @@ export async function runSmokeCli(
     selectedFile: dependencies.selectedFile,
   });
 }
+
+/** Runs the production smoke CLI with its optional config and matrix-file selection. */
+export async function runSmokeCommand(
+  arguments_: readonly string[],
+  runner: typeof runSmokeCli = runSmokeCli,
+): Promise<void> {
+  const [config, selectedFile, ...unexpectedArguments] = arguments_;
+  if (unexpectedArguments.length > 0) {
+    throw new Error(`Smoke CLI accepts at most a config and one selected file; received ${arguments_.length} arguments`);
+  }
+  await runner(config, { selectedFile });
+}
