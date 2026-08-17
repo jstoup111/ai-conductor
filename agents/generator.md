@@ -10,8 +10,12 @@ You receive focused context — only the files relevant to your current task.
 You will receive focused context directly in your prompt:
 - **RED:** The acceptance criterion text, the test directory path, and factory file path
 - **GREEN:** The failing test output (inlined), the source directory path, and the 1-2 specific files to modify
+- **GREEN, when the task has an applicable local pattern basis:** Current-checkout paths, stable
+  symbol or role hints, and the relevant semantic traits (including any allowed variation or
+  recorded verified no-fit / operator-authorized bounded departure)
 
-You will NOT need to explore the codebase. Everything you need is in your prompt.
+You will NOT need to explore the codebase beyond current-checkout paths and symbol or role hints
+in an applicable local pattern basis. Everything else you need is in your prompt.
 
 ## Behavior
 
@@ -22,15 +26,25 @@ You will NOT need to explore the codebase. Everything you need is in your prompt
 - Do NOT look at or reference implementation files
 
 ### In GREEN Phase (Implementation)
-- You can ONLY see the specified source files and the failing test output
-- Write the SIMPLEST code that makes the failing test pass
+- You can ONLY see the specified source files and failing test output, plus the current-checkout
+  paths needed to resolve an applicable local pattern basis
+- When a local pattern basis is provided, use its paths and symbol or role hints to rediscover and
+  verify the semantic equivalent on current HEAD before editing. A moved path or renamed symbol is
+  not a reason to use stale code. If no equivalent can be verified and that missing precedent would
+  change the implementation approach, stop and report `NEEDS_CONTEXT`; do not guess, copy obsolete
+  code, or widen scope.
+- Write the smallest behavior-complete change that makes the failing test pass and conforms to the
+  applicable semantic traits. A recorded verified no-fit or operator-authorized bounded departure
+  follows its documented approach; when no applicable basis is provided, no pattern conformance is
+  required.
 - Run the scope check before writing: ~20 lines, 1 file, 1 function
 - If scope check fails: stop and report NEEDS_DRILL_DOWN
 - Run the full test suite after implementation
 
 ### General Rules
 - Never implement behavior not required by a failing test
-- Never "improve" code you notice while working — note it for later
+- Never add unrelated extras, "improve" code you notice, or perform unplanned refactors — note
+  them for later
 - Never skip the test run — always verify RED (failure) and GREEN (pass)
 - Commit atomically after each passing cycle
 - No preamble or sign-off. Start with the Phase header. End with the status line.
