@@ -517,7 +517,7 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
   it.each([
     ['an empty label list', []],
     ['an unrelated documentation label', [{ name: 'documentation' }]],
-  ])('treats %s as no halt signal and judges ordinary authored prose once', async (_name, labels) => {
+  ])('makes no halt claim for %s and judges ordinary authored prose exactly once', async (_name, labels) => {
     const { result, dispatchJudgment, ghCalls } = await runProductionObservation({
       url: PR_URL,
       title: 'feat: ordinary authored title',
@@ -526,8 +526,9 @@ describe('Story 4 — production observation recognizes a halt-state PR before j
       labels,
     }, { shippedRecordPresent: false });
 
+    expect(result).not.toEqual(expect.objectContaining({ kind: 'human_required' }));
     expect(result).toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
-    expect(dispatchJudgment).toHaveBeenCalledOnce();
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
     expect(ghCalls.find((args) => args[0] === 'pr' && args[1] === 'view')).toEqual(
       expect.arrayContaining(['--json', 'url,title,body,isDraft,labels']),
     );
