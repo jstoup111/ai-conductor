@@ -104,10 +104,12 @@ npx vitest run --config vitest.smoke.config.ts test/engine/daemon-e2e-live-claud
 
 The reusable [Live daemon E2E workflow](../../.github/workflows/live-daemon-e2e.yml)
 runs one matrix leg per provider, selecting only that provider's smoke file.
-When `require_credentials: true`, a missing matrix credential fails its leg;
-otherwise it records a non-gating skip. To add a provider, add its descriptor,
-its provider-specific smoke file, and its matrix entry in the same change; do
-not create a parallel live-E2E workflow.
+An absent matrix credential records a provider-named non-gating skip, while a
+credential-present leg remains gate-enforced. The separate
+`require-live-provider-credential` job requires at least one provider
+credential overall. To add a provider, add its descriptor, its provider-specific
+smoke file, and its matrix entry in the same change; do not create a parallel
+live-E2E workflow.
 
 ## Linters
 
@@ -340,19 +342,21 @@ glob-discovered smoke tier from `src/conductor`:
 npm run smoke
 ```
 
-The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers nine
+The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers ten
 files. Each declares exactly one required capability beside the test:
 
 | Capability | Current files | Requirement |
 | --- | --- | --- |
 | `hermetic` | `finish-record`, `surgical-finish-retry` | No external binary or credential. |
 | `toolchain` | `publish-interrupted`, `backlog-priority`, `codex-provider`, `daemon-tmux` | A local toolchain or network-backed setup. |
-| `credentialed` | `claude-provider`, `build-token-auth`, `daemon-e2e-live` | A live provider credential. |
+| `credentialed:claude` | `claude-provider`, `build-token-auth`, `daemon-e2e-live-claude` | `CLAUDE_CODE_OAUTH_TOKEN`. |
+| `credentialed:codex` | `daemon-e2e-live-codex` | `CODEX_API_KEY`. |
 
 `publish-interrupted.smoke.test.ts` is `toolchain`, not hermetic: it creates a worktree and runs the
-real `bin/setup`, which may install dependencies. `npm run smoke` runs in advisory mode by default
-(`SMOKE_MODE` unset or anything but `gate`): a file whose capability is unmet — no toolchain binary,
-no `CLAUDE_CODE_OAUTH_TOKEN` — is skipped, not failed, and a run that executed zero smoke assertions
+real `bin/setup`, which may install dependencies. Select one production smoke file with
+`npm run smoke -- <smoke_file>`. `npm run smoke` runs in advisory mode by default
+(`SMOKE_MODE` unset or anything but `gate`): a file whose capability is unmet — no toolchain binary
+or that provider's credential — is skipped, not failed, and a run that executed zero smoke assertions
 for a file still fails that file. Set `SMOKE_MODE=gate` for the fail-closed release variant: every
 unmet capability fails its file outright, and the whole run fails if no `credentialed` file actually
 executed — an all-skipped credentialed tier can never pass a gate run. `SMOKE_FORCE_SKIP` (comma-
@@ -360,8 +364,8 @@ separated `capability:<name>` or `file:<path>` entries) forces an operator overr
 in gate mode a forced skip still counts as a failure. Every run ends with one `smoke ledger:` line per
 file naming its capability and outcome (`ran`, `skipped (unmet: …)`, or `failed (evidence: …)`).
 
-For a single case, invoke Vitest with `vitest.smoke.config.ts` and the case path. Keep the normal
-`vitest.config.ts` exclusions intact: ordinary unit and integration runs must never execute smoke tests.
+Keep the normal `vitest.config.ts` exclusions intact: ordinary unit and integration runs must never
+execute smoke tests.
 
 ## Bash test scripts
 

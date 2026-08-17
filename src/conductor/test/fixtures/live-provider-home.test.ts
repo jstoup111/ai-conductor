@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import { ProviderHomeProvisionError } from '../../src/engine/self-host/provider-home.js';
+import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions, LLMProvider, SelfHostAuthContext } from '../../src/execution/llm-provider.js';
 import type { LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import {
@@ -53,6 +54,31 @@ async function withLiveProviderHome<T>(
 }
 
 describe('provisionLiveProviderHome', () => {
+  it('re-injects only the selected real Claude credential into its isolated child environment', async () => {
+    const sourceRoot = await createSourceCheckout();
+    const priorClaudeToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const priorCodexKey = process.env.CODEX_API_KEY;
+
+    try {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'claude-provider-owned-token';
+      process.env.CODEX_API_KEY = 'ambient-codex-key';
+      const provider = new ClaudeProvider();
+      const home = await provisionLiveProviderHome(sourceRoot, claudeDescriptor, provider);
+      try {
+        expect(home.childEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe('claude-provider-owned-token');
+        expect(home.childEnv().CODEX_API_KEY).toBeUndefined();
+      } finally {
+        await home.teardown();
+      }
+    } finally {
+      if (priorClaudeToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorClaudeToken;
+      if (priorCodexKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorCodexKey;
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['claude', 'CLAUDE_CODE_OAUTH_TOKEN'],
     ['codex', 'CODEX_API_KEY'],

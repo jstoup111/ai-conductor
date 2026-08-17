@@ -10,7 +10,7 @@ import {
   type LiveE2EProviderManifestEntry,
 } from '../../src/engine/live-e2e-providers.js';
 
-export type LiveE2EAuthenticationSource = AuthenticationSource | 'oauth-token';
+export type LiveE2EAuthenticationSource = AuthenticationSource | 'oauth-token' | 'missing';
 
 export interface LiveE2EProviderDescriptor extends LiveE2EProviderManifestEntry {
   readonly createProvider: () => LLMProvider;
@@ -27,7 +27,12 @@ const LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS = {
   claude: {
     createProvider: () => new ClaudeProvider(),
     expectedAuthenticationSource: 'oauth-token',
-    resolveAuthenticationSource: async () => 'oauth-token',
+    resolveAuthenticationSource: async (provider) => {
+      if (!(provider instanceof ClaudeProvider)) {
+        throw new Error('Claude live descriptor requires ClaudeProvider');
+      }
+      return provider.authenticationSource();
+    },
     assertCredentialAvailable: () => {},
   },
   codex: {

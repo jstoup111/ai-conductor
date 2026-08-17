@@ -366,6 +366,36 @@ describe('runLiveE2ERunBody authentication source', () => {
     expect(resolveAuthenticationSource).toHaveBeenCalledTimes(1);
     expect(resolveAuthenticationSource).toHaveBeenCalledWith(provider);
   });
+
+  it('rejects a Claude descriptor authentication-source mismatch from real provider state', async () => {
+    const { assertDescriptorAuthenticationSource } = await import('./live-e2e-run-body.js') as {
+      assertDescriptorAuthenticationSource: (
+        descriptor: LiveE2EProviderDescriptor,
+        provider: LLMProvider,
+      ) => Promise<void>;
+    };
+    const { ClaudeProvider } = await import('../../src/execution/claude-provider.js');
+    const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+
+    try {
+      delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      const provider = new ClaudeProvider();
+      const descriptor = {
+        id: 'claude',
+        expectedAuthenticationSource: 'oauth-token',
+        resolveAuthenticationSource: async (candidate: LLMProvider) => {
+          if (!(candidate instanceof ClaudeProvider)) throw new Error('Claude descriptor requires ClaudeProvider');
+          return candidate.authenticationSource();
+        },
+      } as unknown as LiveE2EProviderDescriptor;
+
+      await expect(assertDescriptorAuthenticationSource(descriptor, provider))
+        .rejects.toThrow('expected oauth-token, resolved missing');
+    } finally {
+      if (priorToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+    }
+  });
 });
 
 describe('live E2E failure diagnostics', () => {
