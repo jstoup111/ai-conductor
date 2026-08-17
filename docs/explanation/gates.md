@@ -300,6 +300,13 @@ On the remediation path the planner picks the target per gap, the kickback event
 than `build`, and a gap that needs a human halts instead of routing. Remediation may still choose `build`
 for a scope gap — the difference is that the deletion becomes a recorded plan-level decision.
 
+Completeness carries a remediation-lap calibration (see `skills/build-review-completeness/SKILL.md`) so
+laps converge instead of regenerating scope from their own repairs: an appended `rem-*` task is judged
+against exactly its own text, a remediation-authored test that distinguishes its behavior is delivered
+regardless of assertion style, and documentation lag caused by a later lap consolidates to at most one
+finding per document. Tautological repairs — tests that cannot fail against the merge-base form of what
+they cover — remain blocking findings.
+
 Both the `build` rework hint and the remediation dispatch prompt carry best-effort `plan contract:` and
 `prior attempts:` pointer lines derived from the raw rubric aggregate — a `plan contract:` pointer names the
 active plan's owning task for a finding anchored to a plan task or an owned file, and a `prior attempts:`
