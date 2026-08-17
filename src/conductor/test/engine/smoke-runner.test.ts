@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { discoverSmokeFiles } from '../../src/engine/smoke-runner.js';
+import { discoverSmokeFiles, runSmokeCli } from '../../src/engine/smoke-runner.js';
 
 describe('discoverSmokeFiles', () => {
   it('isolates discovery, then restores the caller environment and cleans up after success', async () => {
@@ -74,5 +74,38 @@ describe('discoverSmokeFiles', () => {
       if (previousTmpdir === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = previousTmpdir;
     }
+  });
+});
+
+describe('runSmokeCli selection', () => {
+  it('discovers and validates all smoke files, then runs only the selected credentialed leg', async () => {
+    const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+    const claudeFile = 'test/engine/daemon-e2e-live-claude.smoke.test.ts';
+    const codexFile = 'test/engine/daemon-e2e-live-codex.smoke.test.ts';
+
+    await runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [
+        { file: claudeFile, source: "const smokeCapability = 'credentialed:claude';" },
+        { file: codexFile, source: "const smokeCapability = 'credentialed:codex';" },
+      ],
+      runVitest,
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: { CODEX_API_KEY: 'present' },
+      selectedFile: codexFile,
+    });
+
+    expect(runVitest).toHaveBeenCalledOnce();
+    expect(runVitest).toHaveBeenCalledWith(codexFile);
+  });
+
+  it('rejects a selected smoke file that discovery did not validate', async () => {
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [
+        { file: 'test/smoke/finish-record.smoke.test.ts', source: "const smokeCapability = 'hermetic';" },
+      ],
+      runVitest: async () => ({ executedAssertions: true, output: '' }),
+      selectedFile: 'test/engine/daemon-e2e-live-codex.smoke.test.ts',
+    })).rejects.toThrow('Selected smoke file was not discovered: test/engine/daemon-e2e-live-codex.smoke.test.ts');
   });
 });

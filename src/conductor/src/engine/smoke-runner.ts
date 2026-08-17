@@ -37,6 +37,7 @@ export interface SmokeRunDependencies {
   hasCommand?: (command: string) => boolean;
   environment?: Readonly<Record<string, string | undefined>>;
   emit?: (line: string) => void;
+  selectedFile?: string;
 }
 
 /** Parses one discovered smoke file's declaration and enforces the closed capability set. */
@@ -62,18 +63,25 @@ async function runSmoke({
   hasCommand = defaultHasCommand,
   environment = process.env,
   emit = console.info,
+  selectedFile,
 }: SmokeRunDependencies): Promise<void> {
   const files = (await discover()).map(({ file, source }) => ({
     file,
     capability: parseSmokeCapabilityDeclaration(file, source),
   }));
   assertSmokeDiscovery(files);
+  const selectedFiles = selectedFile === undefined
+    ? files
+    : files.filter(({ file }) => file === selectedFile);
+  if (selectedFiles.length === 0) {
+    throw new Error(`Selected smoke file was not discovered: ${selectedFile}`);
+  }
 
   const ledger: SmokeOutcomeLedgerEntry[] = [];
   const executedCapabilities: SmokeCapability[] = [];
   let failure: Error | undefined;
 
-  for (const { file, capability } of files) {
+  for (const { file, capability } of selectedFiles) {
     const resolution = mode === 'gate'
       ? resolveGateSmokeFile(file, capability, { hasCommand, environment })
       : resolveAdvisorySmokeFile(file, capability, { hasCommand, environment });
@@ -227,5 +235,6 @@ export async function runSmokeCli(
     hasCommand: dependencies.hasCommand,
     environment: dependencies.environment,
     emit: dependencies.emit,
+    selectedFile: dependencies.selectedFile,
   });
 }

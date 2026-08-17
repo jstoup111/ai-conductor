@@ -49,9 +49,10 @@ describe('structural: release workflow', () => {
       CREDENTIAL_ENV: '${{ matrix.credential_env }}',
       LIVE_PROVIDER_CREDENTIAL: '${{ secrets[matrix.credential_env] }}',
     });
-    expect(smoke?.run).toBe(
-      'env "$CREDENTIAL_ENV=$LIVE_PROVIDER_CREDENTIAL" npx vitest run --config vitest.smoke.config.ts "${{ matrix.smoke_file }}"',
-    );
+    expect(String(smoke?.run)).toContain('if [ -z "$LIVE_PROVIDER_CREDENTIAL" ]; then');
+    expect(String(smoke?.run)).toContain('SMOKE_MODE=gate npm run smoke -- "${{ matrix.smoke_file }}"');
+    expect(String(smoke?.run)).toContain('env "$CREDENTIAL_ENV=$LIVE_PROVIDER_CREDENTIAL"');
+    expect(String(smoke?.run)).not.toMatch(/(?:npx\s+)?vitest\s+run/);
     expect(source).toMatch(/\$GITHUB_STEP_SUMMARY[\s\S]*\$\{\{ matrix\.provider \}\}[\s\S]*(?:gating|non-gating skip)[\s\S]*\$\{\{ matrix\.credential_env \}\}/);
   });
 

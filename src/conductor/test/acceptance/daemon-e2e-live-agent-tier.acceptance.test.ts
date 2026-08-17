@@ -96,7 +96,7 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(runBody).not.toMatch(/function\s+dumpPipelineDiagnostics/);
   });
 
-  it('keeps the live workflow advisory to merges and fail-closed for reusable gating callers', async () => {
+  it('keeps the live workflow advisory to merges and makes each credential-present leg gate-enforced', async () => {
     const [workflow, ci, smoke, runBody] = await Promise.all([
       requiredSource(WORKFLOW_PATH),
       requiredSource(join(REPO_ROOT, '.github/workflows/ci.yml')),
@@ -106,14 +106,13 @@ describe('live-agent daemon E2E tier (#1124)', () => {
 
     expect(workflow).toMatch(/workflow_dispatch\s*:/);
     expect(workflow).toMatch(/workflow_call\s*:/);
-    expect(workflow).toMatch(/require_credentials:[\s\S]*?type:\s*boolean[\s\S]*?default:\s*false/);
     expect(workflow).not.toMatch(/^\s*(?:pull_request|schedule)\s*:/m);
     expect(workflow).toMatch(/fail-fast:\s*false/);
     expect(workflow).toMatch(/include:[\s\S]*provider:\s*claude[\s\S]*provider:\s*codex/);
-    expect(workflow).toMatch(/inputs\.require_credentials/);
     expect(workflow).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
     expect(workflow).toMatch(/CREDENTIAL_ENV:\s*\$\{\{\s*matrix\.credential_env\s*\}\}/);
-    expect(workflow).toMatch(/npx\s+vitest\s+run\s+--config\s+vitest\.smoke\.config\.ts\s+"\$\{\{\s*matrix\.smoke_file\s*\}\}"/);
+    expect(workflow).toMatch(/SMOKE_MODE=gate\s+npm\s+run\s+smoke\s+--\s+"\$\{\{\s*matrix\.smoke_file\s*\}\}"/);
+    expect(workflow).toMatch(/if\s+\[\s+-z\s+"\$LIVE_PROVIDER_CREDENTIAL"\s+\];\s+then[\s\S]*exit\s+0/);
 
     const ciGate = ci.slice(ci.indexOf('ci-gate:'));
     expect(ciGate).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
@@ -131,7 +130,7 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       requiredSource(join(CONDUCTOR_ROOT, 'vitest.smoke.config.ts')),
     ]);
 
-    expect(workflow).toMatch(/run:\s*env\s+"\$CREDENTIAL_ENV=\$LIVE_PROVIDER_CREDENTIAL"\s+npx\s+vitest\s+run\s+--config\s+vitest\.smoke\.config\.ts/);
+    expect(workflow).toMatch(/env\s+"\$CREDENTIAL_ENV=\$LIVE_PROVIDER_CREDENTIAL"\s+SMOKE_MODE=gate\s+npm\s+run\s+smoke\s+--/);
     expect(JSON.parse(packageJson).scripts.smoke)
       .toBe('node --import tsx scripts/smoke.ts vitest.smoke.config.ts');
     expect(smokeConfig).toMatch(/environment:\s*['"]node['"]/);

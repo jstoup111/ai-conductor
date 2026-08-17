@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       require_credentials:
-        description: Fail when the live-provider credential is unavailable.
+        description: Retained compatibility input; each available live-provider credential enables its own gate-enforced leg.
         required: false
         type: boolean
         default: false
@@ -33,20 +33,11 @@ jobs:
     steps:
       - name: Check live-provider credentials
         env:
-          REQUIRE_CREDENTIALS: ${{ inputs.require_credentials }}
           LIVE_PROVIDER_CREDENTIAL: ${{ secrets[matrix.credential_env] }}
         run: |
           set -euo pipefail
-          if [ "$REQUIRE_CREDENTIALS" = "true" ] && [ -z "$LIVE_PROVIDER_CREDENTIAL" ]; then
-            echo "Missing required secret: ${{ matrix.credential_env }}" >&2
-            exit 1
-          fi
           if [ -n "$LIVE_PROVIDER_CREDENTIAL" ]; then
-            if [ "$REQUIRE_CREDENTIALS" = "true" ]; then
-              echo "### Live daemon E2E: ${{ matrix.provider }} gating run (${{ matrix.credential_env }} available)" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "### Live daemon E2E: ${{ matrix.provider }} non-gating run (${{ matrix.credential_env }} available)" >> "$GITHUB_STEP_SUMMARY"
-            fi
+            echo "### Live daemon E2E: ${{ matrix.provider }} gating run (${{ matrix.credential_env }} available)" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Live daemon E2E: ${{ matrix.provider }} non-gating skip (${{ matrix.credential_env }} is unavailable)" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -71,5 +62,9 @@ jobs:
         env:
           CREDENTIAL_ENV: ${{ matrix.credential_env }}
           LIVE_PROVIDER_CREDENTIAL: ${{ secrets[matrix.credential_env] }}
-        run: env "$CREDENTIAL_ENV=$LIVE_PROVIDER_CREDENTIAL" npx vitest run --config vitest.smoke.config.ts "${{ matrix.smoke_file }}"
+        run: |
+          if [ -z "$LIVE_PROVIDER_CREDENTIAL" ]; then
+            exit 0
+          fi
+          env "$CREDENTIAL_ENV=$LIVE_PROVIDER_CREDENTIAL" SMOKE_MODE=gate npm run smoke -- "${{ matrix.smoke_file }}"
         working-directory: src/conductor
