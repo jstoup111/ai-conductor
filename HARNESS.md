@@ -635,6 +635,13 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
   every phase: BUILD (don't implement against a superseded design), and SHIP /
   debugging / manual-test (a bug on a condemned path is a removal signal, not a
   fix target).
+- **Pattern authority is conditional.** An approved architecture outranks observed
+  code. Otherwise, when a suitable established local pattern applies, reuse it
+  for that feature; a verified no-fit or an operator-authorized bounded departure
+  is allowed. This is a feature-specific conformance decision, not a universal
+  project style or pattern catalog. A declared exact replication remains a
+  distinct mechanical case: reproduce its specified source exactly rather than
+  treating pattern choice as permission to vary it.
 - Retro runs on both harness AND application after every feature
 - Tech-context is additive — never overrides generic skill behavior
 - **Docs track features.** Every feature that adds or changes user-facing
