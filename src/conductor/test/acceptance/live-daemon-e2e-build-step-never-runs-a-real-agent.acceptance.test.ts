@@ -106,10 +106,13 @@ describe('live daemon E2E command resolution (#1311)', () => {
     expect(preflight).not.toMatch(/['"]pipeline['"]/);
     expect(preflight).not.toMatch(/\.invoke\s*\(|exec(?:File)?\s*\(|fetch\s*\(/);
 
-    const preflightCall = runBody.search(/dispatchAfterLivePreflight/);
-    expect(preflightCall).toBeGreaterThanOrEqual(0);
-    expect(runBody).toMatch(/await\s+preflight\([^)]*providerKey\)[\s\S]*await\s+dispatch\(\)/);
-    expect(runBody).toMatch(/dispatches\s*=\s*0/);
+    // The dispatch boundary is shared by the provider-specific smoke legs.
+    // Keep this story-level contract focused on the live run body's wiring;
+    // its focused fixture test owns the failed-preflight/no-dispatch behavior.
+    expect(runBody).toMatch(/await\s+dispatchAfterLivePreflight\(\s*providerHome/);
+    expect(runBody).toMatch(
+      /export\s+async\s+function\s+dispatchAfterLivePreflight[\s\S]*await\s+preflight\([^)]*providerKey\)[\s\S]*return\s+dispatch\(\)/,
+    );
   });
 
   it('classifies the observed zero-turn unknown-command envelope as a named failure at the provider boundary', async () => {
