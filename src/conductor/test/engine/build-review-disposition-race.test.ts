@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -37,10 +37,15 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     };
   }
 
-  async function fixture(resolver: ReturnType<typeof vi.fn>) {
+  async function fixture(
+    resolver: ReturnType<typeof vi.fn>,
+    opts?: { kickbackLedger?: Record<string, unknown> },
+  ) {
     dir = await mkdtemp(join(tmpdir(), 'build-review-disposition-race-'));
     const statePath = join(dir, '.pipeline', 'state.json');
-    const state: Record<string, unknown> = { complexity_tier: 'M' };
+    // Keep the fixture in the same feature session so an explicitly seeded
+    // kickback ledger is not cleared at Conductor startup.
+    const state: Record<string, unknown> = { complexity_tier: 'M', run_started_at: 1 };
     for (const step of ALL_STEPS) {
       if (step.name !== 'build_review') state[step.name] = 'done';
     }
@@ -50,6 +55,12 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
       join(dir, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
     );
+    if (opts?.kickbackLedger) {
+      await writeFile(
+        join(dir, '.pipeline', 'kickback-ledger.json'),
+        JSON.stringify(opts.kickbackLedger),
+      );
+    }
 
     const dispatched: StepName[] = [];
     let buildReviewRuns = 0;
@@ -127,5 +138,69 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
     expect(kickbacks).toEqual([{ from: 'build_review', to: 'build' }]);
     expect(dispatched).toContain('build');
+  });
+
+  it('keeps an unresolved finding on the existing cumulative-cap path, preserving its cap reason and HALT class', async () => {
+    const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: ['sha256:still-open'] }));
+
+    const { dispatched, kickbacks } = await fixture(resolver, {
+      kickbackLedger: {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 1,
+            cumulative: 5,
+            treeHash: 'previous-tree',
+            lastReason: 'previous failure',
+            priorVerdict: true,
+            resolvedBefore: 0,
+          },
+        },
+      },
+    });
+
+    expect(dispatched).toEqual(['build_review']);
+    expect(kickbacks).toEqual([]);
+    expect(await readFile(join(dir!, '.pipeline/HALT'), 'utf-8')).toContain(
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): scope: unplanned audit-trail surface',
+    );
+    expect(await readFile(join(dir!, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    expect(JSON.parse(await readFile(join(dir!, '.pipeline/kickback-ledger.json'), 'utf-8'))).toMatchObject({
+      gates: { build_review: { count: 1, cumulative: 6 } },
+    });
+  });
+
+  it('keeps the raw-FAIL HALT reasons distinct, classified, and exhaustively guarded at their exit sites', async () => {
+    const source = await readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf-8');
+    const rawFailStart = source.indexOf('// build_review kickback (daemon only, Task 13)');
+    const rawFailEnd = source.indexOf('// Task 8: Stall remediation', rawFailStart);
+    expect(rawFailStart).toBeGreaterThanOrEqual(0);
+    expect(rawFailEnd).toBeGreaterThan(rawFailStart);
+    const rawFailBlock = source.slice(rawFailStart, rawFailEnd);
+
+    for (const reason of [
+      'build_review scope-FAIL disposition HALT:',
+      'build_review kickback-to-build no-op:',
+      'build_review cumulative kickback cap exceeded',
+      'build_review completeness FAIL needs a human:',
+      'build_review FAIL unresolved after',
+    ]) {
+      expect(rawFailBlock).toContain(reason);
+    }
+    expect((rawFailBlock.match(/writeHaltMarker\([^\n]+, 'needs-human'\)/g) ?? [])).toHaveLength(5);
+
+    // Task 11 derived ten terminal outcomes after the effective-PASS helper.
+    // Their fifteen concrete control primitives cover stale-mirage
+    // halt/regrade, no-op halt, budget consume, cumulative halt,
+    // remediate-refusal halt, merged-PR return, ordinary route, and per-gate
+    // halt. A new raw-FAIL exit changes this count and must add an adjacent
+    // effective-verdict decision instead of silently bypassing dispositions.
+    const helperEnd = rawFailBlock.indexOf('// Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):');
+    const exitRegion = rawFailBlock.slice(helperEnd);
+    const terminalActions = exitRegion.match(
+      /await this\.writeHaltMarker|i = i - 1|await consumeKickbackBudget|await emitTracked\(|return;/g,
+    ) ?? [];
+    expect(terminalActions).toHaveLength(15);
+    expect((exitRegion.match(/if \(await reenterBuildReviewIfEffectivePass\(\)\) continue;/g) ?? [])).toHaveLength(7);
   });
 });
