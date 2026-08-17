@@ -24,18 +24,19 @@ describe('LIVE_E2E_PROVIDERS', () => {
     expect(claude?.assertCredentialAvailable(undefined)).toBeUndefined();
   });
 
-  it('resolves the real Claude authentication source from its construction-time credential', async () => {
-    const claude = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'claude');
+  it('captures the real Claude authentication source at provider construction', () => {
     const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
     try {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'live-claude-token';
-      const oauthProvider = claude!.createProvider();
+      const oauthProvider = new ClaudeProvider();
       delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-      const missingProvider = claude!.createProvider();
+      const missingProvider = new ClaudeProvider();
 
-      await expect(claude!.resolveAuthenticationSource(oauthProvider)).resolves.toBe('oauth-token');
-      await expect(claude!.resolveAuthenticationSource(missingProvider)).resolves.toBe('missing');
+      expect([oauthProvider.authenticationSource(), missingProvider.authenticationSource()]).toEqual([
+        'oauth-token',
+        'missing',
+      ]);
     } finally {
       if (priorToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
       else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
