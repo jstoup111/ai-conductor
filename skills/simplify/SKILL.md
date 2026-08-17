@@ -40,7 +40,7 @@ Look for duplicated **business logic** across batch-changed files. Distinguish b
 |------|---------|--------|
 | Duplicated behavior | Same validation logic in two services | Must extract |
 | Duplicated shape | Two serializers with similar structure | Leave alone |
-| Copy-paste with tweaks | Same method with 1-2 param differences | Extract with parameters — except a declared exact-replication's mapped source/target pair alone is not an extract-with-parameters finding. Still flag undeclared duplication or similarity outside the declared target set; with no declaration, apply this row unchanged. A declared pair may retain an extraction finding when rationale beyond the declared replication merits it. |
+| Copy-paste with tweaks | Same method with 1-2 param differences | Extract with parameters — except a declared replication's exact mapped source/target pair alone is not an extract-with-parameters finding. Still flag undeclared duplication or similarity outside the declared target set; with no declaration, apply this row unchanged. A declared pair may retain an extraction finding when rationale beyond the declared replication merits it. |
 
 Flag when 3+ similar blocks exist across different files. Two similar blocks in the same
 file are a judgment call — flag only if the logic is non-trivial.
