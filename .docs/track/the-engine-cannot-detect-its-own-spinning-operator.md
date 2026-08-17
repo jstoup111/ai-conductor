@@ -71,15 +71,33 @@ cache hit mints one without a new judgement. Any detector that globs them measur
 
 ## Chosen approach (operator-confirmed after the override)
 
-**Count when a kickback is actually consumed, in the state file. Never glob artifacts.**
+**Count when a kickback is actually consumed, in the state file, keyed by rubric. Never glob
+artifacts, and never key on anything the grader wrote.**
 
 At the `build_review` FAIL exit the engine already holds this lap's own freshly-judged findings and
 their effective verdict — `resolveEffectiveBuildReviewVerdict` gives `unresolvedFindingIds` under
-the disposition store's lease. Each consumed kickback ticks a bounded per-site tally on the
-`KickbackGateEntry` beside `cumulative`, keyed by the rubric's **typed anchor subject**:
-`scope.path`, `tautology.changedTest`, `rootCause.locus`, `completeness.planTask`. When one site's
-tally reaches the threshold, the run takes a `needs-human` HALT whose body names the site, its
-count, the rubrics that raised it, and the budget state.
+the disposition store's lease. Each consumed kickback ticks a per-rubric failure tally on the
+`KickbackGateEntry` beside `cumulative`. When one rubric's tally reaches 4, the run takes a
+`needs-human` HALT whose body names the rubric, its failure count, the sites it most recently
+flagged, and the budget state.
+
+**The key was chosen by measurement, after a first attempt failed one.** A per-**site** tally, keyed
+on the typed anchor subject, was authored and then withdrawn: replayed over 11 features
+reconstructed from persisted event ledgers it fired on 2 of the 5 that spun and missed
+`finish-publication`, the episode this issue reports. Sites move as remediation fixes them.
+
+| key | threshold | spin | healthy | kickbacks avoided |
+|---|---|---|---|---|
+| per-rubric failures | 4 | 5/5 | 0/6 | 14 |
+| per-rubric failures | 3 | 5/5 | 2/6 | 21 |
+| consecutive same-rubric run | 4 | 5/5 | 0/6 | 10 |
+| per-site repetition | 3 | 2/5 | 0/6 | 6 |
+
+The rubric name is engine-supplied from the registry rather than grader output, so
+`adr-2026-07-26` D3's finding that build_review reasons are never byte-stable cannot reach it, and
+nothing about finding identity or `adr-2026-08-16`'s vocabularies is read or affected. The sweep was
+also run with and without `cumulative`'s PASS reset and gave identical results, so `adr-2026-08-12`
+D2 stays untouched.
 
 Why each element is forced:
 
@@ -87,22 +105,21 @@ Why each element is forced:
   that destroyed round 1: one tick per real backward move. It also satisfies
   `adr-2026-08-12`'s rejected alternative — "State belongs in the state file; the event is the
   observation of it" — which forbids deriving a control decision by parsing persisted history.
-- **The typed anchor subject, not `evidenceLocations`.**
-  `adr-2026-08-13-stable-build-review-finding-dispositions` classes `evidenceLocations` as
-  presentation and excludes it from identity; `adr-2026-08-16-closed-build-review-finding-vocabularies`
-  enumerates the fields the engine verifies against the immutable snapshot and
-  `evidenceLocations` is not among them. Round 1's key was the unverified one.
+- **The rubric, not any grader-authored field.** Two earlier keys were tried and dropped:
+  `evidenceLocations` (classed as presentation and excluded from identity by
+  `adr-2026-08-13-stable-build-review-finding-dispositions`, and absent from
+  `adr-2026-08-16-closed-build-review-finding-vocabularies`'s engine-verified reference list), then
+  the typed anchor subject (verified, but it measured 2 of 5 on the corpus). The rubric name comes
+  from the engine's own registry, so no grader text reaches the counting path at all.
 - **Deriving unresolved-ness from the current lap's own join**, never from a prior lap's artifact.
   `adr-2026-08-03-build-repair-member-reuse-validity` binds that "no on-disk gate verdict, step
   status, or timestamp is sufficient authority on its own", and
   `architecture-review-2026-07-08-post-rebase-gate-first-reverify` establishes that a `build_review`
   artifact does not attest the current tree.
-- **Config-gated, default-on, with a stated exit condition**, mirroring `adr-2026-08-12` D4 exactly.
-  Its reasoning applies with more force here: the threshold cannot be calibrated from existing data,
-  and "a false `needs-human` halt on a converging feature is the expensive failure direction". The
-  flag is the escape hatch, and per
-  `adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag` it carries a written exit
-  condition so it does not become permanent by default.
+- **Config-gated, default-on**, mirroring `adr-2026-08-12` D4. Its reasoning still applies — "a
+  false `needs-human` halt on a converging feature is the expensive failure direction" — though less
+  urgently than it did for the withdrawn key, since the threshold is now measured rather than
+  guessed. The flag remains the production escape for a number derived from eleven features.
 - **`needs-human`, and the existing halt sequence.** `daemon-rekick.ts` skips `needs-human` on every
   sweep while weaker classes are cleared and re-dispatched — a guard whose halt the daemon
   auto-clears is not a guard. The path reuses marker → `surfaceRemediationPr` → `emitLoopHalt`
@@ -115,25 +132,27 @@ Why each element is forced:
   base are discarded, not counted) and after the cumulative cap, so a run that trips the cap still
   reports the ping-pong reason rather than having it masked.
 
-## The operator override, stated plainly
+## The two operator directions, stated plainly
 
-Exploration recommended descoping to diagnosis-only, on the ground that no evidence on disk shows
-site repetition separating spin from convergence. The operator overrode it: *"I want to short
-circuit cycles regardless — if it looks like no progress is being made we need to short circuit
-regardless."*
+**First:** exploration recommended descoping to diagnosis-only, on the ground that no evidence then
+available showed repetition separating spin from convergence. The operator overrode it: *"I want to
+short circuit cycles regardless — if it looks like no progress is being made we need to short
+circuit regardless."*
 
-The override is sound and the recommendation rested partly on round 1's contaminated numbers, which
-round 2 retracted. What survives the retraction is narrower but real, and is carried into the ADR as
-an accepted cost rather than papered over:
+**Second:** DECIDE then reported that the site key it had chosen fired on only 2 of 5 spinning
+features and missed the filed incident. The operator directed: *"fix the keyed portion on what
+provides real value add."* That direction produced the per-rubric key and the sweep above.
 
-- The threshold is **not evidenced**. Two fresh judgements is the whole corpus. `adr-2026-08-12` set
-  its own cap at 5 on the same footing ("a judgement, not a measurement — confidence 70%") and
-  named the config flag as the remedy; this follows that precedent explicitly.
-- Two materially different findings at one site across two kickbacks read as one repeat.
-  `adr-2026-08-16` rejected path-collapse for *identity*, where collapse grants blanket immunity.
-  Here the consequence runs the other way — collapse causes a conservative halt a human then rules
-  on, which is exactly the behavior the operator asked for and exactly issue outcome 2. That
-  asymmetry is the argument, and it must be written down rather than assumed.
+The sequence matters, because the first direction was taken against weak evidence and the second is
+what supplied it. The threshold now rests on 11 features rather than zero, at **85% confidence,
+basis verified**, against the 55% the withdrawn design carried. What remains uncertain is corpus
+size and the spin/healthy labelling, which comes from operator reports and cap terminations rather
+than an independent oracle — carried into the ADR as the accepted cost, with the config gate and the
+in-tree re-derivation as its remedies.
+
+The site-collapse objection that the withdrawn design had to argue past — `adr-2026-08-16`'s
+rejection of path-level identity collapse — is **gone rather than mitigated**: the rubric key
+touches no identity, disposition, or immunity decision.
 
 ## Approaches weighed and declined
 
@@ -154,6 +173,13 @@ an accepted cost rather than papered over:
 - **Globbing `.pipeline/build-review/lap-*` for repeat counts** (the intake's first hypothesis —
   "the persisted lap dirs already carry every signal"). Declined on the round-2 measurement: lap
   dirs count cache re-stamps, not judgements.
+- **Per-site repetition, keyed on the typed anchor subject** (the intake's signal (a), and this
+  track's own first chosen design). Authored in full, then withdrawn on the corpus replay: 2 of 5
+  spinning features, and it misses `finish-publication`, the filed episode. Sites move as
+  remediation fixes them, so repetition at a site is as consistent with convergence as with spin.
+- **Consecutive same-rubric run.** Same separation as the chosen key (5/5 spin, 0/6 healthy) but
+  avoids 10 kickbacks against 14, because a rubric that alternates in and out resets the run — the
+  evasion `adr-2026-07-26` D3 warned about.
 - **Test-weakening detection** (the intake's second hypothesis). Genuinely diffable, but it is a
   different signal with a different owner — the tautology rubric already grades assertion strength —
   and it needs the `test_suite` per-round history that does not exist. Left out of scope.

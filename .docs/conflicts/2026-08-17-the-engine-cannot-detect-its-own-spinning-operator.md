@@ -7,24 +7,27 @@
 swept across four partitions; one partition re-run after an API failure, so coverage is complete.
 **Result:** 4 blocking conflicts found against the first design and resolved by replacing its
 mechanism; 1 blocking conflict resolved by a measurement that falsified the design's own premise;
-3 constraints accepted into the design; 1 raised conflict dismissed on evidence; 1 defect in shipped
-behaviour surfaced and routed out of scope. Re-check clean.
+1 further conflict found against the *second* design and resolved by re-keying it; 2 constraints
+accepted into the design; 1 raised conflict dismissed on evidence; 1 defect in shipped behaviour
+surfaced and filed. Re-check clean.
 
 ---
 
 ## How this check changed the feature
 
 The intake proposed a cross-lap comparator over the persisted lap directories, keyed on finding
-sites, with a kickback rate window as a second signal. The sweep and one measurement dismantled
-three of its four load-bearing choices:
+sites, with a kickback rate window as a second signal. The sweep and two measurements dismantled
+every one of its load-bearing choices:
 
-- the **rate window** is forbidden outright,
-- the **lap directories** are not a counting unit,
-- the **key** was a field the engine never verifies.
+- the **rate window** is forbidden outright (Conflict 1),
+- the **lap directories** are not a counting unit (Conflict 3),
+- `evidenceLocations` is not an engine-verified field (Conflict 4),
+- and the **site** — the typed anchor subject that replaced it — does not measure spinning
+  (Conflict 6).
 
-What survived — count on consumption, key on the typed anchor subject, halt `needs-human` with a
-rendered body — is what the stories describe. Conflicts 1–4 are recorded against withdrawn designs
-because they are the reason the current one exists.
+What survived is: count on consumption, key on the **rubric**, halt `needs-human` with a rendered
+body. Conflicts 1–4 and 6 are recorded against withdrawn designs because they are the reason the
+current one exists.
 
 ---
 
@@ -165,32 +168,40 @@ has already ruled invalid.
 
 ---
 
-## Constraint 3 (accepted): a coarse key is licensed only by its consequence direction
+## Conflict 6: the site key does not measure spinning
 
-**Source:** `adr-2026-08-16-closed-build-review-finding-vocabularies`, whose Option B —
-"structural-only identity … keying on rubric plus paths" — was rejected because "two materially
-different scope findings on one file collapse to one id", a High-impact risk carried from
-`architecture-review-2026-08-13-build-review-rubric-dispositions`.
-**Why this is a constraint and not Conflict 6:** the rejection is scoped to *identity*, where
-collapse grants an acceptance blanket immunity over a file. Story 2 reuses the shape on the
-**halting** side, where collapse produces a conservative human-required halt instead of silent
-over-acceptance — the opposite failure direction, and the behaviour the operator explicitly asked
-for.
-**Accepted into:** the stories' closing note, which forbids this key from influencing identity,
-dispositions, or any immunity decision, and requires an implementation that does so to fail review.
-This is the feature's most likely source of a false halt and is tracked as R2 in the architecture
-review.
+**Stories involved:** withdrawn Story ("the same unresolved site flagged across N consumed
+kickbacks") vs the corpus
+**Files:** withdrawn draft vs `.daemon/evals-raw/features/*/events.jsonl` and the live worktrees
+**Type:** contradiction (design vs evidence)
+**Severity:** blocking
+**ADR filename stem:** review-2026-08-11-remove-wiring-check-gate-1496
+**Story ID:** withdrawn site-key story
+**ADR opposing sentence (verbatim):** a deterministic gate whose mechanical proxy did not faithfully
+measure its claimed property was **deleted, not hardened** — "deterministic" is only a virtue if the
+proxy is faithful.
+**Story opposing sentence (verbatim):** "Given a site whose tally reaches the configured threshold,
+when the FAIL block routes, then the run takes a halt classified `needs-human`"
+**Resolution:** Re-keyed onto the rubric, on measurement. Replayed over 11 features reconstructed
+from persisted event ledgers, per-site repetition fired on **2 of the 5** features with reported or
+cap-terminated spin, and missed `finish-publication` — the episode #1652 was filed about, which ran
+nine kickbacks with a maximum site repeat of two. Sites move as remediation fixes them, so site
+repetition is as consistent with convergence as with spin. Per-rubric failure totals at threshold 4
+fire on 5 of 5 spinning features and 0 of 6 healthy ones. This also dissolves the constraint the
+withdrawn design had to argue past: `adr-2026-08-16` rejected path-level collapse for identity, and
+the rubric key touches no identity, disposition, or immunity decision at all.
 
 ---
 
 ## Out-of-scope defect surfaced during the sweep
 
-`priorAttemptPointers` (`src/conductor/src/engine/remediation-context-pointers.ts:52`) keys #1620's
+`priorAttemptPointers` (`src/conductor/src/engine/remediation-context-pointers.ts:77`) keys #1620's
 same-site prior-attempt pointers on the whole canonical anchor, which includes the free prose
-subjects the grader re-words every lap. Whole-anchor equality repeated **zero** times across every
-persisted lap on disk, so those advisory pointers appear never to fire in production. This is a
-defect in shipped behaviour, independent of this bound's correctness, and is routed to its own
-intake issue rather than widening this change.
+subjects the grader re-words every lap. Measured over 67 graded-FAIL laps across 13 features, a
+whole-anchor match to a prior lap occurred in **4 laps (6%)** against **20 (30%)** for a prose-free
+key, so those advisory pointers fire in roughly one of every five cases where they apply. This is a
+defect in shipped behaviour, independent of this bound's correctness, and is filed as
+jstoup111/ai-conductor#1693 rather than widening this change.
 
 ---
 
@@ -198,5 +209,5 @@ intake issue rather than widening this change.
 
 Stories 1–6 as written carry no remaining contradiction, overlap, state conflict, or resource
 contention against each other or against the swept corpus. Story 4 overlaps Story 3 by design — it
-renders on both halt paths — and that overlap is deliberate, so the diagnosis ships even if the new
-bound never fires. Clean.
+renders on both halt paths — and that overlap is deliberate and load-bearing: the bound stays silent
+on 6 of the 11 measured features, while the diagnosis ships on the cap path regardless. Clean.

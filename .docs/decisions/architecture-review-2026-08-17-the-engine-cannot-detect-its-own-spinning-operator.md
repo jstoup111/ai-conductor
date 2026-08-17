@@ -1,131 +1,142 @@
-# Architecture Review: Site-repetition short-circuit for build_review
+# Architecture Review: Rubric-repetition short-circuit for build_review
 
 **Date:** 2026-08-17
 **Status:** APPROVED WITH CONDITIONS
 **Feature:** jstoup111/ai-conductor#1652
-**Reviews:** `adr-2026-08-17-build-review-site-repetition-short-circuit.md`
-**Sweep:** repo-wide, all 481 files in `.docs/decisions/` read (4 partitions; one partition
-re-run after an API failure). Base `f5a2b29c8`.
+**Reviews:** `adr-2026-08-17-build-review-rubric-repetition-short-circuit.md`
+**Sweep:** repo-wide, all 481 files in `.docs/decisions/` read (4 partitions; one partition re-run
+after an API failure). Base `f5a2b29c8`.
 
 ## Verdict
 
-The design is architecturally sound **as revised**. Two of its three original elements were
-withdrawn during review on evidence, and the survivor is placed correctly against a dense set of
-approved constraints. Approval is conditional on the six conditions in §4, all mechanical.
+The design is architecturally sound **as revised twice**. Three of the intake's four load-bearing
+choices were withdrawn during review, and the fourth — the key — was replaced after the first
+revision failed a measurement. The survivor is placed correctly against a dense set of approved
+constraints and is the key `adr-2026-08-12` itself nominated as its strongest follow-up. Approval is
+conditional on the six mechanical conditions in §4.
 
-The dominant risk is **not** architectural. It is that D4's threshold is a 55%-confidence judgement
-that no available data can calibrate, on a bound whose wrong direction halts converging features.
-D5's flag and exit condition are the mitigation and are treated as load-bearing, not optional.
+The design's central claim is now **measured rather than assumed**, which is the material change
+since the first review pass.
 
-## 1. What the sweep changed
+## 1. What review changed, in order
 
-The sweep reversed the design twice. Both reversals are recorded because each was a correct-looking
-design that an approved decision or a measurement falsified.
+Each revision is recorded because each was a correct-looking design that a decision or a measurement
+falsified.
 
-**Reversal 1 — the rate window (forbidden).** The intake proposed a kickback rate over a wall-clock
-window. `adr-2026-08-12` had already rejected deriving a control decision by parsing persisted
-history ("state belongs in the state file; the event is the observation of it"), and
-`adr-2026-07-10-intra-step-build-progress-events` confines the engine's only wall-clock threshold to
-observability events. A rate trigger is also not reproducible run-to-run. Withdrawn; `cumulative`
-already answers the volume question from the state file.
+**Reversal 1 — the rate window (forbidden).** `adr-2026-08-12` rejected deriving a control decision
+by parsing persisted history; `adr-2026-07-10-intra-step-build-progress-events` confines the engine's
+only wall-clock threshold to observability; a rate trigger is not reproducible run-to-run.
 
-**Reversal 2 — the counting unit (falsified).** The intake's central hypothesis was that the
-persisted lap directories already carry every signal. A census over both features with laps on disk
-showed 36 of 44 rubric artifacts on the incident feature, and 20 of 20 on the other, were
-`provenance.kind = 'cache-hit'` — `adr-2026-08-13` D7 re-stamps a prior verdict into the current
-lap's artifact. The apparent 8-of-11 signal was one judgement counted eight times, and so was the
-apparent false-positive that briefly argued against building anything. The corpus of genuine
-judgements is **two**.
+**Reversal 2 — the counting unit (falsified).** `adr-2026-08-13` D7 re-stamps a cache hit's prior
+result into the current lap's artifact. A provenance census found 36 of 44 rubric artifacts on the
+incident feature, and 20 of 20 on another, were re-stamps. **A design measured against `lap-*`
+directory counts measures the rubric cache.** The revised design ticks on consumed kickbacks.
 
-This is the sharpest finding of the review: **a design measured against `lap-*` directory counts
-measures the rubric cache.** The revised design ticks on consumed kickbacks instead, which is one
-real backward move per tick and immune to the artifact.
+**Reversal 3 — the key (falsified).** The first revision keyed a per-site tally on the typed anchor
+subject. Replayed over 11 features reconstructed from persisted event ledgers it fired on **2 of the
+5** that spun and missed `finish-publication`, the episode #1652 reports. The measured comparison:
+
+| key | threshold | spin | healthy | kickbacks avoided |
+|---|---|---|---|---|
+| per-rubric failures | 4 | 5/5 | 0/6 | 14 |
+| per-rubric failures | 3 | 5/5 | 2/6 | 21 |
+| per-rubric failures | 5 | 4/5 | 0/6 | 9 |
+| consecutive same-rubric run | 4 | 5/5 | 0/6 | 10 |
+| per-site repetition | 3 | 2/5 | 0/6 | 6 |
+
+This is the review's most important finding and it discharges the bar
+`review-2026-08-11-remove-wiring-check-gate-1496` sets: a deterministic proxy must be shown to
+measure the property it claims, or it is the failure that got `wiring_check` deleted. The site key
+could not be shown to; the rubric key can.
+
+**Incidental finding, recorded not acted on.** Across the same corpus the cumulative cap fired on
+**2 of 11** features although 5 exceeded its nominal threshold, because one `build_review` PASS
+resets `cumulative` (`adr-2026-08-12` D2). That reset is deliberate and this feature does not touch
+it — the design was verified to perform identically with and without it. Whether `cumulative` should
+also carry a never-reset floor is `adr-2026-08-12`'s question.
 
 ## 2. Constraint conformance
 
 | Constraint | Source | Verdict |
 |---|---|---|
-| No second bound may silently re-derive the cumulative one | `adr-2026-08-12` | **Pass** — composes explicitly; that ADR named rubric-item identity as "the strongest candidate for a future refinement" that "composes with this bound rather than replacing it" |
-| Bound key may not be grader prose | `adr-2026-07-26` D3 | **Pass** — typed anchor subjects only; whole-anchor equality measured at zero repeats on disk, confirming D3 empirically |
-| `evidenceLocations` is presentation, not identity | `adr-2026-08-13-stable-…-dispositions`, `adr-2026-08-16` | **Pass after revision** — an earlier draft keyed on it; withdrawn |
+| No second bound may silently re-derive the cumulative one | `adr-2026-08-12` | **Pass** — this is the refinement that ADR nominated: "the strongest candidate … it composes with this bound rather than replacing it" |
+| Bound key may not be grader prose | `adr-2026-07-26` D3 | **Pass** — the rubric name is engine-supplied from the registry; no grader-authored field reaches the counting path |
+| `evidenceLocations` is presentation, not identity | `adr-2026-08-13-stable-…`, `adr-2026-08-16` | **Pass after revision 1** — an earlier draft keyed on it; withdrawn |
+| Path/site collapse rejected for identity | `adr-2026-08-16` Option B | **Pass after revision 2** — no longer engaged at all; the rubric key touches no identity, disposition, or immunity decision |
 | Control state belongs in the state file | `adr-2026-08-12` rejected alt. | **Pass** — tally on `KickbackGateEntry`, not a scan |
-| No on-disk verdict is sufficient authority alone | `adr-2026-08-03-build-repair-member-reuse-validity` | **Pass** — unresolved-ness re-derived from the current lap's join |
-| A `build_review` artifact does not attest the current tree | `architecture-review-2026-07-08` | **Pass** — no prior-lap artifact is read |
+| No on-disk verdict is sufficient authority alone | `adr-2026-08-03` | **Pass** — unresolved-ness re-derived from the current lap's join |
 | Fresh-base disposition precedes any kickback spend | `adr-2026-07-23` | **Pass** — new exit placed after it (D6) |
-| Cap-first ordering | `adr-2026-07-27`, `adr-2026-08-16` D6 | **Pass** — threshold 3 < cap 5, and the cap wins on a tie |
+| Cap-first ordering | `adr-2026-07-27`, `adr-2026-08-16` D6 | **Pass** — cap wins on a tie, and D7 renders into its body |
+| PASS-reset semantics unchanged | `adr-2026-08-12` D2 | **Pass** — verified by a twin sweep with identical results |
 | Exit set grep-derived; predicate consulted at each exit | `adr-2026-08-16` D6 | **Condition C1** |
 | Distinct reason and explicit class per HALT | `adr-2026-06-30`, `adr-2026-08-16` D6 | **Pass** |
-| Only `needs-human` survives the re-kick sweep | `daemon-rekick.ts:173-193`, `adr-2026-07-28` | **Pass** — chosen, with the reasoning stated |
+| Only `needs-human` survives the re-kick sweep | `daemon-rekick.ts:173-193`, `adr-2026-07-28` | **Pass** — chosen, with reasoning stated |
 | New HALT reuses marker → PR surfacing → `loop_halt` | `architecture-review-2026-07-04` cond. 2 | **Condition C2** |
-| `writeHaltMarker`'s result must be consumed | `adr-2026-08-11-halt-events-ride-the-persisted-spine` | **Condition C2** |
-| No per-emit-site halt payload variant | `adr-2026-08-11` | **Pass** — additive field on `kickback`, central `emitLoopHalt` |
+| `writeHaltMarker`'s result must be consumed | `adr-2026-08-11` | **Condition C2** |
+| No per-emit-site halt payload variant | `adr-2026-08-11` | **Pass** — additive field on `kickback` |
 | Durable counter legal only if the occurrence is emitted | event-spine exception C, `adr-2026-08-12` D5 | **Pass** — D8 |
 | New event field needs an explicit sink decision | `adr-2026-07-26-event-sink-registry-exhaustiveness` | **Condition C3** |
-| New bound must be config-gated, default-inert when off | `adr-2026-08-12` D4, `adr-2026-07-03-pr-timing-config-key` | **Pass** — D5, fail-closed validation |
-| A staged flag needs a written exit condition | `adr-2026-08-09-repo-wide-adr-sweep-staged-…` | **Pass** — D5 |
+| New bound config-gated, inert when off | `adr-2026-08-12` D4, `adr-2026-07-03-pr-timing-config-key` | **Pass** — D5/Story 5, fail-closed validation |
 | Legacy ledger entries must read clean | `adr-2026-08-12` D1 | **Condition C4** |
-| No LLM in the bound's decision path | `adr-2026-08-12` consequences | **Pass** — pure predicate, no dispatch |
-| `.pipeline` reads must not throw at a routing boundary | `adr-2026-07-11` | **Pass** — in-memory state, no scan |
+| No LLM in the bound's decision path | `adr-2026-08-12` consequences | **Pass** — pure module, no dispatch |
+| A deterministic proxy must faithfully measure its property | `review-2026-08-11-remove-wiring-check-gate-1496` | **Pass** — §1 reversal 3 is the evidence |
 | Halt reason may assert only what evidence established | `adr-2026-08-05-worktree-classification-…` | **Condition C5** |
 
 ## 3. Risks
 
-**R1 — Threshold miscalibration (High impact, High likelihood).** D4 is 55% confidence, weaker than
-the 70% `adr-2026-08-12` recorded for its own cap, and the census shows why: two fresh judgements is
-the entire corpus. Too tight halts converging features — "the expensive failure direction" in that
-ADR's words. Mitigated by D5's flag, fail-closed validation, and a written exit condition that
-re-derives the value from ten features' telemetry. **This mitigation must actually be exercised;**
-a flag left dormant converts a 55% guess into permanent behaviour.
+**R1 — Corpus size and label quality (Medium impact, Medium likelihood).** The threshold separates
+perfectly at 4, but over eleven features whose spin/healthy labels come from operator reports and cap
+terminations rather than an independent oracle. This is materially better evidenced than the
+withdrawn design's 55% and than `adr-2026-08-12`'s own cap of 5 at 70%, but it is not a large sample.
+Mitigated by plan task 1 re-deriving in-tree with an instruction to halt rather than ship an
+unsupported number, by Story 5's gate, and by Story 6's persisted tallies keeping the number
+checkable. **Downgraded from the first review pass**, where the threshold was the dominant risk at
+55% confidence.
 
-**R2 — Site collapse (Medium impact, Medium likelihood).** D2's key is coarser than finding
-identity, so two materially different findings at one site read as one repeat. `adr-2026-08-16`
-rejected path collapse for identity on a High-impact risk. The design's answer — that collapse on
-the halting side produces a conservative human ruling rather than silent over-acceptance — is
-accepted as sound, and is exactly the behaviour the operator asked for. It is nonetheless the most
-likely source of a false halt, and it is the first thing to inspect if R1's signal appears.
+**R2 — Coarseness (Low impact, accepted by design).** The bound names a rubric, not a defect, so it
+cannot tell an operator *which* finding is stuck. That is deliberate — outcome-2 asks the operator to
+rule on substance, and D7 renders the recent sites for exactly that. The former R2 (site collapse
+granting false immunity) is **resolved, not mitigated**: the rubric key touches no identity or
+immunity path.
 
-**R3 — The bound may be inert (Medium impact, Low likelihood).** If most spins distribute across
-sites rather than concentrating, no site reaches 3 before the cap fires at 6 and only D7's diagnosis
-ships. This is not a failure — D7 alone delivers issue outcomes 2 and 3 — but the telemetry in D8
-must be able to distinguish "never fired" from "fired correctly", which the exit condition depends
-on.
+**R3 — The bound is silent on most features (Low impact, High likelihood, expected).** It fires on 5
+of 11. That is not a failure — D7's diagnosis ships on the cap path regardless, and outcome-2 and
+outcome-3 are delivered independently of whether the bound trips. Story 6's telemetry must
+distinguish "never fired" from "fired correctly".
 
-**R4 — Unbounded tally growth (Low impact, Low likelihood).** D1 caps and evicts. Eviction biased
-toward keeping high counts fails open (a lost tally means no halt), which is the correct direction.
+**R4 — Adjacent unfixed gap (Medium impact, out of scope).** The cumulative cap is defeated by a
+single PASS, so 5 of 11 features exceeded its threshold without it firing. This feature does not
+depend on that being fixed, but an operator reading "cap 5" should not assume it bounds anything.
+Belongs to `adr-2026-08-12`.
 
 ## 4. Conditions
 
 - **C1.** The FAIL block's exit set is **derived by grep at implementation time**, not from this
   document's or the ADR's enumeration, and the effective-verdict predicate is consulted **at** each
-  exit rather than hoisted once — `adr-2026-08-16` D6, verbatim. The plan states seven exits on that
-  ADR's authority; the implementation confirms the count against the tree it edits.
+  exit rather than hoisted once — `adr-2026-08-16` D6, verbatim.
 - **C2.** The new halt reuses the **exact** sequence beside it — `writeHaltMarker` with its result
   consumed and its failure logged, then `surfaceRemediationPr`, then `emitLoopHalt` — matching the
   cumulative-cap halt at `conductor.ts:7607-7617`. No bare marker write.
-- **C3.** `repeatedSites` is added to `EVENT_SINKS` with an explicit render/persist/audit decision;
-  it must persist, since D5's exit condition reads it back.
-- **C4.** A regression test pins that a ledger entry written before this change (no `siteRepeats`)
-  loads clean and yields an empty tally, mirroring `test/engine/kickback-ledger.test.ts`'s existing
-  legacy-`cumulative` coverage.
-- **C5.** A regression test pins that **repeated cache-hit laps do not advance the tally** — the
-  falsification from §1 encoded as a test, so no future refactor reintroduces artifact counting.
-  A second test pins that the halt body states only the observed repeat counts and never asserts
-  that the run is spinning or cannot converge.
+- **C3.** `rubricFailures` is added to `EVENT_SINKS` with an explicit render/persist/audit decision;
+  it must persist, since R1's mitigation reads it back.
+- **C4.** A regression test pins that a ledger entry written before this change loads clean and
+  yields an empty tally, mirroring `test/engine/kickback-ledger.test.ts`'s existing legacy-`cumulative`
+  coverage.
+- **C5.** Three regression tests: repeated cache-hit laps do not advance the tally (§1 reversal 2
+  encoded as a test); the halt body states only observed counts and never asserts the run is spinning
+  or cannot converge; and the tally is never read by any identity, disposition, or immunity path.
 - **C6.** `docs/explanation/gates.md`, `docs/reference/configuration.md`, and
-  `docs/runbooks/stalled-or-stuck-feature.md` are updated in the same PR. The runbook's recorded
-  "Known limitation — `--report` renders neither halt nor kickback tables" is adjacent to this work
-  and should be noted, not fixed here.
+  `docs/runbooks/stalled-or-stuck-feature.md` are updated in the same PR. The configuration reference
+  must carry the corpus evidence behind the threshold, not just the number.
 
 ## 5. Out of scope, confirmed against the sweep
 
 `test_suite` per-round history (the data does not exist); substance equivalence across re-worded
-findings (#1611, spec landed, unimplemented); cross-rubric arbitration (#1630); infrastructure
-budget lanes (#1629); `prd_audit` and `manual_test`, left by `adr-2026-08-12` D6 to whichever issue
-produces their evidence.
+findings (#1611, spec landed, unimplemented); cross-rubric arbitration (#1630); infrastructure budget
+lanes (#1629); `prd_audit` and `manual_test`, left by `adr-2026-08-12` D6; and `cumulative`'s PASS
+reset, per R4.
 
-**One defect surfaced and deliberately not fixed here.** `priorAttemptPointers`
-(`remediation-context-pointers.ts:52`) keys #1620's same-site prior-attempt pointers on the whole
-canonical anchor, including its free prose subjects. Whole-anchor equality repeated **zero** times
-across every lap on disk, so those advisory pointers appear never to fire in production. That is a
-defect in shipped behaviour, unrelated to this bound's correctness, and belongs in its own intake
-issue rather than widening this change.
+**One defect surfaced and filed.** `priorAttemptPointers` (`remediation-context-pointers.ts:77`) keys
+#1620's same-site pointers on the whole canonical anchor including its free prose subjects. Measured
+over 67 graded-FAIL laps, a whole-anchor match to a prior lap occurred in 4 laps (6%) against 20
+(30%) for a prose-free key. Filed as jstoup111/ai-conductor#1693.
