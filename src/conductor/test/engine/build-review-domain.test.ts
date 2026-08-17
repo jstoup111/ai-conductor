@@ -28,7 +28,7 @@ describe('build-review domain', () => {
       { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'save', violationKind: 'stayed-green' },
       { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
       { rubric: 'rootCause', statedDefect: 'does not save', locus: 'handler', relation: 'symptom-only' },
-      { rubric: 'completeness', planTask: '11', missingOutcome: 'writes state' },
+      { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state' },
     ];
 
     expect(anchors).toHaveLength(4);
@@ -90,7 +90,7 @@ describe('build-review domain', () => {
       kind: 'judged', rubric: 'completeness', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{
         concernKind: 'MISSING_DELIVERABLE', summary: 'A deliverable is absent.', evidenceLocations: ['src/a.ts:8'],
-        anchor: { rubric: 'completeness', planTask: '4', missingOutcome: 'writes the result' },
+        anchor: { rubric: 'completeness', planTask: '4', missingSurface: 'src/result.ts', missingOutcome: 'writes the result' },
       }],
     })).toMatchObject({ findings: [{ concernKind: 'missing-deliverable', anchor: { missingOutcome: 'writes the result' } }] });
 
@@ -189,7 +189,7 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
       '"anchor": {"rubric": "rootCause", "statedDefect": "<string>", "locus": "<string>", "relation": "<string>"}',
     );
     expect(renderBuildReviewJudgedResultShape('completeness')).toContain(
-      '"anchor": {"rubric": "completeness", "planTask": "<string>", "missingOutcome": "<string>"}',
+      '"anchor": {"rubric": "completeness", "planTask": "<string>", "missingSurface": "<string>", "missingOutcome": "<string>"}',
     );
   });
 

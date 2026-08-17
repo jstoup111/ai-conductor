@@ -24,7 +24,7 @@ export type BuildReviewFindingAnchor =
   | { rubric: 'tautology'; changedTest: string; exercisedBehavior: string; violationKind: string }
   | { rubric: 'scope'; path: string; relation: string }
   | { rubric: 'rootCause'; statedDefect: string; locus: string; relation: string }
-  | { rubric: 'completeness'; planTask: string; missingOutcome: string };
+  | { rubric: 'completeness'; planTask: string; missingSurface: string; missingOutcome: string };
 
 export interface BuildReviewFinding {
   readonly concernKind: string;
@@ -109,7 +109,8 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES: Readonly<Record<BuildReviewRubri
 
 /** Normalize harmless grader spelling variance before closed-set lookup. */
 export function normalizeBuildReviewFindingVocabularyMember(value: string): string {
-  return value.toLowerCase().replaceAll('_', '-');
+  const normalized = value.toLowerCase().replaceAll('_', '-');
+  return normalized === 'out-of-plan-test-change' ? 'out-of-plan-change' : normalized;
 }
 
 function assertUnambiguousBuildReviewFindingVocabularies(): void {
@@ -178,8 +179,8 @@ function parseAnchor(value: unknown): BuildReviewFindingAnchor | undefined {
         : undefined;
     }
     case 'completeness':
-      return nonEmptyString(source.planTask) && nonEmptyString(source.missingOutcome)
-        ? { rubric: source.rubric, planTask: source.planTask, missingOutcome: source.missingOutcome }
+      return nonEmptyString(source.planTask) && nonEmptyString(source.missingSurface) && nonEmptyString(source.missingOutcome)
+        ? { rubric: source.rubric, planTask: source.planTask, missingSurface: source.missingSurface, missingOutcome: source.missingOutcome }
         : undefined;
   }
 }
@@ -250,7 +251,7 @@ const ANCHOR_FIELDS: Record<BuildReviewRubricId, readonly string[]> = {
   tautology: ['changedTest', 'exercisedBehavior', 'violationKind'],
   scope: ['path', 'relation'],
   rootCause: ['statedDefect', 'locus', 'relation'],
-  completeness: ['planTask', 'missingOutcome'],
+  completeness: ['planTask', 'missingSurface', 'missingOutcome'],
 };
 
 /**

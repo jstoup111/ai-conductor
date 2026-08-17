@@ -23,6 +23,7 @@ describe('planContractPointers', () => {
             anchor: {
               rubric: 'completeness',
               planTask: '1',
+              missingSurface: 'src/engine/remediation-context-pointers.ts',
               missingOutcome: 'renders the plan contract pointer',
             },
           },
@@ -31,7 +32,7 @@ describe('planContractPointers', () => {
         '.docs/plans/remediation-context.md',
       ),
     ).toEqual([
-      'plan contract: .docs/plans/remediation-context.md — Task 1 (anchor: renders the plan contract pointer)',
+      'plan contract: .docs/plans/remediation-context.md — Task 1 (anchor: src/engine/remediation-context-pointers.ts)',
     ]);
   });
 
@@ -284,7 +285,7 @@ describe('planContractPointers', () => {
         concernKind: 'missing-outcome',
         summary: 'The requested plan task is absent.',
         evidenceLocations: ['src/engine/conductor.ts:1'],
-        anchor: { rubric: 'completeness', planTask: '999', missingOutcome: 'renders the plan contract pointer' },
+        anchor: { rubric: 'completeness', planTask: '999', missingSurface: 'src/engine/remediation-context-pointers.ts', missingOutcome: 'renders the plan contract pointer' },
       }], '### Task 1: Existing task\n', '.docs/plans/remediation-context.md'),
       priorAttemptPointers([scopeFinding], [{
         artifactPath: '.pipeline/build-review/lap-different/scope.json',

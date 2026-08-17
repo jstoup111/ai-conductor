@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import {
+  normalizeBuildReviewFindingVocabularyMember,
   parseBuildReviewRubricContractVersion,
   type BuildReviewFindingAnchor,
 } from './build-review-domain.js';
@@ -13,8 +14,19 @@ export interface BuildReviewFindingIdentityInput {
   readonly anchor: BuildReviewFindingAnchor;
 }
 
+type BuildReviewFindingCanonicalAnchor =
+  | { readonly rubric: 'tautology'; readonly changedTest: string; readonly violationKind: string }
+  | { readonly rubric: 'scope'; readonly path: string; readonly relation: string }
+  | { readonly rubric: 'rootCause'; readonly locus: string; readonly relation: string }
+  | { readonly rubric: 'completeness'; readonly planTask: string; readonly missingSurface: string };
+
 /** The complete, version-bound payload persisted alongside a finding hash. */
-export interface BuildReviewFindingCanonicalPayload extends BuildReviewFindingIdentityInput {}
+export interface BuildReviewFindingCanonicalPayload {
+  readonly rubric: BuildReviewRubricId;
+  readonly contractVersion: 'v1';
+  readonly concernKind: string;
+  readonly anchor: BuildReviewFindingCanonicalAnchor;
+}
 
 export interface BuildReviewFindingIdentity {
   readonly id: string;
@@ -58,9 +70,22 @@ function parseAnchor(value: unknown, rubric: BuildReviewRubricId): BuildReviewFi
         ? { rubric, statedDefect: source.statedDefect, locus: source.locus, relation: source.relation }
         : undefined;
     case 'completeness':
-      return nonEmptyString(source.planTask) && nonEmptyString(source.missingOutcome)
-        ? { rubric, planTask: source.planTask, missingOutcome: source.missingOutcome }
+      return nonEmptyString(source.planTask) && nonEmptyString(source.missingSurface) && nonEmptyString(source.missingOutcome)
+        ? { rubric, planTask: source.planTask, missingSurface: source.missingSurface, missingOutcome: source.missingOutcome }
         : undefined;
+  }
+}
+
+function canonicalAnchor(anchor: BuildReviewFindingAnchor): BuildReviewFindingCanonicalAnchor {
+  switch (anchor.rubric) {
+    case 'tautology':
+      return { rubric: anchor.rubric, changedTest: anchor.changedTest, violationKind: anchor.violationKind };
+    case 'scope':
+      return { rubric: anchor.rubric, path: anchor.path, relation: anchor.relation };
+    case 'rootCause':
+      return { rubric: anchor.rubric, locus: anchor.locus, relation: anchor.relation };
+    case 'completeness':
+      return { rubric: anchor.rubric, planTask: anchor.planTask, missingSurface: anchor.missingSurface };
   }
 }
 
@@ -94,8 +119,8 @@ export function canonicalizeBuildReviewFindingIdentity(value: unknown): BuildRev
   const canonicalPayload: BuildReviewFindingCanonicalPayload = {
     rubric,
     contractVersion,
-    concernKind: source.concernKind,
-    anchor,
+    concernKind: normalizeBuildReviewFindingVocabularyMember(source.concernKind),
+    anchor: canonicalAnchor(anchor),
   };
   const canonicalJson = canonicalBuildReviewFindingJson(canonicalPayload);
   return Object.freeze({

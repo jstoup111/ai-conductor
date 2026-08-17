@@ -31,17 +31,37 @@ describe('build-review finding identity', () => {
     },
     {
       rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-outcome',
-      anchor: { rubric: 'completeness', planTask: '11', missingOutcome: 'writes state' },
+      anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state' },
     },
   ];
 
   it('canonicalizes every rubric-specific typed anchor into a version-bound identity', () => {
     const identities = fixtures.map(canonicalizeBuildReviewFindingIdentity);
 
-    expect(identities).toEqual(fixtures.map((fixture) => expect.objectContaining({
-      canonicalPayload: fixture,
-      id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-    })));
+    expect(identities).toEqual([
+      expect.objectContaining({
+        canonicalPayload: {
+          rubric: 'tautology', contractVersion: 'v1', concernKind: 'stayed-green',
+          anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', violationKind: 'stayed-green' },
+        },
+        id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({ canonicalPayload: fixtures[1], id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) }),
+      expect.objectContaining({
+        canonicalPayload: {
+          rubric: 'rootCause', contractVersion: 'v1', concernKind: 'symptom-only',
+          anchor: { rubric: 'rootCause', locus: 'handler', relation: 'symptom-only' },
+        },
+        id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({
+        canonicalPayload: {
+          rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-outcome',
+          anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts' },
+        },
+        id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      }),
+    ]);
   });
 
   it('sorts the complete identity payload before hashing it', () => {
