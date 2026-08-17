@@ -3363,6 +3363,15 @@ TIER: M`,
         }),
         ...currentBuildReviewProof(),
       });
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
+        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v2',
+        findings: branch.rubric === 'scope' ? [{
+          concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
+          evidenceLocations: ['src/example.ts:1'],
+          anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'out-of-plan-change' },
+        }] : [],
+      }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
       expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject(rawAggregate as object);
@@ -3381,7 +3390,7 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v1', findings: [], verdict: 'PASS',
+        contractVersion: 'v2', findings: [], verdict: 'PASS',
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: false });
@@ -4030,7 +4039,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
   const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
   const snapshotDigest = 'sha256:434fa33612c7d7188d5ba5398a748b54a28400bcb534988863610f64a70896f8';
   const projection = {
-    rubric: 'tautology', contractVersion: 'v1', projectionVersion: 'v1',
+    rubric: 'tautology', contractVersion: 'v2', projectionVersion: 'v2',
     lapId, snapshotDigest, digest: 'sha256:projection',
     mergeBase: 'base', headSha: 'head', changedFiles: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
     changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
@@ -4048,12 +4057,12 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     'I read the referenced diff and measured each changed test.',
     '```json',
     JSON.stringify({
-      kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId, snapshotDigest,
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v2', lapId, snapshotDigest,
       findings: [{
-        concernKind: 'assertion-cannot-fail',
+        concernKind: 'assertion-insensitive-to-production',
         changedTest: { path: 'test/engine/event-sinks.test.ts', suite: 'event sink subscriptions', name: 'rejects an unrelated sink' },
         exercisedBehavior: { productionSymbol: 'EVENT_SINKS', productionPath: 'src/engine/event-sinks.ts' },
-        violationKind: 'assertion-over-test-local-construct',
+        violationKind: 'assertion-insensitive-to-production',
         summary: 'The assertion compares a test-local mutated copy and can never fail.',
         evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
       }],
@@ -4061,16 +4070,16 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     '```',
   ].join('\n');
   const validOutput = JSON.stringify({
-    kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId, snapshotDigest,
+    kind: 'judged', rubric: 'tautology', contractVersion: 'v2', lapId, snapshotDigest,
     findings: [{
-      concernKind: 'assertion-cannot-fail',
+      concernKind: 'assertion-insensitive-to-production',
       summary: 'The assertion compares a test-local mutated copy and can never fail.',
       evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
       anchor: {
         rubric: 'tautology',
         changedTest: 'test/engine/event-sinks.test.ts > rejects an unrelated sink',
         exercisedBehavior: 'EVENT_SINKS persisted routing',
-        violationKind: 'assertion-over-test-local-construct',
+        violationKind: 'assertion-insensitive-to-production',
       },
     }],
   });
@@ -4097,7 +4106,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain('anchor');
     expect(repairPrompt).toContain(`"lapId": "<echo the projection lapId verbatim>"`);
     // The bounded excerpt of the model's own previous output rides along.
-    expect(repairPrompt).toContain('assertion-over-test-local-construct');
+    expect(repairPrompt).toContain('assertion-insensitive-to-production');
   });
 
   it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
@@ -4108,7 +4117,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
 
     expect(invoke).toHaveBeenCalledTimes(1);
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<string>"}');
+    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
     expect(prompt).toContain('never flattened');
   });
 
@@ -4164,6 +4173,6 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest });
     const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
     expect(repairPrompt).toContain('ONLY one JSON object');
-    expect(repairPrompt).toContain('assertion-over-test-local-construct');
+    expect(repairPrompt).toContain('assertion-insensitive-to-production');
   });
 });
