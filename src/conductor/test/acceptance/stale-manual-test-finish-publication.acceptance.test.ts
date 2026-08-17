@@ -25,6 +25,7 @@ import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { PASSING_FULL_SUITE_VERIFIER } from '../test-conductor.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { computeAndWriteVerdict } from '../../src/engine/gate-verdicts.js';
+import { gateVerdictStillValid } from '../../src/engine/gate-code-validity.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -144,6 +145,31 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       ).stdout.trim();
       expect(postRebaseHead).not.toBe(preShipTailCodeStamp);
       expect(postDocumentationHead).not.toBe(postRebaseHead);
+      await expect(access(join(pipeline, 'manual-test-results.md'))).resolves.toBeUndefined();
+      await expect(readFile(join(pipeline, 'manual-test-fail-evidence.json'), 'utf8')).resolves.toContain(
+        preShipTailCodeStamp,
+      );
+      const stampValidity = await gateVerdictStillValid(
+        {
+          projectRoot: root,
+          git: async (args) => {
+            try {
+              const { stdout } = await execFile('git', args, { cwd: root, encoding: 'utf8' });
+              return { stdout, stderr: '', exitCode: 0 };
+            } catch (error) {
+              const failure = error as { stdout?: string; stderr?: string; code?: number };
+              return {
+                stdout: failure.stdout ?? '',
+                stderr: failure.stderr ?? '',
+                exitCode: failure.code ?? 1,
+              };
+            }
+          },
+        },
+        'manual_test',
+        preShipTailCodeStamp,
+      );
+      expect(stampValidity).toBe('rerun');
     }
 
     let manualTestRuns = 0;
