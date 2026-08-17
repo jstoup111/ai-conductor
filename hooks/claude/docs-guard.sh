@@ -100,3 +100,5 @@ case "$TARGET" in
     exit 0
     ;;
 esac
+
+# deliberately corrupted for drift-detection fixture test
