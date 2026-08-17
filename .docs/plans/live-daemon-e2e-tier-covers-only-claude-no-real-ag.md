@@ -28,6 +28,16 @@ provider construction, binary name, credential environment variable, self-host e
 `providerKey`, and — per the conflict-check resolution — the **expected authentication source**,
 so the auth assertion is uniform and descriptor-driven rather than a provider name test.
 
+> **Amended 2026-08-17 by #1264:** The manifest is production-owned. Production
+> `smoke-capability.ts` must derive its credential mapping from the manifest, and
+> `src/conductor/tsconfig.json` excludes the test root from the production `rootDir`, so a
+> test-fixture-owned manifest deterministically fails source typecheck (TS6059). The
+> `LIVE_E2E_PROVIDERS` enumeration source therefore lives in a production-owned module under
+> `src/conductor/src/`; test fixtures may augment its entries with execution-only fields
+> (provider construction, run-body wiring) keyed by provider id, and production code never
+> imports from the test root. Operator-approved at the 2026-08-17 needs-human halt
+> (`stall:manifest-ownership`, remediate-verified 99%).
+
 **Sequencing rationale.** The capability model changes first (tasks 1–8) because both the file
 split and the guard depend on per-provider capability members existing. The extraction follows
 (9–14) and must be assertion-preserving; the Claude leg is split out before the Codex leg is
@@ -80,6 +90,11 @@ discharged by this repository's `maintain-documentation` custom step, not by a t
 **Files:**
 - `src/conductor/test/fixtures/live-e2e-providers.ts` — new manifest and descriptor type
 - `src/conductor/test/fixtures/live-e2e-providers.test.ts` — new test
+
+> **Amended 2026-08-17 by #1264:** Per the manifest-ownership amendment above, the enumeration
+> source (descriptor type + manifest entries production consumes) belongs in a production-owned
+> module under `src/conductor/src/`; the test-fixture module retains only execution-only
+> augmentation keyed by provider id. The original file targets stand as authored history.
 
 **Dependencies:** none
 
