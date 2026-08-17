@@ -11,6 +11,16 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.104.0] - 2026-08-17
+
+### Changed
+
+- Story artifacts under `.docs/stories/` are now corrected in place during DECIDE instead of accumulating additive amendment blocks; all other accepted DECIDE artifacts keep the additive-amendment rule. ([implementation PR #1539](https://github.com/jstoup111/ai-conductor/pull/1539)).
+
+### Fixed
+
+- The FINISH publication retry budget no longer exhausts on verified transitions, and new halt reasons name a stuck PR-state check or an unmoved publication transition. ([implementation PR #1565](https://github.com/jstoup111/ai-conductor/pull/1565)).
+
 ## [0.103.0] - 2026-08-17
 
 ### Added
