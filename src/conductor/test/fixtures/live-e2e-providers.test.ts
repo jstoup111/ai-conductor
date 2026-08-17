@@ -64,9 +64,11 @@ describe('LIVE_E2E_PROVIDERS', () => {
     expect(codex).toBeDefined();
 
     try {
+      // Isolate every branch from an operator's cached login so removing the
+      // API-key short circuit cannot silently pass against ~/.codex/auth.json.
+      process.env.CODEX_HOME = codexHome;
       expect(codex!.assertCredentialAvailable('present-codex-key')).toBeUndefined();
 
-      process.env.CODEX_HOME = codexHome;
       await writeFile(join(codexHome, 'auth.json'), '{}');
       expect(codex!.assertCredentialAvailable(undefined)).toBeUndefined();
 
