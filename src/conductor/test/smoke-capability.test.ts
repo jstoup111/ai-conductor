@@ -16,7 +16,7 @@ const acceptedCredentialedCapabilities: readonly SmokeCapability[] = [
 ];
 
 // @ts-expect-error SmokeCapability is a closed union, not an arbitrary string.
-const rejectedSmokeCapability: SmokeCapability = 'credentialed:unknown';
+const rejectedSmokeCapability: SmokeCapability = 'arbitrary-capability';
 
 void acceptedCredentialedCapabilities;
 void rejectedSmokeCapability;
