@@ -65,6 +65,75 @@ describe('ProvisionedHome', () => {
 });
 
 describe('runLiveE2ERunBody authentication source', () => {
+  it('does not dispatch or report a successful terminal state when the live fixture is already halted', async () => {
+    const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
+      runLiveE2ERunBody: (
+        descriptor: LiveE2EProviderDescriptor,
+        tokenCap: number,
+        dependencies?: LiveE2ERunBodyDependencies,
+      ) => Promise<void>;
+    };
+    const priorKey = process.env.CODEX_API_KEY;
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, output: 'unexpected dispatch', exitCode: 0 })),
+      invokeInteractive: vi.fn(async () => ({ success: true, output: 'unexpected dispatch', exitCode: 0 })),
+    };
+    const homeDir = await mkdtemp(`${tmpdir()}/live-e2e-prehalt-home-`);
+    const teardown = vi.fn(async () => { await rm(homeDir, { recursive: true, force: true }); });
+    const terminalStates: Array<{ done: boolean; halt: boolean; successful: boolean }> = [];
+    const descriptor = {
+      id: 'codex',
+      binaryName: 'codex',
+      credentialEnvVar: 'CODEX_API_KEY',
+      providerKey: 'codex',
+      selfHostExecutable: 'codex',
+      createProvider: () => provider,
+      assertCredentialAvailable: () => {},
+      expectedAuthenticationSource: 'api-key',
+      resolveAuthenticationSource: async () => 'api-key',
+    } as unknown as LiveE2EProviderDescriptor;
+
+    try {
+      process.env.CODEX_API_KEY = 'live-codex-key';
+
+      const runError = await runLiveE2ERunBody(descriptor, 1, {
+        binaryAvailable: () => true,
+        provisionProviderHome: async () => ({
+          provider: 'codex', homeDir, childEnv: () => ({}), childArgs: () => [], teardown,
+        }),
+        preflight: async () => {},
+        beforeRunDaemon: async (worktreeDir) => {
+          await mkdir(join(worktreeDir, '.pipeline'), { recursive: true });
+          await writeFile(join(worktreeDir, '.pipeline/HALT'), 'pre-halted fixture\n');
+        },
+        afterRunDaemon: async (worktreeDir) => {
+          terminalStates.push({
+            done: existsSync(join(worktreeDir, '.pipeline/DONE')),
+            halt: existsSync(join(worktreeDir, '.pipeline/HALT')),
+            successful: existsSync(join(worktreeDir, '.pipeline/DONE')) && !existsSync(join(worktreeDir, '.pipeline/HALT')),
+          });
+        },
+      }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(runError).toBeInstanceOf(Error);
+      expect((runError as Error).message).toBe('Live E2E fixture is already halted; refusing provider dispatch.');
+
+      expect({
+        providerDispatches: vi.mocked(provider.invoke).mock.calls.length + vi.mocked(provider.invokeInteractive).mock.calls.length,
+        terminalStates,
+      }).toEqual({
+        providerDispatches: 0,
+        terminalStates: [{ done: false, halt: true, successful: false }],
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports an absent Codex binary as an unmet toolchain requirement before provisioning a home', async () => {
     const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
       runLiveE2ERunBody: (

@@ -106,6 +106,10 @@ type LiveProviderPreflight = (homeDir: string, providerKey?: string) => Promise<
 export interface LiveE2ERunBodyDependencies {
   readonly binaryAvailable?: (binaryName: string) => boolean;
   readonly provisionProviderHome?: typeof provisionLiveProviderHome;
+  readonly preflight?: LiveProviderPreflight;
+  /** Test-only fixture seam around the real daemon invocation. */
+  readonly beforeRunDaemon?: (worktreeDir: string) => Promise<void>;
+  readonly afterRunDaemon?: (worktreeDir: string) => Promise<void>;
 }
 
 export const DEFAULT_LIVE_E2E_TOKEN_CAP = 100000;
@@ -361,6 +365,12 @@ async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Pr
     !existsSync(join(worktreeDir, `.daemon/parked/${slug}`));
 }
 
+function assertLiveE2ERunIsNotHalted(worktreeDir: string): void {
+  if (existsSync(join(worktreeDir, '.pipeline/HALT'))) {
+    throw new Error('Live E2E fixture is already halted; refusing provider dispatch.');
+  }
+}
+
 export async function runLiveE2ERunBody(
   descriptor: LiveE2EProviderDescriptor,
   tokenCap = resolveLiveE2ETokenCap(),
@@ -463,27 +473,33 @@ export async function runLiveE2ERunBody(
                 : { ok: false as const, reason: 'fixture aggregate is invalid' };
             },
           });
-          await runDaemon({
-            discoverBacklog: async () => [{ slug, tier: 'S', track: 'technical' }],
-            runFeature: async (item) => {
-              const events = new ConductorEventEmitter();
-              events.on('step_started', (event) => {
-                if (event.type === 'step_started') stepTracker.current = event.step;
-              });
-              const conductor = new Conductor({
-                stateFilePath: statePath, stepRunner: runner, events, projectRoot: liveWorktreeDir,
-                fromStep: 'build', mode: 'auto', daemon: true, verifyArtifacts: false,
-                fullSuiteVerifier: {
-                  ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
-                  inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
-                },
-                escalateBuildFailure: async () => ({}),
-              });
-              await conductor.run();
-              return { slug: item.slug, status: 'done' };
-            },
-          }, { concurrency: 1, once: true });
-        }, descriptor.providerKey);
+          await dependencies.beforeRunDaemon?.(liveWorktreeDir);
+          try {
+            assertLiveE2ERunIsNotHalted(liveWorktreeDir);
+            await runDaemon({
+              discoverBacklog: async () => [{ slug, tier: 'S', track: 'technical' }],
+              runFeature: async (item) => {
+                const events = new ConductorEventEmitter();
+                events.on('step_started', (event) => {
+                  if (event.type === 'step_started') stepTracker.current = event.step;
+                });
+                const conductor = new Conductor({
+                  stateFilePath: statePath, stepRunner: runner, events, projectRoot: liveWorktreeDir,
+                  fromStep: 'build', mode: 'auto', daemon: true, verifyArtifacts: false,
+                  fullSuiteVerifier: {
+                    ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+                    inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+                  },
+                  escalateBuildFailure: async () => ({}),
+                });
+                await conductor.run();
+                return { slug: item.slug, status: 'done' };
+              },
+            }, { concurrency: 1, once: true });
+          } finally {
+            await dependencies.afterRunDaemon?.(liveWorktreeDir);
+          }
+        }, descriptor.providerKey, dependencies.preflight);
         const { stdout: commitSha } = await execa('git', ['rev-parse', 'HEAD'], { cwd: liveWorktreeDir });
         const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], { cwd: liveWorktreeDir });
         const { stdout: changedFiles } = await execa('git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], { cwd: liveWorktreeDir });
