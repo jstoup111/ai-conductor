@@ -22,6 +22,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Remediation tasks now reach the builder on daemon features whose specs were authored externally — the plan-append no longer silently no-ops when engine-state.json is absent. ([implementation PR #1671](https://github.com/jstoup111/ai-conductor/pull/1671)).
 - The engine now commits its own remediation plan appends, and build completion refuses to pass while an engine-appended rem-* task heading is missing from the plan. ([implementation PR #1675](https://github.com/jstoup111/ai-conductor/pull/1675)).
+- Seal rotation accepts the engine's own recorded remediation-task plan appends instead of halting for a manual reseal. ([implementation PR #1679](https://github.com/jstoup111/ai-conductor/pull/1679)).
+- build_review completeness judges remediation-authored repairs against their own task text instead of regenerating scope from them each lap. ([implementation PR #1681](https://github.com/jstoup111/ai-conductor/pull/1681)).
 
 ## [0.102.0] - 2026-08-16
 
