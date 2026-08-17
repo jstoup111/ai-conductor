@@ -126,10 +126,6 @@ apply_harness_update() {
 check_harness_update_tagged() {
   timeout 5 git -C "$HARNESS_DIR" fetch --tags --quiet 2>/dev/null || return 0
 
-  local latest_tag
-  latest_tag=$(git -C "$HARNESS_DIR" tag -l 'v*.*.*' --sort=-v:refname 2>/dev/null | head -1)
-  [ -z "$latest_tag" ] && return 0
-
   # The checkout is the sole identity authority. The resolver supplies its
   # reachable release baseline; persisted currentVersion is only refreshed
   # from an exact checked-out release and is never read for this decision.
@@ -146,6 +142,10 @@ check_harness_update_tagged() {
     warn "Installed tagged release is unverifiable; cannot check for tagged updates."
     return 0
   fi
+
+  local latest_tag
+  latest_tag=$(git -C "$HARNESS_DIR" tag -l 'v*.*.*' --sort=-v:refname 2>/dev/null | head -1)
+  [ -z "$latest_tag" ] && return 0
 
   echo "Update identity: ${_display_identity} (source: ${_source})"
 
