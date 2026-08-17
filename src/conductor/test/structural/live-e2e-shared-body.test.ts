@@ -16,6 +16,14 @@ describe('structural: shared live E2E body', () => {
     const source = await readFile(sharedBodyPath, 'utf8');
     const parsed = ts.createSourceFile(sharedBodyPath, source, ts.ScriptTarget.Latest, true);
     const providerSpecificBranches: string[] = [];
+    const functionSource = (name: string): string => {
+      const declaration = parsed.statements.find((statement): statement is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+      );
+      return declaration ? source.slice(declaration.getStart(parsed), declaration.end) : '';
+    };
+    const runBodySource = functionSource('runLiveE2ERunBody');
+    const diagnosticsSource = functionSource('runWithLiveE2EFailureDiagnostics');
 
     const visit = (node: ts.Node): void => {
       if (ts.isBinaryExpression(node) && [
@@ -47,10 +55,10 @@ describe('structural: shared live E2E body', () => {
 
     expect({
       providerSpecificBranches,
-      constructsProviderFromDescriptor: source.includes('createLiveProvider(\n    descriptor,\n    credential,\n  )'),
-      validatesDescriptorAuthentication: source.includes('assertDescriptorAuthenticationSource(descriptor, provider)'),
-      wrapsFailuresInSharedDiagnostics: source.includes('withLiveE2EFailureDiagnostics(worktreeDir, [credential ?? \'\'], async () =>'),
-      dumpsDiagnosticsBeforeRethrowing: /catch \(error\) \{\s*await dumpLiveE2EFailureDiagnostics\(worktreeDir, credentialValues\);\s*throw error;/s.test(source),
+      constructsProviderFromDescriptor: runBodySource.includes('createLiveProvider(descriptor, credential)'),
+      validatesDescriptorAuthentication: runBodySource.includes('assertDescriptorAuthenticationSource(descriptor, provider)'),
+      wrapsFailuresInSharedDiagnostics: runBodySource.includes("runWithLiveE2EFailureDiagnostics(() => worktreeDir, [credential ?? ''], async () =>"),
+      dumpsDiagnosticsBeforeRethrowing: /catch \(error\) \{\s*await dumpLiveE2EFailureDiagnostics\(resolveWorktreeDir\(\), credentialValues\);\s*throw redactLiveE2EFailure\(error, credentialValues\);/s.test(diagnosticsSource),
     }).toEqual({
       providerSpecificBranches: [],
       constructsProviderFromDescriptor: true,
