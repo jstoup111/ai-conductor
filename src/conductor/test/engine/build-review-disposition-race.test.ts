@@ -40,7 +40,11 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
   async function fixture(
     resolver: ReturnType<typeof vi.fn>,
-    opts?: { kickbackLedger?: Record<string, unknown> },
+    opts?: {
+      kickbackLedger?: Record<string, unknown>;
+      completenessFailure?: boolean;
+      remediateRefusal?: boolean;
+    },
   ) {
     dir = await mkdtemp(join(tmpdir(), 'build-review-disposition-race-'));
     const statePath = join(dir, '.pipeline', 'state.json');
@@ -75,13 +79,34 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
             JSON.stringify(buildReviewRuns === 1
               ? {
                   verdict: 'FAIL',
-                  reasons: ['scope: unplanned audit-trail surface'],
-                  rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
+                  reasons: [opts?.completenessFailure
+                    ? 'completeness: accepted plan finding'
+                    : 'scope: unplanned audit-trail surface'],
+                  rubric: {
+                    tautology: false,
+                    scope: !opts?.completenessFailure,
+                    rootCause: false,
+                    completeness: opts?.completenessFailure ?? false,
+                  },
                 }
               : {
                   verdict: 'PASS',
                   rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
                 }),
+          );
+        }
+        if (step === 'remediate' && opts?.remediateRefusal) {
+          await writeFile(
+            join(dir!, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [{
+                id: 'accepted-completeness-finding',
+                disposition: 'halt',
+                category: 'product-scope',
+                rationale: 'Planner refuses to choose a rework target.',
+                tasks: [],
+              }],
+            }),
           );
         }
         return { success: true };
@@ -125,6 +150,24 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     expect(kickbacks).toEqual([]);
     // build_review re-ran and settled from the disposition-aware join.
     expect(buildReviewRuns()).toBe(2);
+  });
+
+  it('re-lands build_review instead of halting when an accepted completeness finding meets a remediate refusal', async () => {
+    const resolver = vi.fn(async () => effective({
+      accepted: ['sha256:accepted-completeness-finding'],
+      unresolved: [],
+    }));
+
+    const { dispatched, kickbacks, buildReviewRuns } = await fixture(resolver, {
+      completenessFailure: true,
+      remediateRefusal: true,
+    });
+
+    expect(dispatched).toContain('remediate');
+    expect(dispatched).not.toContain('build');
+    expect(kickbacks).toEqual([]);
+    expect(buildReviewRuns()).toBe(2);
+    await expect(readFile(join(dir!, '.pipeline/HALT'), 'utf-8')).rejects.toThrow();
   });
 
   it('lets the raw-FAIL resolver report a non-binding disposition on the event spine', async () => {
