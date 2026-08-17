@@ -37,12 +37,14 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     {
       label: 'manual_test was marked stale after review-lap commits',
       manualTestState: 'stale' as const,
+      existingEvidence: false,
     },
     {
-      label: 'ship-tail commits invalidated the manual_test evidence while state still says done',
+      label: 'ship-tail rebase and maintain_documentation commits invalidated a stamped manual_test verdict while state still says done',
       manualTestState: 'done' as const,
+      existingEvidence: true,
     },
-  ])('reruns and publishes unattended when $label', async ({ manualTestState }) => {
+  ])('reruns and publishes unattended when $label', async ({ manualTestState, existingEvidence }) => {
     const root = await mkdtemp(join(tmpdir(), 'stale-manual-test-finish-'));
     roots.push(root);
     const pipeline = join(root, '.pipeline');
@@ -68,6 +70,9 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       architecture_review_as_built: 'skipped',
       retro: 'skipped',
       rebase: 'done',
+      // The custom documentation-maintenance tail commit lands after rebase.
+      // It leaves manual_test's pre-tail code stamp behind the current run.
+      maintain_documentation: 'done',
     });
     await writeState(stateFilePath, state as ConductState);
     await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
@@ -75,6 +80,27 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       join(root, '.docs', 'shipped', 'stale-manual-test-discovered-at-finish-is-unroutab.md'),
       'shipped\n',
     );
+
+    // The second observed shape arrives at FINISH with a clean PASS already
+    // recorded. Its stamp predates the ship-tail's runtime rebase and the
+    // following documentation-maintenance commit, so the fence must rerun
+    // manual_test for stamp drift rather than mistaking absent evidence for
+    // the cause.
+    const preShipTailCodeStamp = 'manual-test-before-ship-tail-rebase';
+    if (existingEvidence) {
+      await writeFile(
+        join(pipeline, 'manual-test-results.md'),
+        '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 2 | PASS |\n',
+      );
+      await writeFile(
+        join(pipeline, 'manual-test-fail-evidence.json'),
+        JSON.stringify({ codeStamp: preShipTailCodeStamp }),
+      );
+      await expect(access(join(pipeline, 'manual-test-results.md'))).resolves.toBeUndefined();
+      await expect(readFile(join(pipeline, 'manual-test-fail-evidence.json'), 'utf8')).resolves.toContain(
+        preShipTailCodeStamp,
+      );
+    }
 
     let manualTestRuns = 0;
     let publicationObservedBeforeValidation = false;
