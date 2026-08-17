@@ -49,10 +49,13 @@ echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `fin
 Return every independent finding; an empty array means no Scope concern was found. Each finding
 contains:
 
-- an enumerated concern kind in a `concernKind` field (never `kind`);
+- a `concernKind` field (never `kind`) with the sole allowed member
+  `out-of-plan-change`;
 - typed logical anchors for the out-of-plan path or surface and its plan-scope relation, carried
-  in a nested `anchor` object — `{"rubric": "scope", "path": "<string>", "relation": "<string>"}` —
-  with plain string values, never flattened to the finding's top level and never renamed;
+  in a nested `anchor` object — `{"rubric": "scope", "path": "<string>",
+  "relation": "not-authorized-by-plan"}` — where `relation` must be exactly
+  `not-authorized-by-plan`; the subject `path` remains a plain string. Never flatten the anchor
+  to the finding's top level or rename it;
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 

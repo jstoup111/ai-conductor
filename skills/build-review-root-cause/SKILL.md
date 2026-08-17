@@ -42,11 +42,14 @@ exactly the string `judged` (never `result` or any other field name), carrying c
 It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means a PASS for this rubric. Each finding contains:
 
-- an enumerated concern kind in a `concernKind` field (never `kind`);
+- a `concernKind` field (never `kind`) with one of: `root-cause-unaddressed`,
+  `symptom-only-fix`, or `provenance-sensitive-cache-identity`;
 - typed logical anchors for the stated defect/outcome and implementation mechanism or locus judged
   symptomatic, carried in a nested `anchor` object — `{"rubric": "rootCause", "statedDefect":
-  "<string>", "locus": "<string>", "relation": "<string>"}` — with plain string values, never
-  flattened to the finding's top level and never renamed;
+  "<string>", "locus": "<string>", "relation": "<member>"}` — where `relation` must be one
+  of `root-cause-unaddressed`, `symptom-only-fix`, or `provenance-sensitive-cache-identity`.
+  The subject fields remain plain strings; never flatten the anchor to the finding's top level or
+  rename it;
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 
