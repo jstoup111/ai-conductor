@@ -42,6 +42,9 @@ exactly the string `judged` (never `result` or any other field name), carrying c
 It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means a PASS for this rubric. Each finding contains:
 
+**Closed vocabulary:** `root-cause-unaddressed`, `symptom-only-fix`,
+`provenance-sensitive-cache-identity`.
+
 - a `concernKind` field (never `kind`) with one of: `root-cause-unaddressed`,
   `symptom-only-fix`, or `provenance-sensitive-cache-identity`;
 - typed logical anchors for the stated defect/outcome and implementation mechanism or locus judged

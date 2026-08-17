@@ -49,6 +49,8 @@ echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `fin
 Return every independent finding; an empty array means no Scope concern was found. Each finding
 contains:
 
+**Closed vocabulary:** `out-of-plan-change`, `not-authorized-by-plan`.
+
 - a `concernKind` field (never `kind`) with the sole allowed member
   `out-of-plan-change`;
 - typed logical anchors for the out-of-plan path or surface and its plan-scope relation, carried

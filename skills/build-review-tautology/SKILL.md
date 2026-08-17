@@ -77,7 +77,12 @@ It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `
 Return every independent finding; an empty array means no Tautology concern was found. Each finding
 contains:
 
-- a `concernKind` field (never `kind`) with one of: `assertion-insensitive-to-production`,
+**Closed vocabulary:** `assertion-insensitive-to-production`,
+`test-does-not-exercise-changed-behavior`, `assertion-derived-from-test-data`,
+`source-text-mirror`.
+
+- a `concernKind` field (never `kind`) carrying the concern kind, with one of:
+  `assertion-insensitive-to-production`,
   `test-does-not-exercise-changed-behavior`, `assertion-derived-from-test-data`, or
   `source-text-mirror`;
 - typed logical anchors for the changed test, exercised behavior/assertion, and violation kind,
@@ -85,7 +90,7 @@ contains:
   "exercisedBehavior": "<string>", "violationKind": "<member>"}` — where `violationKind` must
   be one of `assertion-insensitive-to-production`, `test-does-not-exercise-changed-behavior`,
   `assertion-derived-from-test-data`, or `source-text-mirror`. The subject fields remain plain
-  strings; never flatten the anchor to the finding's top level or rename it (no `anchors`, no
+  strings; the anchor is never flattened to the finding's top level or renamed (no `anchors`, no
   per-field objects);
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.

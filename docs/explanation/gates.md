@@ -323,12 +323,22 @@ unique matching task yields no pointer for that finding rather than blocking the
 [`/remediate` skill](../reference/skills.md) treats a referenced plan task's Steps as the governing repair
 contract and prior-attempt artifacts as earlier same-anchor context, not a replacement contract.
 
-Routing is re-checked against the disposition store at the moment the kickback is emitted, not only when
-the FAIL was graded. An operator `conduct build-review accept` can land while the remediation planner is
-composing rework from the raw aggregate (a window of minutes); when every graded finding is accepted by
-disposition at routing time, the composed rework is dropped and `build_review` re-lands instead — its
-re-run settles from cache, applies the dispositions, and re-dispatches only infrastructure-failed rubrics.
-Without this guard a kickback has ordered removal of exactly the surface the operator had just accepted.
+Every exit from a `build_review` FAIL block consults the disposition store using the effective verdict, not
+only the raw aggregate that first reported the FAIL. An operator `conduct build-review accept` can land
+while the remediation planner is composing rework from that raw aggregate (a window of minutes); when
+every graded finding is accepted at routing time, the composed rework is dropped and `build_review`
+re-lands instead. Its re-run settles from cache, applies the dispositions, and re-dispatches only
+infrastructure-failed rubrics. Without this guard a kickback has ordered removal of exactly the surface
+the operator had just accepted.
+
+Each rubric has a closed engine-owned finding vocabulary, repeated in its provider-facing skill contract:
+Scope uses `out-of-plan-change` and `not-authorized-by-plan`; Tautology uses
+`assertion-insensitive-to-production`, `test-does-not-exercise-changed-behavior`,
+`assertion-derived-from-test-data`, and `source-text-mirror`; Root Cause uses
+`root-cause-unaddressed`, `symptom-only-fix`, and `provenance-sensitive-cache-identity`; Completeness
+uses `missing-deliverable`. The parser normalizes harmless casing and underscore variation before
+validation. A value outside its rubric's vocabulary is rejected and receives the bounded repair/rerun
+path below; it cannot become a new finding identity or burn a kickback.
 
 A rubric session that answers but misses the judged-result JSON contract does not burn its dispatch. The
 engine embeds the exact per-rubric result schema (including the nested `anchor` object's field names) in

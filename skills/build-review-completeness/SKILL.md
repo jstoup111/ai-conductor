@@ -96,6 +96,8 @@ It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `
 array. Return every independent finding; an empty array means no Completeness concern was found.
 Each finding contains:
 
+**Closed vocabulary:** `missing-deliverable`.
+
 - a `concernKind` field (never `kind`) with the sole allowed member `missing-deliverable`;
 - typed logical anchors for the approved plan outcome/task and missing deliverable, carried in a
   nested `anchor` object — `{"rubric": "completeness", "planTask": "<string>", "missingOutcome":

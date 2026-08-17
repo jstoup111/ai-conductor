@@ -1510,6 +1510,31 @@ for tagged_update_script in "${HARNESS_DIR}/bin/update" "${HARNESS_DIR}/bin/cond
 done
 assert "bin/update and bin/conduct delegate all checkout identity resolution to resolve_harness_identity" "$tagged_identity_delegation_violation"
 
+
+# ── 25. Build-review rubric vocabulary contract ─────────────────────────────
+# Rubric skills are provider-facing contracts, while the engine owns the
+# closed trust-boundary vocabulary. Compare both sets mechanically so either
+# an undocumented accepted token or an obsolete documented token fails here.
+echo ""
+echo -e "${BOLD}25. Build-review rubric vocabulary contract${NC}"
+
+rubric_vocabulary_check="${HARNESS_DIR}/test/check_build_review_rubric_skill_vocabularies.sh"
+if [ -f "$rubric_vocabulary_check" ]; then
+  set +e
+  rubric_vocabulary_output=$(bash "$rubric_vocabulary_check" 2>&1)
+  rubric_vocabulary_exit=$?
+  set -e
+
+  if [ "$rubric_vocabulary_exit" -eq 0 ]; then
+    assert "build-review rubric SKILL.md vocabularies equal the engine source" 0
+  else
+    echo "$rubric_vocabulary_output" | sed 's/^/    /'
+    assert "build-review rubric SKILL.md vocabularies equal the engine source" 1
+  fi
+else
+  assert "test/check_build_review_rubric_skill_vocabularies.sh exists" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

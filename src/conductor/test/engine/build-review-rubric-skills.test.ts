@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { BUILD_REVIEW_FINDING_VOCABULARIES } from '../../src/engine/build-review-domain.js';
+
 const tautologySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-tautology/SKILL.md', import.meta.url),
 );
@@ -16,7 +18,29 @@ const completenessSkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-completeness/SKILL.md', import.meta.url),
 );
 
+const vocabularyLine = /^\*\*Closed vocabulary:\*\*\s+(.+?)(?=\n\n)/ms;
+
+function documentedVocabulary(skill: string): string[] {
+  const matched = skill.match(vocabularyLine);
+  if (!matched) throw new Error('missing closed vocabulary declaration');
+  return [...matched[1].matchAll(/`([^`]+)`/g)].map((entry) => entry[1]).sort();
+}
+
 describe('engine/build-review rubric skill contracts', () => {
+  it('keeps every rubric skill’s closed vocabulary equal to the engine source in both directions', async () => {
+    const skills = {
+      tautology: await readFile(tautologySkillPath, 'utf8'),
+      scope: await readFile(scopeSkillPath, 'utf8'),
+      rootCause: await readFile(rootCauseSkillPath, 'utf8'),
+      completeness: await readFile(completenessSkillPath, 'utf8'),
+    } as const;
+
+    for (const rubric of Object.keys(skills) as Array<keyof typeof skills>) {
+      expect(documentedVocabulary(skills[rubric]))
+        .toEqual([...BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members].sort());
+    }
+  });
+
   it('defines the versioned Tautology judgement contract over its closed projection', async () => {
     const skill = await readFile(tautologySkillPath, 'utf8');
 
