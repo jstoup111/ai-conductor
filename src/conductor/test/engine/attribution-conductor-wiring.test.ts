@@ -300,6 +300,8 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       {
         config: {
           llm_provider: ['claude', 'codex'],
+          // #1682: tautology defaults off; this test exercises the four-rubric lap.
+          build_review: { rubrics: { tautology: { enabled: true } } },
           steps: {
             build_review: { llm_provider: 'codex' },
             attribution_verify: { llm_provider: 'codex' },

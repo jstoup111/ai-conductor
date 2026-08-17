@@ -745,6 +745,22 @@ const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'hi
   completeness: 'high',
 };
 
+/**
+ * Per-rubric default enablement; an explicit `rubrics.<id>.enabled` always
+ * wins. Tautology is opt-in: its scoped-run preflight classifies test output
+ * with framework-specific patterns, and on frameworks it does not recognize
+ * (e.g. RSpec, #1682) every run — pass or fail — becomes an unretriable
+ * infrastructure failure, so the rubric can never return a verdict and the
+ * gate deadlocks. Projects whose framework the preflight understands enable
+ * it explicitly (this repository does, in `.ai-conductor/config.yml`).
+ */
+const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
+  tautology: false,
+  scope: true,
+  rootCause: true,
+  completeness: true,
+};
+
 export function resolveBuildReviewConfig(
   config?: HarnessConfig,
   policy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
@@ -810,7 +826,7 @@ export function resolveBuildReviewConfig(
       options,
     );
     return [rubricId, {
-      enabled: rubric?.enabled ?? true,
+      enabled: rubric?.enabled ?? DEFAULT_RUBRIC_ENABLED[rubricId],
       llm_provider: rubricProvider,
       model: resolvedNative.model,
       effort: resolvedNative.effort,

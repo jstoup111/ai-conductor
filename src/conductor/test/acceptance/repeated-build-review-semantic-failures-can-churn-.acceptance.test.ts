@@ -266,7 +266,7 @@ describe('acceptance: removal evidence reaches the real build_review prompt (#15
       planPath,
       pipelineDir,
       config: {
-        build_review: { enabled: true, perTaskFloor: false },
+        build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
         test_suite: { scoped_command: 'true {selectors}' },
       },
       buildReviewInputOptions: {

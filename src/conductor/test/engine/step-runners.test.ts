@@ -3299,19 +3299,24 @@ TIER: M`,
 
     it.each([
       {
-        name: 'build_review is absent and defaults to enabled',
+        // #1682: tautology defaults to disabled; only the other three rubrics dispatch.
+        name: 'build_review is absent and defaults to the three enabled rubrics (tautology off, #1682)',
         config: { wiring: { entry_points: ['src/index.ts'] } } as HarnessConfig,
+        expectedInvokeCalls: 6, // 3 rubrics x (1 dispatch + 1 bounded shape-repair)
+        expectTautology: false,
       },
       {
         name: 'a partial rubric override inherits the remaining enabled rubrics',
         config: {
           build_review: {
-            rubrics: { scope: { model: 'opus' } },
+            rubrics: { scope: { model: 'opus' }, tautology: { enabled: true } },
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
+        expectedInvokeCalls: 8, // 4 rubrics x (1 dispatch + 1 bounded shape-repair)
+        expectTautology: true,
       },
-    ])('uses the production rubric coordinator when $name', async ({ config }) => {
+    ])('uses the production rubric coordinator when $name', async ({ config, expectedInvokeCalls, expectTautology }) => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
@@ -3326,16 +3331,20 @@ TIER: M`,
 
       await runner.run('build_review', emptyState);
 
-      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-      expect(provider.invoke).toHaveBeenCalledTimes(8);
-      expect((provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => options.prompt)).toEqual(
+      expect(provider.invoke).toHaveBeenCalledTimes(expectedInvokeCalls);
+      const prompts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => options.prompt);
+      expect(prompts).toEqual(
         expect.arrayContaining([
-          expect.stringContaining('Build Review Tautology rubric'),
           expect.stringContaining('Build Review Scope rubric'),
           expect.stringContaining('Build Review Root Cause rubric'),
           expect.stringContaining('Build Review Completeness rubric'),
         ]),
       );
+      if (expectTautology) {
+        expect(prompts).toEqual(expect.arrayContaining([expect.stringContaining('Build Review Tautology rubric')]));
+      } else {
+        expect(prompts.join('\n')).not.toContain('Build Review Tautology rubric');
+      }
     });
 
     it('does not dispatch the coordinator or legacy scalar grader when the whole gate is disabled', async () => {
@@ -3369,6 +3378,13 @@ TIER: M`,
         return { exitCode: 1, stdout: '', stderr: '' };
       };
       return git;
+    }
+
+    // #1682: tautology defaults off; these tests exercise four-rubric fan-out mechanics.
+    function tautologyOptIn() {
+      return {
+        config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+      };
     }
 
     function currentBuildReviewProof() {
@@ -3423,6 +3439,7 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
+          config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
           ...currentBuildReviewProof(),
         },
       );
@@ -3464,6 +3481,7 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           log: (message) => console.warn(message),
+          ...tautologyOptIn(),
           ...currentBuildReviewProof(),
         },
       );
@@ -3548,6 +3566,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...tautologyOptIn(),
         ...currentBuildReviewProof(),
       });
 
@@ -3585,6 +3604,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         featureDesc: 'block-edits-to-docs-spec-artifacts-during-build-an',
+        ...tautologyOptIn(),
         ...currentBuildReviewProof(),
       });
 
@@ -3608,6 +3628,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...tautologyOptIn(),
         ...currentBuildReviewProof(),
       });
 
@@ -3633,6 +3654,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...tautologyOptIn(),
         ...currentBuildReviewProof(),
       });
 
@@ -3654,6 +3676,7 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...tautologyOptIn(),
         ...currentBuildReviewProof(),
       });
 
