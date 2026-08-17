@@ -1,4 +1,4 @@
-import { LIVE_E2E_PROVIDERS } from '../../test/fixtures/live-e2e-providers.js';
+import { LIVE_E2E_PROVIDERS } from './live-e2e-providers.js';
 
 /** The complete set of capabilities a smoke test may require. */
 export const SMOKE_CAPABILITIES = [

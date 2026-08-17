@@ -5,12 +5,14 @@ import { join } from 'node:path';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import type { AuthenticationSource, LLMProvider } from '../../src/execution/llm-provider.js';
-import type { SelfHostProviderId } from '../../src/engine/self-host/provider-home.js';
+import {
+  LIVE_E2E_PROVIDERS as LIVE_E2E_PROVIDER_MANIFEST,
+  type LiveE2EProviderManifestEntry,
+} from '../../src/engine/live-e2e-providers.js';
 
 export type LiveE2EAuthenticationSource = AuthenticationSource | 'oauth-token';
 
-export interface LiveE2EProviderDescriptor {
-  readonly id: SelfHostProviderId;
+export interface LiveE2EProviderDescriptor extends LiveE2EProviderManifestEntry {
   readonly createProvider: () => LLMProvider;
   readonly binaryName: string;
   readonly credentialEnvVar: string;
@@ -21,25 +23,15 @@ export interface LiveE2EProviderDescriptor {
   readonly assertCredentialAvailable: (credential: string | undefined) => void;
 }
 
-export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = [
-  {
-    id: 'claude',
+const LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS = {
+  claude: {
     createProvider: () => new ClaudeProvider(),
-    binaryName: 'claude',
-    credentialEnvVar: 'CLAUDE_CODE_OAUTH_TOKEN',
-    selfHostExecutable: 'claude',
-    providerKey: 'claude',
     expectedAuthenticationSource: 'oauth-token',
     resolveAuthenticationSource: async () => 'oauth-token',
     assertCredentialAvailable: () => {},
   },
-  {
-    id: 'codex',
+  codex: {
     createProvider: () => new CodexProvider(),
-    binaryName: 'codex',
-    credentialEnvVar: 'CODEX_API_KEY',
-    selfHostExecutable: 'codex',
-    providerKey: 'codex',
     expectedAuthenticationSource: 'api-key',
     resolveAuthenticationSource: async (provider) => {
       const readiness = await provider.readiness?.();
@@ -59,4 +51,11 @@ export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = [
       );
     },
   },
-];
+} as const satisfies Record<LiveE2EProviderManifestEntry['id'], Omit<LiveE2EProviderDescriptor, keyof LiveE2EProviderManifestEntry>>;
+
+export const LIVE_E2E_PROVIDERS: readonly LiveE2EProviderDescriptor[] = LIVE_E2E_PROVIDER_MANIFEST.map(
+  (descriptor) => ({
+    ...descriptor,
+    ...LIVE_E2E_PROVIDER_EXECUTION_AUGMENTATIONS[descriptor.id],
+  }),
+);

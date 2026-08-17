@@ -8,7 +8,7 @@ import {
 } from '../src/engine/smoke-capability.js';
 import type { SmokeCapability } from '../src/engine/smoke-capability.js';
 import { runSmokeCli } from '../src/engine/smoke-runner.js';
-import { LIVE_E2E_PROVIDERS } from './fixtures/live-e2e-providers.js';
+import { LIVE_E2E_PROVIDERS } from '../src/engine/live-e2e-providers.js';
 
 const acceptedCredentialedCapabilities: readonly SmokeCapability[] = [
   'credentialed:claude',
