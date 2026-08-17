@@ -306,6 +306,8 @@ export type ConductorEvent =
       excludedBaseAheadPaths?: string[];
       /** Feature-authored paths excluded because an operator reseal already approved their sealed content. */
       excludedOperatorResealedPaths?: string[];
+      /** Authored paths accepted because their divergence is exactly the engine's recorded remediation-task append. */
+      includedEngineAppendedPaths?: string[];
     }
   | {
       type: 'protected_artifact_rebaseline_refused';

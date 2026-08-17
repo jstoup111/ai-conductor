@@ -130,6 +130,14 @@ refuses completion while any recorded id's `### Task <id>` heading is missing fr
 deleting a remediation task never completes it. The guard disarms only when the engine-state file is
 absent (e.g. a recreated worktree), never on a plan edit.
 
+The seal-rotation evaluator honors the same record: an authored plan whose divergence from the base
+tip is exactly an append of the recorded `### Task rem-*` blocks (base content a byte prefix of
+head, every suffix heading a recorded task id) is treated as the engine's own amendment and rotates
+without an operator reseal — the `protected_artifact_rebaseline` event reports it under
+`includedEngineAppendedPaths`. Any other authored divergence (unrecorded ids, extra headings, prose
+before the first recorded heading, or a non-append edit) still refuses with
+`feature-authored:head-differs-from-base` and requires `conduct-ts reseal`.
+
 **Protected-artifact seal.** `.pipeline/protected-artifact-seal.json` fingerprints every file under
 `.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, and `.docs/stories` against a
 baseline commit:
