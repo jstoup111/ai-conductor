@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BUILD_REVIEW_FINDING_VOCABULARIES,
   describeBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewDispatchFailure,
@@ -180,17 +181,32 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
 
   it('renders the exact per-rubric anchor schema', () => {
     expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
-      '"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<string>"}',
+      '"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
     );
     expect(renderBuildReviewJudgedResultShape('scope')).toContain(
-      '"anchor": {"rubric": "scope", "path": "<string>", "relation": "<string>"}',
+      '"anchor": {"rubric": "scope", "path": "<string>", "relation": "<one of: out-of-plan-change | not-authorized-by-plan>"}',
     );
     expect(renderBuildReviewJudgedResultShape('rootCause')).toContain(
-      '"anchor": {"rubric": "rootCause", "statedDefect": "<string>", "locus": "<string>", "relation": "<string>"}',
+      '"anchor": {"rubric": "rootCause", "statedDefect": "<string>", "locus": "<string>", "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>"}',
     );
     expect(renderBuildReviewJudgedResultShape('completeness')).toContain(
       '"anchor": {"rubric": "completeness", "planTask": "<string>", "missingSurface": "<string>", "missingOutcome": "<string>"}',
     );
+  });
+
+  it.each([
+    ['tautology', 'violationKind'],
+    ['scope', 'relation'],
+    ['rootCause', 'relation'],
+    ['completeness', undefined],
+  ] as const)('renders every allowed %s vocabulary member into its dispatch schema', (rubric, classificationField) => {
+    const shape = renderBuildReviewJudgedResultShape(rubric);
+    const allowedMembers = BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.join(' | ');
+
+    expect(shape).toContain(`"concernKind": "<one of: ${allowedMembers}>"`);
+    if (classificationField) {
+      expect(shape).toContain(`"${classificationField}": "<one of: ${allowedMembers}>"`);
+    }
   });
 
   it('names the missing anchor when a finding flattens anchor fields to its top level (2026-08-15 tautology incident shape)', () => {

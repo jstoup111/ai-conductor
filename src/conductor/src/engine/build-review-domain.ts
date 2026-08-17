@@ -257,6 +257,17 @@ const ANCHOR_FIELDS: Record<BuildReviewRubricId, readonly string[]> = {
   completeness: ['planTask', 'missingSurface', 'missingOutcome'],
 };
 
+/** The anchor field, if any, whose value shares the rubric's closed vocabulary. */
+const CLASSIFICATION_ANCHOR_FIELDS: Partial<Record<BuildReviewRubricId, string>> = {
+  tautology: 'violationKind',
+  scope: 'relation',
+  rootCause: 'relation',
+};
+
+function renderFindingVocabularyMemberShape(rubric: BuildReviewRubricId): string {
+  return `<one of: ${BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.join(' | ')}>`;
+}
+
 /**
  * Render the exact judged-result JSON template for one rubric. This is the
  * machine-owned schema text embedded in every rubric dispatch and repair
@@ -265,10 +276,13 @@ const ANCHOR_FIELDS: Record<BuildReviewRubricId, readonly string[]> = {
  * top-level fields when the anchor shape was unstated).
  */
 export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId): string {
-  const anchorFields = ANCHOR_FIELDS[rubric].map((field) => `"${field}": "<string>"`).join(', ');
+  const classificationAnchorField = CLASSIFICATION_ANCHOR_FIELDS[rubric];
+  const anchorFields = ANCHOR_FIELDS[rubric].map((field) =>
+    `"${field}": "${field === classificationAnchorField ? renderFindingVocabularyMemberShape(rubric) : '<string>'}"`,
+  ).join(', ');
   return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "v2", ' +
     '"lapId": "<echo the projection lapId verbatim>", "snapshotDigest": "<echo the projection snapshotDigest verbatim>", ' +
-    '"findings": [{"concernKind": "<string>", "summary": "<non-empty actionable string>", ' +
+    `"findings": [{"concernKind": "${renderFindingVocabularyMemberShape(rubric)}", "summary": "<non-empty actionable string>", ` +
     '"evidenceLocations": ["<path:line or path:line:column>"], ' +
     `"anchor": {"rubric": "${rubric}", ${anchorFields}}}]}`;
 }
