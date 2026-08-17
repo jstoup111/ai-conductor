@@ -305,3 +305,4 @@ order. Task 12 waits on the three behaviors it exercises.
 - [ ] Dependencies are explicit and acyclic
 - [ ] No terminal catch-all validation task
 - [ ] Zero new exports introduced
+### Task rem-build-review-scope-1: src/conductor/test/acceptance/stale-manual-test-finish-publication.acceptance.test.ts:53-270 — complete Task 12's second case by seeding passing manual-test evidence with a satisfied pre-tail verdict and codeStamp, applying later rebase and maintain_documentation commits, asserting stamp validity becomes rerun, and proving exactly one finish-to-manual_test kickback publishes without HALT
