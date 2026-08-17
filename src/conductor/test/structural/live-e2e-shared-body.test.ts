@@ -67,26 +67,29 @@ describe('structural: shared live E2E body', () => {
       vi.mocked(dumpPipelineDiagnostics).mockResolvedValue('');
       const outcomes = await Promise.all(LIVE_E2E_PROVIDERS.map(async (registeredDescriptor) => {
         process.env[registeredDescriptor.credentialEnvVar] = `${registeredDescriptor.id}-credential`;
-        const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+        const provider: LLMProvider = {
+          invoke: vi.fn(),
+          invokeInteractive: vi.fn(),
+          readiness: vi.fn(async (): Promise<never> => {
+            throw new Error('equivalent injected live-provider outcome');
+          }),
+        };
         const descriptor: LiveE2EProviderDescriptor = {
           ...registeredDescriptor,
           createProvider: () => {
             selections(registeredDescriptor.id);
             return provider;
           },
-          expectedAuthenticationSource: 'test-source',
+          expectedAuthenticationSource: 'api-key',
           resolveAuthenticationSource: async (candidate) => {
             authenticationChecks(registeredDescriptor.id, candidate);
-            return 'test-source';
+            return 'api-key';
           },
           assertCredentialAvailable: () => {},
         };
 
         return runLiveE2ERunBody(descriptor, 1, {
           binaryAvailable: () => true,
-          provisionProviderHome: async (): Promise<never> => {
-            throw new Error('equivalent injected live-provider outcome');
-          },
         }).then(
           () => 'completed',
           (error: unknown) => error instanceof Error ? error.message : String(error),
