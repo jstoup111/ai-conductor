@@ -15,22 +15,38 @@
  */
 
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { PASSING_FULL_SUITE_VERIFIER } from '../test-conductor.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import { computeAndWriteVerdict } from '../../src/engine/gate-verdicts.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
+const execFile = promisify(execFileCb);
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+
+async function commit(root: string, files: Record<string, string>, message: string): Promise<string> {
+  for (const [path, contents] of Object.entries(files)) {
+    const destination = join(root, path);
+    await mkdir(join(destination, '..'), { recursive: true });
+    await writeFile(destination, contents);
+  }
+  await execFile('git', ['add', '.'], { cwd: root });
+  await execFile('git', ['commit', '-q', '-m', message], { cwd: root });
+  return (await execFile('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' })).stdout.trim();
+}
 
 describe('stale SHIP evidence at FINISH converges through the production coordinator', () => {
   it.each([
@@ -51,6 +67,14 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     const stateFilePath = join(pipeline, 'conduct-state.json');
     const prUrl = 'https://github.com/acme/widget/pull/1613';
     await mkdir(pipeline, { recursive: true });
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: root });
+    await execFile('git', ['config', 'commit.gpgsign', 'false'], { cwd: root });
+    await commit(root, {
+      '.gitignore': '.pipeline/\n',
+      'src/feature.ts': 'export const feature = 1;\n',
+    }, 'feat: establish manual-test baseline');
 
     const state: Record<string, unknown> = {
       feature_desc: 'stale-manual-test-discovered-at-finish-is-unroutab',
@@ -86,7 +110,10 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
     // following documentation-maintenance commit, so the fence must rerun
     // manual_test for stamp drift rather than mistaking absent evidence for
     // the cause.
-    const preShipTailCodeStamp = 'manual-test-before-ship-tail-rebase';
+    const preShipTailCodeStamp = (
+      await execFile('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' })
+    ).stdout.trim();
+    await createProtectedArtifactSeal({ projectRoot: root, baselineCommit: preShipTailCodeStamp });
     if (existingEvidence) {
       await writeFile(
         join(pipeline, 'manual-test-results.md'),
@@ -100,6 +127,23 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
       await expect(readFile(join(pipeline, 'manual-test-fail-evidence.json'), 'utf8')).resolves.toContain(
         preShipTailCodeStamp,
       );
+      const preRunVerdict = await computeAndWriteVerdict(root, 'manual_test');
+      expect(preRunVerdict.satisfied).toBe(true);
+
+      await commit(root, { 'src/feature.ts': 'export const feature = 2;\n' }, 'rebase: apply ship-tail changes');
+      const postRebaseHead = (
+        await execFile('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' })
+      ).stdout.trim();
+      await commit(
+        root,
+        { '.docs/shipped/stale-manual-test-discovered-at-finish-is-unroutab.md': 'shipped\nmaintained\n' },
+        'docs: maintain shipped record',
+      );
+      const postDocumentationHead = (
+        await execFile('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' })
+      ).stdout.trim();
+      expect(postRebaseHead).not.toBe(preShipTailCodeStamp);
+      expect(postDocumentationHead).not.toBe(postRebaseHead);
     }
 
     let manualTestRuns = 0;
