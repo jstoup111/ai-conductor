@@ -910,6 +910,141 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     });
   });
 
+  describe('engine-appended remediation tasks (rotation acceptance)', () => {
+    const path = '.docs/plans/feature.md';
+    const baseBytes = Buffer.from('# Plan\n\n### Task 1: ship it\n');
+    const seal: ProtectedArtifactSeal = {
+      version: 2,
+      baselineCommit: 'sealed-head',
+      protectedArtifacts: [],
+      rebaselines: [],
+    };
+
+    function evaluate(headBytes: Buffer, appendedRemediationTaskIds?: readonly string[]) {
+      return evaluateProtectedArtifactSealRotation({
+        seal,
+        baselineAncestry: 'non-ancestor',
+        workspaceArtifacts: new Map([[path, headBytes]]),
+        headArtifacts: new Map([[path, headBytes]]),
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        authorshipByPath: new Map([[path, 'authored']]),
+        ...(appendedRemediationTaskIds ? { appendedRemediationTaskIds } : {}),
+      });
+    }
+
+    it('permits an authored plan whose divergence is exactly the recorded appended task blocks', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from(
+        '### Task rem-scope-1: remove the unauthorized change\n'
+        + '  - source: build_review:scope\n'
+        + '  - rationale: gap repair\n'
+        + '### Task rem-completeness-1: deliver the missing outcome\n',
+      )]);
+
+      expect(evaluate(head, ['rem-scope-1', 'rem-completeness-1'])).toEqual({
+        permitted: true,
+        paths: [path],
+        includedEngineAppendedPaths: [path],
+      });
+    });
+
+    it('refuses when the appended suffix carries an unrecorded task heading', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from(
+        '### Task rem-scope-1: recorded repair\n### Task rem-rogue-9: unrecorded extra\n',
+      )]);
+
+      expect(evaluate(head, ['rem-scope-1'])).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('refuses when the divergence is not a pure append of the base content', () => {
+      const head = Buffer.from('# Rewritten Plan\n### Task rem-scope-1: recorded repair\n');
+
+      expect(evaluate(head, ['rem-scope-1'])).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('refuses when no appended remediation task ids are recorded', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from('### Task rem-scope-1: repair\n')]);
+
+      expect({
+        omitted: evaluate(head),
+        empty: evaluate(head, []),
+      }).toEqual({
+        omitted: { permitted: false, condition: 'head-differs-from-base', path },
+        empty: { permitted: false, condition: 'head-differs-from-base', path },
+      });
+    });
+
+    it('refuses prose appended before the first recorded task heading', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from(
+        'freeform addendum the plan never approved\n### Task rem-scope-1: repair\n',
+      )]);
+
+      expect(evaluate(head, ['rem-scope-1'])).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('refuses a non-task heading smuggled into the appended suffix', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from(
+        '### Task rem-scope-1: repair\n## New Section: rewrite the scope\n',
+      )]);
+
+      expect(evaluate(head, ['rem-scope-1'])).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('permits rotation in-repository by reading recorded ids from engine-state', async () => {
+      const planPath = '.docs/plans/feature.md';
+      const repo = await makeRepo({ [planPath]: 'approved plan\n' });
+      const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
+      await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
+      await writeProjectFile(repo, planPath, 'approved plan\n### Task rem-scope-1: remove the unauthorized change\n');
+      await git(repo, ['add', planPath]);
+      await git(repo, ['commit', '-q', '-m', 'chore(plan): record appended remediation tasks']);
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(repo, '.pipeline/engine-state.json'),
+        `${JSON.stringify({ appendedRemediationTaskIds: ['rem-scope-1'] })}\n`,
+      );
+
+      const verdict = await evaluateProtectedArtifactSealRotationInRepository({
+        projectRoot: repo,
+        seal: {
+          version: 2,
+          baselineCommit,
+          protectedArtifacts: [{
+            path: planPath,
+            fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+          }],
+          rebaselines: [],
+        },
+        headCommit: await git(repo, ['rev-parse', 'HEAD']),
+        baseTipRef: 'main',
+      });
+
+      expect(verdict).toEqual({
+        permitted: true,
+        paths: [planPath],
+        includedEngineAppendedPaths: [planPath],
+      });
+    });
+  });
+
   it('refuses a diverging path when its authorship is indeterminate', () => {
     const path = '.docs/plans/changed.md';
     const headBytes = Buffer.from('head\n');
