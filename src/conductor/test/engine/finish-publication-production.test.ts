@@ -819,7 +819,7 @@ describe('production FINISH publication composition', () => {
         return { success: true };
       });
       const writeShippedRecord = vi.fn(async () => 0);
-      const coordinator = createProductionFinishPublicationCoordinator({
+      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
@@ -829,9 +829,9 @@ describe('production FINISH publication composition', () => {
           : { stdout: 'refs/remotes/origin/feat/feature\n' },
         observeReleaseReadiness: async () => 'present',
         writeShippedRecord,
+        repairPresentation: async () => {},
       });
-
-      await expect(coordinator.advance({
+      const input = {
         state: {
           feature_desc: 'feature',
           worktree_branch: 'feat/feature',
@@ -841,12 +841,26 @@ describe('production FINISH publication composition', () => {
           manual_test: 'done',
           architecture_review_as_built: 'done',
         } as ConductState,
-        mode: 'auto',
+        mode: 'auto' as const,
         daemon: true,
         dispatchJudgment,
         dispatchAuthoring,
         emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+      };
+
+      await expect(makeCoordinator().advance(input)).resolves.toEqual({
+        kind: 'publication_progress', transition: 'author_pr_prose',
+      });
+
+      // The dedup key stays unwritten until the prose survives, so a prose
+      // halt here remains re-dispatchable by the daemon.
+      expect(writeShippedRecord).not.toHaveBeenCalled();
+
+      // A daemon re-creates this composition on the next dispatch. The exact
+      // revision the authoring pass produced remains accepted, so the healthy
+      // placeholder path consumes its one authoring provider pass, not a
+      // second judgment pass.
+      await makeCoordinator().advance(input);
 
       expect(dispatchAuthoring).toHaveBeenCalledWith({
         kind: 'finish_pr_prose_authoring',

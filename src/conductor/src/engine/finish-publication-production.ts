@@ -226,8 +226,6 @@ export function createProductionFinishPublicationCoordinator(
   // A successful coordinator authoring pass owns exactly one mandatory
   // re-observation. Its revision is accepted without a redundant judgment;
   // independently observed authored prose remains stale and is judged.
-  const pendingAuthoredPrUrls = new Set<string>();
-  const coordinatorAuthoredRevisions = new Set<string>();
   const acceptedProseRevisionByPr = new Map<string, string>();
   const authoredProsePendingByPr = new Set<string>();
   // Interactive authority is acquired once per coordinator lifetime. A retry
@@ -347,9 +345,22 @@ export function createProductionFinishPublicationCoordinator(
                   const halted = prHaltState(pr.title, pr.body, pr.labels);
                   const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
                   proseRevisionByPr.set(pr.url, revision);
+                  await seedJudgmentStore();
                   if (authoredProsePendingByPr.delete(pr.url) && !halted) {
                     const observedProse = prProse(pr.title, pr.body, false, false);
-                    if (observedProse !== 'placeholder') acceptedProseRevisionByPr.set(pr.url, revision);
+                    if (observedProse !== 'placeholder') {
+                      // The authoring pass, not an independently observed
+                      // reader-facing revision, owns this exact replacement.
+                      // Retain the result across the next daemon dispatch so
+                      // a healthy placeholder path does not pay a redundant
+                      // judgment provider pass.
+                      acceptedProseRevisionByPr.set(pr.url, revision);
+                      judgmentByRevision.set(revisionDigest(revision), { kind: 'accepted' });
+                      await persistJudgmentStore();
+                    }
+                  }
+                  if (judgmentByRevision.get(revisionDigest(revision))?.kind === 'accepted') {
+                    acceptedProseRevisionByPr.set(pr.url, revision);
                   }
                   const prose = prProse(
                     pr.title,
