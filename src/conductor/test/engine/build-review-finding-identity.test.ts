@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
+import * as buildReviewDomain from '../../src/engine/build-review-domain.js';
 import {
   canonicalizeBuildReviewFindingIdentity,
   canonicalizeBuildReviewFindingSet,
   type BuildReviewFindingIdentityInput,
 } from '../../src/engine/build-review-finding-identity.js';
+
+type FindingVocabulary = Readonly<Record<string, readonly string[]>>;
+type FindingVocabularies = Readonly<Record<string, FindingVocabulary>>;
+
+function normalizedVocabularyMembers(vocabularies: FindingVocabularies | undefined): readonly string[] {
+  if (!vocabularies) throw new Error('build-review finding vocabularies are not exported');
+  return Object.values(vocabularies).flatMap((rubric) => Object.values(rubric).flat());
+}
 
 describe('build-review finding identity', () => {
   const fixtures: readonly BuildReviewFindingIdentityInput[] = [
@@ -63,6 +72,45 @@ describe('build-review finding identity', () => {
     });
 
     expect(later).toEqual(first);
+  });
+
+  it('canonicalizes the 2026-08-15 scope re-wording to the accepted finding identity', () => {
+    const accepted = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-test-change',
+      anchor: { rubric: 'scope', path: 'src/conductor/test/engine/step-runners.test.ts', relation: 'not-authorized-by-plan' },
+    });
+    const reworded = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/conductor/test/engine/step-runners.test.ts', relation: 'not-authorized-by-plan' },
+    });
+
+    expect(reworded).toEqual(accepted);
+  });
+
+  it('keeps every closed finding vocabulary unambiguous after normalization', () => {
+    const vocabularies = (buildReviewDomain as typeof buildReviewDomain & {
+      readonly BUILD_REVIEW_FINDING_VOCABULARIES?: FindingVocabularies;
+    }).BUILD_REVIEW_FINDING_VOCABULARIES;
+    const normalized = normalizedVocabularyMembers(vocabularies).map((member) => member.toLowerCase().replaceAll('_', '-'));
+
+    expect(new Set(normalized).size).toBe(normalized.length);
+  });
+
+  it('excludes report prose subjects from the canonical identity', () => {
+    const stableFields = {
+      rubric: 'tautology' as const, contractVersion: 'v1' as const, concernKind: 'test-does-not-exercise-changed-behavior',
+      anchor: { rubric: 'tautology' as const, changedTest: 'src/conductor/test/engine/build-review-finding-identity.test.ts', exercisedBehavior: 'first prose description', violationKind: 'test-does-not-exercise-changed-behavior' },
+    };
+    const first = canonicalizeBuildReviewFindingIdentity({
+      ...stableFields, summary: 'The assertion still passes after the production change.', evidenceLocations: ['src/conductor/test/engine/build-review-finding-identity.test.ts:1'],
+    });
+    const reworded = canonicalizeBuildReviewFindingIdentity({
+      ...stableFields,
+      anchor: { ...stableFields.anchor, exercisedBehavior: 'reworded prose description' },
+      summary: 'The changed behavior is not exercised.', evidenceLocations: ['src/conductor/test/engine/build-review-finding-identity.test.ts:999'],
+    });
+
+    expect(reworded).toEqual(first);
   });
 
   it('changes identity for a materially different concern or logical anchor', () => {
