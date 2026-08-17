@@ -174,7 +174,7 @@ describe("build-review semantic cache", () => {
           concernKind: "out-of-plan-change",
           summary: "src/a.ts is outside the approved plan.",
           evidenceLocations: ["src/a.ts:1"],
-          anchor: { rubric: "scope" as const, path: "src/a.ts", relation: "out-of-plan-change" },
+          anchor: { rubric: "scope" as const, path: "src/a.ts", relation: "not-authorized-by-plan" },
         }],
         verdict: "FAIL" as const,
       },
