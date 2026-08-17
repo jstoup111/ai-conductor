@@ -41,7 +41,8 @@ describe('engine/build-review rubric skill contracts', () => {
       for (const member of BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds) {
         expect(skills[rubric]).toContain(`\`${member}\``);
       }
-      for (const members of Object.values(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields)) {
+      for (const [field, members] of Object.entries(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields)) {
+        expect(skills[rubric]).toContain(`\`${field}\``);
         for (const member of members) expect(skills[rubric]).toContain(`\`${member}\``);
       }
     }
@@ -178,6 +179,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/"rubric": "completeness", "planTask": "<projection task reference>"/);
     expect(skill).toMatch(/"missingSurface": "<task-owned plan surface reference>"/);
     expect(skill).toMatch(/"missingKind": "missing-deliverable"/);
+    expect(skill).toMatch(/`missingKind`.*role-specific.*matches.*`concernKind`/is);
     expect(skill).toMatch(/typed logical anchors/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);

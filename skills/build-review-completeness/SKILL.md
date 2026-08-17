@@ -102,10 +102,11 @@ Each finding contains:
 - typed logical anchors for the approved plan outcome/task and missing deliverable, carried in a
   nested `anchor` object — `{"rubric": "completeness", "planTask": "<projection task reference>",
   "missingSurface": "<task-owned plan surface reference>", "missingOutcome": "<report prose>",
-  "missingKind": "missing-deliverable"}` — where `missingKind` must be exactly
-  `missing-deliverable` and therefore matches `concernKind`. `planTask` and `missingSurface` are
-  immutable-projection references; `missingOutcome` remains report prose. Never flatten the anchor
-  to the finding's top level or rename it (no `planAnchor`/`deliverableAnchor`);
+  "missingKind": "missing-deliverable"}` — where `missingKind` is the role-specific
+  classification anchor field: it must be exactly `missing-deliverable` and therefore matches
+  `concernKind`. `planTask` and `missingSurface` are immutable-projection references;
+  `missingOutcome` remains report prose. Never flatten the anchor to the finding's top level or
+  rename it (no `planAnchor`/`deliverableAnchor`);
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 
