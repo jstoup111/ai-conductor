@@ -6,7 +6,40 @@ import {
   resolveAdvisorySmokeFile,
   resolveGateSmokeFile,
 } from '../src/engine/smoke-capability.js';
+import type { SmokeCapability } from '../src/engine/smoke-capability.js';
 import { runSmokeCli } from '../src/engine/smoke-runner.js';
+import { LIVE_E2E_PROVIDERS } from './fixtures/live-e2e-providers.js';
+
+const acceptedCredentialedCapabilities: readonly SmokeCapability[] = [
+  'credentialed:claude',
+  'credentialed:codex',
+];
+
+// @ts-expect-error SmokeCapability is a closed union, not an arbitrary string.
+const rejectedSmokeCapability: SmokeCapability = 'credentialed:unknown';
+
+void acceptedCredentialedCapabilities;
+void rejectedSmokeCapability;
+
+function withDescriptorCredentialEnvVar(
+  providerId: 'claude' | 'codex',
+  credentialEnvVar: string,
+  run: () => void,
+): void {
+  const descriptor = LIVE_E2E_PROVIDERS.find(({ id }) => id === providerId);
+  if (descriptor === undefined) {
+    throw new Error(`Missing ${providerId} live E2E provider descriptor`);
+  }
+
+  const mutableDescriptor = descriptor as { credentialEnvVar: string };
+  const originalCredentialEnvVar = mutableDescriptor.credentialEnvVar;
+  mutableDescriptor.credentialEnvVar = credentialEnvVar;
+  try {
+    run();
+  } finally {
+    mutableDescriptor.credentialEnvVar = originalCredentialEnvVar;
+  }
+}
 
 describe('smoke capability declarations', () => {
   it('exposes exactly the closed smoke capability set', () => {
@@ -25,26 +58,27 @@ describe('smoke capability declarations', () => {
     })).toEqual({ outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' });
   });
 
-  it('resolves each credentialed provider against its own advisory credential variable', () => {
-    const dependencies = {
-      hasCommand: () => true,
-      environment: { CLAUDE_CODE_OAUTH_TOKEN: 'token' },
-    };
-
-    expect({
-      claude: resolveAdvisorySmokeFile(
+  it('resolves each credentialed provider against its descriptor-owned advisory credential variable', () => {
+    withDescriptorCredentialEnvVar('claude', 'TEST_CLAUDE_ADVISORY_CREDENTIAL', () => {
+      expect(resolveAdvisorySmokeFile(
         'test/engine/daemon-e2e-live-claude.smoke.test.ts',
         'credentialed:claude',
-        dependencies,
-      ),
-      codex: resolveAdvisorySmokeFile(
+        {
+          hasCommand: () => true,
+          environment: { TEST_CLAUDE_ADVISORY_CREDENTIAL: 'token' },
+        },
+      )).toEqual({ outcome: 'ran' });
+    });
+
+    withDescriptorCredentialEnvVar('codex', 'TEST_CODEX_ADVISORY_CREDENTIAL', () => {
+      expect(resolveAdvisorySmokeFile(
         'test/engine/daemon-e2e-live-codex.smoke.test.ts',
         'credentialed:codex',
-        dependencies,
-      ),
-    }).toEqual({
-      claude: { outcome: 'ran' },
-      codex: { outcome: 'skipped', unmet: 'CODEX_API_KEY' },
+        {
+          hasCommand: () => true,
+          environment: { TEST_CODEX_ADVISORY_CREDENTIAL: 'token' },
+        },
+      )).toEqual({ outcome: 'ran' });
     });
   });
 
@@ -61,26 +95,27 @@ describe('smoke capability declarations', () => {
     });
   });
 
-  it('resolves each credentialed provider against its own gate credential variable', () => {
-    const dependencies = {
-      hasCommand: () => true,
-      environment: { CLAUDE_CODE_OAUTH_TOKEN: 'token' },
-    };
-
-    expect({
-      claude: resolveGateSmokeFile(
+  it('resolves each credentialed provider against its descriptor-owned gate credential variable', () => {
+    withDescriptorCredentialEnvVar('claude', 'TEST_CLAUDE_GATE_CREDENTIAL', () => {
+      expect(resolveGateSmokeFile(
         'test/engine/daemon-e2e-live-claude.smoke.test.ts',
         'credentialed:claude',
-        dependencies,
-      ),
-      codex: resolveGateSmokeFile(
+        {
+          hasCommand: () => true,
+          environment: { TEST_CLAUDE_GATE_CREDENTIAL: 'token' },
+        },
+      )).toEqual({ outcome: 'ran' });
+    });
+
+    withDescriptorCredentialEnvVar('codex', 'TEST_CODEX_GATE_CREDENTIAL', () => {
+      expect(resolveGateSmokeFile(
         'test/engine/daemon-e2e-live-codex.smoke.test.ts',
         'credentialed:codex',
-        dependencies,
-      ),
-    }).toEqual({
-      claude: { outcome: 'ran' },
-      codex: { outcome: 'skipped', provider: 'codex', unmet: 'CODEX_API_KEY' },
+        {
+          hasCommand: () => true,
+          environment: { TEST_CODEX_GATE_CREDENTIAL: 'token' },
+        },
+      )).toEqual({ outcome: 'ran' });
     });
   });
 

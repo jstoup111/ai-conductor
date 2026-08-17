@@ -1,3 +1,5 @@
+import { LIVE_E2E_PROVIDERS } from '../../test/fixtures/live-e2e-providers.js';
+
 /** The complete set of capabilities a smoke test may require. */
 export const SMOKE_CAPABILITIES = [
   'hermetic',
@@ -41,21 +43,18 @@ export type GateSmokeCapabilityResolution =
   | { outcome: 'skipped'; provider: 'claude' | 'codex'; unmet: string }
   | { outcome: 'failed'; unmet: string };
 
-/** The live-provider descriptors that own credentialed smoke capabilities. */
-const LIVE_SMOKE_PROVIDER_DESCRIPTORS = [
-  {
-    capability: 'credentialed:claude',
-    provider: 'claude',
-    credentialEnvVar: 'CLAUDE_CODE_OAUTH_TOKEN',
-    toolchainCommand: 'claude',
-  },
-  {
-    capability: 'credentialed:codex',
-    provider: 'codex',
-    credentialEnvVar: 'CODEX_API_KEY',
-    toolchainCommand: 'codex',
-  },
-] as const;
+type CredentialedSmokeCapability = Extract<SmokeCapability, `credentialed:${string}`>;
+
+/** Resolves a manifest provider to a declared closed credentialed capability. */
+function credentialedSmokeCapability(
+  provider: (typeof LIVE_E2E_PROVIDERS)[number]['id'],
+): CredentialedSmokeCapability {
+  const capability = `credentialed:${provider}`;
+  if (!SMOKE_CAPABILITIES.includes(capability as SmokeCapability)) {
+    throw new Error(`Live E2E provider ${provider} has no declared smoke capability`);
+  }
+  return capability as CredentialedSmokeCapability;
+}
 
 /** The executable required by each smoke file that needs the toolchain capability. */
 const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
@@ -105,16 +104,19 @@ function resolveAdvisorySmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, AdvisorySmokeCapabilityResolution> {
   const credentialedCapabilities = Object.fromEntries(
-    LIVE_SMOKE_PROVIDER_DESCRIPTORS.map(({ capability, credentialEnvVar }) => [
-      capability,
-      forceSkipsCapability(environment, capability)
-        ? { outcome: 'skipped', unmet: 'operator override' }
-        : environment[credentialEnvVar]
-        ? { outcome: 'ran' }
-        : { outcome: 'skipped', unmet: credentialEnvVar },
-    ]),
+    LIVE_E2E_PROVIDERS.map(({ id, credentialEnvVar }) => {
+      const capability = credentialedSmokeCapability(id);
+      return [
+        capability,
+        forceSkipsCapability(environment, capability)
+          ? { outcome: 'skipped', unmet: 'operator override' }
+          : environment[credentialEnvVar]
+          ? { outcome: 'ran' }
+          : { outcome: 'skipped', unmet: credentialEnvVar },
+      ];
+    }),
   ) as Record<
-    (typeof LIVE_SMOKE_PROVIDER_DESCRIPTORS)[number]['capability'],
+    CredentialedSmokeCapability,
     AdvisorySmokeCapabilityResolution
   >;
 
@@ -180,18 +182,21 @@ function resolveGateSmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, GateSmokeCapabilityResolution> {
   const credentialedCapabilities = Object.fromEntries(
-    LIVE_SMOKE_PROVIDER_DESCRIPTORS.map(({ capability, provider, credentialEnvVar, toolchainCommand }) => [
-      capability,
-      forceSkipsCapability(environment, capability)
-        ? { outcome: 'failed', unmet: 'operator override' }
-        : environment[credentialEnvVar]
-        ? hasCommand(toolchainCommand)
-          ? { outcome: 'ran' }
-          : { outcome: 'failed', unmet: toolchainCommand }
-        : { outcome: 'skipped', provider, unmet: credentialEnvVar },
-    ]),
+    LIVE_E2E_PROVIDERS.map(({ id, binaryName, credentialEnvVar }) => {
+      const capability = credentialedSmokeCapability(id);
+      return [
+        capability,
+        forceSkipsCapability(environment, capability)
+          ? { outcome: 'failed', unmet: 'operator override' }
+          : environment[credentialEnvVar]
+          ? hasCommand(binaryName)
+            ? { outcome: 'ran' }
+            : { outcome: 'failed', unmet: binaryName }
+          : { outcome: 'skipped', provider: id, unmet: credentialEnvVar },
+      ];
+    }),
   ) as Record<
-    (typeof LIVE_SMOKE_PROVIDER_DESCRIPTORS)[number]['capability'],
+    CredentialedSmokeCapability,
     GateSmokeCapabilityResolution
   >;
 
