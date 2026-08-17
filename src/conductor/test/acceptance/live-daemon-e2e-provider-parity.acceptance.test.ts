@@ -163,15 +163,81 @@ describe('live daemon E2E provider parity (#1264)', () => {
   });
 
   it('shares cost, authentication, teardown, and diagnostics guarantees across provider legs', async () => {
-    const source = await requiredSource(SHARED_BODY_PATH);
+    const runBody = await import(/* @vite-ignore */ SHARED_BODY_PATH) as {
+      DEFAULT_LIVE_E2E_TOKEN_CAP: number;
+      resolveLiveE2ETokenCap: (environment: NodeJS.ProcessEnv) => number;
+      assertTokenCap: (totalTokens: number, unmetered: number, cap: number) => void;
+      enforceLiveE2ETokenCap: <T>(
+        run: () => Promise<T>,
+        metrics: () => { totalTokens: number; unmetered: number },
+        cap: number,
+      ) => Promise<T>;
+      assertDescriptorAuthenticationSource: (
+        descriptor: unknown,
+        provider: unknown,
+      ) => Promise<void>;
+      withProvisionedLiveProviderHome: <T>(
+        sourceRoot: string,
+        descriptor: unknown,
+        provider: unknown,
+        provision: (...args: unknown[]) => Promise<unknown>,
+        run: (home: unknown) => Promise<T>,
+      ) => Promise<T>;
+      withLiveE2EFailureDiagnostics: <T>(
+        worktreeDir: string | undefined,
+        credentialValues: readonly string[],
+        run: () => Promise<T>,
+      ) => Promise<T>;
+    };
 
-    expect(source).toMatch(/expectedAuthenticationSource/);
-    expect(source).toMatch(/prepareSelfHostAuth/);
-    expect(source).toMatch(/assertTokenCap/);
-    expect(source).toMatch(/totalTokens[\s\S]*(?:dispatch|turn)[\s\S]*(?:cap|limit)/i);
-    expect(source).toMatch(/unmeteredSteps/);
-    expect(source).toMatch(/dumpPipelineDiagnostics/);
-    expect(source).toMatch(/finally\s*\{[\s\S]*(?:teardown|dispose|remove|rm)/);
+    // Cost: one shared cap policy governs every leg, honors the env override,
+    // and rejects an over-cap spend even when the leg itself already failed.
+    expect(runBody.resolveLiveE2ETokenCap({ DAEMON_E2E_LIVE_TOKEN_CAP: '123' })).toBe(123);
+    expect(runBody.resolveLiveE2ETokenCap({})).toBe(runBody.DEFAULT_LIVE_E2E_TOKEN_CAP);
+    expect(() => runBody.assertTokenCap(11, 3, 10)).toThrow(/cap 10 exceeded.*observed 11.*unmetered results: 3/i);
+    expect(() => runBody.assertTokenCap(10, 0, 10)).not.toThrow();
+    await expect(runBody.enforceLiveE2ETokenCap(
+      async () => 'leg completed',
+      () => ({ totalTokens: 50, unmetered: 0 }),
+      10,
+    )).rejects.toThrow(/cap 10 exceeded/i);
+
+    // Authentication: a leg whose provider resolves a different authentication
+    // source than its descriptor expects is rejected before any spend.
+    await expect(runBody.assertDescriptorAuthenticationSource(
+      {
+        expectedAuthenticationSource: 'oauth',
+        resolveAuthenticationSource: async () => 'api-key',
+      },
+      {},
+    )).rejects.toThrow(/expected oauth, resolved api-key/i);
+
+    // Teardown: the provisioned throwaway home is torn down whether the leg
+    // returns or throws.
+    const teardown = vi.fn(async () => {});
+    const provision = vi.fn(async () => ({ teardown }));
+    await expect(runBody.withProvisionedLiveProviderHome(
+      '/fixture-root', {}, {}, provision, async () => 'ran',
+    )).resolves.toBe('ran');
+    expect(teardown).toHaveBeenCalledTimes(1);
+    await expect(runBody.withProvisionedLiveProviderHome(
+      '/fixture-root', {}, {}, provision, async () => { throw new Error('leg failed'); },
+    )).rejects.toThrow('leg failed');
+    expect(teardown).toHaveBeenCalledTimes(2);
+
+    // Diagnostics: a failing leg reports pipeline diagnostics and rethrows
+    // with credential values redacted from the surfaced failure.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(runBody.withLiveE2EFailureDiagnostics(
+        undefined,
+        ['fixture-credential'],
+        async () => { throw new Error('auth fixture-credential rejected'); },
+      )).rejects.toThrow(/auth \[redacted\] rejected/);
+      expect(consoleError.mock.calls.flat().join('\n')).toMatch(/pipeline diagnostics unavailable/);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('makes the workflow matrix select and report each provider leg without exposing credentials', async () => {

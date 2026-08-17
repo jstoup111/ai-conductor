@@ -14,10 +14,12 @@
  *   arithmetic; this file owns the cross-boundary story contracts.
  */
 
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeResult } from '../../src/execution/llm-provider.js';
 
@@ -72,47 +74,124 @@ async function invokeEnvelope(
 
 describe('live daemon E2E command resolution (#1311)', () => {
   it('provisions copied checkout skills inside the selected live case and routes that home into dispatch', async () => {
-    const [home, runBody] = await Promise.all([
-      requiredSource(LIVE_HOME_PATH),
-      requiredSource(LIVE_RUN_BODY_PATH),
-    ]);
+    const { provisionLiveProviderHome } = await import(/* @vite-ignore */ LIVE_HOME_PATH) as {
+      provisionLiveProviderHome: (
+        sourceRoot: string,
+        descriptor: { id: string },
+        provider: { prepareSelfHostAuth?: (context: unknown) => Promise<{ env?: NodeJS.ProcessEnv } | void> },
+        baseDir?: string,
+      ) => Promise<{
+        homeDir: string;
+        childEnv(): NodeJS.ProcessEnv;
+        teardown(): Promise<void>;
+      }>;
+    };
+    const { ProvisionedHome } = await import(/* @vite-ignore */ LIVE_RUN_BODY_PATH) as {
+      ProvisionedHome: new (
+        provider: unknown,
+        selfHost: unknown,
+      ) => { invoke(options: Record<string, unknown>): Promise<unknown>; dispatches: number };
+    };
 
-    expect(home).toMatch(/provisionProviderHome/);
-    expect(home).toMatch(/export\s+(?:async\s+)?function\s+provisionLiveProviderHome/);
-    expect(home).not.toMatch(/symlink\s*\([^)]*worktree|bin\/install|\.claude\.json/);
+    const repoRoot = dirname(dirname(CONDUCTOR_ROOT));
+    const baseDir = await mkdtemp(join(tmpdir(), 'live-home-acceptance-'));
+    const prepareSelfHostAuth = vi.fn(async () => ({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'fixture-token' } }));
+    const home = await provisionLiveProviderHome(repoRoot, { id: 'claude' }, { prepareSelfHostAuth }, baseDir);
 
-    const selectedCase = runBody.indexOf("describe.skipIf(!shouldRun)");
-    const provisioning = runBody.indexOf('await withProvisionedLiveProviderHome');
-    expect(selectedCase).toBeGreaterThanOrEqual(0);
-    expect(provisioning).toBeGreaterThan(selectedCase);
-    expect(runBody).toMatch(/selfHost\s*:/);
-    expect(runBody).toMatch(/finally\s*\{[\s\S]*teardown\s*\(/);
+    try {
+      // The checkout's skills are COPIED into the throwaway home, not linked.
+      expect(existsSync(join(home.homeDir, 'skills', 'tdd', 'SKILL.md'))).toBe(true);
+      expect((await lstat(join(home.homeDir, 'skills'))).isSymbolicLink()).toBe(false);
+
+      // The home is isolated: ambient credentials never leak between legs, the
+      // selected provider's auth seam repopulates only its own credential, and
+      // the child is pointed at the throwaway home.
+      expect(prepareSelfHostAuth).toHaveBeenCalledWith(expect.objectContaining({ provider: 'claude', homeDir: home.homeDir }));
+      const childEnv = home.childEnv();
+      expect(childEnv.CLAUDE_CONFIG_DIR).toBe(home.homeDir);
+      expect(childEnv.CODEX_API_KEY).toBeUndefined();
+      expect(childEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe('fixture-token');
+
+      // The provisioned home is what dispatch receives: ProvisionedHome
+      // overrides any caller-supplied selfHost with the provisioned one.
+      const invoke = vi.fn(async () => ({ success: true, output: '', exitCode: 0 }));
+      const selfHost = { executable: 'claude', env: childEnv, args: [], teardown: () => home.teardown() };
+      const provisioned = new ProvisionedHome({ invoke }, selfHost);
+      await provisioned.invoke({ prompt: 'fixture', sessionId: 'fixture', resume: false });
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ selfHost }));
+      expect(provisioned.dispatches).toBe(1);
+    } finally {
+      await home.teardown();
+      await rm(baseDir, { recursive: true, force: true });
+    }
+
+    // Teardown removed the throwaway home entirely.
+    expect(existsSync(home.homeDir)).toBe(false);
   });
 
   it('preflights every registry-rendered command from the provisioned home before provider dispatch', async () => {
-    const [preflight, runBody] = await Promise.all([
-      requiredSource(PREFLIGHT_PATH),
-      requiredSource(LIVE_RUN_BODY_PATH),
-    ]);
+    const { dispatchableStepCommands } = await import(/* @vite-ignore */ PREFLIGHT_PATH) as {
+      dispatchableStepCommands: ((providerKey: string) => readonly { step: string; skillName: string; rendered: string }[]) & {
+        assertResolves: (
+          homeDir: string,
+          providerKey?: string,
+          dependencies?: { access?: (path: string) => Promise<void> },
+        ) => Promise<void>;
+      };
+    };
+    const { dispatchAfterLivePreflight } = await import(/* @vite-ignore */ LIVE_RUN_BODY_PATH) as {
+      dispatchAfterLivePreflight: <T>(
+        home: { homeDir: string },
+        dispatch: () => Promise<T>,
+        providerKey: string,
+        preflight?: (homeDir: string, providerKey?: string) => Promise<void>,
+      ) => Promise<T>;
+    };
 
-    expect(preflight).toMatch(/STEP_SKILL_INVOCATIONS/);
-    expect(preflight).toMatch(/renderSkillInvocation/);
-    expect(preflight).toMatch(
-      /descriptor\.kind\s*(?:===?\s*['"]skill['"]|!==?\s*['"]skill['"]\s*\)\s*return\s*\[\])/,
-    );
-    expect(preflight).toMatch(/SKILL\.md/);
-    expect(preflight).toMatch(/missing|unresolved/i);
-    expect(preflight).toMatch(/custom|project configuration|parallel/i);
-    expect(preflight).not.toMatch(/['"]pipeline['"]/);
-    expect(preflight).not.toMatch(/\.invoke\s*\(|exec(?:File)?\s*\(|fetch\s*\(/);
+    // The command set is registry-derived and non-empty; every entry renders a
+    // provider-specific invocation for a skill the isolated home must resolve.
+    const commands = dispatchableStepCommands('claude');
+    expect(commands.length).toBeGreaterThan(0);
+    for (const command of commands) {
+      expect(command.rendered).toContain(command.skillName);
+    }
 
-    // The dispatch boundary is shared by the provider-specific smoke legs.
-    // Keep this story-level contract focused on the live run body's wiring;
-    // its focused fixture test owns the failed-preflight/no-dispatch behavior.
-    expect(runBody).toMatch(/await\s+dispatchAfterLivePreflight\(\s*providerHome/);
-    expect(runBody).toMatch(
-      /export\s+async\s+function\s+dispatchAfterLivePreflight[\s\S]*await\s+preflight\([^)]*providerKey\)[\s\S]*return\s+dispatch\(\)/,
-    );
+    // A home holding every registry skill passes preflight; a home missing one
+    // fails it, naming the unresolved skill.
+    const resolvedPaths: string[] = [];
+    await dispatchableStepCommands.assertResolves('/provisioned-home', 'claude', {
+      access: async (path: string) => { resolvedPaths.push(path); },
+    });
+    expect(resolvedPaths).toEqual(commands.map(
+      (command) => join('/provisioned-home', 'skills', command.skillName, 'SKILL.md'),
+    ));
+    const missing = commands[0].skillName;
+    await expect(dispatchableStepCommands.assertResolves('/provisioned-home', 'claude', {
+      access: async (path: string) => {
+        if (path.includes(join('skills', missing))) throw new Error('ENOENT');
+      },
+    })).rejects.toThrow(new RegExp(`Unable to resolve skills.*${missing}`));
+
+    // Preflight gates dispatch: it runs against the provisioned home with the
+    // provider key first, and a failed preflight prevents any dispatch.
+    const order: string[] = [];
+    const dispatch = vi.fn(async () => { order.push('dispatch'); return 'dispatched'; });
+    await expect(dispatchAfterLivePreflight(
+      { homeDir: '/provisioned-home' },
+      dispatch,
+      'claude',
+      async (homeDir, providerKey) => { order.push(`preflight:${homeDir}:${providerKey}`); },
+    )).resolves.toBe('dispatched');
+    expect(order).toEqual(['preflight:/provisioned-home:claude', 'dispatch']);
+
+    const blockedDispatch = vi.fn(async () => 'dispatched');
+    await expect(dispatchAfterLivePreflight(
+      { homeDir: '/provisioned-home' },
+      blockedDispatch,
+      'claude',
+      async () => { throw new Error('Unable to resolve skills tdd'); },
+    )).rejects.toThrow(/unable to resolve skills/i);
+    expect(blockedDispatch).not.toHaveBeenCalled();
   });
 
   it('classifies the observed zero-turn unknown-command envelope as a named failure at the provider boundary', async () => {
