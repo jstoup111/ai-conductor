@@ -92,9 +92,32 @@ Read in order of authority (higher overrides lower):
 4. `.memory/decisions/` — Prior architectural decisions
 5. Existing code structure — `config/routes.rb`, model relationships, directory layout
 
-**Convention over precedent:** Written decisions override observed patterns. Existing code that
-violates a documented decision is tech debt, not precedent. Never downgrade a finding because
-"the codebase already does it this way."
+**Approved decisions first; convention over precedent:** Applicable APPROVED decisions override
+observed patterns. Existing code that conflicts with a documented decision is tech debt and must
+be rejected as precedent. Never downgrade a finding because "the codebase already does it this
+way."
+
+**Focused local pattern basis (when applicable):** When a concrete local precedent matters to a
+feature concern that approved decisions do not already settle, record it in the review's ordinary
+prose. Keep the basis bounded to that concern and include:
+
+- the precedent's role;
+- the material semantic traits the new work should preserve;
+- why that precedent applies to this concern;
+- the variation that remains allowed; and
+- path and stable-symbol hints that help BUILD rediscover an equivalent on its current HEAD.
+
+Hints are rediscovery seeds, not authoring-time snapshots: never anchor this basis to line numbers
+or require the original exemplar to remain at a fixed coordinate. BUILD must resolve the traits
+against its checkout at implementation time. A selected pattern does not establish a project-wide
+convention or configuration rule, and it does not replace the separate exact-replication
+`Pattern-source` / `Rename-map` contract.
+
+When no suitable precedent can be verified, record that verified no-fit in the ordinary review
+prose rather than inventing an exemplar. When the in-scope approach requires departing from an
+otherwise applicable pattern, record the operator-authorized bounded departure, its reason, and
+its boundary before handing the approach to BUILD. Do not add this optional basis when no local
+precedent affects the approach.
 
 ### 2. Technical Feasibility
 
