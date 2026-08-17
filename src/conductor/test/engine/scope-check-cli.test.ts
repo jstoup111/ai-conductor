@@ -39,10 +39,8 @@ describe('scope-check CLI', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it.each([
-    ['absent key', '{}\n'],
-  ])('falls back to report-only for %s configuration', async (_name, config) => {
-    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), config);
+  it('loads report-only as the default from resolved project configuration', async () => {
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), '{}\n');
     await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(false);
   });
 
@@ -53,6 +51,33 @@ describe('scope-check CLI', () => {
     );
 
     await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(true);
+  });
+
+  it('falls back to report-only for a non-boolean containment configuration value', async () => {
+    await expect(
+      loadScopeCheckEnforcement(projectRoot, async () => ({
+        ok: true,
+        config: { build_review: { scopeContainmentEnforced: 'true' } },
+        warnings: [],
+      })),
+    ).resolves.toBe(false);
+  });
+
+  it('falls back to report-only when the configuration loader rejects', async () => {
+    await expect(
+      loadScopeCheckEnforcement(projectRoot, async () => {
+        throw new Error('configuration unreadable');
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('falls back to report-only for a malformed configuration result', async () => {
+    await expect(
+      loadScopeCheckEnforcement(projectRoot, async () => ({
+        ok: false,
+        error: { type: 'parse_error', message: 'configuration malformed' },
+      })),
+    ).resolves.toBe(false);
   });
 
   it('contains no withdrawn enforcement-flip guidance in the scope-check source or generated hook', async () => {
@@ -263,9 +288,12 @@ describe('scope-check CLI', () => {
 
     await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
 
-    expect(await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8')).toMatch(
-      /^\{"type":"containment_check_unresolved","failure":"task-status-malformed","taskId":"3","ts":\d+\}\n$/,
-    );
+    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8'))).toMatchObject({
+      type: 'containment_check_unresolved',
+      failure: 'task-status-malformed',
+      taskId: '3',
+      commitMessage: MESSAGE,
+    });
     await expect(readFile(engineLedgerPath, 'utf8')).resolves.toBe(engineLedger);
   });
 
@@ -280,7 +308,11 @@ describe('scope-check CLI', () => {
 
     const lines = (await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8')).split('\n');
     expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ taskId: '3', failure: 'task-status-malformed' });
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      taskId: '3',
+      failure: 'task-status-malformed',
+      commitMessage,
+    });
   });
 
   it('swallows an unwritable hook ledger path', async () => {

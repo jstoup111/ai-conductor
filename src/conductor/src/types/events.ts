@@ -164,6 +164,8 @@ export type ConductorEvent =
         | 'evaluation-failed';
       /** Present once the commit message yielded a resolvable Task trailer. */
       taskId?: string;
+      /** Raw commit message, retained when the hook read it before failing. */
+      commitMessage?: string;
       /** Epoch milliseconds when the hook recorded the unresolved check. */
       ts: number;
     }

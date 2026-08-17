@@ -88,6 +88,7 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
       type: 'containment_check_unresolved',
       failure: 'task-status-unreadable',
       taskId,
+      commitMessage,
       ts: Date.now(),
     });
     return 3;
@@ -101,6 +102,7 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
       type: 'containment_check_unresolved',
       failure: 'task-status-malformed',
       taskId,
+      commitMessage,
       ts: Date.now(),
     });
     return 3;
@@ -133,6 +135,7 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
       type: 'containment_check_unresolved',
       failure: 'evaluation-failed',
       taskId,
+      commitMessage,
       ts: Date.now(),
     });
     return 3;

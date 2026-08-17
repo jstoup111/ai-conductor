@@ -47,7 +47,7 @@ import { writeState } from '../../src/engine/state.js';
  *                           absent" invariant); the fixture below MUST NOT
  *                           produce a record.
  */
-type AuditedEventType = ConductorEvent['type'];
+type AuditedEventType = Exclude<ConductorEvent['type'], 'containment_check_unresolved'>;
 
 const EVENT_TYPE_CLASSIFICATION: Record<
   AuditedEventType,
@@ -63,7 +63,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_disposition_refused: 'not-audited-by-design',
   build_review_outer_verdict: 'not-audited-by-design',
   step_started: 'not-audited-by-design',
-  containment_check_unresolved: 'not-audited-by-design',
   deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
@@ -162,12 +161,6 @@ const EVENT_FIXTURES: { [K in AuditedEventType]: Extract<ConductorEvent, { type:
   build_review_disposition_refused: { type: 'build_review_disposition_refused', feature: 'feature', reason: 'non-tty' },
   build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
   step_started: { type: 'step_started', step: 'build', index: 0 },
-  containment_check_unresolved: {
-    type: 'containment_check_unresolved',
-    failure: 'evaluation-failed',
-    taskId: '3',
-    ts: 1_000,
-  },
   deprecated_step: {
     type: 'deprecated_step',
     step: 'wiring_check',
@@ -483,8 +476,10 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     const writer = new AuditTrailWriter(dir);
     writer.subscribe(events);
 
-    expect(sinks.persistedEventTypes()).toContain('containment_check_unresolved');
-    expect(sinks.auditedEventTypes()).not.toContain('containment_check_unresolved');
+    expect(sinks.EVENT_SINKS.containment_check_unresolved).toMatchObject({
+      persist: true,
+      audit: false,
+    });
 
     const stepsRun: StepName[] = [];
     const deprecatedSteps: Array<Extract<ConductorEvent, { type: 'deprecated_step' }>> = [];
@@ -574,7 +569,7 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
 
   it('drift guard: every audit-owned event type is classified, and the writer honors that classification', async () => {
     // Enumeration-driven (writing-system-tests §3): EVENT_TYPE_CLASSIFICATION
-    // above is a `Record` keyed by the full `ConductorEvent['type']` union —
+    // above is a `Record` keyed by the audit-writer-owned event union —
     // TypeScript itself refuses to compile this file if a new event type is
     // added without a classification, which is the actual drift guard (a
     // hand-written fixture list can silently go stale; a missing `Record`
