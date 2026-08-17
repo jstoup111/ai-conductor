@@ -276,9 +276,14 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
   continue publication.` and, when the provider supplied one, a trailing `Detail: <provider text>`.
   This is a `human_required` disposition — a condition only an operator can resolve, distinct from
   the three retryable/non-retryable shapes above. Its reasons cover judgment refusal or halt prose
-  (`judgment_refused`, `judgment_halt_prose`), an unresolvable PR match or shipped record
-  (`ambiguous_pr_identity`, `invalid_shipped_record`), and destructive or unrecognized publication
-  intent (`interactive_intent_*`, `unattended_intent_*`). It is always a `needs-human` halt.
+  (`judgment_refused`, `judgment_halt_prose`), a PR that still carries a `needs-remediation` title
+  prefix, banner, label, or body marker (`halt_state_pr` — resolved before judgment is ever
+  dispatched, so no provider pass is spent), a publication transition that ran but left its owned
+  state unchanged (`publication_transition_unmoved` — the detail names the transition and the
+  state that did not move, whether the transition reported success or asked for a retry it could
+  not perform), an unresolvable PR match or shipped record (`ambiguous_pr_identity`,
+  `invalid_shipped_record`), and destructive or unrecognized publication intent
+  (`interactive_intent_*`, `unattended_intent_*`). It is always a `needs-human` halt.
 
 **Diagnosis:** inspect the named last transition and the preceding FINISH publication events in the
 daemon log. Fourteen verified transitions without convergence means the publication state machine is
