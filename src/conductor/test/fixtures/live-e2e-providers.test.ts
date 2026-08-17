@@ -1,3 +1,7 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
@@ -43,8 +47,10 @@ describe('LIVE_E2E_PROVIDERS', () => {
     }
   });
 
-  it('declares the complete Codex live-leg descriptor', () => {
+  it('declares the complete Codex live-leg descriptor and verifies its credential guard', async () => {
     const codex = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'codex');
+    const priorHome = process.env.CODEX_HOME;
+    const codexHome = await mkdtemp(join(tmpdir(), 'live-e2e-codex-auth-'));
 
     expect(codex).toMatchObject({
       id: 'codex',
@@ -55,7 +61,24 @@ describe('LIVE_E2E_PROVIDERS', () => {
       expectedAuthenticationSource: 'api-key',
     });
     expect(codex?.createProvider()).toBeInstanceOf(CodexProvider);
-    expect(codex?.assertCredentialAvailable).toBeTypeOf('function');
+    expect(codex).toBeDefined();
+
+    try {
+      expect(codex!.assertCredentialAvailable('present-codex-key')).toBeUndefined();
+
+      process.env.CODEX_HOME = codexHome;
+      await writeFile(join(codexHome, 'auth.json'), '{}');
+      expect(codex!.assertCredentialAvailable(undefined)).toBeUndefined();
+
+      await rm(join(codexHome, 'auth.json'));
+      expect(() => codex!.assertCredentialAvailable(undefined)).toThrow(
+        `Missing Codex credential: set CODEX_API_KEY or sign in at ${join(codexHome, 'auth.json')}`,
+      );
+    } finally {
+      if (priorHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = priorHome;
+      await rm(codexHome, { recursive: true, force: true });
+    }
   });
 });
 

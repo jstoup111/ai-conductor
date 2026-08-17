@@ -31,6 +31,12 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
 };
 
 describe('structural: smoke test entry point', () => {
+  it('forwards both the smoke config and matrix-selected file to the smoke command', async () => {
+    const entryPoint = await readFile(join(conductorRoot, 'scripts/smoke.ts'), 'utf8');
+
+    expect(entryPoint).toMatch(/await\s+runSmokeCommand\(\s*process\.argv\.slice\(2\)\s*\)/);
+  });
+
   it('fails before running Vitest when smoke discovery is empty', async () => {
     const runVitest = vi.fn();
     const outcome = await runSmokeCli('vitest.smoke.config.ts', {

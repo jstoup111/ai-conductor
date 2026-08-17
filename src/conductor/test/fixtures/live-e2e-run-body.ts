@@ -15,7 +15,8 @@ import type {
 import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
+import { DefaultStepRunner, type StepRunnerOptions } from '../../src/engine/step-runners.js';
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
 import type { StepName } from '../../src/types/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -147,14 +148,28 @@ export async function withProvisionedLiveProviderHome<T>(
   }
 }
 
-export async function dispatchAfterLivePreflight(
+export async function dispatchAfterLivePreflight<T>(
   home: Pick<ProviderHome, 'homeDir'>,
-  dispatch: () => Promise<void>,
+  dispatch: () => Promise<T>,
   providerKey: string,
   preflight: LiveProviderPreflight = dispatchableStepCommands.assertResolves,
-): Promise<void> {
+): Promise<T> {
   await preflight(home.homeDir, providerKey);
-  await dispatch();
+  return dispatch();
+}
+
+export function createLiveE2EStepRunner(
+  provider: LLMProvider,
+  descriptor: LiveE2EProviderDescriptor,
+  sessionId: string,
+  projectDir: string,
+  options: Omit<StepRunnerOptions, 'modelPolicy' | 'providerKey'>,
+): DefaultStepRunner {
+  return new DefaultStepRunner(provider, sessionId, projectDir, {
+    ...options,
+    providerKey: descriptor.providerKey,
+    modelPolicy: resolveProviderModelPolicy(descriptor.providerKey),
+  });
 }
 
 export function assertTokenCap(totalTokens: number, unmetered: number, cap: number): void {
@@ -443,8 +458,8 @@ export async function runLiveE2ERunBody(
             plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
             architecture_review: 'done', acceptance_specs: 'done',
           }));
-          const runner = new DefaultStepRunner(meter!, 'daemon-e2e-live-session', liveWorktreeDir, {
-            featureDesc: slug, pipelineDir, planPath, providerKey: descriptor.providerKey, mode: 'auto',
+          const runner = createLiveE2EStepRunner(meter!, descriptor, 'daemon-e2e-live-session', liveWorktreeDir, {
+            featureDesc: slug, pipelineDir, planPath, mode: 'auto',
             // The tautology preflight (#1618) fails instantly in a standalone
             // temp repository with missing-scoped-configuration; disable only
             // that branch — the other three fan-out branches still run live.

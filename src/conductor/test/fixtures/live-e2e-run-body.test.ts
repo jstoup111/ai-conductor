@@ -64,6 +64,36 @@ describe('ProvisionedHome', () => {
   });
 });
 
+describe('Codex live-leg model policy', () => {
+  it('dispatches the Codex-native build model through the live-leg runner', async () => {
+    const { createLiveE2EStepRunner } = await import('./live-e2e-run-body.js') as {
+      createLiveE2EStepRunner: (
+        provider: LLMProvider,
+        descriptor: LiveE2EProviderDescriptor,
+        sessionId: string,
+        projectDir: string,
+        options: Record<string, unknown>,
+      ) => { run: (step: 'build', state: Record<string, never>) => Promise<unknown> };
+    };
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 })),
+      invokeInteractive: vi.fn(async () => undefined),
+    };
+    const descriptor = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'codex');
+    expect(descriptor).toBeDefined();
+
+    const runner = createLiveE2EStepRunner(provider, descriptor!, 'live-codex-session', '/tmp/live-codex', {
+      mode: 'auto',
+    });
+    await runner.run('build', {});
+
+    expect(vi.mocked(provider.invoke).mock.calls[0][0]).toMatchObject({
+      model: 'gpt-5.6-terra',
+      effort: 'medium',
+    });
+  });
+});
+
 describe('runLiveE2ERunBody authentication source', () => {
   it('does not dispatch or report a successful terminal state when the live fixture is already halted', async () => {
     const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
@@ -660,21 +690,45 @@ describe('live E2E preflight dispatch boundary', () => {
 
   it('keeps a post-preflight outcome failure distinct from the successful preflight', async () => {
     const { dispatchAfterLivePreflight } = await import('./live-e2e-run-body.js') as {
-      dispatchAfterLivePreflight: (
+      dispatchAfterLivePreflight: <T>(
         home: { homeDir: string },
-        dispatch: () => Promise<void>,
+        dispatch: () => Promise<T>,
         providerKey: string,
         preflight: (homeDir: string, providerKey?: string) => Promise<void>,
-      ) => Promise<void>;
+      ) => Promise<T>;
     };
     const preflight = vi.fn(async () => {});
-    const dispatch = vi.fn(async () => { throw new Error('daemon outcome failed after preflight'); });
+    const dispatch = vi.fn(async () => ({
+      success: false,
+      exitCode: 1,
+      output: 'daemon outcome failed after preflight',
+      commandUnresolved: undefined,
+      commandUnresolvedName: undefined,
+    }));
 
-    await expect(dispatchAfterLivePreflight({ homeDir: '/tmp/live-home' }, dispatch, 'claude', preflight))
-      .rejects.toThrow('daemon outcome failed after preflight');
-    expect({ preflight: preflight.mock.calls, dispatches: dispatch.mock.calls.length }).toEqual({
+    const result = await dispatchAfterLivePreflight(
+      { homeDir: '/tmp/live-home' },
+      dispatch,
+      'claude',
+      preflight,
+    );
+
+    expect({
+      preflight: preflight.mock.calls,
+      dispatches: dispatch.mock.calls.length,
+      success: result.success,
+      exitCode: result.exitCode,
+      commandUnresolved: result.commandUnresolved,
+      commandUnresolvedName: result.commandUnresolvedName,
+      successfulTerminalState: result.success,
+    }).toEqual({
       preflight: [['/tmp/live-home', 'claude']],
       dispatches: 1,
+      success: false,
+      exitCode: 1,
+      commandUnresolved: undefined,
+      commandUnresolvedName: undefined,
+      successfulTerminalState: false,
     });
   });
 });
