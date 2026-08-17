@@ -268,6 +268,10 @@ function renderFindingVocabularyMemberShape(rubric: BuildReviewRubricId): string
   return `<one of: ${BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.join(' | ')}>`;
 }
 
+function describeFindingVocabularyRejection(rubric: BuildReviewRubricId, field: string): string {
+  return `${field} must be one of: ${BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.join(' | ')}`;
+}
+
 /**
  * Render the exact judged-result JSON template for one rubric. This is the
  * machine-owned schema text embedded in every rubric dispatch and repair
@@ -315,6 +319,9 @@ export function describeBuildReviewJudgedResultRejection(
       const entry = record(finding);
       if (!entry) { problems.push(`findings[${index}] is not an object`); return; }
       if (!nonEmptyString(entry.concernKind)) problems.push(`findings[${index}].concernKind must be a non-empty string (never "kind")`);
+      else if (!parseFindingVocabularyMember(entry.concernKind, rubric)) {
+        problems.push(describeFindingVocabularyRejection(rubric, `findings[${index}].concernKind`));
+      }
       if (!nonEmptyString(entry.summary)) problems.push(`findings[${index}].summary must be a non-empty string`);
       if (!Array.isArray(entry.evidenceLocations) || entry.evidenceLocations.length === 0 ||
         entry.evidenceLocations.some((location) => !evidenceLocation(location))) {
@@ -329,6 +336,9 @@ export function describeBuildReviewJudgedResultRejection(
         if (anchor.rubric !== rubric) problems.push(`findings[${index}].anchor.rubric must be "${rubric}"`);
         for (const field of ANCHOR_FIELDS[rubric]) {
           if (!nonEmptyString(anchor[field])) problems.push(`findings[${index}].anchor.${field} must be a non-empty string`);
+          else if (field === CLASSIFICATION_ANCHOR_FIELDS[rubric] && !parseFindingVocabularyMember(anchor[field], rubric)) {
+            problems.push(describeFindingVocabularyRejection(rubric, `findings[${index}].anchor.${field}`));
+          }
         }
       }
     });

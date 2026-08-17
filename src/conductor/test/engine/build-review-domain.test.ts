@@ -209,6 +209,22 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     }
   });
 
+  it('names the tautology vocabulary when a prose violationKind is outside it', () => {
+    const rejection = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v2', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'assertion-insensitive-to-production', summary: 'The assertion remains green.', evidenceLocations: ['test/a.test.ts:8'],
+        anchor: {
+          rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'writes an event',
+          violationKind: 'a prose explanation instead of a classification',
+        },
+      }],
+    }, 'tautology', expected);
+
+    expect(rejection).toContain('findings[0].anchor.violationKind');
+    expect(rejection).toContain(BUILD_REVIEW_FINDING_VOCABULARIES.tautology.members.join(' | '));
+  });
+
   it('names the missing anchor when a finding flattens anchor fields to its top level (2026-08-15 tautology incident shape)', () => {
     const rejection = describeBuildReviewJudgedResultRejection({
       kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
