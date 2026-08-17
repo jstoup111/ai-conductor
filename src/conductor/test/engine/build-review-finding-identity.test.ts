@@ -116,19 +116,39 @@ describe('build-review finding identity', () => {
     expect(new Set(normalized).size).toBe(normalized.length);
   });
 
-  it('excludes report prose subjects from the canonical identity', () => {
-    const stableFields = {
+  it('excludes report prose subjects from every canonical identity', () => {
+    const tautology = {
       rubric: 'tautology' as const, contractVersion: 'v1' as const, concernKind: 'test-does-not-exercise-changed-behavior',
       anchor: { rubric: 'tautology' as const, changedTest: 'src/conductor/test/engine/build-review-finding-identity.test.ts', exercisedBehavior: 'first prose description', violationKind: 'test-does-not-exercise-changed-behavior' },
     };
-    const first = canonicalizeBuildReviewFindingIdentity({
-      ...stableFields, summary: 'The assertion still passes after the production change.', evidenceLocations: ['src/conductor/test/engine/build-review-finding-identity.test.ts:1'],
-    });
-    const reworded = canonicalizeBuildReviewFindingIdentity({
-      ...stableFields,
-      anchor: { ...stableFields.anchor, exercisedBehavior: 'reworded prose description' },
-      summary: 'The changed behavior is not exercised.', evidenceLocations: ['src/conductor/test/engine/build-review-finding-identity.test.ts:999'],
-    });
+    const rootCause = {
+      rubric: 'rootCause' as const, contractVersion: 'v1' as const, concernKind: 'root-cause-unaddressed',
+      anchor: { rubric: 'rootCause' as const, statedDefect: 'first prose defect description', locus: 'src/engine/handler.ts', relation: 'root-cause-unaddressed' },
+    };
+    const completeness = {
+      rubric: 'completeness' as const, contractVersion: 'v1' as const, concernKind: 'missing-deliverable',
+      anchor: { rubric: 'completeness' as const, planTask: '5', missingSurface: 'src/engine/handler.ts', missingOutcome: 'first prose outcome description' },
+    };
+
+    const first = [tautology, rootCause, completeness].map((finding) => canonicalizeBuildReviewFindingIdentity({
+      ...finding, summary: 'The initial wording.', evidenceLocations: ['src/conductor/test/engine/build-review-finding-identity.test.ts:1'],
+    }));
+    const reworded = [
+      {
+        ...tautology,
+        anchor: { ...tautology.anchor, exercisedBehavior: 'reworded prose description' },
+      },
+      {
+        ...rootCause,
+        anchor: { ...rootCause.anchor, statedDefect: 'reworded prose defect description' },
+      },
+      {
+        ...completeness,
+        anchor: { ...completeness.anchor, missingOutcome: 'reworded prose outcome description' },
+      },
+    ].map((finding) => canonicalizeBuildReviewFindingIdentity({
+      ...finding, summary: 'The reworded summary.', evidenceLocations: ['src/conductor/test/engine/build-review-finding-identity.test.ts:999'],
+    }));
 
     expect(reworded).toEqual(first);
   });
