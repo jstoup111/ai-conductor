@@ -84,6 +84,27 @@ both the acceptance spec and its implementation. The waiver must be recorded wit
 and attributable approval; the completion is reported as waived, never as proven RED. Without that
 recorded declaration, the acceptance specs must establish ordinary failing-spec RED evidence.
 
+### Behavioral Coverage at the Lowest Sufficient Layer
+
+Every happy and negative acceptance criterion needs one concrete coverage disposition: existing
+sufficient behavioral proof, a lower-layer behavioral test, or an acceptance/system spec. A criterion
+does not automatically require a new acceptance/system spec, and work remains incomplete until its
+disposition identifies the proof or test that covers the behavior.
+
+Reserve acceptance/system coverage for a distinct, multi-step externally observable flow that cannot
+be proven sufficiently below. Negative behavior remains mandatory, but lower-layer coverage retains
+its failure permutations; an acceptance/system spec covers the distinct flow without duplicating each
+of those permutations. Test scope follows changed behavior and failure boundaries, not production-file
+count, so production-file count does not determine test-file count. Natural-language skill guidance
+alone is not executable or machine-readable behavior and must not be tested solely by matching its
+wording.
+
+Every generated acceptance/system spec must still establish genuine RED evidence before
+implementation. A declared exact-copy `Pattern-source` / `Rename-map` contract remains its separate
+mechanical exception: it copies the source acceptance specs under its governing contract even when
+the lowest-sufficient-layer rule would not select them from scratch. This exception does not apply to
+ordinary semantic pattern reuse without that declaration.
+
 **DECIDE scope:** The operator chooses the fix breadth before approach confirmation. Do not silently
 narrow or broaden the requested outcome.
 
