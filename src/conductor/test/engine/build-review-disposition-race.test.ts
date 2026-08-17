@@ -235,37 +235,19 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     });
   });
 
-  it('keeps the raw-FAIL HALT reasons distinct, classified, and exhaustively guarded at their exit sites', async () => {
-    const source = await readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf-8');
-    const rawFailStart = source.indexOf('// build_review kickback (daemon only, Task 13)');
-    const rawFailEnd = source.indexOf('// Task 8: Stall remediation', rawFailStart);
-    expect(rawFailStart).toBeGreaterThanOrEqual(0);
-    expect(rawFailEnd).toBeGreaterThan(rawFailStart);
-    const rawFailBlock = source.slice(rawFailStart, rawFailEnd);
-
-    for (const reason of [
-      'build_review scope-FAIL disposition HALT:',
-      'build_review kickback-to-build no-op:',
-      'build_review cumulative kickback cap exceeded',
-      'build_review completeness FAIL needs a human:',
-      'build_review FAIL unresolved after',
-    ]) {
-      expect(rawFailBlock).toContain(reason);
-    }
-    expect((rawFailBlock.match(/writeHaltMarker\([^\n]+, 'needs-human'\)/g) ?? [])).toHaveLength(5);
-
-    // Task 11 derived ten terminal outcomes after the effective-PASS helper.
-    // Their fifteen concrete control primitives cover stale-mirage
-    // halt/regrade, no-op halt, budget consume, cumulative halt,
-    // remediate-refusal halt, merged-PR return, ordinary route, and per-gate
-    // halt. A new raw-FAIL exit changes this count and must add an adjacent
-    // effective-verdict decision instead of silently bypassing dispositions.
-    const helperEnd = rawFailBlock.indexOf('// Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):');
-    const exitRegion = rawFailBlock.slice(helperEnd);
-    const terminalActions = exitRegion.match(
-      /await this\.writeHaltMarker|i = i - 1|await consumeKickbackBudget|await emitTracked\(|return;/g,
-    ) ?? [];
-    expect(terminalActions).toHaveLength(15);
-    expect((exitRegion.match(/if \(await reenterBuildReviewIfEffectivePass\(\)\) continue;/g) ?? [])).toHaveLength(7);
+  it.each([
+    ['scope-FAIL route', {}],
+    ['kickback-to-build no-op', { kickbackLedger: { version: 1, gates: { build_review: { count: 2, cumulative: 2, treeHash: 'same', lastReason: 'same', priorVerdict: true, resolvedBefore: 0 } } } }],
+    ['cumulative cap', { kickbackLedger: { version: 1, gates: { build_review: { count: 1, cumulative: 5, treeHash: 'prior', lastReason: 'prior', priorVerdict: true, resolvedBefore: 0 } } } }],
+    ['completeness needs-human', { completenessFailure: true, remediateRefusal: true }],
+    ['per-gate unresolved halt', { kickbackLedger: { version: 1, gates: { build_review: { count: 2, cumulative: 2, treeHash: 'prior', lastReason: 'prior', priorVerdict: false, resolvedBefore: 0 } } } }],
+  ])('re-enters build_review instead of terminal routing when effective PASS reaches %s', async (_exit, options) => {
+    const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
+    const { dispatched, kickbacks, buildReviewRuns } = await fixture(resolver, options);
+    expect(resolver).toHaveBeenCalled();
+    expect(dispatched).not.toContain('build');
+    expect(kickbacks).toEqual([]);
+    expect(buildReviewRuns()).toBe(2);
+    await expect(readFile(join(dir!, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
   });
 });

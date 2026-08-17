@@ -1,6 +1,7 @@
 import type { BuildReviewRubricId } from "../types/config.js";
 import {
   parseBuildReviewDispatchFailure,
+  buildReviewFindingReferenceContext,
   parseBuildReviewJudgedResult,
   type BuildReviewJudgedResult,
   type BuildReviewLapId,
@@ -172,9 +173,9 @@ function infrastructure(rubric: BuildReviewRubricId, reason: string, detail?: st
 export function validateBuildReviewDispatchedResult(
   candidate: unknown,
   rubric: BuildReviewRubricId,
-  projection: Pick<BuildReviewRubricProjection, "lapId" | "snapshotDigest">,
+  projection: BuildReviewRubricProjection,
 ): BuildReviewJudgedResult | undefined {
-  const result = parseBuildReviewJudgedResult(candidate);
+  const result = parseBuildReviewJudgedResult(candidate, buildReviewFindingReferenceContext(projection));
   // Treat the provider list as one boundary value.  Parsing individual
   // findings is insufficient: duplicate/colliding identities would otherwise
   // become two independently persisted branch facts.
@@ -193,10 +194,14 @@ function validWrittenArtifact(
 ): BuildReviewJudgedResult | undefined {
   const artifact = parseBuildReviewBranchArtifact(candidate);
   const result = artifact?.result;
+  const projectionBoundResult = result && parseBuildReviewJudgedResult(
+    result,
+    buildReviewFindingReferenceContext(projection),
+  );
   return artifact?.rubric === rubric && artifact.lapId === projection.lapId &&
-    artifact.snapshotDigest === projection.snapshotDigest && result?.kind === "judged" &&
-    result.rubric === rubric && result.lapId === projection.lapId &&
-    result.snapshotDigest === projection.snapshotDigest ? result : undefined;
+    artifact.snapshotDigest === projection.snapshotDigest && projectionBoundResult?.kind === "judged" &&
+    projectionBoundResult.rubric === rubric && projectionBoundResult.lapId === projection.lapId &&
+    projectionBoundResult.snapshotDigest === projection.snapshotDigest ? projectionBoundResult : undefined;
 }
 
 /**

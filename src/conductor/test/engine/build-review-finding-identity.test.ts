@@ -7,31 +7,31 @@ import {
   type BuildReviewFindingIdentityInput,
 } from '../../src/engine/build-review-finding-identity.js';
 
-type FindingVocabulary = Readonly<Record<string, readonly string[]>>;
+type FindingVocabulary = { readonly members: readonly string[]; readonly concernKinds: readonly string[]; readonly anchorFields: Readonly<Record<string, readonly string[]>> };
 type FindingVocabularies = Readonly<Record<string, FindingVocabulary>>;
 
 function normalizedVocabularyMembers(vocabularies: FindingVocabularies | undefined): readonly string[] {
   if (!vocabularies) throw new Error('build-review finding vocabularies are not exported');
-  return Object.values(vocabularies).flatMap((rubric) => Object.values(rubric).flat());
+  return Object.values(vocabularies).flatMap((rubric) => [rubric.members, rubric.concernKinds, ...Object.values(rubric.anchorFields)].flat());
 }
 
 describe('build-review finding identity', () => {
   const fixtures: readonly BuildReviewFindingIdentityInput[] = [
     {
-      rubric: 'tautology', contractVersion: 'v1', concernKind: 'stayed-green',
-      anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'save', violationKind: 'stayed-green' },
+      rubric: 'tautology', contractVersion: 'v1', concernKind: 'source-text-mirror',
+      anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'save', violationKind: 'source-text-mirror' },
     },
     {
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     },
     {
-      rubric: 'rootCause', contractVersion: 'v1', concernKind: 'symptom-only',
-      anchor: { rubric: 'rootCause', statedDefect: 'does not save', locus: 'handler', relation: 'symptom-only' },
+      rubric: 'rootCause', contractVersion: 'v1', concernKind: 'symptom-only-fix',
+      anchor: { rubric: 'rootCause', statedDefect: 'does not save', locus: 'src/handler.ts', relation: 'symptom-only-fix' },
     },
     {
-      rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-outcome',
-      anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state' },
+      rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-deliverable',
+      anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state', missingKind: 'missing-deliverable' },
     },
   ];
 
@@ -41,22 +41,22 @@ describe('build-review finding identity', () => {
     expect(identities).toEqual([
       expect.objectContaining({
         canonicalPayload: {
-          rubric: 'tautology', contractVersion: 'v1', concernKind: 'stayed-green',
-          anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', violationKind: 'stayed-green' },
+          rubric: 'tautology', contractVersion: 'v1', concernKind: 'source-text-mirror',
+          anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', violationKind: 'source-text-mirror' },
         },
         id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       }),
       expect.objectContaining({ canonicalPayload: fixtures[1], id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) }),
       expect.objectContaining({
         canonicalPayload: {
-          rubric: 'rootCause', contractVersion: 'v1', concernKind: 'symptom-only',
-          anchor: { rubric: 'rootCause', locus: 'handler', relation: 'symptom-only' },
+          rubric: 'rootCause', contractVersion: 'v1', concernKind: 'symptom-only-fix',
+          anchor: { rubric: 'rootCause', locus: 'src/handler.ts', relation: 'symptom-only-fix' },
         },
         id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       }),
       expect.objectContaining({
         canonicalPayload: {
-          rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-outcome',
+          rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-deliverable',
           anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts' },
         },
         id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
@@ -66,23 +66,23 @@ describe('build-review finding identity', () => {
 
   it('sorts the complete identity payload before hashing it', () => {
     const identity = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-      anchor: { relation: 'outside-plan', rubric: 'scope', path: 'src/a.ts' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { relation: 'not-authorized-by-plan', rubric: 'scope', path: 'src/a.ts' },
     });
 
     expect(identity).toMatchObject({
-      canonicalJson: '{"anchor":{"path":"src/a.ts","relation":"outside-plan","rubric":"scope"},"concernKind":"unplanned-surface","contractVersion":"v1","rubric":"scope"}',
+      canonicalJson: '{"anchor":{"path":"src/a.ts","relation":"not-authorized-by-plan","rubric":"scope"},"concernKind":"out-of-plan-change","contractVersion":"v1","rubric":"scope"}',
       canonicalPayload: {
-        rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
       },
     });
   });
 
   it('preserves identity when prose and evidence locations drift', () => {
     const stableFinding = {
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     };
     const first = canonicalizeBuildReviewFindingIdentity({
       ...stableFinding, summary: 'The patch changes a file outside the plan.', evidenceLocations: ['src/a.ts:8'],
@@ -111,9 +111,12 @@ describe('build-review finding identity', () => {
     const vocabularies = (buildReviewDomain as typeof buildReviewDomain & {
       readonly BUILD_REVIEW_FINDING_VOCABULARIES?: FindingVocabularies;
     }).BUILD_REVIEW_FINDING_VOCABULARIES;
-    const normalized = normalizedVocabularyMembers(vocabularies).map((member) => member.toLowerCase().replaceAll('_', '-'));
-
-    expect(new Set(normalized).size).toBe(normalized.length);
+    for (const rubric of Object.values(vocabularies ?? {})) {
+      for (const members of [rubric.members, rubric.concernKinds, ...Object.values(rubric.anchorFields)]) {
+        const normalized = members.map((member) => member.toLowerCase().replaceAll('_', '-'));
+        expect(new Set(normalized).size).toBe(normalized.length);
+      }
+    }
   });
 
   it('excludes report prose subjects from every canonical identity', () => {
@@ -127,7 +130,7 @@ describe('build-review finding identity', () => {
     };
     const completeness = {
       rubric: 'completeness' as const, contractVersion: 'v1' as const, concernKind: 'missing-deliverable',
-      anchor: { rubric: 'completeness' as const, planTask: '5', missingSurface: 'src/engine/handler.ts', missingOutcome: 'first prose outcome description' },
+      anchor: { rubric: 'completeness' as const, planTask: '5', missingSurface: 'src/engine/handler.ts', missingOutcome: 'first prose outcome description', missingKind: 'missing-deliverable' },
     };
 
     const first = [tautology, rootCause, completeness].map((finding) => canonicalizeBuildReviewFindingIdentity({
@@ -153,10 +156,27 @@ describe('build-review finding identity', () => {
     expect(reworded).toEqual(first);
   });
 
+  it('rejects grader-formatted identity subjects while keeping distinct canonical references distinct', () => {
+    const subjects = [
+      { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'source-text-mirror' }, field: 'changedTest' },
+      { rubric: 'rootCause', concernKind: 'root-cause-unaddressed', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' }, field: 'locus' },
+      { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' }, field: 'planTask' },
+      { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' }, field: 'missingSurface' },
+    ] as const;
+    for (const subject of subjects) {
+      const finding = { ...subject, contractVersion: 'v2' } as Record<string, unknown>;
+      expect(canonicalizeBuildReviewFindingIdentity(finding)).toBeDefined();
+      expect(canonicalizeBuildReviewFindingIdentity({ ...finding, anchor: { ...subject.anchor, [subject.field]: ` ${String(subject.anchor[subject.field])} ` } })).toBeUndefined();
+    }
+    const first = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v2', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' } });
+    const second = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v2', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'not-authorized-by-plan' } });
+    expect(second?.id).not.toBe(first?.id);
+  });
+
   it('changes identity for a materially different concern or logical anchor', () => {
     const base = {
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     };
     const changedConcern = canonicalizeBuildReviewFindingIdentity({ ...base, concernKind: 'missing-approval' });
     const changedAnchor = canonicalizeBuildReviewFindingIdentity({ ...base, anchor: { ...base.anchor, path: 'src/b.ts' } });
@@ -164,34 +184,30 @@ describe('build-review finding identity', () => {
     expect([changedConcern?.id, changedAnchor?.id]).not.toContain(canonicalizeBuildReviewFindingIdentity(base)?.id);
   });
 
-  it('retains separate blocking identities when a rubric classification changes at one subject', () => {
+  it('retains separate blocking identities when a valid classification changes at one subject', () => {
     const findingSets = [
       [
         { rubric: 'tautology', contractVersion: 'v1', concernKind: 'assertion-insensitive-to-production', anchor: { rubric: 'tautology', changedTest: 'src/a.test.ts', exercisedBehavior: 'save', violationKind: 'assertion-insensitive-to-production' } },
         { rubric: 'tautology', contractVersion: 'v1', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'src/a.test.ts', exercisedBehavior: 'save', violationKind: 'source-text-mirror' } },
       ],
       [
-        { rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } },
-        { rubric: 'scope', contractVersion: 'v1', concernKind: 'not-authorized-by-plan', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' } },
-      ],
-      [
-        { rubric: 'rootCause', contractVersion: 'v1', concernKind: 'root-cause-unaddressed', anchor: { rubric: 'rootCause', statedDefect: 'save fails', locus: 'handler', relation: 'root-cause-unaddressed' } },
-        { rubric: 'rootCause', contractVersion: 'v1', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'save fails', locus: 'handler', relation: 'symptom-only-fix' } },
+        { rubric: 'rootCause', contractVersion: 'v1', concernKind: 'root-cause-unaddressed', anchor: { rubric: 'rootCause', statedDefect: 'save fails', locus: 'src/handler.ts', relation: 'root-cause-unaddressed' } },
+        { rubric: 'rootCause', contractVersion: 'v1', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'save fails', locus: 'src/handler.ts', relation: 'symptom-only-fix' } },
       ],
     ];
 
-    expect(findingSets.map(canonicalizeBuildReviewFindingSet).map((findings) => findings?.length)).toEqual([2, 2, 2]);
+    expect(findingSets.map(canonicalizeBuildReviewFindingSet).map((findings) => findings?.length)).toEqual([2, 2]);
   });
 
   it('keeps distinct missing surfaces under one completeness plan task blocking', () => {
     const findings = canonicalizeBuildReviewFindingSet([
       {
         rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-deliverable',
-        anchor: { rubric: 'completeness', planTask: '10', missingSurface: 'src/first.ts', missingOutcome: 'first outcome' },
+        anchor: { rubric: 'completeness', planTask: '10', missingSurface: 'src/first.ts', missingOutcome: 'first outcome', missingKind: 'missing-deliverable' },
       },
       {
         rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-deliverable',
-        anchor: { rubric: 'completeness', planTask: '10', missingSurface: 'src/second.ts', missingOutcome: 'second outcome' },
+        anchor: { rubric: 'completeness', planTask: '10', missingSurface: 'src/second.ts', missingOutcome: 'second outcome', missingKind: 'missing-deliverable' },
       },
     ]);
 
@@ -200,11 +216,11 @@ describe('build-review finding identity', () => {
 
   it('gives a reclassified concern a new identity', () => {
     const sharedSubject = {
-      rubric: 'scope', contractVersion: 'v1',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
+      rubric: 'rootCause', contractVersion: 'v1',
+      anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' },
     };
-    const first = canonicalizeBuildReviewFindingIdentity({ ...sharedSubject, concernKind: 'out-of-plan-change' });
-    const reclassified = canonicalizeBuildReviewFindingIdentity({ ...sharedSubject, concernKind: 'not-authorized-by-plan' });
+    const first = canonicalizeBuildReviewFindingIdentity({ ...sharedSubject, concernKind: 'root-cause-unaddressed' });
+    const reclassified = canonicalizeBuildReviewFindingIdentity({ ...sharedSubject, concernKind: 'symptom-only-fix', anchor: { ...sharedSubject.anchor, relation: 'symptom-only-fix' } });
 
     expect(reclassified?.id).not.toBe(first?.id);
   });
@@ -229,12 +245,12 @@ describe('build-review finding identity', () => {
   it('retains every independently valid finding rather than truncating a grader result', () => {
     const findings = canonicalizeBuildReviewFindingSet([
       {
-        rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
       },
       {
-        rubric: 'scope', contractVersion: 'v1', concernKind: 'missing-approval',
-        anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'outside-plan' },
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+        anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'not-authorized-by-plan' },
       },
     ]);
 

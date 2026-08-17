@@ -61,7 +61,7 @@ describe('build-review raw aggregate', () => {
   });
 
   it('retains complete named findings and derives FAIL without folding the rubric result', () => {
-    const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'out-of-plan-change' } };
+    const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [finding]) }),
     });
@@ -75,7 +75,7 @@ describe('build-review raw aggregate', () => {
       kind: 'infrastructure-failure', rubric: 'completeness' as const, reason: 'provider-error', detail: 'provider unavailable',
     };
     const finding = {
-      concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'out-of-plan-change' },
+      concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     };
     const cases = [
       {
@@ -205,7 +205,7 @@ describe('build-review raw aggregate', () => {
   });
 
   it('derives effective state only after strict raw judgement, without changing raw findings', () => {
-    const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'out-of-plan-change' } };
+    const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [finding]) }),
     });
@@ -221,8 +221,8 @@ describe('build-review raw aggregate', () => {
   });
 
   it('matches only a feature-scoped full canonical payload after raw grading', () => {
-    const first = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'out-of-plan-change' } };
-    const second = { concernKind: 'not-authorized-by-plan', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/b.ts', relation: 'not-authorized-by-plan' } };
+    const first = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
+    const second = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/b.ts', relation: 'not-authorized-by-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [first, second]) }),
     });

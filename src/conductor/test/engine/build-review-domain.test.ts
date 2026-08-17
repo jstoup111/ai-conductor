@@ -26,10 +26,10 @@ describe('build-review domain', () => {
 
   it('accepts only the typed anchors belonging to each rubric', () => {
     const anchors: readonly BuildReviewFindingAnchor[] = [
-      { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'save', violationKind: 'stayed-green' },
-      { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
-      { rubric: 'rootCause', statedDefect: 'does not save', locus: 'handler', relation: 'symptom-only' },
-      { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state' },
+      { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'save', violationKind: 'source-text-mirror' },
+      { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
+      { rubric: 'rootCause', statedDefect: 'does not save', locus: 'src/handler.ts', relation: 'symptom-only-fix' },
+      { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state', missingKind: 'missing-deliverable' },
     ];
 
     expect(anchors).toHaveLength(4);
@@ -75,23 +75,23 @@ describe('build-review domain', () => {
       kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{
         concernKind: 'TEST_DOES_NOT_EXERCISE_CHANGED_BEHAVIOR', summary: 'The assertion remains green.', evidenceLocations: ['test/a.test.ts:8'],
-        anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'writes an event', violationKind: 'ASSERTION_INSENSITIVE_TO_PRODUCTION' },
+        anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'writes an event', violationKind: 'TEST_DOES_NOT_EXERCISE_CHANGED_BEHAVIOR' },
       }],
-    })).toMatchObject({ findings: [{ concernKind: 'test-does-not-exercise-changed-behavior', anchor: { exercisedBehavior: 'writes an event', violationKind: 'assertion-insensitive-to-production' } }] });
+    })).toMatchObject({ findings: [{ concernKind: 'test-does-not-exercise-changed-behavior', anchor: { exercisedBehavior: 'writes an event', violationKind: 'test-does-not-exercise-changed-behavior' } }] });
 
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'rootCause', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{
         concernKind: 'SYMPTOM_ONLY_FIX', summary: 'The defect remains.', evidenceLocations: ['src/a.ts:8'],
-        anchor: { rubric: 'rootCause', statedDefect: 'events are omitted', locus: 'handler', relation: 'ROOT_CAUSE_UNADDRESSED' },
+        anchor: { rubric: 'rootCause', statedDefect: 'events are omitted', locus: 'src/handler.ts', relation: 'SYMPTOM_ONLY_FIX' },
       }],
-    })).toMatchObject({ findings: [{ concernKind: 'symptom-only-fix', anchor: { statedDefect: 'events are omitted', relation: 'root-cause-unaddressed' } }] });
+    })).toMatchObject({ findings: [{ concernKind: 'symptom-only-fix', anchor: { statedDefect: 'events are omitted', relation: 'symptom-only-fix' } }] });
 
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'completeness', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
       findings: [{
         concernKind: 'MISSING_DELIVERABLE', summary: 'A deliverable is absent.', evidenceLocations: ['src/a.ts:8'],
-        anchor: { rubric: 'completeness', planTask: '4', missingSurface: 'src/result.ts', missingOutcome: 'writes the result' },
+        anchor: { rubric: 'completeness', planTask: '4', missingSurface: 'src/result.ts', missingOutcome: 'writes the result', missingKind: 'MISSING_DELIVERABLE' },
       }],
     })).toMatchObject({ findings: [{ concernKind: 'missing-deliverable', anchor: { missingOutcome: 'writes the result' } }] });
 
@@ -103,6 +103,19 @@ describe('build-review domain', () => {
       expect(parseBuildReviewJudgedResult({
         kind: 'judged', rubric, lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1', findings: [finding],
       })).toBeUndefined();
+    }
+  });
+
+  it('accepts only each rubric’s contract-defined concern-to-anchor classification pair', () => {
+    const base = { kind: 'judged', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v2', summary: 'x', evidenceLocations: ['src/a.ts:1'] };
+    const cases = [
+      { rubric: 'scope', concernKind: 'not-authorized-by-plan', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } },
+      { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'assertion-insensitive-to-production' } },
+      { rubric: 'rootCause', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' } },
+      { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'other' } },
+    ] as const;
+    for (const finding of cases) {
+      expect(parseBuildReviewJudgedResult({ ...base, rubric: finding.rubric, findings: [{ ...finding, summary: base.summary, evidenceLocations: base.evidenceLocations }] })).toBeUndefined();
     }
   });
 
@@ -181,16 +194,16 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
 
   it('renders the exact per-rubric anchor schema', () => {
     expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
-      '"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
+      '"anchor": {"rubric": "tautology", "changedTest": "<canonical projection reference or report string>", "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
     );
     expect(renderBuildReviewJudgedResultShape('scope')).toContain(
-      '"anchor": {"rubric": "scope", "path": "<string>", "relation": "<one of: out-of-plan-change | not-authorized-by-plan>"}',
+      '"anchor": {"rubric": "scope", "path": "<canonical projection reference or report string>", "relation": "<one of: not-authorized-by-plan>"}',
     );
     expect(renderBuildReviewJudgedResultShape('rootCause')).toContain(
-      '"anchor": {"rubric": "rootCause", "statedDefect": "<string>", "locus": "<string>", "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>"}',
+      '"anchor": {"rubric": "rootCause", "statedDefect": "<canonical projection reference or report string>", "locus": "<canonical projection reference or report string>", "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>"}',
     );
     expect(renderBuildReviewJudgedResultShape('completeness')).toContain(
-      '"anchor": {"rubric": "completeness", "planTask": "<string>", "missingSurface": "<string>", "missingOutcome": "<string>"}',
+      '"anchor": {"rubric": "completeness", "planTask": "<canonical projection reference or report string>", "missingSurface": "<canonical projection reference or report string>", "missingOutcome": "<canonical projection reference or report string>", "missingKind": "<one of: missing-deliverable>"}',
     );
   });
 
@@ -201,11 +214,12 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     ['completeness', undefined],
   ] as const)('renders every allowed %s vocabulary member into its dispatch schema', (rubric, classificationField) => {
     const shape = renderBuildReviewJudgedResultShape(rubric);
-    const allowedMembers = BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.join(' | ');
+    const allowedMembers = BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds.join(' | ');
 
     expect(shape).toContain(`"concernKind": "<one of: ${allowedMembers}>"`);
     if (classificationField) {
-      expect(shape).toContain(`"${classificationField}": "<one of: ${allowedMembers}>"`);
+      const anchorMembers = BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields[classificationField].filter((member) => member !== 'out-of-plan-change').join(' | ');
+      expect(shape).toContain(`"${classificationField}": "<one of: ${anchorMembers}>"`);
     }
   });
 

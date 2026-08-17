@@ -29,6 +29,7 @@ import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '..
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -3702,6 +3703,7 @@ TIER: M`,
       expect(result.success).toBe(false);
       await expect(access(join(dir, '.pipeline/build-review.json'))).rejects.toThrow();
       expect(invoke).toHaveBeenCalledTimes(8);
+      expect((await readKickbackLedger(dir)).gates.build_review).toBeUndefined();
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
@@ -4041,7 +4043,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
   const projection = {
     rubric: 'tautology', contractVersion: 'v2', projectionVersion: 'v2',
     lapId, snapshotDigest, digest: 'sha256:projection',
-    mergeBase: 'base', headSha: 'head', changedFiles: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    mergeBase: 'base', headSha: 'head', changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
     changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
   const policy = {
@@ -4077,7 +4079,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
       evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
       anchor: {
         rubric: 'tautology',
-        changedTest: 'test/engine/event-sinks.test.ts > rejects an unrelated sink',
+        changedTest: 'test/engine/event-sinks.test.ts',
         exercisedBehavior: 'EVENT_SINKS persisted routing',
         violationKind: 'assertion-insensitive-to-production',
       },
@@ -4117,7 +4119,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
 
     expect(invoke).toHaveBeenCalledTimes(1);
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
+    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": "<canonical projection reference or report string>", "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
     expect(prompt).toContain('never flattened');
   });
 

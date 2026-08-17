@@ -1,4 +1,6 @@
 import type { BuildReviewRubricId } from '../types/config.js';
+import { parsePlanTaskPaths } from './plan-task-parse.js';
+import type { BuildReviewRubricProjection } from './build-review-projections.js';
 
 /** A validated lap identity; callers cannot accidentally substitute a bare string. */
 export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' };
@@ -27,7 +29,39 @@ export type BuildReviewFindingAnchor =
   | { rubric: 'tautology'; changedTest: string; exercisedBehavior: string; violationKind: string }
   | { rubric: 'scope'; path: string; relation: string }
   | { rubric: 'rootCause'; statedDefect: string; locus: string; relation: string }
-  | { rubric: 'completeness'; planTask: string; missingSurface: string; missingOutcome: string };
+  | { rubric: 'completeness'; planTask: string; missingSurface: string; missingOutcome: string; missingKind: string };
+
+/** Immutable projection members that may appear in a finding identity. */
+export interface BuildReviewFindingReferenceContext {
+  readonly changedTests: readonly string[];
+  readonly changedPaths: readonly string[];
+  readonly planTasks: readonly string[];
+  readonly planTaskSurfaces?: Readonly<Record<string, readonly string[]>>;
+}
+
+/** Derive the only finding subjects a grader may cite from its frozen projection. */
+export function buildReviewFindingReferenceContext(
+  projection: BuildReviewRubricProjection,
+): BuildReviewFindingReferenceContext {
+  const changedPaths = projection.changedFiles.map((file) => file.path);
+  if (projection.rubric !== 'completeness') {
+    return Object.freeze({
+      changedTests: projection.rubric === 'tautology'
+        ? projection.changedFiles.map((file) => file.path).filter((path) => /(?:^|\/)test(?:\/|$)|\.test\.[^.]+$/.test(path))
+        : [],
+      changedPaths: Object.freeze(changedPaths),
+      planTasks: [],
+    });
+  }
+  const taskPaths = parsePlanTaskPaths(projection.planBody);
+  return Object.freeze({
+    changedTests: [], changedPaths: Object.freeze(changedPaths),
+    planTasks: Object.freeze([...taskPaths.keys()]),
+    planTaskSurfaces: Object.freeze(Object.fromEntries(
+      [...taskPaths.entries()].map(([task, paths]) => [task, Object.freeze([...paths])]),
+    )),
+  });
+}
 
 export interface BuildReviewFinding {
   readonly concernKind: string;
@@ -83,12 +117,16 @@ const INFRASTRUCTURE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
 const LAP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 /**
- * The closed classification vocabulary for each rubric. Classification fields
- * within a rubric share this set; subject fields remain report prose.
+ * Closed vocabularies are role-specific.  A concern and its anchor field are
+ * deliberately not independently selected from one rubric-wide bag.
  */
-export const BUILD_REVIEW_FINDING_VOCABULARIES: Readonly<Record<BuildReviewRubricId, Readonly<Record<'members', readonly string[]>>>> = Object.freeze({
+export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
   scope: Object.freeze({
     members: Object.freeze(['out-of-plan-change', 'not-authorized-by-plan']),
+    concernKinds: Object.freeze(['out-of-plan-change']),
+    // v1 stored results used the concern token as relation. Preserve parsing
+    // compatibility while v2 dispatch renders only the contract role token.
+    anchorFields: Object.freeze({ relation: Object.freeze(['not-authorized-by-plan', 'out-of-plan-change']) }),
   }),
   tautology: Object.freeze({
     members: Object.freeze([
@@ -97,6 +135,14 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES: Readonly<Record<BuildReviewRubri
       'assertion-derived-from-test-data',
       'source-text-mirror',
     ]),
+    concernKinds: Object.freeze([
+      'assertion-insensitive-to-production', 'test-does-not-exercise-changed-behavior',
+      'assertion-derived-from-test-data', 'source-text-mirror',
+    ]),
+    anchorFields: Object.freeze({ violationKind: Object.freeze([
+      'assertion-insensitive-to-production', 'test-does-not-exercise-changed-behavior',
+      'assertion-derived-from-test-data', 'source-text-mirror',
+    ]) }),
   }),
   rootCause: Object.freeze({
     members: Object.freeze([
@@ -104,9 +150,17 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES: Readonly<Record<BuildReviewRubri
       'symptom-only-fix',
       'provenance-sensitive-cache-identity',
     ]),
+    concernKinds: Object.freeze([
+      'root-cause-unaddressed', 'symptom-only-fix', 'provenance-sensitive-cache-identity',
+    ]),
+    anchorFields: Object.freeze({ relation: Object.freeze([
+      'root-cause-unaddressed', 'symptom-only-fix', 'provenance-sensitive-cache-identity',
+    ]) }),
   }),
   completeness: Object.freeze({
     members: Object.freeze(['missing-deliverable']),
+    concernKinds: Object.freeze(['missing-deliverable']),
+    anchorFields: Object.freeze({ missingKind: Object.freeze(['missing-deliverable']) }),
   }),
 });
 
@@ -137,10 +191,43 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function parseFindingVocabularyMember(value: unknown, rubric: BuildReviewRubricId): string | undefined {
+function parseFindingVocabularyMember(
+  value: unknown,
+  members: readonly string[],
+): string | undefined {
   if (!nonEmptyString(value)) return undefined;
   const normalized = normalizeBuildReviewFindingVocabularyMember(value);
-  return BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.includes(normalized) ? normalized : undefined;
+  return members.includes(normalized) ? normalized : undefined;
+}
+
+export function parseBuildReviewFindingConcernKind(value: unknown, rubric: BuildReviewRubricId): string | undefined {
+  return parseFindingVocabularyMember(value, BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds);
+}
+
+function parseAnchorClassification(
+  value: unknown,
+  rubric: BuildReviewRubricId,
+  field: 'violationKind' | 'relation' | 'missingKind',
+): string | undefined {
+  const fields = BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields as Partial<Record<typeof field, readonly string[]>>;
+  return fields[field] ? parseFindingVocabularyMember(value, fields[field]) : undefined;
+}
+
+const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9][A-Za-z0-9._/@+-]*)*$/;
+const CANONICAL_PLAN_TASK_REFERENCE = /^[1-9][0-9]*$/;
+
+/** A stable, unformatted path/reference token suitable for a finding identity. */
+export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined {
+  return typeof value === 'string' && CANONICAL_PATH_REFERENCE.test(value) ? value : undefined;
+}
+
+export function parseBuildReviewCanonicalPlanTaskReference(value: unknown): string | undefined {
+  return typeof value === 'string' && CANONICAL_PLAN_TASK_REFERENCE.test(value) ? value : undefined;
+}
+
+function verifiedReference(value: unknown, allowed: readonly string[] | undefined, parser: (value: unknown) => string | undefined): string | undefined {
+  const reference = parser(value);
+  return reference && (!allowed || allowed.includes(reference)) ? reference : undefined;
 }
 
 function evidenceLocation(value: unknown): value is string {
@@ -159,45 +246,61 @@ export function parseBuildReviewRubricContractVersion(value: unknown): BuildRevi
   return value === 'v1' || value === 'v2' ? value as BuildReviewRubricContractVersion : undefined;
 }
 
-function parseAnchor(value: unknown): BuildReviewFindingAnchor | undefined {
+export function parseBuildReviewFindingAnchor(value: unknown, references?: BuildReviewFindingReferenceContext, allowLegacyV1 = false): BuildReviewFindingAnchor | undefined {
   const source = record(value);
   if (!source || !rubricId(source.rubric)) return undefined;
   switch (source.rubric) {
     case 'tautology': {
-      const violationKind = parseFindingVocabularyMember(source.violationKind, source.rubric);
-      return nonEmptyString(source.changedTest) && nonEmptyString(source.exercisedBehavior) && violationKind
-        ? { rubric: source.rubric, changedTest: source.changedTest, exercisedBehavior: source.exercisedBehavior, violationKind }
+      const violationKind = parseAnchorClassification(source.violationKind, source.rubric, 'violationKind');
+      const changedTest = verifiedReference(source.changedTest, references?.changedTests, parseBuildReviewCanonicalPathReference);
+      return changedTest && nonEmptyString(source.exercisedBehavior) && violationKind
+        ? { rubric: source.rubric, changedTest, exercisedBehavior: source.exercisedBehavior, violationKind }
         : undefined;
     }
     case 'scope': {
-      const relation = parseFindingVocabularyMember(source.relation, source.rubric);
-      return nonEmptyString(source.path) && relation
-        ? { rubric: source.rubric, path: source.path, relation }
+      const relation = parseAnchorClassification(source.relation, source.rubric, 'relation');
+      const path = verifiedReference(source.path, references?.changedPaths, parseBuildReviewCanonicalPathReference);
+      return path && relation && (allowLegacyV1 || relation === 'not-authorized-by-plan')
+        ? { rubric: source.rubric, path, relation }
         : undefined;
     }
     case 'rootCause': {
-      const relation = parseFindingVocabularyMember(source.relation, source.rubric);
-      return nonEmptyString(source.statedDefect) && nonEmptyString(source.locus) && relation
-        ? { rubric: source.rubric, statedDefect: source.statedDefect, locus: source.locus, relation }
+      const relation = parseAnchorClassification(source.relation, source.rubric, 'relation');
+      const locus = verifiedReference(source.locus, references?.changedPaths, parseBuildReviewCanonicalPathReference);
+      return nonEmptyString(source.statedDefect) && locus && relation
+        ? { rubric: source.rubric, statedDefect: source.statedDefect, locus, relation }
         : undefined;
     }
-    case 'completeness':
-      return nonEmptyString(source.planTask) && nonEmptyString(source.missingSurface) && nonEmptyString(source.missingOutcome)
-        ? { rubric: source.rubric, planTask: source.planTask, missingSurface: source.missingSurface, missingOutcome: source.missingOutcome }
+    case 'completeness': {
+      const missingKind = source.missingKind === undefined
+        ? 'missing-deliverable'
+        : parseAnchorClassification(source.missingKind, source.rubric, 'missingKind');
+      const planTask = verifiedReference(source.planTask, references?.planTasks, parseBuildReviewCanonicalPlanTaskReference);
+      const missingSurface = verifiedReference(
+        source.missingSurface,
+        planTask && references?.planTaskSurfaces ? references.planTaskSurfaces[planTask] : references?.changedPaths,
+        parseBuildReviewCanonicalPathReference,
+      );
+      return planTask && missingSurface && nonEmptyString(source.missingOutcome) && missingKind
+        ? { rubric: source.rubric, planTask, missingSurface, missingOutcome: source.missingOutcome, missingKind }
         : undefined;
+    }
   }
 }
 
-function parseFindings(value: unknown, rubric: BuildReviewRubricId): readonly BuildReviewFinding[] | undefined {
+function parseFindings(value: unknown, rubric: BuildReviewRubricId, references?: BuildReviewFindingReferenceContext, allowLegacyV1 = false): readonly BuildReviewFinding[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const findings: BuildReviewFinding[] = [];
   for (const candidate of value) {
     const source = record(candidate);
-    const anchor = source && parseAnchor(source.anchor);
-    const concernKind = source && parseFindingVocabularyMember(source.concernKind, rubric);
+    const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references, allowLegacyV1);
+    const concernKind = source && parseBuildReviewFindingConcernKind(source.concernKind, rubric);
     if (!source || !concernKind || !nonEmptyString(source.summary) ||
       !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 ||
       source.evidenceLocations.some((location) => !evidenceLocation(location)) || !anchor || anchor.rubric !== rubric) return undefined;
+    if ((anchor.rubric === 'tautology' && concernKind !== anchor.violationKind) ||
+      (anchor.rubric === 'rootCause' && concernKind !== anchor.relation) ||
+      (anchor.rubric === 'completeness' && concernKind !== anchor.missingKind)) return undefined;
     findings.push({ concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations]), anchor });
   }
   return findings;
@@ -208,13 +311,13 @@ function parseFindings(value: unknown, rubric: BuildReviewRubricId): readonly Bu
  * derived solely from findings, so a contradictory supplied boolean fails
  * closed instead of changing the authoritative result.
  */
-export function parseBuildReviewJudgedResult(value: unknown): BuildReviewJudgedResult | undefined {
+export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewJudgedResult | undefined {
   const source = record(value);
   if (!source || source.kind !== 'judged' || !rubricId(source.rubric)) return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
   const contractVersion = parseBuildReviewRubricContractVersion(source.contractVersion);
   if (!lapId || !contractVersion || !nonEmptyString(source.snapshotDigest)) return undefined;
-  const findings = parseFindings(source.findings, source.rubric);
+  const findings = parseFindings(source.findings, source.rubric, references, contractVersion === 'v1');
   const relocationAudit = source.relocationAudit === undefined
     ? undefined
     : parseRelocationAudit(source.relocationAudit, source.rubric);
@@ -254,7 +357,7 @@ const ANCHOR_FIELDS: Record<BuildReviewRubricId, readonly string[]> = {
   tautology: ['changedTest', 'exercisedBehavior', 'violationKind'],
   scope: ['path', 'relation'],
   rootCause: ['statedDefect', 'locus', 'relation'],
-  completeness: ['planTask', 'missingSurface', 'missingOutcome'],
+  completeness: ['planTask', 'missingSurface', 'missingOutcome', 'missingKind'],
 };
 
 /** The anchor field, if any, whose value shares the rubric's closed vocabulary. */
@@ -262,14 +365,15 @@ const CLASSIFICATION_ANCHOR_FIELDS: Partial<Record<BuildReviewRubricId, string>>
   tautology: 'violationKind',
   scope: 'relation',
   rootCause: 'relation',
+  completeness: 'missingKind',
 };
 
-function renderFindingVocabularyMemberShape(rubric: BuildReviewRubricId): string {
-  return `<one of: ${BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.join(' | ')}>`;
+function renderFindingVocabularyMemberShape(members: readonly string[]): string {
+  return `<one of: ${members.join(' | ')}>`;
 }
 
-function describeFindingVocabularyRejection(rubric: BuildReviewRubricId, field: string): string {
-  return `${field} must be one of: ${BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members.join(' | ')}`;
+function describeFindingVocabularyRejection(members: readonly string[], field: string): string {
+  return `${field} must be one of: ${members.join(' | ')}`;
 }
 
 /**
@@ -282,11 +386,13 @@ function describeFindingVocabularyRejection(rubric: BuildReviewRubricId, field: 
 export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId): string {
   const classificationAnchorField = CLASSIFICATION_ANCHOR_FIELDS[rubric];
   const anchorFields = ANCHOR_FIELDS[rubric].map((field) =>
-    `"${field}": "${field === classificationAnchorField ? renderFindingVocabularyMemberShape(rubric) : '<string>'}"`,
+    `"${field}": "${field === classificationAnchorField
+      ? renderFindingVocabularyMemberShape((BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields as Record<string, readonly string[]>)[field]!.filter((member) => member !== 'out-of-plan-change'))
+      : '<canonical projection reference or report string>'}"`,
   ).join(', ');
   return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "v2", ' +
     '"lapId": "<echo the projection lapId verbatim>", "snapshotDigest": "<echo the projection snapshotDigest verbatim>", ' +
-    `"findings": [{"concernKind": "${renderFindingVocabularyMemberShape(rubric)}", "summary": "<non-empty actionable string>", ` +
+    `"findings": [{"concernKind": "${renderFindingVocabularyMemberShape(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds)}", "summary": "<non-empty actionable string>", ` +
     '"evidenceLocations": ["<path:line or path:line:column>"], ' +
     `"anchor": {"rubric": "${rubric}", ${anchorFields}}}]}`;
 }
@@ -319,8 +425,8 @@ export function describeBuildReviewJudgedResultRejection(
       const entry = record(finding);
       if (!entry) { problems.push(`findings[${index}] is not an object`); return; }
       if (!nonEmptyString(entry.concernKind)) problems.push(`findings[${index}].concernKind must be a non-empty string (never "kind")`);
-      else if (!parseFindingVocabularyMember(entry.concernKind, rubric)) {
-        problems.push(describeFindingVocabularyRejection(rubric, `findings[${index}].concernKind`));
+      else if (!parseBuildReviewFindingConcernKind(entry.concernKind, rubric)) {
+        problems.push(describeFindingVocabularyRejection(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds, `findings[${index}].concernKind`));
       }
       if (!nonEmptyString(entry.summary)) problems.push(`findings[${index}].summary must be a non-empty string`);
       if (!Array.isArray(entry.evidenceLocations) || entry.evidenceLocations.length === 0 ||
@@ -336,8 +442,13 @@ export function describeBuildReviewJudgedResultRejection(
         if (anchor.rubric !== rubric) problems.push(`findings[${index}].anchor.rubric must be "${rubric}"`);
         for (const field of ANCHOR_FIELDS[rubric]) {
           if (!nonEmptyString(anchor[field])) problems.push(`findings[${index}].anchor.${field} must be a non-empty string`);
-          else if (field === CLASSIFICATION_ANCHOR_FIELDS[rubric] && !parseFindingVocabularyMember(anchor[field], rubric)) {
-            problems.push(describeFindingVocabularyRejection(rubric, `findings[${index}].anchor.${field}`));
+          else if (field === CLASSIFICATION_ANCHOR_FIELDS[rubric] && !parseAnchorClassification(
+            anchor[field], rubric, field as 'violationKind' | 'relation' | 'missingKind',
+          )) {
+            problems.push(describeFindingVocabularyRejection(
+              (BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields as Record<string, readonly string[]>)[field]!,
+              `findings[${index}].anchor.${field}`,
+            ));
           }
         }
       }

@@ -90,7 +90,7 @@ contains:
   "exercisedBehavior": "<string>", "violationKind": "<member>"}` — where `violationKind` must
   be one of `assertion-insensitive-to-production`, `test-does-not-exercise-changed-behavior`,
   `assertion-derived-from-test-data`, or `source-text-mirror`. The subject fields remain plain
-  strings; the anchor is never flattened to the finding's top level or renamed (no `anchors`, no
+  strings; `violationKind` must match `concernKind` after canonical normalization. The anchor is never flattened to the finding's top level or renamed (no `anchors`, no
   per-field objects);
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.

@@ -50,7 +50,8 @@ Return every independent finding; an empty array means a PASS for this rubric. E
 - typed logical anchors for the stated defect/outcome and implementation mechanism or locus judged
   symptomatic, carried in a nested `anchor` object — `{"rubric": "rootCause", "statedDefect":
   "<string>", "locus": "<string>", "relation": "<member>"}` — where `relation` must be one
-  of `root-cause-unaddressed`, `symptom-only-fix`, or `provenance-sensitive-cache-identity`.
+  of `root-cause-unaddressed`, `symptom-only-fix`, or `provenance-sensitive-cache-identity`, and
+  must match `concernKind` after canonical normalization.
   The subject fields remain plain strings; never flatten the anchor to the finding's top level or
   rename it;
 - an actionable summary; and

@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import type { BuildReviewRubricId } from '../types/config.js';
 import {
   normalizeBuildReviewFindingVocabularyMember,
+  parseBuildReviewFindingAnchor,
+  parseBuildReviewFindingConcernKind,
   parseBuildReviewRubricContractVersion,
   type BuildReviewFindingAnchor,
   type BuildReviewRubricContractVersion,
@@ -43,38 +45,10 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function nonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
 function parseRubric(value: unknown): BuildReviewRubricId | undefined {
   return typeof value === 'string' && RUBRICS.has(value as BuildReviewRubricId)
     ? value as BuildReviewRubricId
     : undefined;
-}
-
-function parseAnchor(value: unknown, rubric: BuildReviewRubricId): BuildReviewFindingAnchor | undefined {
-  const source = record(value);
-  if (!source || source.rubric !== rubric) return undefined;
-
-  switch (rubric) {
-    case 'tautology':
-      return nonEmptyString(source.changedTest) && nonEmptyString(source.exercisedBehavior) && nonEmptyString(source.violationKind)
-        ? { rubric, changedTest: source.changedTest, exercisedBehavior: source.exercisedBehavior, violationKind: source.violationKind }
-        : undefined;
-    case 'scope':
-      return nonEmptyString(source.path) && nonEmptyString(source.relation)
-        ? { rubric, path: source.path, relation: source.relation }
-        : undefined;
-    case 'rootCause':
-      return nonEmptyString(source.statedDefect) && nonEmptyString(source.locus) && nonEmptyString(source.relation)
-        ? { rubric, statedDefect: source.statedDefect, locus: source.locus, relation: source.relation }
-        : undefined;
-    case 'completeness':
-      return nonEmptyString(source.planTask) && nonEmptyString(source.missingSurface) && nonEmptyString(source.missingOutcome)
-        ? { rubric, planTask: source.planTask, missingSurface: source.missingSurface, missingOutcome: source.missingOutcome }
-        : undefined;
-  }
 }
 
 function canonicalAnchor(anchor: BuildReviewFindingAnchor): BuildReviewFindingCanonicalAnchor {
@@ -112,15 +86,19 @@ export function canonicalizeBuildReviewFindingIdentity(value: unknown): BuildRev
   const source = record(value);
   const rubric = source && parseRubric(source.rubric);
   const contractVersion = source && parseBuildReviewRubricContractVersion(source.contractVersion);
-  if (!source || !rubric || !contractVersion || !nonEmptyString(source.concernKind)) return undefined;
+  if (!source || !rubric || !contractVersion) return undefined;
 
-  const anchor = parseAnchor(source.anchor, rubric);
-  if (!anchor) return undefined;
+  const concernKind = parseBuildReviewFindingConcernKind(source.concernKind, rubric);
+  const anchor = parseBuildReviewFindingAnchor(source.anchor, undefined, contractVersion === 'v1');
+  if (!concernKind || !anchor || anchor.rubric !== rubric ||
+    (anchor.rubric === 'tautology' && concernKind !== anchor.violationKind) ||
+    (anchor.rubric === 'rootCause' && concernKind !== anchor.relation) ||
+    (anchor.rubric === 'completeness' && concernKind !== anchor.missingKind)) return undefined;
 
   const canonicalPayload: BuildReviewFindingCanonicalPayload = {
     rubric,
     contractVersion,
-    concernKind: normalizeBuildReviewFindingVocabularyMember(source.concernKind),
+    concernKind: normalizeBuildReviewFindingVocabularyMember(concernKind),
     anchor: canonicalAnchor(anchor),
   };
   const canonicalJson = canonicalBuildReviewFindingJson(canonicalPayload);
