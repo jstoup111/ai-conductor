@@ -156,21 +156,43 @@ describe('build-review finding identity', () => {
     expect(reworded).toEqual(first);
   });
 
-  it('rejects grader-formatted identity subjects while keeping distinct canonical references distinct', () => {
+  it('rejects grader rephrasing or formatting of canonical snapshot references before they mint identities', () => {
     const subjects = [
       { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'source-text-mirror' }, field: 'changedTest' },
       { rubric: 'rootCause', concernKind: 'root-cause-unaddressed', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' }, field: 'locus' },
       { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' }, field: 'planTask' },
       { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' }, field: 'missingSurface' },
     ] as const;
-    for (const subject of subjects) {
+
+    const identities = subjects.flatMap((subject) => {
       const finding = { ...subject, contractVersion: 'v2' } as Record<string, unknown>;
-      expect(canonicalizeBuildReviewFindingIdentity(finding)).toBeDefined();
-      expect(canonicalizeBuildReviewFindingIdentity({ ...finding, anchor: { ...subject.anchor, [subject.field]: ` ${String(subject.anchor[subject.field])} ` } })).toBeUndefined();
-    }
-    const first = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v2', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' } });
-    const second = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v2', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'not-authorized-by-plan' } });
-    expect(second?.id).not.toBe(first?.id);
+      const reference = String((subject.anchor as Record<string, string>)[subject.field]);
+      return [
+        canonicalizeBuildReviewFindingIdentity({ ...finding, anchor: { ...subject.anchor, [subject.field]: ` ${reference} ` } }),
+        canonicalizeBuildReviewFindingIdentity({ ...finding, anchor: { ...subject.anchor, [subject.field]: `\`${reference}\`` } }),
+        canonicalizeBuildReviewFindingIdentity({ ...finding, anchor: { ...subject.anchor, [subject.field]: `The affected reference is ${reference}.` } }),
+      ];
+    });
+
+    expect(identities).toEqual(Array(12).fill(undefined));
+  });
+
+  it('keeps distinct canonical snapshot references as distinct identities', () => {
+    const subjects = [
+      { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'source-text-mirror' }, field: 'changedTest', alternate: 'test/b.test.ts' },
+      { rubric: 'rootCause', concernKind: 'root-cause-unaddressed', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' }, field: 'locus', alternate: 'src/b.ts' },
+      { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' }, field: 'planTask', alternate: '2' },
+      { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' }, field: 'missingSurface', alternate: 'src/b.ts' },
+    ] as const;
+
+    const referencesStayDistinct = subjects.map((subject) => {
+      const finding = { ...subject, contractVersion: 'v2' } as Record<string, unknown>;
+      const first = canonicalizeBuildReviewFindingIdentity(finding);
+      const second = canonicalizeBuildReviewFindingIdentity({ ...finding, anchor: { ...subject.anchor, [subject.field]: subject.alternate } });
+      return first?.id !== second?.id;
+    });
+
+    expect(referencesStayDistinct).toEqual([true, true, true, true]);
   });
 
   it('changes identity for a materially different concern or logical anchor', () => {
