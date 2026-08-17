@@ -11,6 +11,24 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.103.0] - 2026-08-17
+
+### Added
+
+- Plan tasks can now declare a `Preserves:` behavior clause, and build-review's Completeness gate recognizes when a preserved behavior's coverage survives a relocation or refactor instead of flagging it as a regression. ([implementation PR #1656](https://github.com/jstoup111/ai-conductor/pull/1656)).
+- Daemon-managed provider sessions can no longer invoke conduct-ts orchestration commands; only session-sanctioned worker subcommands are permitted. ([implementation PR #1599](https://github.com/jstoup111/ai-conductor/pull/1599)).
+
+### Changed
+
+- The build_review tautology rubric is now opt-in (`build_review.rubrics.tautology.enabled: true`) because its scoped-run preflight only recognizes Vitest/pytest output; on other frameworks it could never return a verdict and deadlocked the gate. ([implementation PR #1684](https://github.com/jstoup111/ai-conductor/pull/1684)).
+
+### Fixed
+
+- Remediation tasks now reach the builder on daemon features whose specs were authored externally — the plan-append no longer silently no-ops when engine-state.json is absent. ([implementation PR #1671](https://github.com/jstoup111/ai-conductor/pull/1671)).
+- The engine now commits its own remediation plan appends, and build completion refuses to pass while an engine-appended rem-* task heading is missing from the plan. ([implementation PR #1675](https://github.com/jstoup111/ai-conductor/pull/1675)).
+- Seal rotation accepts the engine's own recorded remediation-task plan appends instead of halting for a manual reseal. ([implementation PR #1679](https://github.com/jstoup111/ai-conductor/pull/1679)).
+- build_review completeness judges remediation-authored repairs against their own task text instead of regenerating scope from them each lap. ([implementation PR #1681](https://github.com/jstoup111/ai-conductor/pull/1681)).
+
 ## [0.102.0] - 2026-08-16
 
 ### Added
