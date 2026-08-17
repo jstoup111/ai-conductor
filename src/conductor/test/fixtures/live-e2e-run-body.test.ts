@@ -274,6 +274,42 @@ describe('runLiveE2ERunBody authentication source', () => {
 });
 
 describe('live E2E failure diagnostics', () => {
+  it('captures a pre-worktree failure, redacts its rethrown error, and preserves the outcome', async () => {
+    const { withLiveE2EFailureDiagnostics } = await import('./live-e2e-run-body.js') as {
+      withLiveE2EFailureDiagnostics: <T>(
+        worktreeDir: string | undefined,
+        credentialValues: readonly string[],
+        run: () => Promise<T>,
+      ) => Promise<T>;
+    };
+    const credential = 'sk-live-e2e-pre-worktree-secret';
+    const stderr: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderr.push(args.map(String).join(' '));
+    });
+
+    try {
+      const outcome = await withLiveE2EFailureDiagnostics(
+        undefined,
+        [credential],
+        async () => { throw new Error(`preflight failed with ${credential}`); },
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect({
+        error: outcome instanceof Error ? outcome.message : String(outcome),
+        diagnostics: stderr.join('\n'),
+      }).toEqual({
+        error: 'preflight failed with [redacted]',
+        diagnostics: expect.stringContaining('live worktree was not created; pipeline diagnostics unavailable.'),
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('redacts a configured credential from diagnostic output while retaining presence-only failure reporting', async () => {
     const { dumpLiveE2EFailureDiagnostics, reportLiveE2ESpend } = await import('./live-e2e-run-body.js') as {
       dumpLiveE2EFailureDiagnostics: (worktreeDir: string, credentialValues?: readonly string[]) => Promise<void>;
@@ -443,6 +479,28 @@ describe('withProvisionedLiveProviderHome', () => {
       await rm(checkoutDir, { recursive: true, force: true });
       await rm(homesDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('live E2E preflight dispatch boundary', () => {
+  it('runs the provider preflight before dispatch and does not dispatch after a failed preflight', async () => {
+    const { dispatchAfterLivePreflight } = await import('./live-e2e-run-body.js') as {
+      dispatchAfterLivePreflight: (
+        home: { homeDir: string },
+        dispatch: () => Promise<void>,
+        providerKey: string,
+        preflight: (homeDir: string, providerKey?: string) => Promise<void>,
+      ) => Promise<void>;
+    };
+    const preflight = vi.fn(async () => { throw new Error('selected provider command unavailable'); });
+    const dispatch = vi.fn(async () => {});
+
+    await expect(dispatchAfterLivePreflight({ homeDir: '/tmp/live-home' }, dispatch, 'codex', preflight))
+      .rejects.toThrow('selected provider command unavailable');
+    expect({ preflight: preflight.mock.calls, dispatches: dispatch.mock.calls.length }).toEqual({
+      preflight: [['/tmp/live-home', 'codex']],
+      dispatches: 0,
+    });
   });
 });
 

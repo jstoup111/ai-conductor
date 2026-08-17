@@ -291,9 +291,13 @@ function redactLiveE2ECredentialValues(value: unknown, credentialValues: readonl
 }
 
 export async function dumpLiveE2EFailureDiagnostics(
-  worktreeDir: string,
+  worktreeDir: string | undefined,
   credentialValues: readonly string[] = [],
 ): Promise<void> {
+  if (!worktreeDir) {
+    console.error('live worktree was not created; pipeline diagnostics unavailable.');
+    return;
+  }
   if (!existsSync(worktreeDir)) {
     console.error(`live worktree not found at ${worktreeDir}; pipeline diagnostics unavailable.`);
     return;
@@ -320,17 +324,35 @@ export async function dumpLiveE2EFailureDiagnostics(
   }
 }
 
-async function withLiveE2EFailureDiagnostics<T>(
-  worktreeDir: string,
+function redactLiveE2EFailure(error: unknown, credentialValues: readonly string[]): Error {
+  const message = redactLiveE2ECredentialValues(
+    error instanceof Error ? error.message : error,
+    credentialValues,
+  );
+  const redacted = new Error(message);
+  if (error instanceof Error) redacted.name = error.name;
+  return redacted;
+}
+
+async function runWithLiveE2EFailureDiagnostics<T>(
+  resolveWorktreeDir: () => string | undefined,
   credentialValues: readonly string[],
   run: () => Promise<T>,
 ): Promise<T> {
   try {
     return await run();
   } catch (error) {
-    await dumpLiveE2EFailureDiagnostics(worktreeDir, credentialValues);
-    throw error;
+    await dumpLiveE2EFailureDiagnostics(resolveWorktreeDir(), credentialValues);
+    throw redactLiveE2EFailure(error, credentialValues);
   }
+}
+
+export function withLiveE2EFailureDiagnostics<T>(
+  worktreeDir: string | undefined,
+  credentialValues: readonly string[],
+  run: () => Promise<T>,
+): Promise<T> {
+  return runWithLiveE2EFailureDiagnostics(() => worktreeDir, credentialValues, run);
 }
 
 async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
@@ -344,27 +366,26 @@ export async function runLiveE2ERunBody(
   tokenCap = resolveLiveE2ETokenCap(),
   dependencies: LiveE2ERunBodyDependencies = {},
 ): Promise<void> {
-  assertLiveProviderBinary(descriptor, dependencies.binaryAvailable);
   const credential = process.env[descriptor.credentialEnvVar];
-  assertLiveProviderCredential(descriptor, credential);
-  const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
+  let worktreeDir: string | undefined;
   const slug = 'daemon-e2e-live';
-  const pipelineDir = join(worktreeDir, '.pipeline');
-  const statePath = join(pipelineDir, 'conduct-state.json');
-  const planPath = join(worktreeDir, `.docs/plans/${slug}.md`);
-  const provider = createLiveProvider(
-    descriptor,
-    credential,
-  );
-  let meter = new TokenMeter(provider);
+  let meter: TokenMeter | undefined;
   let provisioned: ProvisionedHome | undefined;
   let baselineSha: string | undefined;
 
-  return withLiveE2EFailureDiagnostics(worktreeDir, [credential ?? ''], async () => {
+  try {
+    return await runWithLiveE2EFailureDiagnostics(() => worktreeDir, [credential ?? ''], async () => {
+    assertLiveProviderBinary(descriptor, dependencies.binaryAvailable);
+    assertLiveProviderCredential(descriptor, credential);
+    worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
+    const pipelineDir = join(worktreeDir, '.pipeline');
+    const statePath = join(pipelineDir, 'conduct-state.json');
+    const planPath = join(worktreeDir, `.docs/plans/${slug}.md`);
+    const provider = createLiveProvider(descriptor, credential);
+    meter = new TokenMeter(provider);
     await assertDescriptorAuthenticationSource(descriptor, provider);
     await assertLiveProviderReadiness(provider);
-    return enforceLiveE2ETokenCap(async () => {
-      try {
+    return await enforceLiveE2ETokenCap(async () => {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
         expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeUndefined();
         await initTestRepo(worktreeDir);
@@ -474,13 +495,15 @@ export async function runLiveE2ERunBody(
         }).toEqual({ terminal: true, madeCommit: true, touchedFixture: true, taskTrailer: true });
       },
         );
-      } finally {
-        reportLiveE2ESpend({
-          totalTokens: meter.totalTokens,
-          dispatches: provisioned?.dispatches ?? 0,
-        }, tokenCap);
-        await rm(worktreeDir, { recursive: true, force: true });
-      }
-    }, () => meter, tokenCap);
-  });
+    }, () => meter!, tokenCap);
+    });
+  } finally {
+    if (meter) {
+      reportLiveE2ESpend({
+        totalTokens: meter.totalTokens,
+        dispatches: provisioned?.dispatches ?? 0,
+      }, tokenCap);
+    }
+    if (worktreeDir) await rm(worktreeDir, { recursive: true, force: true });
+  }
 }
