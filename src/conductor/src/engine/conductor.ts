@@ -7550,7 +7550,9 @@ export class Conductor {
                   try {
                     const resolution = await (
                       this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
-                    )(this.projectRoot, verdictRaw);
+                    )(this.projectRoot, verdictRaw, {
+                      emit: async (event) => { await this.events.emit(event); },
+                    });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                   } catch {
                     // Resolver failures retain the legacy raw-aggregate exit.

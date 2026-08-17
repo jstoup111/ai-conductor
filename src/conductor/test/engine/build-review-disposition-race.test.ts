@@ -8,6 +8,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import { Conductor } from '../test-conductor.js';
 
 // Disposition-race guard (2026-08-15 incident): an operator `build-review
@@ -89,8 +90,12 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
     const events = new ConductorEventEmitter();
     const kickbacks: Array<{ from: string; to: string }> = [];
+    const invalidatedDispositions: ConductorEvent[] = [];
     events.on('kickback', (event) => {
       if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    events.on('build_review_disposition_version_invalidated', (event) => {
+      invalidatedDispositions.push(event);
     });
 
     const conductor = new Conductor({
@@ -106,7 +111,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     });
 
     await conductor.run();
-    return { dispatched, kickbacks, buildReviewRuns: () => buildReviewRuns };
+    return { dispatched, kickbacks, invalidatedDispositions, buildReviewRuns: () => buildReviewRuns };
   }
 
   it('drops the kickback and re-lands build_review when every finding is accepted at routing time', async () => {
@@ -120,6 +125,23 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     expect(kickbacks).toEqual([]);
     // build_review re-ran and settled from the disposition-aware join.
     expect(buildReviewRuns()).toBe(2);
+  });
+
+  it('lets the raw-FAIL resolver report a non-binding disposition on the event spine', async () => {
+    const resolver = vi.fn(async (_projectRoot, _aggregate, deps) => {
+      await deps.emit({
+        type: 'build_review_disposition_version_invalidated',
+        feature: 'feature', findingId: 'sha256:superseded', rubric: 'scope', contractVersion: 'v1',
+      });
+      return effective({ accepted: ['sha256:accepted-scope-finding'], unresolved: [] });
+    });
+
+    const { invalidatedDispositions } = await fixture(resolver);
+
+    expect(invalidatedDispositions).toEqual([{
+      type: 'build_review_disposition_version_invalidated',
+      feature: 'feature', findingId: 'sha256:superseded', rubric: 'scope', contractVersion: 'v1',
+    }]);
   });
 
   it('keeps the kickback when unresolved findings remain despite a partial acceptance', async () => {
