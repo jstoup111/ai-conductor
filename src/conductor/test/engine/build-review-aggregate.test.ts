@@ -266,8 +266,8 @@ describe('build-review raw aggregate', () => {
     const stored: BuildReviewDispositionRecord = {
       version: 'v1', feature,
       finding: canonicalizeBuildReviewFindingIdentity({
-        rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
       })!,
       sourceLapId: lapId, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
     };

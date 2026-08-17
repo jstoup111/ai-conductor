@@ -21,8 +21,8 @@ const commandResult = { stdout: '' };
 describe('production FINISH publication composition', () => {
   it('upserts accepted build-review risk into the retained PR and blocks unrenderable records', async () => {
     const finding = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
     })!;
     const accepted: BuildReviewDispositionRecord = {
       version: 'v1', feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
@@ -695,9 +695,9 @@ describe('production FINISH publication composition', () => {
       const prUrl = 'https://github.com/acme/widget/pull/1173';
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const finding = canonicalizeBuildReviewFindingIdentity({
-        rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned change',
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
         summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'],
-        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
       })!;
       const accepted: BuildReviewDispositionRecord = {
         version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!,

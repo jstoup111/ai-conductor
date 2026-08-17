@@ -46,8 +46,8 @@ function lock(result: Awaited<ReturnType<ConductStateLease['acquire']>>): Conduc
 const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
 const otherFeature = { ...feature, feature: 'other-feature' };
 const finding = canonicalizeBuildReviewFindingIdentity({
-  rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-  anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+  rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+  anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
 })!;
 
 describe('build-review dispositions', () => {
@@ -152,8 +152,8 @@ describe('build-review dispositions', () => {
       summary: 'Earlier wording at src/a.ts:8', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
     };
     const changed = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'outside-plan' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'out-of-plan-change' },
     })!;
 
     expect(matchesBuildReviewDisposition(feature, finding, [accepted])).toBe(true);
