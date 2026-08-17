@@ -1098,6 +1098,30 @@ describe('resolveInteractivePublicationIntent', () => {
 });
 
 describe('advancedPublicationTransition', () => {
+  // Recovery coverage: the fixed-point guard already exists, so this
+  // verification is intentionally expected to pass immediately rather than
+  // inventing a RED claim for implemented behavior.
+  it.each([
+    ['establish_pr', 'pr.identity + branchPushed', 'true'],
+    ['verify_release_readiness', 'releaseReadiness', 'valid'],
+    ['author_pr_prose', 'pr.prose', 'stale'],
+    ['judge_pr_prose', 'pr.prose', 'stale'],
+    ['write_shipped_record', 'shippedRecord', 'valid'],
+    ['ready_pr', 'pr.ready', 'false'],
+    ['record_outcome', 'outcomeRecord', 'missing'],
+  ] as const satisfies readonly [PublicationTransition, string, string][])(
+    'halts human-required when %s leaves its owned %s dimension unchanged',
+    async (transition, dimension, value) => {
+      const snapshot = readyPublicationSnapshot();
+
+      await expect(advancedPublicationTransition(transition, snapshot, snapshot)).resolves.toEqual({
+        kind: 'human_required',
+        reason: 'publication_transition_unmoved',
+        detail: `The ${transition} transition left ${dimension} unchanged at ${value}.`,
+      });
+    },
+  );
+
   it.each([
     [
       'author_pr_prose',
