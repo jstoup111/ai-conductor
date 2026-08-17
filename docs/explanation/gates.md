@@ -266,7 +266,7 @@ rebuild.
 
 A verified FINISH publication transition is progress, not a failed attempt: it immediately re-enters
 FINISH without spending the step retry budget or advancing its model-escalation rung. This separate
-allowance is bounded to 12 verified transitions per FINISH step entry. If publication still has not
+allowance is bounded to 14 verified transitions per FINISH step entry. If publication still has not
 converged when the allowance is exhausted, the conductor writes a `needs-human` HALT naming the last
 transition rather than looping indefinitely. The [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#finish-publication-halts)
 defines diagnosis and recovery for that halt.

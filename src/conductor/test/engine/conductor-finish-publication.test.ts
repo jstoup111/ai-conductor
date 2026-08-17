@@ -8,7 +8,13 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
-import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
+import {
+  advanceFinishPublication,
+  routeFinishPublicationDisposition,
+  type AdvanceFinishPublicationResult,
+  type PublicationDisposition,
+  type PublicationSnapshot,
+} from '../../src/engine/finish-publication.js';
 import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
@@ -202,7 +208,11 @@ describe('Conductor FINISH publication routing', () => {
       finish: state.ok ? state.value.finish : undefined,
       publicationAdvances: advance.mock.calls.length,
       stepRetries,
-    }).toEqual({ finish: 'done', publicationAdvances: 2, stepRetries: [] });
+    }).toEqual({
+      finish: 'done',
+      publicationAdvances: 2,
+      stepRetries: [],
+    });
   });
 
   it('keeps the full retry allowance after five publication advances', async () => {
@@ -477,7 +487,9 @@ describe('Conductor FINISH publication routing', () => {
 
     await conductor.run();
 
-    expect(runner.run).toHaveBeenCalledOnce();
+    // Placeholder prose requires authoring. Its resulting retained-PR
+    // title/body is accepted by the GitHub observation without another pass.
+    expect(runner.run).toHaveBeenCalledTimes(1);
     expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
@@ -740,6 +752,198 @@ describe('Conductor FINISH publication routing', () => {
     expect(calls).toEqual(['finish']);
     expect(calls).not.toContain('build');
     expect(calls).not.toContain('remediate');
+  });
+
+  it('halts a completed but non-advancing publication transition without spending FINISH budget', async () => {
+    const stepRetries: StepName[] = [];
+    const loopHalts: string[] = [];
+    const dispositions: string[] = [];
+    const publicationDispositions: AdvanceFinishPublicationResult[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') stepRetries.push(event.step);
+    });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push(event.reason);
+    });
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const unchangedJudgmentSnapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      shippedRecord: 'valid',
+      outcomeRecord: 'missing',
+      pr: {
+        identity: 'one',
+        url: 'https://example.test/pr/27',
+        prose: 'halt',
+        ready: false,
+      },
+    } as const satisfies PublicationSnapshot;
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const disposition = await advanceFinishPublication({
+        observe: async () => unchangedJudgmentSnapshot,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      });
+      publicationDispositions.push(disposition);
+      return disposition.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: disposition.transition }
+        : disposition;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    // A completed effect whose owned dimension remains unchanged is a terminal
+    // human decision, not either a FINISH retry or a progress-loop tick.
+    // These are Conductor-owned observations: a human-required disposition
+    // terminates the FINISH retry loop before either counter can advance.
+    expect(stepRetries).not.toContain('finish');
+    expect(dispositions).toEqual(['human_required']);
+    expect(publicationDispositions).toEqual([expect.objectContaining({ kind: 'human_required' })]);
+    expect(loopHalts).toHaveLength(1);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('failed');
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.not.toContain(
+      'judgment_dispatch_failed',
+    );
+  });
+
+  it('halts an unselectable judgment retry without spending the Conductor FINISH attempt', async () => {
+    const snapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      shippedRecord: 'valid',
+      outcomeRecord: 'missing',
+      pr: {
+        identity: 'one',
+        url: 'https://example.test/pr/unselectable',
+        prose: 'stale',
+        ready: false,
+      },
+    } as const satisfies PublicationSnapshot;
+    const events = new ConductorEventEmitter();
+    const retries: StepName[] = [];
+    const dispositions: string[] = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') retries.push(event.step);
+    });
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const result = await advanceFinishPublication({
+        observe: async () => snapshot,
+        effects: {
+          dispatchJudgment: async () => ({
+            kind: 'revision_required',
+            reason: 'placeholder',
+            detail: 'The title and body are placeholders.',
+          }),
+        },
+      });
+      return result.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: result.transition }
+        : result;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    // The absence of a Conductor retry event is the observable proof that its
+    // FINISH attempt budget remained intact; coordinator call counts are not
+    // that counter.
+    expect(retries).not.toContain('finish');
+    expect(dispositions).toEqual(['human_required']);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('failed');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'author_pr_prose retry cannot run',
+    );
+  });
+
+  it('halts a newly halted judgment retry without spending the Conductor FINISH attempt', async () => {
+    const initial = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid',
+      branchPushed: 'valid', shippedRecord: 'valid', outcomeRecord: 'missing',
+      pr: { identity: 'one', url: 'https://example.test/pr/newly-halted', prose: 'stale', ready: false },
+    } as const satisfies PublicationSnapshot;
+    const newlyHalted = {
+      ...initial,
+      pr: { ...initial.pr, prose: 'halt' as const, halted: true as const },
+    } as const satisfies PublicationSnapshot;
+    const events = new ConductorEventEmitter();
+    const retries: StepName[] = [];
+    const dispositions: string[] = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') retries.push(event.step);
+    });
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValueOnce(newlyHalted);
+      const result = await advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => { throw new Error('response lost'); } },
+      });
+      return result.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: result.transition }
+        : result;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance }, events, projectRoot: dir, fromStep: 'finish',
+      mode: 'default', maxRetries: 3,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(retries).not.toContain('finish');
+    expect(dispositions).toEqual(['human_required']);
+    expect(advance).toHaveBeenCalledTimes(1);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('failed');
   });
 
   it.each([

@@ -12,13 +12,10 @@ import { dirname, join } from 'node:path';
 import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './conductor.js';
-import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from './pr-labels.js';
+import { type GhRunner, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
-import {
-  NEEDS_REMEDIATION_TITLE_PREFIX,
-  PR_BODY_FLOOR_MARKER,
-} from './halt-pr-rehabilitation.js';
+import { PR_BODY_FLOOR_MARKER, hasHaltSignal } from './halt-pr-rehabilitation.js';
 import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import {
   dispatchFinishRecord,
@@ -138,19 +135,34 @@ async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
 }
 
-function prProse(title: unknown, body: unknown): 'accepted' | 'stale' | 'placeholder' | 'halt' {
+function prHaltState(title: unknown, body: unknown, rawLabels: unknown): boolean {
+  const prTitle = typeof title === 'string' ? title : '';
+  const prBody = typeof body === 'string' ? body : '';
+  const labels = Array.isArray(rawLabels)
+    ? rawLabels.map((label) => String((label as { name?: unknown } | null)?.name ?? ''))
+    : [];
+  return hasHaltSignal({ title: prTitle, body: prBody, labels, isDraft: false });
+}
+
+function prProse(
+  title: unknown,
+  body: unknown,
+  halted: boolean,
+  acceptedRevision: boolean,
+): 'accepted' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
   const text = `${prTitle}\n${prBody}`.trim();
   if (!text) return 'placeholder';
-  if (
-    prTitle.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
-    prBody.includes(HALT_PR_BANNER_SENTINEL)
-  ) return 'halt';
+  if (halted) return 'halt';
   if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
-  return 'accepted';
+  // Existing prose is a judgment candidate until this coordinator either
+  // authored that exact revision or received an accepted judgment for it.
+  // The PR remains the observation authority; this cache only records the
+  // bounded provider work performed by this coordinator lifetime.
+  return acceptedRevision ? 'accepted' : 'stale';
 }
 
 /**
@@ -211,6 +223,11 @@ export function createProductionFinishPublicationCoordinator(
       // Best-effort durability; the in-memory verdict still bounds this run.
     }
   };
+  // A successful coordinator authoring pass owns exactly one mandatory
+  // re-observation. Its revision is accepted without a redundant judgment;
+  // independently observed authored prose remains stale and is judged.
+  const acceptedProseRevisionByPr = new Map<string, string>();
+  const authoredProsePendingByPr = new Set<string>();
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
@@ -314,16 +331,48 @@ export function createProductionFinishPublicationCoordinator(
               if (!state.pr_url) return { state: 'missing' };
               try {
                 const { stdout } = await deps.gh(
-                  ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft'],
+                  ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft,labels'],
                   { cwd: deps.projectRoot },
                 );
-                const pr = JSON.parse(stdout) as { url?: unknown; title?: unknown; body?: unknown; isDraft?: unknown };
+                const pr = JSON.parse(stdout) as {
+                  url?: unknown;
+                  title?: unknown;
+                  body?: unknown;
+                  isDraft?: unknown;
+                  labels?: unknown;
+                };
                 if (typeof pr.url === 'string') {
-                  proseRevisionByPr.set(pr.url, `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`);
+                  const halted = prHaltState(pr.title, pr.body, pr.labels);
+                  const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
+                  proseRevisionByPr.set(pr.url, revision);
+                  await seedJudgmentStore();
+                  if (authoredProsePendingByPr.delete(pr.url) && !halted) {
+                    const observedProse = prProse(pr.title, pr.body, false, false);
+                    if (observedProse !== 'placeholder') {
+                      // The authoring pass, not an independently observed
+                      // reader-facing revision, owns this exact replacement.
+                      // Retain the result across the next daemon dispatch so
+                      // a healthy placeholder path does not pay a redundant
+                      // judgment provider pass.
+                      acceptedProseRevisionByPr.set(pr.url, revision);
+                      judgmentByRevision.set(revisionDigest(revision), { kind: 'accepted' });
+                      await persistJudgmentStore();
+                    }
+                  }
+                  if (judgmentByRevision.get(revisionDigest(revision))?.kind === 'accepted') {
+                    acceptedProseRevisionByPr.set(pr.url, revision);
+                  }
+                  const prose = prProse(
+                    pr.title,
+                    pr.body,
+                    halted,
+                    acceptedProseRevisionByPr.get(pr.url) === revision,
+                  );
                   return {
                       state: 'one' as const,
                       url: pr.url,
-                      prose: prProse(pr.title, pr.body),
+                      prose,
+                      ...(halted ? { halted: true as const } : {}),
                       ready: !pr.isDraft,
                     };
                 }
@@ -365,6 +414,7 @@ export function createProductionFinishPublicationCoordinator(
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
                   await dispatchAuthoring(request);
+                  authoredProsePendingByPr.add(request.pullRequestUrl);
                 },
               }
             : {}),
@@ -373,8 +423,19 @@ export function createProductionFinishPublicationCoordinator(
             const revision = proseRevisionByPr.get(request.pullRequestUrl);
             const digest = revision === undefined ? undefined : revisionDigest(revision);
             const cached = digest === undefined ? undefined : judgmentByRevision.get(digest);
-            if (cached) return cached;
+            if (cached) {
+              // A persisted acceptance must also restore the prose-state
+              // tracking a fresh coordinator lost, or the re-observed verdict
+              // says "accepted" while classification still reads stale.
+              if (cached.kind === 'accepted' && revision !== undefined) {
+                acceptedProseRevisionByPr.set(request.pullRequestUrl, revision);
+              }
+              return cached;
+            }
             const result = decodePrProseJudgment(await dispatchJudgment(request));
+            if (revision !== undefined && result.kind === 'accepted') {
+              acceptedProseRevisionByPr.set(request.pullRequestUrl, revision);
+            }
             if (digest !== undefined && (result.kind === 'accepted' || result.kind === 'revision_required' || result.kind === 'refused')) {
               judgmentByRevision.set(digest, result);
               await persistJudgmentStore();

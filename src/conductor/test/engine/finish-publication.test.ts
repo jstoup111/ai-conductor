@@ -82,6 +82,52 @@ async function nonRetryablePublicationReason(reason: string) {
 type ObservationState = 'present' | 'missing' | 'stale' | 'malformed' | 'unavailable';
 type PushObservationState = 'pushed' | 'unpushed' | 'stale' | 'malformed' | 'unavailable';
 type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
+type PublicationTransition = import('../../src/engine/finish-publication.js').PublicationTransition;
+type PublicationTransitionDimensions =
+  import('../../src/engine/finish-publication.js').PublicationTransitionDimensions;
+
+type Assert<T extends true> = T;
+type PublicationTransitionDimensionsAreTotal = Assert<
+  PublicationTransitionDimensions extends Record<PublicationTransition, unknown> ? true : false
+>;
+
+void (undefined as unknown as PublicationTransitionDimensionsAreTotal);
+
+async function publicationTransitionDimension(transition: PublicationTransition): Promise<unknown> {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const dimensions = mod.PUBLICATION_TRANSITION_DIMENSIONS;
+  if (dimensions === null || typeof dimensions !== 'object') {
+    throw new Error(
+      'expected export "PUBLICATION_TRANSITION_DIMENSIONS" to resolve every publication transition (not yet implemented)',
+    );
+  }
+  return Reflect.get(dimensions, transition);
+}
+
+type AdvancedPublicationTransition = (
+  emit: undefined,
+  transition: PublicationTransition,
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+) => Promise<
+  | { kind: 'advanced'; transition: PublicationTransition }
+  | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
+>;
+
+async function advancedPublicationTransition(
+  transition: PublicationTransition,
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const advance = mod.advancedPublicationTransition;
+  if (typeof advance !== 'function') {
+    throw new Error(
+      'expected export "advancedPublicationTransition" to compare pre- and post-effect publication observations (not yet implemented)',
+    );
+  }
+  return (advance as AdvancedPublicationTransition)(undefined, transition, before, after);
+}
 
 type PublicationCondition =
   | {
@@ -336,12 +382,11 @@ function deferred<T = void>() {
 }
 
 describe('FINISH human-required halt marker', () => {
-  it('writes the rendered provider refusal through the coordinator to the needs-human halt marker', async () => {
+  it('short-circuits a halt-state PR before provider dispatch and writes needs-human halt guidance', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'finish-publication-refusal-marker-'));
     const pipelineDir = join(projectRoot, '.pipeline');
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
     const prUrl = 'https://github.com/acme/widget/pull/1172';
-    const detail = 'The provider declined the requested prose judgment.';
 
     try {
       await mkdir(join(projectRoot, '.docs', 'shipped'), { recursive: true });
@@ -388,10 +433,9 @@ describe('FINISH human-required halt marker', () => {
         },
         observeReleaseReadiness: async () => 'present',
       });
-      const provider = vi.fn(async () => ({
-        success: true,
-        output: JSON.stringify({ kind: 'refused', detail }),
-      }));
+      const provider = vi.fn(async () => {
+        throw new Error('provider must not be called for a halt-state PR');
+      });
       const conductor = new Conductor({
         stateFilePath,
         stepRunner: { run: provider },
@@ -409,9 +453,9 @@ describe('FINISH human-required halt marker', () => {
       await conductor.run();
 
       const haltBody = await readFile(join(pipelineDir, 'HALT'), 'utf8');
-      expect(provider).toHaveBeenCalledOnce();
+      expect(provider).not.toHaveBeenCalled();
       expect(haltBody).toContain('Next action:');
-      expect(haltBody).toContain(detail);
+      expect(haltBody).toContain('remediation halt signal');
       await expect(readFile(join(pipelineDir, 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -420,6 +464,21 @@ describe('FINISH human-required halt marker', () => {
 });
 
 describe('finish-publication domain types', () => {
+  it.each([
+    'establish_pr',
+    'verify_release_readiness',
+    'author_pr_prose',
+    'judge_pr_prose',
+    'write_shipped_record',
+    'ready_pr',
+    'record_outcome',
+  ] as const satisfies readonly PublicationTransition[])(
+    'resolves an owned dimension for %s',
+    async (transition) => {
+      await expect(publicationTransitionDimension(transition)).resolves.toBeDefined();
+    },
+  );
+
   it('exports the semantic unions for the publication lifecycle', async () => {
     type PublicationIntent = import('../../src/engine/finish-publication.js').PublicationIntent;
     type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
@@ -1038,6 +1097,261 @@ describe('resolveInteractivePublicationIntent', () => {
   );
 });
 
+describe('advancedPublicationTransition', () => {
+  // Recovery coverage: the fixed-point guard already exists, so this
+  // verification is intentionally expected to pass immediately rather than
+  // inventing a RED claim for implemented behavior.
+  it.each([
+    ['establish_pr', 'pr.identity + branchPushed', 'true'],
+    ['verify_release_readiness', 'releaseReadiness', 'valid'],
+    ['author_pr_prose', 'pr.prose', 'stale'],
+    ['judge_pr_prose', 'pr.prose', 'stale'],
+    ['write_shipped_record', 'shippedRecord', 'valid'],
+    ['ready_pr', 'pr.ready', 'false'],
+    ['record_outcome', 'outcomeRecord', 'missing'],
+  ] as const satisfies readonly [PublicationTransition, string, string][])(
+    'halts human-required when %s leaves its owned %s dimension unchanged',
+    async (transition, dimension, value) => {
+      const snapshot = readyPublicationSnapshot();
+
+      await expect(advancedPublicationTransition(transition, snapshot, snapshot)).resolves.toEqual({
+        kind: 'human_required',
+        reason: 'publication_transition_unmoved',
+        detail: `The ${transition} transition left ${dimension} unchanged at ${value}.`,
+      });
+    },
+  );
+
+  it.each([
+    [
+      'author_pr_prose',
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'placeholder', ready: false },
+      }),
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+      }),
+    ],
+    [
+      'write_shipped_record',
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+        shippedRecord: 'missing',
+      }),
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+        shippedRecord: 'valid',
+      }),
+    ],
+    [
+      'ready_pr',
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+      }),
+      readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+      }),
+    ],
+  ] as const satisfies readonly [PublicationTransition, PublicationSnapshot, PublicationSnapshot][]) (
+    'reports advanced when %s moves its owned dimension',
+    async (transition, before, after) => {
+      await expect(advancedPublicationTransition(transition, before, after)).resolves.toEqual({
+        kind: 'advanced',
+        transition,
+      });
+    },
+  );
+
+  it('retries when the post-effect owned dimension is indeterminate', async () => {
+    await expect(
+      advancedPublicationTransition(
+        'judge_pr_prose',
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
+        }),
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: false },
+        }),
+      ),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'judge_pr_prose',
+      reason: 'publication_transition_indeterminate',
+    });
+  });
+
+  it('advances when a previously indeterminate owned dimension becomes determinate', async () => {
+    await expect(
+      advancedPublicationTransition(
+        'judge_pr_prose',
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: false },
+        }),
+        readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+        }),
+      ),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+  });
+
+  it('exhausts the existing FINISH retry budget for repeated indeterminate post-effect observations', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'finish-publication-indeterminate-'));
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    const state: Record<string, unknown> = {
+      complexity_tier: 'S',
+      feature_desc: 'finish-publication-indeterminate',
+    };
+    for (const step of [
+      'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
+      'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+      'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+      'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+      'architecture_review_as_built', 'retro', 'rebase',
+    ] satisfies StepName[]) {
+      state[step] = 'done';
+    }
+    await writeState(stateFilePath, state as ConductState);
+
+    const before = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'placeholder', ready: false },
+    });
+    const after = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: false },
+    });
+    const advance = vi.fn(async () => advanceFinishPublication({
+      observe: vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(before)
+        .mockResolvedValueOnce(after),
+      effects: {
+        authorProse: async () => undefined,
+        dispatchJudgment: async () => ({ kind: 'accepted' }),
+      } as never,
+    }));
+
+    try {
+      await new Conductor({
+        stateFilePath,
+        stepRunner: { run: vi.fn(async () => ({ success: true })) },
+        finishPublication: { advance: advance as never },
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        fromStep: 'finish',
+        mode: 'auto',
+        maxRetries: 3,
+        git: async () => ({ stdout: '' }),
+        gh: async () => ({ stdout: '' }),
+        runGh: async () => ({ stdout: '' }),
+      }).run();
+
+      expect(advance).toHaveBeenCalledTimes(3);
+      await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        'FINISH publication retry exhausted: publication_transition_indeterminate',
+      );
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('advanceFinishPublication unmoved transition dimensions', () => {
+  it('halts human-required when judgment completes but PR prose remains halt', async () => {
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'halt',
+            ready: false,
+          },
+        }),
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      }),
+    ).resolves.toMatchObject({ kind: 'human_required' });
+  });
+
+  it('renders an unmoved judge_pr_prose halt with its stuck pr.prose value and next action', async () => {
+    const disposition = await advanceFinishPublication({
+      observe: async () => readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          ready: false,
+        },
+      }),
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    });
+
+    expect(disposition).toMatchObject({ kind: 'human_required' });
+    const route = await routeFinishPublicationDisposition(disposition);
+    if (route.kind !== 'halt') throw new Error('expected a human-required halt');
+
+    expect(route.reason).toContain('judge_pr_prose');
+    expect(route.reason).toContain('pr.prose');
+    expect(route.reason).toContain('halt');
+    expect(route.reason).toMatch(/next action:/i);
+    expect(route.reason).not.toContain('authoring_required_after_judgment');
+  });
+
+  it('halts human-required when foreign shipped-record movement masks unchanged PR prose', async () => {
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          ready: false,
+        },
+        shippedRecord: 'missing',
+      }))
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          ready: false,
+        },
+        shippedRecord: 'valid',
+      }));
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      }),
+    ).resolves.toMatchObject({ kind: 'human_required' });
+  });
+
+  it('halts human-required when establishing a PR moves identity without a pushed branch', async () => {
+    const draft = draftPrFakes((args) => {
+      if (args[1] === 'view') return new Error('no pull requests found');
+      if (args[1] === 'create') return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+      return { stdout: '' };
+    });
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }))
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'stale',
+          ready: false,
+        },
+        branchPushed: 'missing',
+      }));
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), establishPr: draft.deps },
+      }),
+    ).resolves.toMatchObject({ kind: 'human_required' });
+  });
+});
+
 describe('resolveUnattendedPublicationIntent', () => {
   it.each([
     [
@@ -1127,16 +1441,29 @@ describe('resolveUnattendedPublicationIntent', () => {
 
 describe('advanceFinishPublication preflight', () => {
   it('reaches the judgment boundary once when observed publication, SHIP, and release readiness are valid', async () => {
-    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' };
+    });
+
+    const observe = vi.fn(async () => readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose, ready: false },
+    }));
 
     await expect(
       advanceFinishPublication({
-        observe: async () => readyPublicationSnapshot(),
+        observe,
         effects: { dispatchJudgment },
       }),
     ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
 
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+    // The post-judgment snapshot, not the provider's accepted response, is
+    // the authority that permits this transition to advance.
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(await observe.mock.results[0]?.value).toMatchObject({ pr: { prose: 'stale' } });
+    expect(await observe.mock.results[1]?.value).toMatchObject({ pr: { prose: 'accepted' } });
   });
 
   it('returns the exact release-readiness blocker before dispatching judgment', async () => {
@@ -1182,20 +1509,51 @@ describe('advanceFinishPublication preflight', () => {
 });
 
 describe('advanceFinishPublication PR identity', () => {
-  it('reuses an observed existing draft identity without opening another PR', async () => {
-    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
-    const draft = draftPrFakes(() => new Error('must not call GitHub'));
+  it('requires the post-establish observation to verify both draft identity and pushed branch', async () => {
+    const draft = draftPrFakes((args) => {
+      if (args[1] === 'view') return new Error('no pull requests found');
+      if (args[1] === 'create') return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+      return { stdout: '' };
+    });
+    const before = readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' });
+    const after = readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
+      branchPushed: 'valid',
+    });
+    const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after);
 
     await expect(
       advanceFinishPublication({
-        observe: async () => readyPublicationSnapshot(),
-        effects: { dispatchJudgment, establishPr: draft.deps },
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), establishPr: draft.deps },
       }),
-    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    ).resolves.toEqual({ kind: 'advanced', transition: 'establish_pr' });
 
-    expect(draft.gitCalls).toHaveLength(0);
-    expect(draft.ghCalls).toHaveLength(0);
-    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+    expect(draft.ghCalls.filter((args) => args[1] === 'create')).toHaveLength(1);
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(await observe.mock.results[0]?.value).toMatchObject({ pr: { identity: 'none' }, branchPushed: 'missing' });
+    expect(await observe.mock.results[1]?.value).toMatchObject({ pr: { identity: 'one' }, branchPushed: 'valid' });
+  });
+
+  it('does not advance establish_pr when a new PR identity leaves branch evidence invalid', async () => {
+    const draft = draftPrFakes((args) => {
+      if (args[1] === 'view') return new Error('no pull requests found');
+      if (args[1] === 'create') return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+      return { stdout: '' };
+    });
+    const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }))
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
+        branchPushed: 'missing',
+      }));
+
+    await expect(advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), establishPr: draft.deps },
+    })).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_transition_unmoved' });
   });
 
   it('opens exactly one draft PR and re-observes its identity before advancing', async () => {
@@ -1270,19 +1628,37 @@ describe('advanceFinishPublication durable shipped evidence', () => {
   const shippedSnapshot = (overrides: Partial<PublicationSnapshot> = {}): PublicationSnapshot =>
     readyPublicationSnapshot({ pr: acceptedProsePr, ...overrides });
 
-  it('reuses an existing verified shipped record without invoking its writer', async () => {
+  it('advances shipped-record publication only after the post-write observation is valid', async () => {
     const createShippedRecord = vi.fn(async () => undefined);
-    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    const before = shippedSnapshot({ shippedRecord: 'missing' });
+    const after = shippedSnapshot({ shippedRecord: 'valid' });
+    const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce(after);
 
     await expect(
       advanceFinishPublication({
-        observe: async () => readyPublicationSnapshot(),
-        effects: { dispatchJudgment, createShippedRecord },
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), createShippedRecord },
       }),
-    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    ).resolves.toEqual({ kind: 'advanced', transition: 'write_shipped_record' });
 
-    expect(createShippedRecord).not.toHaveBeenCalled();
-    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+    expect(createShippedRecord).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(await observe.mock.results[0]?.value).toMatchObject({ shippedRecord: 'missing' });
+    expect(await observe.mock.results[1]?.value).toMatchObject({ shippedRecord: 'valid' });
+  });
+
+  it('does not advance write_shipped_record when branch evidence changes but the record remains missing', async () => {
+    const createShippedRecord = vi.fn(async () => undefined);
+    const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(shippedSnapshot({ shippedRecord: 'missing' }))
+      .mockResolvedValueOnce(shippedSnapshot({ branchPushed: 'missing', shippedRecord: 'missing' }));
+
+    await expect(advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), createShippedRecord },
+    })).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_transition_unmoved' });
   });
 
   it('creates an absent shipped record once and re-observes strict evidence before advancing', async () => {
@@ -1342,7 +1718,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
 
     expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
       writes: 1,
-      observations: 2,
+      observations: 3,
     });
     expect(dispatchJudgment).not.toHaveBeenCalled();
   });
@@ -1499,6 +1875,81 @@ describe('advanceFinishPublication concurrent mutation reconciliation', () => {
 });
 
 describe('advanceFinishPublication PR prose judgment boundary', () => {
+  it.each([
+    ['PR identity is unavailable', {
+      pr: { identity: 'indeterminate' },
+    }],
+    ['release readiness is unavailable', {
+      releaseReadiness: 'indeterminate',
+    }],
+  ] as const)(
+    'preserves a judgment retry when %s in the fresh observation',
+    async (_description, unavailableEvidence) => {
+      const observe = vi
+        .fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(readyPublicationSnapshot())
+        .mockResolvedValueOnce(readyPublicationSnapshot(unavailableEvidence));
+
+      await expect(
+        advanceFinishPublication({
+          observe,
+          effects: { dispatchJudgment: async () => ({ kind: 'timed_out' }) },
+        }),
+      ).resolves.toEqual({
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_timed_out',
+      });
+
+      expect(observe).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('halts without spending a FINISH retry when a determinate observation selects another transition', async () => {
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot())
+      // The judgment reports prose that needs authoring, but the fresh
+      // authoritative snapshot still selects judgment. Retrying authoring
+      // would therefore re-enter FINISH unable to perform what it names.
+      .mockResolvedValueOnce(readyPublicationSnapshot());
+
+    const disposition = await advanceFinishPublication({
+      observe,
+      effects: {
+        dispatchJudgment: async () => ({
+          kind: 'revision_required',
+          reason: 'placeholder',
+          detail: 'The title and body are placeholders.',
+        }),
+      },
+    });
+
+    expect(disposition).toMatchObject({ kind: 'human_required' });
+    expect(await routeFinishPublicationDisposition(disposition)).toMatchObject({ kind: 'halt' });
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a judgment retry when the fresh snapshot still selects judgment', async () => {
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot())
+      .mockResolvedValueOnce(readyPublicationSnapshot());
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'timed_out' }) },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'judge_pr_prose',
+      reason: 'judgment_timed_out',
+    });
+
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
   it('skips judgment for accepted PR prose and proceeds to final verification', async () => {
     const dispatchJudgment = vi.fn(async () => undefined);
 
@@ -1521,41 +1972,95 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
     expect(dispatchJudgment).not.toHaveBeenCalled();
   });
 
-  it.each(['stale', 'halt'] as const)(
-    'dispatches one bounded judgment pass for %s PR prose',
-    async (prose) => {
+  it('advances stale prose only when the fresh production observation is accepted', async () => {
+      let observedProse: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
       let request: unknown;
       const dispatchJudgment = vi.fn(async (receivedRequest: unknown) => {
         request = receivedRequest;
+        observedProse = 'accepted';
         return { kind: 'accepted' };
       });
 
+      const observe = vi.fn(async () =>
+        readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: observedProse,
+            ready: false,
+          },
+        }),
+      );
+
       await expect(
         advanceFinishPublication({
-          observe: async () =>
-            readyPublicationSnapshot({
-              pr: {
-                identity: 'one',
-                url: 'https://github.com/acme/widget/pull/1172',
-                prose,
-                ready: false,
-              },
-            }),
+          observe,
           effects: { dispatchJudgment },
         }),
       ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
 
       expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+      expect(observe).toHaveBeenCalledTimes(2);
+      expect(await observe.mock.results[0]?.value).toMatchObject({ pr: { prose: 'stale' } });
+      expect(await observe.mock.results[1]?.value).toMatchObject({ pr: { prose: 'accepted' } });
       expect(request).toEqual({
         kind: 'finish_pr_prose_quality',
         pullRequestUrl: 'https://github.com/acme/widget/pull/1172',
         qualityScope: ['title', 'body'],
         maximumPasses: 1,
       });
-    },
-  );
+  });
 
-  it('dispatches again only when prose becomes stale after an accepted retry', async () => {
+  it('halts a PR with a machine-readable halt signal before it dispatches judgment', async () => {
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'halt',
+            halted: true,
+            ready: false,
+          },
+        }),
+        effects: { dispatchJudgment },
+      }),
+    ).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('halts a judgment retry when its reconciliation observation newly carries a halt signal', async () => {
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'stale',
+          ready: false,
+        },
+      }))
+      .mockResolvedValueOnce(readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          halted: true,
+          ready: false,
+        },
+      }));
+
+    await expect(advanceFinishPublication({
+      observe,
+      effects: { dispatchJudgment: async () => { throw new Error('response lost'); } },
+    })).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
+  it('halts when an accepted judgment leaves its owned prose dimension unchanged', async () => {
     const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
     const observe = vi
       .fn<() => Promise<PublicationSnapshot>>()
@@ -1564,18 +2069,8 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
           pr: {
             identity: 'one',
             url: 'https://github.com/acme/widget/pull/1172',
-            prose: 'accepted',
+            prose: 'stale',
             ready: false,
-          },
-        }),
-      )
-      .mockResolvedValueOnce(
-        readyPublicationSnapshot({
-          pr: {
-            identity: 'one',
-            url: 'https://github.com/acme/widget/pull/1172',
-            prose: 'accepted',
-            ready: true,
           },
         }),
       )
@@ -1591,14 +2086,14 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       );
 
     await expect(
-      advanceFinishPublication({ observe, effects: { dispatchJudgment, repairPresentation: async () => undefined } }),
-    ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
-    expect(dispatchJudgment).not.toHaveBeenCalled();
-
-    await expect(
       advanceFinishPublication({ observe, effects: { dispatchJudgment } }),
-    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    ).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: 'The judge_pr_prose transition left pr.prose unchanged at stale.',
+    });
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -1636,11 +2131,6 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       { kind: 'human_required', reason: 'judgment_refused', detail: 'The provider declined the requested prose judgment.' },
     ],
     [
-      'halt boilerplate',
-      { kind: 'revision_required', reason: 'halt', detail: 'The PR contains an unresolved operator blocker.' },
-      { kind: 'human_required', reason: 'judgment_halt_prose', detail: 'The PR contains an unresolved operator blocker.' },
-    ],
-    [
       'placeholder prose',
       { kind: 'revision_required', reason: 'placeholder', detail: 'The title and body are placeholders.' },
       { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
@@ -1651,25 +2141,57 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       { kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_required_after_judgment' },
     ],
   ] as const)(
-    'preserves the established route while forwarding detail only for human-required %s judgments',
+    'reconciles the %s judgment result without allowing an unselectable publication retry',
     async (_failure, judgmentResult, expected) => {
       const dispatchJudgment = vi.fn(async () => judgmentResult);
       const createShippedRecord = vi.fn(async () => undefined);
       const draft = draftPrFakes(() => new Error('must not create another PR'));
+      const emit = vi.fn();
 
-      await expect(
-        advanceFinishPublication({
-          observe: async () => readyPublicationSnapshot(),
-          effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
-        }),
-      ).resolves.toEqual(expected);
+      const result = await advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot(),
+        effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
+        emit,
+      });
+      expect(result).toMatchObject(
+        expected.kind === 'publication_retry'
+          ? { kind: 'human_required', reason: 'publication_transition_unmoved' }
+          : expected,
+      );
 
       expect(dispatchJudgment).toHaveBeenCalledTimes(1);
       expect(createShippedRecord).not.toHaveBeenCalled();
       expect(draft.gitCalls).toHaveLength(0);
       expect(draft.ghCalls).toHaveLength(0);
+      expect(emit).toHaveBeenCalledWith({
+        type: 'finish_publication_transition', phase: 'started', transition: 'judge_pr_prose',
+      });
+      if (_failure === 'refusal') {
+        expect(result).toMatchObject({ kind: 'human_required', reason: 'judgment_refused' });
+        expect(result).not.toMatchObject({ kind: 'publication_retry' });
+      }
     },
   );
+
+  it('halts halt boilerplate before judgment and never emits a publication retry', async () => {
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    const disposition = await advanceFinishPublication({
+      observe: async () => readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'halt',
+          halted: true,
+          ready: false,
+        },
+      }),
+      effects: { dispatchJudgment },
+    });
+
+    expect(disposition).toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+    expect(await routeFinishPublicationDisposition(disposition)).toMatchObject({ kind: 'halt' });
+  });
 
   it('does not repeat judgment after a successful pass is re-observed as accepted', async () => {
     let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
@@ -1819,7 +2341,7 @@ describe('advanceFinishPublication final outcome commit point', () => {
 
     expect(writes).toEqual(['state-write']);
     expect(recordOutcome).toHaveBeenCalledTimes(1);
-    expect(observe).toHaveBeenCalledTimes(2);
+    expect(observe).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -1949,10 +2471,9 @@ describe('advanceFinishPublication accepted PR presentation', () => {
         }),
         effects: { dispatchJudgment, repairPresentation },
       }),
-    ).resolves.toEqual({
-      kind: 'publication_retry',
-      transition: 'author_pr_prose',
-      reason: 'authoring_required_after_judgment',
+    ).resolves.toMatchObject({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
     });
 
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
