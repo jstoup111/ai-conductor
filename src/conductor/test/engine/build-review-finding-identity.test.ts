@@ -144,6 +144,51 @@ describe('build-review finding identity', () => {
     expect([changedConcern?.id, changedAnchor?.id]).not.toContain(canonicalizeBuildReviewFindingIdentity(base)?.id);
   });
 
+  it('retains separate blocking identities when a rubric classification changes at one subject', () => {
+    const findingSets = [
+      [
+        { rubric: 'tautology', contractVersion: 'v1', concernKind: 'assertion-insensitive-to-production', anchor: { rubric: 'tautology', changedTest: 'src/a.test.ts', exercisedBehavior: 'save', violationKind: 'assertion-insensitive-to-production' } },
+        { rubric: 'tautology', contractVersion: 'v1', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'src/a.test.ts', exercisedBehavior: 'save', violationKind: 'source-text-mirror' } },
+      ],
+      [
+        { rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } },
+        { rubric: 'scope', contractVersion: 'v1', concernKind: 'not-authorized-by-plan', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' } },
+      ],
+      [
+        { rubric: 'rootCause', contractVersion: 'v1', concernKind: 'root-cause-unaddressed', anchor: { rubric: 'rootCause', statedDefect: 'save fails', locus: 'handler', relation: 'root-cause-unaddressed' } },
+        { rubric: 'rootCause', contractVersion: 'v1', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'save fails', locus: 'handler', relation: 'symptom-only-fix' } },
+      ],
+    ];
+
+    expect(findingSets.map(canonicalizeBuildReviewFindingSet).map((findings) => findings?.length)).toEqual([2, 2, 2]);
+  });
+
+  it('keeps distinct missing surfaces under one completeness plan task blocking', () => {
+    const findings = canonicalizeBuildReviewFindingSet([
+      {
+        rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-deliverable',
+        anchor: { rubric: 'completeness', planTask: '10', missingSurface: 'src/first.ts', missingOutcome: 'first outcome' },
+      },
+      {
+        rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-deliverable',
+        anchor: { rubric: 'completeness', planTask: '10', missingSurface: 'src/second.ts', missingOutcome: 'second outcome' },
+      },
+    ]);
+
+    expect(findings?.map((finding) => finding.id)).toHaveLength(2);
+  });
+
+  it('gives a reclassified concern a new identity', () => {
+    const sharedSubject = {
+      rubric: 'scope', contractVersion: 'v1',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
+    };
+    const first = canonicalizeBuildReviewFindingIdentity({ ...sharedSubject, concernKind: 'out-of-plan-change' });
+    const reclassified = canonicalizeBuildReviewFindingIdentity({ ...sharedSubject, concernKind: 'not-authorized-by-plan' });
+
+    expect(reclassified?.id).not.toBe(first?.id);
+  });
+
   it('fails closed instead of omitting invalid, duplicate, or colliding finding records', () => {
     const first = {
       rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
