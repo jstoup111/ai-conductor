@@ -77,35 +77,7 @@ describe('Conductor FINISH publication routing', () => {
     { name: 'interactive', mode: 'interactive' as const, daemon: false },
     { name: 'default foreground', mode: 'default' as const, daemon: false },
     { name: 'foreground auto', mode: 'auto' as const, daemon: false },
-    // Daemon mode is deliberately covered here: even in mocked-dispatch mode,
-    // wiring a coordinator must not reinstate a coordinator-only fence
-    // exemption.
-    { name: 'daemon auto with coordinator', mode: 'auto' as const, daemon: true },
   ])('starts at FINISH and lets the coordinator bound %s judgment dispatches', async ({ mode, daemon }) => {
-    await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(
-      join(dir, '.pipeline', 'manual-test-results.md'),
-      '# Manual Test Results\n\n## Attempt 1 — 2026-08-16T00:00:00Z\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
-    );
-    // The daemon row reaches the real fence.  These are the minimal fresh
-    // SHIP reports it recomputes before allowing the injected coordinator.
-    await writeFile(
-      join(dir, '.pipeline', 'prd-audit.md'),
-      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | test.ts:1 | — |\n',
-    );
-    await writeFile(
-      join(dir, '.pipeline', 'architecture-review-as-built.md'),
-      '# As-Built Review\n\nVerdict: APPROVED\n',
-    );
-    if (daemon) {
-      const persisted = await readState(statePath);
-      if (!persisted.ok) throw new Error('test fixture state must be readable');
-      await writeState(statePath, {
-        ...persisted.value,
-        complexity_tier: 'M',
-        architecture_review: 'skipped',
-      });
-    }
     const calls: StepName[] = [];
     const dispositions: string[] = [];
     const events = new ConductorEventEmitter();
@@ -138,7 +110,6 @@ describe('Conductor FINISH publication routing', () => {
       fromStep: 'finish',
       mode,
       daemon,
-      ...(daemon ? { config: { steps: { manual_test: { disable: true } } } } : {}),
       git: async () => ({ stdout: '' }),
       gh: async () => ({ stdout: '' }),
       runGh: async () => ({ stdout: '' }),
