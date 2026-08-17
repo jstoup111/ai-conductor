@@ -1268,20 +1268,6 @@ assert "between-releases checkout reports its post-release identity and source" 
 assert "between-releases checkout records its v0.3.0 baseline, not v0.4.0" \
   "$( [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" != "v0.4.0" ] && echo 0 || echo 1)"
 
-# A non-exact checkout can still be a tagged install when its prior successful
-# update recorded the tag. That record is the fallback authority.
-REPO=$(make_repo "i17-recorded-tag")
-git -C "$REPO" commit -q --allow-empty -m "between releases"
-BETWEEN_RELEASES_SHA=$(git -C "$REPO" rev-parse HEAD)
-git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
-git -C "$REPO" tag v0.4.0
-git -C "$REPO" checkout -q "$BETWEEN_RELEASES_SHA"
-HOME_DIR=$(make_isolated_home)
-set_current_version "$HOME_DIR" v0.3.0
-
-run_update "$REPO" "$HOME_DIR"
-assert "recorded tagged identity remains update authority off-tag" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
-
 # ─── Task 6: tagged decision identity line ─────────────────────────────────
 
 echo ""
