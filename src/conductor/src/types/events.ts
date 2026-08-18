@@ -148,7 +148,7 @@ export type ConductorEvent =
   | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }
   | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
   | { type: 'build_review_cache_hit'; rubric: string; lapId: string }
-  | { type: 'build_review_rubric_infrastructure_failure'; rubric: string; lapId: string; reason: string }
+  | { type: 'build_review_rubric_infrastructure_failure'; rubric: string; lapId: string; reason: string; excerpt?: string }
   | { type: 'build_review_disposition_accepted'; feature: string; lapId: string; findingId: string; operator: string }
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
   | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }
