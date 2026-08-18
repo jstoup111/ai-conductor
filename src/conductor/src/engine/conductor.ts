@@ -15,6 +15,7 @@ import {
 } from './test-suite-remediation.js';
 import { dirname, relative, join, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
+import { execa } from 'execa';
 import {
   HALT_MARKER,
   PROTECTED_ARTIFACT_HALT_CLASS,
@@ -32,6 +33,7 @@ import type {
   AuthenticationReadiness,
   CodexProbeFailure,
   InvokeResult,
+  SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
@@ -236,6 +238,11 @@ import {
   snapshotReleaseMetadataBlock,
 } from './release-metadata.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
+import {
+  deriveBindSet,
+  probeContainment,
+  wrapForContainment,
+} from './self-host/live-containment.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
@@ -3140,6 +3147,22 @@ export class Conductor {
           provider: codex ? 'codex' : 'claude',
           selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
         });
+        const bindSet = deriveBindSet(liveCheckout, this.projectRoot);
+        const containment = sh.liveContainment
+          ? await probeContainment(
+            bindSet,
+            liveCheckout,
+            this.projectRoot,
+            async (executable, args) => {
+              const result = await execa(executable, args, { reject: false });
+              return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
+            },
+          )
+          : { contained: false as const, reason: 'containment disabled by configuration' };
+        const prepareInvocation = (invocation: SelfHostInvocation): SelfHostInvocation => {
+          if (!containment.contained) return invocation;
+          return { ...invocation, ...wrapForContainment(invocation, bindSet) };
+        };
         // Runs in the candidate's teardown — i.e. AFTER the dispatch it guards
         // has already produced its result. Record the verdict instead of
         // throwing: a throw here propagates out of the `finally` that calls
@@ -3148,7 +3171,25 @@ export class Conductor {
         // recorded reason is consumed at the next dispatch boundary, which is
         // where the HALT marker is written and the run stops.
         const verify = async () => {
-          const result = await verifyLiveBoundary(boundary).catch(() => ({ ok: false, reason: 'Live boundary could not be verified.' }));
+          const result = await verifyLiveBoundary(boundary, containment)
+            .catch(() => ({
+              ok: false,
+              reason: 'Live boundary could not be verified.',
+              containedDrift: undefined,
+            }));
+          await this.events.emit(
+            containment.contained
+              ? { type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence }
+              : { type: 'self_host_containment_verdict', contained: false, reason: containment.reason },
+          );
+          if (result.containedDrift) {
+            await this.events.emit({
+              type: 'contained_live_checkout_drift',
+              evidence: result.containedDrift.evidence,
+              attribution: 'concurrent-operator',
+              summary: result.containedDrift.summary,
+            });
+          }
           if (!result.ok) {
             this.pendingLiveBoundaryHalt =
               result.reason ?? 'Live boundary could not be verified.';
@@ -3174,7 +3215,7 @@ export class Conductor {
             runId: identity.runId,
             attempt: identity.attempt,
           });
-          return { executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } };
+          return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
         }
         if (candidate.providerKey === 'claude') {
           const sandbox = await this.guardrails.provisionSandbox({
@@ -3185,12 +3226,12 @@ export class Conductor {
             runId: identity.runId,
             attempt: identity.attempt,
           });
-          return {
+          return prepareInvocation({
             executable: 'claude',
             env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
             args: [],
             teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
-          };
+          });
         }
         return priorPreparation?.(candidate, runtime, identity);
       };

@@ -706,6 +706,7 @@ any omitted field, yields auto-detection with every gate enabled.
 | `activation` | string | `auto`, `force_on`, `force_off` | `auto` | `auto` compares the build root's realpath against the harness root; `force_on` treats any repo as a self-build; `force_off` never self-hosts |
 | `skill_relink_preflight` | boolean | — | `true` | Intended to gate the pre-dispatch `bin/install --update` relink |
 | `sandbox_build_env` | boolean | — | `true` | Runs the self-build under a throwaway `CLAUDE_CONFIG_DIR` |
+| `live_containment` | boolean | — | `true` | Proves the live checkout is read-only to each self-host dispatch with `bwrap`. If `false`, skips containment and restores fail-closed live-boundary behavior. |
 | `version_approval_gate` | boolean | — | `true` | Halts for operator VERSION-bump approval before `finish` |
 | `release_artifact_gate` | boolean | — | `true` | Halts on an integrity, CHANGELOG, or migration-block failure |
 | `version_freeze` | string | Non-empty after trim, else hard error (`config.ts:1056-1064`) | `null` | While it resolves to the repo `VERSION`, the approval gate self-satisfies. Blank or whitespace normalizes to `null`. Besides a pinned semver string, accepts the literal `"latest"` (tracks the resolved base branch's current `VERSION`) or `"branch:<name>"` (tracks an explicit branch's `VERSION`) — see [self-hosting.md](../guides/self-hosting.md#the-self-host-finish-gates) |
@@ -723,6 +724,15 @@ non-numbers.
 `sandbox_build_env: false` does not merely relax the sandbox — it makes the self-build unrunnable, with
 `{ success: false, permissionDenied: true, output: 'Required safety protection unavailable:
 self-host-isolation' }` (`src/conductor/src/engine/conductor.ts:2049-2065`).
+
+`live_containment: false` is a temporary compatibility opt-out, not an exclusion. The dispatch runs
+without the `bwrap` read-only live-checkout proof, so any live-checkout drift again follows the
+existing fail-closed boundary path and writes a HALT. See the [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only) for recovery.
+
+Likewise, containment is not considered active when `bwrap` is unavailable or its two-sided probe
+fails. Only a successful proof that the live checkout is read-only and the dispatched worktree is
+writable permits live-checkout drift to be attributed to a concurrent operator; every unproven case
+remains fail-closed.
 
 > **Known limitation.** `skill_relink_preflight` is resolved into `skillRelinkPreflight`
 > (`resolved-config.ts:562`) but has no consumer outside `resolved-config.ts`. The relink runs

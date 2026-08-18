@@ -65,6 +65,35 @@ describe('ClaudeProvider', () => {
       expect(onSpawn.mock.calls).toEqual([[]]);
     });
 
+    it('launches wrapped self-host invocations through bwrap with the Claude command after the bind set', async () => {
+      const bindSet = ['--dev-bind', '/', '/', '--ro-bind', '/live-checkout', '/live-checkout'];
+      mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({
+        ...baseOptions,
+        selfHost: {
+          executable: 'bwrap',
+          env: { CLAUDE_CONFIG_DIR: '/isolated/claude-home' },
+          args: [...bindSet, '--', 'claude'],
+          teardown: async () => {},
+        },
+      });
+
+      expect(mockExeca.mock.calls[0].slice(0, 2)).toEqual([
+        'bwrap',
+        [
+          ...bindSet,
+          '--',
+          'claude',
+          '--session-id',
+          expect.any(String),
+          '--print',
+          '--output-format',
+          'json',
+        ],
+      ]);
+    });
+
     it('checks a current permit immediately before the injected subprocess factory', async () => {
       const callOrder: string[] = [];
       const subprocessFactory = vi.fn(() => {

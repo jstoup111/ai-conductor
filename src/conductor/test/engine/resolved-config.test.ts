@@ -1203,6 +1203,28 @@ describe('engine/resolved-config', () => {
     });
   });
 
+  describe('resolveSelfHostConfig — live containment', () => {
+    it.each([
+      { name: 'no config is supplied', config: undefined, expected: true },
+      {
+        name: 'the explicit opt-out is supplied',
+        config: { harness_self_host: { live_containment: false } } as unknown as HarnessConfig,
+        expected: false,
+      },
+      {
+        name: 'a non-boolean value is supplied',
+        config: { harness_self_host: { live_containment: 'false' } } as unknown as HarnessConfig,
+        expected: true,
+      },
+    ])('defaults safely when $name', async ({ config, expected }) => {
+      const { resolveSelfHostConfig } = await import(
+        '../../src/engine/resolved-config.js'
+      );
+
+      expect(resolveSelfHostConfig(config).liveContainment).toBe(expected);
+    });
+  });
+
   // #188 retry-as-escalation: the `escalate` knob resolves through the same
   // step → phase → defaults precedence as the other tuning knobs.
   describe('escalate resolution (#188)', () => {

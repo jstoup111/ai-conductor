@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import {
   CodexProvider,
   parseCodexJsonl,
@@ -13,6 +15,12 @@ import type {
 } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
+import {
+  deriveBindSet,
+  wrapForContainment,
+} from '../../src/engine/self-host/live-containment.js';
+
+const execFileAsync = promisify(execFile);
 
 // This is a fake Codex CLI boundary: no test invokes a locally installed Codex.
 //
@@ -204,6 +212,25 @@ describe('CodexProvider', () => {
     expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
   });
 
+  it('rejects an overlong self-host argument before creating a provider subprocess', async () => {
+    const subprocessFactory = vi.fn(() =>
+      Promise.resolve({ stdout: jsonlMessage('unexpected child'), exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()), 'codex', undefined, subprocessFactory);
+
+    await expect(provider.invoke({
+      ...baseOptions,
+      selfHost: {
+        executable: '/isolated/bin/codex',
+        env: {},
+        args: ['x'.repeat(513)],
+        teardown: async () => {},
+      },
+    })).rejects.toThrow('Codex self-host arguments exceed the 512-character per-argument provider contract.');
+
+    expect(subprocessFactory).not.toHaveBeenCalled();
+  });
+
   it('models every Codex readiness outcome as an exhaustive discriminated contract', () => {
     const readinessOutcomes = [
       { provider: 'codex', source: 'cached-login', state: 'ready' },
@@ -302,6 +329,101 @@ describe('CodexProvider', () => {
       });
     },
   );
+
+  it('places Codex arguments after its contained executable for invoke and invokeInteractive', async () => {
+    const bindSet = ['--dev-bind', '/', '/', '--ro-bind', '/live', '/live'];
+    const codexExecutable = '/isolated/bin/codex';
+    const isolatedHomeArgs = ['--config', 'project_doc_max_bytes=0'];
+    const selfHost = {
+      executable: 'bwrap',
+      env: { CODEX_HOME: '/isolated/codex-home' },
+      args: [...bindSet, '--', codexExecutable, ...isolatedHomeArgs],
+      teardown: async () => {},
+    };
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('contained'), exitCode: 0 } as any);
+
+    await provider.invoke({ ...baseOptions, selfHost });
+    await provider.invokeInteractive({ ...baseOptions, selfHost, interactive: true });
+
+    expect(mockExeca.mock.calls.map(([executable, args]) => ({ executable, args }))).toEqual([
+      {
+        executable: 'bwrap',
+        args: [
+          ...bindSet,
+          '--',
+          codexExecutable,
+          ...isolatedHomeArgs,
+          'exec',
+          '--config', 'sandbox_mode="workspace-write"',
+          '--config', 'approval_policy="on-request"',
+          '--config', 'approvals_reviewer="auto_review"',
+          '--config', 'shell_environment_policy.ignore_default_excludes=false',
+          '--cd', baseOptions.cwd,
+          '--json',
+          '-',
+        ],
+      },
+      {
+        executable: 'bwrap',
+        args: [
+          ...bindSet,
+          '--',
+          codexExecutable,
+          ...isolatedHomeArgs,
+          'exec',
+          '--cd', baseOptions.cwd,
+          '-',
+        ],
+      },
+    ]);
+  });
+
+  it('passes an engine-derived containment launcher with more than sixteen arguments to Codex', async () => {
+    const liveCheckout = await mkdtemp(join(tmpdir(), 'codex-containment-checkout-'));
+    const worktreeRoot = join(liveCheckout, '.worktrees', 'build');
+    try {
+      await execFileAsync('git', ['init', '--initial-branch=main', liveCheckout]);
+      await Promise.all([
+        mkdir(worktreeRoot, { recursive: true }),
+        mkdir(join(liveCheckout, '.pipeline'), { recursive: true }),
+      ]);
+      const contained = wrapForContainment({
+        executable: '/isolated/bin/codex',
+        args: ['--config', 'project_doc_max_bytes=0'],
+        env: { CODEX_HOME: '/isolated/codex-home' },
+      }, deriveBindSet(liveCheckout, worktreeRoot));
+      mockExeca.mockResolvedValue({ stdout: jsonlMessage('contained'), exitCode: 0 } as any);
+
+      await provider.invoke({
+        ...baseOptions,
+        selfHost: { ...contained, teardown: async () => {} },
+      });
+
+      expect({
+        containmentArgCount: contained.args.length,
+        spawn: mockExeca.mock.calls[0].slice(0, 2),
+      }).toEqual({
+        containmentArgCount: expect.any(Number),
+        spawn: [
+          'bwrap',
+          [
+            ...contained.args,
+            'exec',
+            '--config', 'sandbox_mode="workspace-write"',
+            '--config', 'approval_policy="on-request"',
+            '--config', 'approvals_reviewer="auto_review"',
+            '--config', 'shell_environment_policy.ignore_default_excludes=false',
+            '--cd', baseOptions.cwd,
+            '--json',
+            '-',
+          ],
+        ],
+      });
+      expect(contained.args.length).toBeGreaterThan(16);
+    } finally {
+      await rm(liveCheckout, { recursive: true, force: true });
+    }
+  });
 
   it.each([
     {

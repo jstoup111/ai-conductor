@@ -105,6 +105,8 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 const PINNED_PERSISTED_EVENT_TYPES = [
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
+  'contained_live_checkout_drift',
+  'self_host_containment_verdict',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -133,6 +135,8 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
+  'contained_live_checkout_drift',
+  'self_host_containment_verdict',
   'step_started',
   'step_completed',
   'step_failed',
@@ -453,8 +457,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 89 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(89);
+  it('is total over all 91 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(91);
   });
 
   it('routes verdict_freshness to every sink', () => {

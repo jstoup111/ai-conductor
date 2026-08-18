@@ -16,7 +16,7 @@ Runs the self-host dispatch child inside a `bwrap` mount namespace where the liv
 bound read-only and the volatile subtrees are re-bound read-write, so a live-checkout change is
 provably not the dispatch's. `verifyLiveBoundary` consumes that verdict and stops halting on
 operator edits, while keeping today's fail-closed behavior wherever containment cannot be proven.
-13 tasks.
+15 tasks.
 
 ## Technical Approach
 
@@ -380,3 +380,74 @@ Tasks 7–10 and 13 have no dependency on the 1–6 chain and may run in any ord
 
 **Files likely touched:**
 - `CLAUDE.md` — Daemon Operations Safety section 5
+### Task rem-root-cause-1: src/conductor/src/engine/self-host/live-containment.ts:58-74 and src/conductor/test/engine/self-host/live-containment-enforcement.test.ts:19-48 — isolate the sandbox PID/proc view so /proc/<outside-process-pid>/root cannot reach the live checkout, and extend the real-bwrap test to prove that alternate path cannot mutate it before containment may be trusted
+### Task rem-completeness-1: src/conductor/src/engine/config.ts:1194-1206, src/conductor/src/types/config.ts:361-371, src/conductor/src/engine/resolved-config.ts:643-644, and src/conductor/test/engine/self-host-config.test.ts:13-66 — admit and type harness_self_host.live_containment as a boolean, remove the resolver cast, and prove validateConfig accepts false before resolveSelfHostConfig preserves the opt-out
+### Task rem-adr-001: src/conductor/src/types/events.ts:144, src/conductor/src/engine/self-host/live-boundary.ts:354, and src/conductor/src/engine/conductor.ts:3169-3176 — add and emit a contained-live-checkout-drift ConductorEvent through the existing EventPersister spine carrying ContainmentVerdict.evidence, explicit concurrent-operator attribution, and the describeDiff summary
+### Task rem-adr-002: src/conductor/test/acceptance/contained-live-checkout-drift-attribution.acceptance.test.ts — add failing-then-green Story 4 AC3 coverage proving contained drift does not halt and produces an events.jsonl record stating containment evidence, concurrent-operator attribution, and the changed-path summary
+
+---
+
+### Task 14: A contained dispatch reports live-checkout drift on the event spine
+**Story:** 4
+**Type:** happy-path
+**Dependencies:** 8
+
+**Steps:**
+1. Write failing test: with a `contained: true` verdict and a drifted live checkout,
+   `verifyLiveBoundary` returns `{ ok: true, containedDrift: { evidence, summary } }`, where
+   `evidence` is `ContainmentVerdict.evidence` and `summary` is today's `describeDiff` output;
+   with no drift, `containedDrift` is absent.
+2. Write failing test: a new `ConductorEvent` member
+   `{ type: 'contained_live_checkout_drift'; evidence: string; attribution: 'concurrent-operator'; summary: string }`
+   type-checks in the union and round-trips through `EventPersister` into `events.jsonl`.
+3. Write failing test: the conductor's post-teardown verify path emits
+   `contained_live_checkout_drift` when the result carries `containedDrift`, and emits nothing
+   when it does not.
+4. Verify tests fail (RED).
+5. Implement: in `live-boundary.ts`, replace the bare `continue` on the contained live-checkout
+   branch with capture of `{ evidence, summary }` into the returned ok-result; add the union
+   member in `events.ts`; in `conductor.ts`'s `verify()` closure, emit the event through the
+   existing `ConductorEventEmitter` spine when `containedDrift` is present.
+6. Verify tests pass (GREEN).
+7. Commit: "feat(self-host): report contained live-checkout drift on the event spine"
+
+**Files likely touched:**
+- `src/conductor/src/types/events.ts` — `contained_live_checkout_drift` union member
+- `src/conductor/src/engine/self-host/live-boundary.ts` — contained-drift capture
+- `src/conductor/src/engine/conductor.ts` — emission in the verify closure
+- `src/conductor/test/engine/self-host/live-boundary.test.ts` — result-shape cases
+- `src/conductor/test/engine/conductor-live-boundary-events.test.ts` — emission cases
+
+---
+
+### Task 15: Acceptance — contained drift leaves an attributed record and no halt
+**Story:** 4
+**Type:** happy-path
+**Dependencies:** 14
+
+**Steps:**
+1. Write failing acceptance test at
+   `src/conductor/test/acceptance/contained-live-checkout-drift-attribution.acceptance.test.ts`:
+   through the real `prepareCandidateSelfHost` path with the PATH-local `bwrap` fake (Task 12's
+   fixture pattern), mutate the live checkout after fingerprinting under a proven-contained
+   verdict; assert no HALT is written and `events.jsonl` contains one
+   `contained_live_checkout_drift` record whose fields state the containment evidence,
+   `attribution: 'concurrent-operator'`, and the changed-path summary.
+2. Verify it fails (RED) against the pre-Task-14 tree.
+3. Verify it passes (GREEN) with Task 14 in place.
+4. Commit: "test(self-host): prove contained drift is attributed on the spine, not halted"
+
+**Files likely touched:**
+- `src/conductor/test/acceptance/contained-live-checkout-drift-attribution.acceptance.test.ts` — new
+### Task rem-adr-003: src/conductor/src/engine/self-host/live-boundary.ts:341-366, src/conductor/src/types/events.ts:144, src/conductor/src/engine/conductor.ts:3169-3176, src/conductor/test/engine/self-host/live-boundary.test.ts, and src/conductor/test/engine/conductor-live-boundary-events.test.ts — complete pending Plan Task 14 by returning contained-drift evidence and describeDiff summary, adding the contained_live_checkout_drift event with concurrent-operator attribution, emitting it through ConductorEventEmitter/EventPersister, and proving drift emits once while no drift does not
+### Task rem-adr-004: src/conductor/test/acceptance/contained-live-checkout-drift-attribution.acceptance.test.ts — complete pending Plan Task 15 with a bounded fake-bwrap acceptance path proving contained live-checkout drift writes no HALT and persists containment evidence, concurrent-operator attribution, and the changed-path summary to events.jsonl
+### Task rem-adr-005: src/conductor/src/types/events.ts:144, src/conductor/src/engine/conductor.ts:3147-3176, and src/conductor/test/engine/conductor-live-boundary-events.test.ts — add and persist a discriminated self-host containment-verdict event once per completed verify closure, carrying evidence when contained and reason when uncontained, so clean dispatches expose whether containment was in force without a parallel log or sidecar; operator-approved widening 2026-08-18: both containment events (contained_live_checkout_drift, self_host_containment_verdict) are rendered by the daemon log line sink only (src/conductor/src/engine/event-sinks.ts, src/conductor/src/daemon-cli.ts); operator decision 2026-08-18: interactive terminal rendering is out of scope — daemon self-host is the only rendering consumer, and the terminal-renderer cases are removed
+### Task rem-adr-006: docs/reference/configuration.md:695-725 — document harness_self_host.live_containment as a default-true boolean whose false setting skips containment and restores fail-closed live-boundary behavior
+### Task rem-adr-007: docs/runbooks/stalled-or-stuck-feature.md:200-227 — update the self-host live-boundary section for proven versus unproven containment and document carve-out-gap EROFS diagnosis, temporary live_containment opt-out, correction of the shared LIVE_CHECKOUT_VOLATILE policy when the write path is legitimate, and feature resume verification
+### Task rem-scope-001: src/conductor/src/engine/event-sinks.ts:10-11, src/conductor/src/daemon-cli.ts:2076-2083, src/conductor/src/ui/terminal-renderer.ts:117-123, and src/conductor/test/engine/event-sinks.test.ts:107-138 — keep contained_live_checkout_drift and self_host_containment_verdict persisted but mark them non-renderable, remove their daemon and terminal rendering cases, and pin both events as persisted-only in the sink contract test
+### Task rem-root-cause-001: src/conductor/src/execution/codex-provider.ts:229-233,313 and src/conductor/test/execution/codex-provider.test.ts:203-260 — compose both Codex invocation paths with self-host argv before provider-generated exec/model flags so a wrapped invocation reaches bwrap as [...bindSet, '--', codexExecutable, ...isolatedHomeArgs, ...codexArgs], and prove the exact executable and argv through the actual Codex provider spawn boundary
+### Task rem-root-cause-002: src/conductor/src/execution/codex-provider.ts:819-825, src/conductor/src/engine/self-host/live-containment.ts:62-89, and src/conductor/test/execution/codex-provider.test.ts — replace the fixed 16-element rejection with validation that admits the engine-derived variable-length containment launcher while retaining the per-argument size guard, then invoke Codex with deriveBindSet/wrapForContainment output from a real temporary Git checkout and assert the greater-than-16 argv reaches the spawn boundary without rejection
+### Task rem-adr-008: src/conductor/src/execution/claude-provider.ts:506 — spawn options.selfHost?.executable ?? 'claude' so a wrapped Claude self-host invocation executes bwrap with the supplied containment argv instead of passing bwrap flags to the Claude CLI
+### Task rem-adr-009: src/conductor/test/execution/claude-provider.test.ts — add spawn-boundary coverage asserting a wrapped self-host invocation uses the exact bwrap executable and bind-set-prefixed argv ending with '--', 'claude', and the original Claude arguments
+### Task rem-adr-001-aaf606: src/conductor/test/ui/subscriber.test.ts:6-84 and src/conductor/src/ui/subscriber.ts:27-60 — first add focused failing coverage with a mocked terminal renderer proving contained_live_checkout_drift and self_host_containment_verdict reach TerminalRenderer.handle while an unrelated subscribed event does not, then add only those two types to the literal subscription list and forward them alongside halt_marker_write_failed without changing unrelated event delivery
+### Task rem-scope-002: src/conductor/src/ui/subscriber.ts:53-65 — remove contained_live_checkout_drift and self_host_containment_verdict from TerminalSubscriber's eventTypes and TerminalRenderer forwarding condition while preserving halt_marker_write_failed; src/conductor/test/ui/subscriber.test.ts:5-19,89-111 — remove the containment-event terminal-renderer setup and coverage added for the out-of-scope interactive path, preserving daemon-log-only rendering required by plan task rem-adr-005

@@ -594,6 +594,7 @@ export interface ResolvedSelfHostConfig {
   activation: SelfHostActivation;
   skillRelinkPreflight: boolean;
   sandboxBuildEnv: boolean;
+  liveContainment: boolean;
   versionApprovalGate: boolean;
   releaseArtifactGate: boolean;
   /** Declared version freeze (#261); null = no freeze (gate halts as before). */
@@ -650,6 +651,9 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
     skillRelinkPreflight: block?.skill_relink_preflight ?? true,
     sandboxBuildEnv: block?.sandbox_build_env ?? true,
+    liveContainment: typeof block?.live_containment === 'boolean'
+      ? block.live_containment
+      : true,
     versionApprovalGate: block?.version_approval_gate ?? true,
     releaseArtifactGate: block?.release_artifact_gate ?? true,
     // Blank/whitespace normalizes to null so a freeze can never "match" an

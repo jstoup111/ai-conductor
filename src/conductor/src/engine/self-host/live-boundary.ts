@@ -4,6 +4,7 @@ import { readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
+import { type ContainmentVerdict } from './live-containment.js';
 
 const execFile = promisify(execFileCb);
 
@@ -337,7 +338,15 @@ function describeDiff(diff: { added: string[]; removed: string[]; changed: strin
   return `${counts}: ${shown.join('; ')}${elided > 0 ? `; and ${elided} more` : ''}`;
 }
 
-export async function verifyLiveBoundary(snapshot: LiveBoundarySnapshot): Promise<{ ok: boolean; reason?: string }> {
+export async function verifyLiveBoundary(
+  snapshot: LiveBoundarySnapshot,
+  containmentVerdict: ContainmentVerdict = { contained: false, reason: 'containment not evaluated' },
+): Promise<{
+  ok: boolean;
+  reason?: string;
+  containedDrift?: { evidence: string; summary: string };
+}> {
+  let containedDrift: { evidence: string; summary: string } | undefined;
   for (const surface of snapshot.surfaces) {
     const current = await manifest(
       surface.root,
@@ -347,12 +356,23 @@ export async function verifyLiveBoundary(snapshot: LiveBoundarySnapshot): Promis
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
       if (surface.label === 'live checkout') {
+        if (containmentVerdict.contained) {
+          containedDrift = {
+            evidence: containmentVerdict.evidence,
+            summary: describeDiff(diff),
+          };
+          continue;
+        }
         const paths = [...diff.added, ...diff.removed, ...diff.changed];
         const classifications = await classifyLiveCheckoutDiff(surface.root, paths);
         if (paths.every(path => classifications.get(path) === 'operator-edit')) continue;
+        return {
+          ok: false,
+          reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}. Containment was not in force: ${containmentVerdict.reason}.`,
+        };
       }
       return { ok: false, reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}.` };
     }
   }
-  return { ok: true };
+  return containedDrift ? { ok: true, containedDrift } : { ok: true };
 }

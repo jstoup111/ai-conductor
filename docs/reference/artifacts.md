@@ -615,9 +615,12 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **88 variants**. `EventPersister` subscribes to the **61** event types
-marked `persist: true` in `event-sinks.ts` and writes only those:
+`ConductorEvent` defines **91 variants** across **90** event types (`self_host_containment_verdict`
+declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
+subscribes to the **63** event types marked `persist: true` in `event-sinks.ts` and writes only
+those:
 
+`contained_live_checkout_drift`, `self_host_containment_verdict`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
 `build_review_cache_hit`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `provider_attempt`,
@@ -634,6 +637,13 @@ marked `persist: true` in `event-sinks.ts` and writes only those:
 `parallel_failure`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
 `loop_halt`, `halt_marker_write_failed`, `rebase_changed`, `rebase_gate_invalidated`,
 `rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`, and `acceptance_red`.
+
+`contained_live_checkout_drift` and `self_host_containment_verdict` are the containment boundary's
+closure events (`live-containment.ts`): the drift event names a concurrent operator's live-checkout
+change once a dispatch is proven contained, and the verdict event records whether that proof
+succeeded for each completed self-host dispatch. Both render to the terminal and daemon log and
+persist to this file; see [`live_containment`](configuration.md#harness_self_host) and the
+[live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
 
 `build_review_disposition_accepted` and `build_review_disposition_refused` are declared `persist:
 false` deliberately: they are written by the external build-review CLI to its own pipeline-owned

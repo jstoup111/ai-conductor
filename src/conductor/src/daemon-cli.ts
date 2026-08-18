@@ -2073,6 +2073,14 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'contained_live_checkout_drift':
+      log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
+      break;
+    case 'self_host_containment_verdict':
+      log(`${dot} ${chalk.dim(event.contained
+        ? `self-host containment verified: ${event.evidence}`
+        : `self-host containment unavailable: ${event.reason}`)}`);
+      break;
     case 'step_started':
       log(`${dot} ${chalk.cyan('▶')} ${event.step}`);
       break;

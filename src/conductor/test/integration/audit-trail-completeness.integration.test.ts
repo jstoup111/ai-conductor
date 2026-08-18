@@ -53,6 +53,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  contained_live_checkout_drift: 'not-audited-by-design',
+  self_host_containment_verdict: 'not-audited-by-design',
   build_review_rubric_started: 'not-audited-by-design',
   build_review_rubric_prompt: 'not-audited-by-design',
   build_review_rubric_result: 'not-audited-by-design',
@@ -149,8 +151,25 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   acceptance_red: 'not-audited-by-design',
 };
 
-/** One minimally-valid fixture per event owned by the audit writer, keyed by type. */
-const EVENT_FIXTURES: { [K in AuditedEventType]: Extract<ConductorEvent, { type: K }> } = {
+/** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
+const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+  contained_live_checkout_drift: {
+    type: 'contained_live_checkout_drift',
+    evidence: 'live root read-only; worktree writable',
+    attribution: 'concurrent-operator',
+    summary: '1 added, 0 removed, 0 changed: added operator-edit.txt',
+  },
+  self_host_containment_verdict: {
+    type: 'self_host_containment_verdict',
+    contained: true,
+    evidence: 'live root read-only; worktree writable',
+  },
+  containment_check_unresolved: {
+    type: 'containment_check_unresolved',
+    failure: 'evaluation-failed',
+    taskId: '1',
+    ts: 1755300000000,
+  },
   build_review_rubric_started: { type: 'build_review_rubric_started', rubric: 'scope', lapId: 'lap-1' },
   build_review_rubric_prompt: { type: 'build_review_rubric_prompt', rubric: 'scope', lapId: 'lap-1', promptBytes: 4096 },
   build_review_rubric_result: { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
