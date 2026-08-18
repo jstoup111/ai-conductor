@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import * as buildReviewDomain from '../../src/engine/build-review-domain.js';
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   buildReviewFindingReferenceContext,
@@ -50,12 +51,105 @@ describe('build-review domain', () => {
     }, references)).toBeUndefined();
   });
 
+  it('derives root-cause content-region references from projected hunk content, independent of line shifts', () => {
+    const projectedHunk = {
+      oldStart: 12, oldCount: 1, newStart: 14, newCount: 1,
+      lines: ['- return staleState;', '+ return persistedState;'],
+    };
+    const shiftedProjectedHunk = {
+      ...projectedHunk,
+      oldStart: 112, newStart: 114,
+    };
+    const projection = (hunk: typeof projectedHunk) => ({
+      rubric: 'rootCause',
+      changedFiles: [{ path: 'src/handler.ts', changeKind: 'modified', hunks: [hunk] }],
+    }) as unknown as BuildReviewRubricProjection;
+
+    const references = buildReviewFindingReferenceContext(projection(projectedHunk)) as unknown as {
+      readonly rootCauseLoci: readonly { readonly path: string; readonly contentHash: string; readonly display: string }[];
+    };
+    const shiftedReferences = buildReviewFindingReferenceContext(projection(shiftedProjectedHunk)) as unknown as {
+      readonly rootCauseLoci: readonly { readonly path: string; readonly contentHash: string; readonly display: string }[];
+    };
+
+    expect(references.rootCauseLoci).toEqual([{
+      path: 'src/handler.ts',
+      contentHash: 'sha256:67a8c9094cb9d5c2e93d5b5adba5543970592651c73948b9f441433cc017c3e6',
+      display: 'src/handler.ts changed region',
+    }]);
+    expect(shiftedReferences.rootCauseLoci).toEqual(references.rootCauseLoci);
+  });
+
   it.each(['rem-rootcause-1', 'T0', '8.1'])('accepts repository-valid plan task reference %s', (planTask) => {
     expect(parseBuildReviewCanonicalPlanTaskReference(planTask)).toBe(planTask);
   });
 
   it.each([' rem-rootcause-1 ', '`T0`', 'Task 8.1'])('rejects formatted or prose plan task reference %s', (planTask) => {
     expect(parseBuildReviewCanonicalPlanTaskReference(planTask)).toBeUndefined();
+  });
+
+  it('accepts root-cause loci only as content-region references and rejects coordinate encodings', () => {
+    const locus = {
+      path: 'src/handler.ts',
+      contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      display: 'persistence return branch',
+    };
+    const result = parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'rootCause', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      findings: [{
+        concernKind: 'root-cause-unaddressed', summary: 'The persisted state is skipped.', evidenceLocations: ['src/handler.ts:14'],
+        anchor: { rubric: 'rootCause', statedDefect: 'state is not persisted', locus, relation: 'root-cause-unaddressed' },
+      }],
+    });
+    const coordinateEncodings = ['src/handler.ts@12', 'src/handler.ts:12-14', 'src/handler.ts@12,3:14,4'];
+
+    expect(result).toMatchObject({ findings: [{ anchor: { locus } }] });
+    expect(coordinateEncodings.map((coordinate) => parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'rootCause', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      findings: [{
+        concernKind: 'root-cause-unaddressed', summary: 'The persisted state is skipped.', evidenceLocations: ['src/handler.ts:14'],
+        anchor: { rubric: 'rootCause', statedDefect: 'state is not persisted', locus: coordinate, relation: 'root-cause-unaddressed' },
+      }],
+    }))).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('rejects malformed or incomplete root-cause content-region references', () => {
+    const locus = {
+      path: 'src/handler.ts',
+      contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      display: 'persistence return branch',
+    };
+    const malformedLoci = [
+      { path: locus.path, contentHash: locus.contentHash },
+      { path: locus.path, display: locus.display },
+      { contentHash: locus.contentHash, display: locus.display },
+      { ...locus, contentHash: 'sha256:not-a-digest' },
+      { ...locus, display: '' },
+      { ...locus, coordinate: '12-14' },
+    ];
+
+    expect(malformedLoci.map((candidate) => parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'rootCause', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      findings: [{
+        concernKind: 'root-cause-unaddressed', summary: 'The persisted state is skipped.', evidenceLocations: ['src/handler.ts:14'],
+        anchor: { rubric: 'rootCause', statedDefect: 'state is not persisted', locus: candidate, relation: 'root-cause-unaddressed' },
+      }],
+    }))).toEqual(Array(6).fill(undefined));
+  });
+
+  it('pins the closed three-kind reference schema and rubric anchor bindings', () => {
+    expect({
+      kinds: buildReviewDomain.BUILD_REVIEW_FINDING_REFERENCE_KINDS,
+      bindings: buildReviewDomain.BUILD_REVIEW_FINDING_REFERENCE_BINDINGS,
+    }).toEqual({
+      kinds: ['path', 'plan-task', 'content-region'],
+      bindings: {
+        tautology: { changedTest: 'content-region' },
+        scope: { path: 'path' },
+        rootCause: { locus: 'content-region' },
+        completeness: { planTask: 'plan-task', missingSurface: 'path' },
+      },
+    });
   });
 
   it('accepts only the typed anchors belonging to each rubric', () => {

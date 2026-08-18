@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { BUILD_REVIEW_FINDING_VOCABULARIES } from '../../src/engine/build-review-domain.js';
@@ -12,6 +13,17 @@ type FindingVocabularies = Readonly<Record<string, FindingVocabulary>>;
 
 function normalizedVocabularyMembers(vocabularies: FindingVocabularies): readonly string[] {
   return Object.values(vocabularies).flatMap((rubric) => [rubric.members, rubric.concernKinds, ...Object.values(rubric.anchorFields)].flat());
+}
+
+function contentHashForHunk(hunk: string): string {
+  const normalized = hunk
+    .split('\n')
+    .filter((line) => line.startsWith('-') || line.startsWith('+'))
+    .map((line) => line.slice(1))
+    .join('\n')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+  return `sha256:${createHash('sha256').update(normalized).digest('hex')}`;
 }
 
 describe('build-review finding identity', () => {
@@ -203,6 +215,51 @@ describe('build-review finding identity', () => {
     });
 
     expect(referencesStayDistinct).toEqual([true, true, true, true]);
+  });
+
+  it('anchors root-cause identity to normalized hunk content rather than prose or coordinates', () => {
+    const hunk = '- return staleState;\n+ return persistedState;';
+    const whitespaceOnlyHunk = '-  return   staleState;\n+\treturn persistedState;  ';
+    const distinctHunk = '- return cachedState;\n+ return recomputedState;';
+    const changedHunk = '- return staleState;\n+ return fallbackState;';
+    const contentHash = contentHashForHunk(hunk);
+    const base = {
+      rubric: 'rootCause' as const, contractVersion: 'v3' as const, concernKind: 'root-cause-unaddressed',
+      anchor: {
+        rubric: 'rootCause' as const, statedDefect: 'state is not persisted', relation: 'root-cause-unaddressed',
+        locus: {
+          path: 'src/handler.ts',
+          contentHash,
+          display: 'persistence return branch',
+        },
+      },
+    };
+    const first = canonicalizeBuildReviewFindingIdentity(base);
+    const reworded = canonicalizeBuildReviewFindingIdentity({
+      ...base, summary: 'A different explanation of the same defect.', evidenceLocations: ['src/handler.ts:99'],
+      anchor: { ...base.anchor, statedDefect: 'The state write is omitted.' },
+    } as unknown as BuildReviewFindingIdentityInput);
+    const lineShifted = canonicalizeBuildReviewFindingIdentity({
+      ...base,
+      anchor: { ...base.anchor, locus: { ...base.anchor.locus, display: 'persistence return branch after rebase' } },
+    } as unknown as BuildReviewFindingIdentityInput);
+    const differentHunk = canonicalizeBuildReviewFindingIdentity({
+      ...base,
+      anchor: { ...base.anchor, locus: { ...base.anchor.locus, contentHash: contentHashForHunk(distinctHunk), display: 'cache return branch' } },
+    } as unknown as BuildReviewFindingIdentityInput);
+    const changedContent = canonicalizeBuildReviewFindingIdentity({
+      ...base,
+      anchor: { ...base.anchor, locus: { ...base.anchor.locus, contentHash: contentHashForHunk(changedHunk) } },
+    } as unknown as BuildReviewFindingIdentityInput);
+
+    expect(contentHashForHunk(whitespaceOnlyHunk)).toBe(contentHash);
+    expect(first).toMatchObject({
+      canonicalPayload: { anchor: { locus: { path: 'src/handler.ts', contentHash: base.anchor.locus.contentHash } } },
+    });
+    expect(reworded).toEqual(first);
+    expect(lineShifted).toEqual(first);
+    expect(differentHunk?.id).not.toBe(first?.id);
+    expect(changedContent?.id).not.toBe(first?.id);
   });
 
   it('changes identity for a materially different concern or logical anchor', () => {
