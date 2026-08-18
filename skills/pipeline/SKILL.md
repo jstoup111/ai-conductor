@@ -385,7 +385,9 @@ retroactively block it for an event that its running session had no way to write
 
 The evaluator runs:
 
-1. **Spec compliance** — All acceptance criteria (happy + negative) have corresponding tests?
+1. **Spec compliance** — Does every acceptance criterion (happy + negative) have concrete
+   sufficient behavioral proof at the lowest suitable layer? Compatible criteria may share
+   coverage; do not require one new test per criterion.
 2. **Code quality** — Clear, readable, no duplication, no complexity violations, stack-specific checks?
 3. **Domain integrity** — Domain types used, boundaries respected, naming correct?
 
