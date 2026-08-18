@@ -41,18 +41,23 @@ For each operator reseal, judge whether its rationale justifies the named protec
 amendment in its commit range. Assess unmatched paths normally under this Scope contract; a reseal
 does not exempt them. Reseal evidence does not weaken another rubric.
 
-## Result contract (v1)
+## Result contract (v3)
 
 Return exactly one JSON `judged` result for rubric `scope`: its top-level `kind` field is exactly
-the string `judged` (never `result` or any other field name), it carries contract version `v1`, it
+the string `judged` (never `result` or any other field name), it carries contract version `v3`, it
 echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means no Scope concern was found. Each finding
 contains:
 
-- an enumerated concern kind in a `concernKind` field (never `kind`);
+**Closed vocabulary:** `out-of-plan-change`, `not-authorized-by-plan`.
+
+- a `concernKind` field (never `kind`) with the sole allowed member
+  `out-of-plan-change`;
 - typed logical anchors for the out-of-plan path or surface and its plan-scope relation, carried
-  in a nested `anchor` object — `{"rubric": "scope", "path": "<string>", "relation": "<string>"}` —
-  with plain string values, never flattened to the finding's top level and never renamed;
+  in a nested `anchor` object — `{"rubric": "scope", "path": "<string>",
+  "relation": "not-authorized-by-plan"}` — where `relation` must be exactly
+  `not-authorized-by-plan`; the subject `path` remains a plain string. Never flatten the anchor
+  to the finding's top level or rename it;
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 

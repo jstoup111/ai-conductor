@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync } from 'fs';
+import { chmodSync, lstatSync, mkdtempSync, readdirSync, realpathSync } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
 import { join } from 'path';
 
@@ -40,6 +40,23 @@ export const RUN_TMP_ROOT_PREFIX = 'ai-conductor-vitest-run-';
  * worker-side test prove propagation by comparing `os.tmpdir()` to it.
  */
 export const RUN_TMP_ROOT_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT';
+
+/** Make nested directories removable without following symlinks. */
+function makeDirectoriesWritableSync(path: string): void {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (!stat.isDirectory()) return;
+
+  for (const entry of readdirSync(path)) {
+    makeDirectoriesWritableSync(join(path, entry));
+  }
+  chmodSync(path, 0o700);
+}
 
 /**
  * Top-level real-tmpdir entry prefixes that are NOT test leaks.
@@ -167,6 +184,7 @@ export function ensureRunTmpRootSync(
  * @param runRoot Absolute path returned by `createRunTmpRoot`
  */
 export async function removeRunTmpRoot(runRoot: string): Promise<void> {
+  makeDirectoriesWritableSync(runRoot);
   await rm(runRoot, { recursive: true, force: true });
 }
 

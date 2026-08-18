@@ -23,7 +23,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     readonly activePlan: boolean;
     readonly absoluteActivePlanPath?: boolean;
     readonly priorArtifacts: Readonly<Record<string, string>>;
-    readonly planTask?: string;
+    readonly activePlanTask?: string;
     readonly priorLapDirectory?: boolean;
   }): Promise<string | undefined> {
     if (!dir) throw new Error('test directory was not initialized');
@@ -44,13 +44,15 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     const currentLapId = parseBuildReviewLapId('lap-current')!;
     const priorLapId = parseBuildReviewLapId('lap-prior')!;
     const finding: BuildReviewFinding = {
-      concernKind: 'missing-outcome',
+      concernKind: 'missing-deliverable',
       summary: 'The remediation context does not identify its governing task.',
       evidenceLocations: ['src/engine/conductor.ts:7500'],
       anchor: {
         rubric: 'completeness',
-        planTask: options.planTask ?? '42',
+        planTask: '42',
+        missingSurface: 'src/engine/conductor.ts',
         missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+        missingKind: 'missing-deliverable',
       },
     };
     const judged = (lapId = currentLapId) => ({
@@ -76,7 +78,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
       const relativePlanPath = '.docs/plans/active-remediation-plan.md';
       const activePlanPath = options.absoluteActivePlanPath ? join(dir, relativePlanPath) : relativePlanPath;
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, relativePlanPath), '### Task 42: Preserve the remediation context contract\n');
+      await writeFile(join(dir, relativePlanPath), `### Task ${options.activePlanTask ?? '42'}: Preserve the remediation context contract\n`);
       await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath }));
     }
     for (const [file, contents] of Object.entries(options.priorArtifacts)) {
@@ -218,13 +220,15 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     const currentLapId = parseBuildReviewLapId('lap-current')!;
     const priorLapId = parseBuildReviewLapId('lap-prior')!;
     const finding: BuildReviewFinding = {
-      concernKind: 'missing-outcome',
+      concernKind: 'missing-deliverable',
       summary: 'The remediation context does not identify its governing task.',
       evidenceLocations: ['src/engine/conductor.ts:7500'],
       anchor: {
         rubric: 'completeness',
         planTask: '42',
+        missingSurface: 'src/engine/conductor.ts',
         missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+        missingKind: 'missing-deliverable',
       },
     };
     const judged = (
@@ -299,7 +303,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     }).run();
 
     expect(remediationContext).toMatch(
-      /plan contract: \.docs\/plans\/active-remediation-plan\.md — Task 42 \(anchor: pass plan and prior-attempt pointers to remediation\)\nprior attempts \(1\): \.pipeline\/build-review\/lap-prior\/completeness\.json#\S+/,
+      /plan contract: \.docs\/plans\/active-remediation-plan\.md — Task 42 \(anchor: src\/engine\/conductor\.ts\)\nprior attempts \(1\): \.pipeline\/build-review\/lap-prior\/completeness\.json#\S+/,
     );
   });
 
@@ -307,14 +311,14 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
     dir = await mkdtemp(join(tmpdir(), 'build-review-remediate-pointer-miss-'));
     const remediationContext = await dispatchPointerContext({
       activePlan: true,
-      planTask: 'drifted-task',
+      activePlanTask: 'drifted-task',
       priorArtifacts: {},
       priorLapDirectory: false,
     });
 
     expect(remediationContext).toBe(
       'build_review FAILED on completeness:\n' +
-      '[completeness] missing-outcome\n[completeness] missing-outcome\n' +
+      '[completeness] missing-deliverable\n[completeness] missing-deliverable\n' +
       'The plan task requires review. Check the approved plan’s existing tasks before ' +
       'proposing a plan-level change. Active plan: .docs/plans/active-remediation-plan.md. ' +
       'Plan remediation per the /remediate skill and write .pipeline/remediation.json.',
@@ -335,7 +339,7 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
 
     expect(remediationContext).toContain(
       `plan contract: ${join(dir, '.docs', 'plans', 'active-remediation-plan.md')} — Task 42 ` +
-      '(anchor: pass plan and prior-attempt pointers to remediation)',
+      '(anchor: src/engine/conductor.ts)',
     );
   });
 
@@ -353,12 +357,14 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
             kind: 'judged', rubric: 'completeness', lapId: parseBuildReviewLapId('lap-prior'),
             snapshotDigest: 'sha256:pointer-context', contractVersion: 'v1',
             findings: [{
-              concernKind: 'missing-outcome',
+              concernKind: 'missing-deliverable',
               summary: 'The remediation context does not identify its governing task.',
               evidenceLocations: ['src/engine/conductor.ts:7500'],
               anchor: {
                 rubric: 'completeness', planTask: '42',
+                missingSurface: 'src/engine/conductor.ts',
                 missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+                missingKind: 'missing-deliverable',
               },
             }], verdict: 'FAIL',
           },
@@ -381,12 +387,14 @@ describe('engine/conductor — build_review remediation dispatch (Tasks 7–9)',
         kind: 'judged', rubric: 'completeness', lapId: parseBuildReviewLapId('lap-prior'),
         snapshotDigest: 'sha256:pointer-context', contractVersion: 'v1',
         findings: [{
-          concernKind: 'missing-outcome',
+          concernKind: 'missing-deliverable',
           summary: 'The remediation context does not identify its governing task.',
           evidenceLocations: ['src/engine/conductor.ts:7500'],
           anchor: {
             rubric: 'completeness', planTask: '42',
+            missingSurface: 'src/engine/conductor.ts',
             missingOutcome: 'pass plan and prior-attempt pointers to remediation',
+            missingKind: 'missing-deliverable',
           },
         }], verdict: 'FAIL',
       },

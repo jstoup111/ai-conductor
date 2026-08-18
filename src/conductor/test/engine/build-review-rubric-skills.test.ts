@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { BUILD_REVIEW_FINDING_VOCABULARIES } from '../../src/engine/build-review-domain.js';
+
 const tautologySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-tautology/SKILL.md', import.meta.url),
 );
@@ -16,7 +18,36 @@ const completenessSkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-completeness/SKILL.md', import.meta.url),
 );
 
+const vocabularyLine = /^\*\*Closed vocabulary:\*\*\s+(.+?)(?=\n\n)/ms;
+
+function documentedVocabulary(skill: string): string[] {
+  const matched = skill.match(vocabularyLine);
+  if (!matched) throw new Error('missing closed vocabulary declaration');
+  return [...matched[1].matchAll(/`([^`]+)`/g)].map((entry) => entry[1]).sort();
+}
+
 describe('engine/build-review rubric skill contracts', () => {
+  it('keeps every rubric skill’s closed vocabulary equal to the engine source in both directions', async () => {
+    const skills = {
+      tautology: await readFile(tautologySkillPath, 'utf8'),
+      scope: await readFile(scopeSkillPath, 'utf8'),
+      rootCause: await readFile(rootCauseSkillPath, 'utf8'),
+      completeness: await readFile(completenessSkillPath, 'utf8'),
+    } as const;
+
+    for (const rubric of Object.keys(skills) as Array<keyof typeof skills>) {
+      expect(documentedVocabulary(skills[rubric]))
+        .toEqual([...BUILD_REVIEW_FINDING_VOCABULARIES[rubric].members].sort());
+      for (const member of BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds) {
+        expect(skills[rubric]).toContain(`\`${member}\``);
+      }
+      for (const [field, members] of Object.entries(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields)) {
+        expect(skills[rubric]).toContain(`\`${field}\``);
+        for (const member of members) expect(skills[rubric]).toContain(`\`${member}\``);
+      }
+    }
+  });
+
   it('defines the versioned Tautology judgement contract over its closed projection', async () => {
     const skill = await readFile(tautologySkillPath, 'utf8');
 
@@ -36,12 +67,12 @@ describe('engine/build-review rubric skill contracts', () => {
     // content-free manifest (path + merge-base blob sha per file).
     expect(skill).toMatch(/reverted-production manifest/i);
 
-    expect(skill).toMatch(/contract version.*`v1`/i);
+    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/concern kind/i);
     expect(skill).toMatch(/changed test/i);
     expect(skill).toMatch(/exercised behavior\/assertion/i);
     expect(skill).toMatch(/violation kind/i);
-    expect(skill).toMatch(/"rubric": "tautology", "changedTest": "<string>"/);
+    expect(skill).toMatch(/"rubric": "tautology", "changedTest": \{"path": "<repository-relative path>",/);
     expect(skill).toMatch(/never\s+flattened/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
@@ -79,7 +110,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/unmatched paths?.*normally/i);
     expect(skill).toMatch(/does not.*exempt/i);
 
-    expect(skill).toMatch(/contract version.*`v1`/i);
+    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/out-of-plan path or surface/i);
     expect(skill).toMatch(/plan-scope relation/i);
     expect(skill).toMatch(/"rubric": "scope", "path": "<string>"/);
@@ -112,7 +143,9 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/stated defect\/outcome/i);
     expect(skill).toMatch(/symptom-only/i);
     expect(skill).toMatch(/implementation mechanism or locus/i);
+    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/"rubric": "rootCause", "statedDefect":/);
+    expect(skill).toMatch(/"locus": \{"path": "<repository-relative path>",/);
     expect(skill).toMatch(/typed logical anchors/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
@@ -142,10 +175,14 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/plan.*diff.*whole/i);
 
     expect(skill).toMatch(/default-enabled/i);
+    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/engine.*explicit disablement/i);
     expect(skill).toMatch(/missing deliverable/i);
     expect(skill).toMatch(/approved plan outcome\/task/i);
-    expect(skill).toMatch(/"rubric": "completeness", "planTask": "<string>"/);
+    expect(skill).toMatch(/"rubric": "completeness", "planTask": "<projection task reference>"/);
+    expect(skill).toMatch(/"missingSurface": "<task-owned plan surface reference>"/);
+    expect(skill).toMatch(/"missingKind": "missing-deliverable"/);
+    expect(skill).toMatch(/`missingKind`.*role-specific.*matches.*`concernKind`/is);
     expect(skill).toMatch(/typed logical anchors/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);

@@ -29,6 +29,7 @@ import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '..
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
+import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -3295,7 +3296,7 @@ TIER: M`,
             observedProjections.push(projection);
             return { success: true, exitCode: 0, output: JSON.stringify({
               kind: 'judged', rubric: 'tautology', lapId: (projection as any).lapId,
-              snapshotDigest: (projection as any).snapshotDigest, contractVersion: 'v1', findings: [],
+              snapshotDigest: (projection as any).snapshotDigest, contractVersion: (projection as any).contractVersion, findings: [],
             }) };
           }),
           invokeInteractive: vi.fn().mockResolvedValue(undefined),
@@ -3363,6 +3364,15 @@ TIER: M`,
         }),
         ...currentBuildReviewProof(),
       });
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
+        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v3',
+        findings: branch.rubric === 'scope' ? [{
+          concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
+          evidenceLocations: ['src/example.ts:1'],
+          anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'out-of-plan-change' },
+        }] : [],
+      }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
       expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject(rawAggregate as object);
@@ -3381,7 +3391,7 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v1', findings: [], verdict: 'PASS',
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: false });
@@ -3666,6 +3676,36 @@ TIER: M`,
         stagedPaths: ['src/engine/config.test.ts'],
         task: { id: '3', status: 'in_progress', files: ['src/engine/config.ts'] },
       })).toEqual({ allowed: true });
+    });
+
+    it('leaves no verdict artifact after a vocabulary rejection survives its repair turn', async () => {
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: JSON.stringify({
+          kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: 'lap-head',
+          snapshotDigest: 'sha256:source', findings: [{
+            concernKind: 'other', summary: 'A rejected catch-all.',
+            evidenceLocations: ['src/example.ts:1'],
+            anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'other' },
+          }],
+        }),
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        { gitRunner: scriptedGit(), planPath, ...tautologyOptIn(), ...currentBuildReviewProof() },
+      );
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(false);
+      await expect(access(join(dir, '.pipeline/build-review.json'))).rejects.toThrow();
+      expect(invoke).toHaveBeenCalledTimes(8);
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger.gates.build_review?.count ?? 0).toBe(0);
+      expect(ledger.gates.build_review?.cumulative ?? 0).toBe(0);
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
@@ -4003,10 +4043,10 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
   const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
   const snapshotDigest = 'sha256:434fa33612c7d7188d5ba5398a748b54a28400bcb534988863610f64a70896f8';
   const projection = {
-    rubric: 'tautology', contractVersion: 'v1', projectionVersion: 'v1',
+    rubric: 'tautology', contractVersion: 'v3', projectionVersion: 'v2',
     lapId, snapshotDigest, digest: 'sha256:projection',
-    mergeBase: 'base', headSha: 'head', changedFiles: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
-    changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
+    mergeBase: 'base', headSha: 'head', changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
   const policy = {
     enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
@@ -4021,12 +4061,12 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     'I read the referenced diff and measured each changed test.',
     '```json',
     JSON.stringify({
-      kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId, snapshotDigest,
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v3', lapId, snapshotDigest,
       findings: [{
-        concernKind: 'assertion-cannot-fail',
+        concernKind: 'assertion-insensitive-to-production',
         changedTest: { path: 'test/engine/event-sinks.test.ts', suite: 'event sink subscriptions', name: 'rejects an unrelated sink' },
         exercisedBehavior: { productionSymbol: 'EVENT_SINKS', productionPath: 'src/engine/event-sinks.ts' },
-        violationKind: 'assertion-over-test-local-construct',
+        violationKind: 'assertion-insensitive-to-production',
         summary: 'The assertion compares a test-local mutated copy and can never fail.',
         evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
       }],
@@ -4034,16 +4074,20 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     '```',
   ].join('\n');
   const validOutput = JSON.stringify({
-    kind: 'judged', rubric: 'tautology', contractVersion: 'v1', lapId, snapshotDigest,
+    kind: 'judged', rubric: 'tautology', contractVersion: 'v3', lapId, snapshotDigest,
     findings: [{
-      concernKind: 'assertion-cannot-fail',
+      concernKind: 'assertion-insensitive-to-production',
       summary: 'The assertion compares a test-local mutated copy and can never fail.',
       evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
       anchor: {
         rubric: 'tautology',
-        changedTest: 'test/engine/event-sinks.test.ts > rejects an unrelated sink',
+        changedTest: {
+          path: 'test/engine/event-sinks.test.ts',
+          contentHash: 'sha256:7849045d0fc1c72a360be630bf414918ecda92a8f0fcd56b79ec0a1bd93c92ca',
+          display: 'test/engine/event-sinks.test.ts changed test',
+        },
         exercisedBehavior: 'EVENT_SINKS persisted routing',
-        violationKind: 'assertion-over-test-local-construct',
+        violationKind: 'assertion-insensitive-to-production',
       },
     }],
   });
@@ -4069,8 +4113,9 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain('did not satisfy the judged-result contract');
     expect(repairPrompt).toContain('anchor');
     expect(repairPrompt).toContain(`"lapId": "<echo the projection lapId verbatim>"`);
-    // The bounded excerpt of the model's own previous output rides along.
-    expect(repairPrompt).toContain('assertion-over-test-local-construct');
+    expect(repairPrompt).toContain(
+      'Your previous response (bounded excerpt):\nI read the referenced diff and measured each changed test.',
+    );
   });
 
   it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
@@ -4081,8 +4126,21 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
 
     expect(invoke).toHaveBeenCalledTimes(1);
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": "<string>", "exercisedBehavior": "<string>", "violationKind": "<string>"}');
+    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
     expect(prompt).toContain('never flattened');
+  });
+
+  it('instructs graders with the current v3 structured-anchor contract, not the retired v2 plain-string one', async () => {
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    await dispatch(runner);
+
+    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
+    expect(prompt).toContain('`contractVersion` is "v3"');
+    expect(prompt).not.toContain('`contractVersion` is "v2"');
+    expect(prompt).not.toContain('every anchor value is a plain string');
+    expect(prompt).toContain('content-region');
   });
 
   it('yields a bounded dispatch-failure report with the raw output excerpt when the repair turn is still bad', async () => {
@@ -4111,8 +4169,12 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
   });
 
   it.each(['claude', 'codex'] as const)('repairs within the same dispatch on the %s runtime-candidates path', async (providerKey) => {
+    const runtimeIncidentShapedOutput = incidentShapedOutput.replace(
+      'I read the referenced diff and measured each changed test.',
+      'Runtime-candidates repair output marker.',
+    );
     const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: runtimeIncidentShapedOutput, exitCode: 0 })
       .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
     const policyForKey = providerKey === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
     const runtime = {
@@ -4137,6 +4199,8 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest });
     const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
     expect(repairPrompt).toContain('ONLY one JSON object');
-    expect(repairPrompt).toContain('assertion-over-test-local-construct');
+    expect(repairPrompt).toContain(
+      'Your previous response (bounded excerpt):\nRuntime-candidates repair output marker.',
+    );
   });
 });

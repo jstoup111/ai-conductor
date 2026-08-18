@@ -82,7 +82,9 @@ interface CompletenessFinding {
   anchor: {
     rubric: 'completeness';
     planTask: string;
+    missingSurface: string;
     missingOutcome: string;
+    missingKind: string;
   };
 }
 
@@ -186,13 +188,15 @@ function contractSupportsPreservation(skill: string): boolean {
 
 function finding(missingOutcome: string): CompletenessFinding {
   return {
-    concernKind: 'missing preserved coverage',
+    concernKind: 'missing-deliverable',
     summary: `No equivalent assertion survives for ${missingOutcome}.`,
     evidenceLocations: [`${PLAN_PATH}:4`, `${CARRIER_PATH}:1`],
     anchor: {
       rubric: 'completeness',
       planTask: '9',
+      missingSurface: CARRIER_PATH,
       missingOutcome,
+      missingKind: 'missing-deliverable',
     },
   };
 }
@@ -270,7 +274,7 @@ async function judgeScenario(scenario: Scenario): Promise<{
           rubric: projection.rubric,
           lapId: projection.lapId,
           snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v1',
+          contractVersion: 'v3',
           findings,
           verdict: findings.length === 0 ? 'PASS' : 'FAIL',
         }),
@@ -427,7 +431,9 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     expect(judged.result.findings?.[0]?.anchor).toEqual({
       rubric: 'completeness',
       planTask: '9',
+      missingSurface: CARRIER_PATH,
       missingOutcome: 'wrapper transparency',
+      missingKind: 'missing-deliverable',
     });
     expect(judged.success).toBe(false);
   });
@@ -438,7 +444,7 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     ['same named but assertion-free', { 'test/provider-leg.test.ts': "it('wrapper transparency', () => {});\n" }, 'wrapper transparency'],
     ['different behavior', { 'test/provider-leg.test.ts': 'expect(wrapper.metered).toBe(true);\n' }, 'wrapper transparency'],
     ['skipped replacement', { 'test/provider-leg.test.ts': "it.skip('wrapper transparency', () => expect(wrapper.transparent).toBe(true));\n" }, 'wrapper transparency'],
-  ] as const)('keeps %s coverage loss as a finding with the nested v1 anchor', async (name, replacements, behavior) => {
+  ] as const)('keeps %s coverage loss as a finding with the nested v3 anchor', async (name, replacements, behavior) => {
     const judged = await judgeScenario({
       name: `lost-${name.replaceAll(' ', '-')}`,
       preserves: [behavior],
@@ -448,13 +454,15 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
 
     expect(judged.result).toMatchObject({
       kind: 'judged',
-      contractVersion: 'v1',
+      contractVersion: 'v3',
       findings: [{
-        concernKind: 'missing preserved coverage',
+        concernKind: 'missing-deliverable',
         anchor: {
           rubric: 'completeness',
           planTask: '9',
+          missingSurface: CARRIER_PATH,
           missingOutcome: behavior,
+          missingKind: 'missing-deliverable',
         },
       }],
     });
@@ -478,7 +486,9 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     expect(judged.result.findings?.[0]?.anchor).toEqual({
       rubric: 'completeness',
       planTask: '9',
+      missingSurface: CARRIER_PATH,
       missingOutcome: 'failed preflight never dispatches',
+      missingKind: 'missing-deliverable',
     });
     expect(judged.result.findings?.[0]?.anchor.missingOutcome).not.toBe('wrapper transparency');
   });
@@ -504,12 +514,14 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     expect(judged.result.findings?.[0]?.anchor).toEqual({
       rubric: 'completeness',
       planTask: '9',
+      missingSurface: CARRIER_PATH,
       missingOutcome: 'failed preflight never dispatches',
+      missingKind: 'missing-deliverable',
     });
     expect(judged.result.findings?.[0]?.anchor.missingOutcome).not.toBe('wrapper transparency');
   });
 
-  it('keeps separately lost preserved behaviors on distinct finding anchors', async () => {
+  it('fails closed when separately lost behaviors share one identity anchor', async () => {
     const judged = await judgeScenario({
       name: 'distinct-lost-anchors',
       preserves: ['failed preflight never dispatches', 'optional member remains absent'],
@@ -519,18 +531,11 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
       ].join('\n'),
     });
 
-    expect(judged.result.findings?.map((entry) => entry.anchor)).toEqual([
-      {
-        rubric: 'completeness',
-        planTask: '9',
-        missingOutcome: 'failed preflight never dispatches',
-      },
-      {
-        rubric: 'completeness',
-        planTask: '9',
-        missingOutcome: 'optional member remains absent',
-      },
-    ]);
+    expect(judged.success).toBe(false);
+    expect(judged.result).toMatchObject({
+      kind: 'infrastructure-failure',
+      reason: 'provider-error',
+    });
   });
 
   it('grants no exemption when removal evidence exists without a preservation clause', async () => {
@@ -545,11 +550,12 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     expect(judged.projection.removalContext.deletedFiles).toContain(CARRIER_PATH);
     expect(judged.result).toMatchObject({
       kind: 'judged',
-      contractVersion: 'v1',
+      contractVersion: 'v3',
       findings: [{
         anchor: {
           rubric: 'completeness',
           planTask: '9',
+          missingSurface: CARRIER_PATH,
           missingOutcome: behavior,
         },
       }],
@@ -569,11 +575,12 @@ describe('acceptance: preservation-anchored Completeness exception (#1580)', () 
     expect(judged.projection.removalContext.deletedFiles).toEqual([]);
     expect(judged.result).toMatchObject({
       kind: 'judged',
-      contractVersion: 'v1',
+      contractVersion: 'v3',
       findings: [{
         anchor: {
           rubric: 'completeness',
           planTask: '9',
+          missingSurface: CARRIER_PATH,
           missingOutcome: behavior,
         },
       }],

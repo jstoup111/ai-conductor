@@ -25,7 +25,10 @@ import {
 } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
-import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
+import {
+  resolveEffectiveBuildReviewVerdict,
+  type BuildReviewEffectiveResolution,
+} from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { planContractPointers, priorAttemptPointers } from './remediation-context-pointers.js';
@@ -195,6 +198,7 @@ import {
   readKickbackLedger,
   resetKickbackGateCumulativeInLedger,
   writeKickbackLedger,
+  type KickbackLedger,
 } from './kickback-ledger.js';
 import {
   consumeOperatorGrant,
@@ -390,6 +394,22 @@ export function createFinishPresentationRepair(input: {
  * user is pushed toward `interactive`, `back`, or `quit` instead.
  */
 export const MAX_RECOVERY_RETRIES = 2;
+
+/**
+ * A raw build-review FAIL may be non-blocking only when the current
+ * disposition join resolves it to an effective PASS through an actual
+ * accepted finding. The latter condition preserves the legacy scalar FAIL
+ * behavior, which has no findings for a disposition to accept.
+ */
+function rawBuildReviewFailIsEffectivelyAccepted(
+  resolution: BuildReviewEffectiveResolution,
+): boolean {
+  return (
+    resolution.ok &&
+    resolution.effective.verdict === 'PASS' &&
+    resolution.effective.acceptedFindingIds.length > 0
+  );
+}
 
 // ── Gate-driven loop (Phase 3) ──────────────────────────────────────────────
 // Gate topology — DERIVED from the resolved step registry, not hardcoded, so
@@ -7562,6 +7582,36 @@ export class Conductor {
               const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
               if (parsed?.ok && parsed.verdict === 'FAIL') {
                 const failureDetails = buildReviewFailureDetails(parsed);
+                let kickbackLedgerBeforeConsumption: KickbackLedger | undefined;
+                // The raw aggregate can outlive a concurrent operator acceptance.
+                // Every exit from this raw-FAIL block re-reads the effective
+                // verdict immediately before it exits, so no early snapshot can
+                // turn accepted risk into a rework route or a HALT.
+                const reenterBuildReviewIfEffectivePass = async (): Promise<boolean> => {
+                  try {
+                    const resolution = await (
+                      this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+                    )(this.projectRoot, verdictRaw, {
+                      emit: async (event) => { await this.events.emit(event); },
+                    });
+                    if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
+                  } catch {
+                    // Resolver failures retain the legacy raw-aggregate exit.
+                    return false;
+                  }
+
+                  this.log?.(
+                    'build_review raw FAIL dropped: every graded finding was accepted ' +
+                      'by operator disposition at exit time; re-running build_review.',
+                  );
+                  if (kickbackLedgerBeforeConsumption) {
+                    await writeKickbackLedger(this.projectRoot, kickbackLedgerBeforeConsumption);
+                  }
+                  await this.saveConductorStepStatus(state, step.name, 'failed');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  i = i - 1; // for-loop i++ re-lands on build_review
+                  return true;
+                };
                 // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
                 // scope-FAIL disposition, BEFORE any rework routing decision
                 // below (and before the #569 no_task_progress remediation
@@ -7600,6 +7650,7 @@ export class Conductor {
                 }
 
                 if (scopeFailDisposition?.kind === 'halt') {
+                  if (await reenterBuildReviewIfEffectivePass()) continue;
                   const haltBody =
                     `build_review scope-FAIL disposition HALT: a second stale-mirage ` +
                     `detection this feature-session — never re-enters grading.\n` +
@@ -7620,6 +7671,7 @@ export class Conductor {
                 }
 
                 if (scopeFailDisposition?.kind === 'invalidated') {
+                  if (await reenterBuildReviewIfEffectivePass()) continue;
                   await removeBuildReviewVerdict(this.projectRoot).catch(() => {
                     /* best-effort removal */
                   });
@@ -7641,6 +7693,7 @@ export class Conductor {
                 // of spending another kickback toward the cap.
                 const escalation = await checkKickbackToBuildEscalation('build_review');
                 if (escalation.halt) {
+                  if (await reenterBuildReviewIfEffectivePass()) continue;
                   const reason = `build_review kickback-to-build no-op: ${escalation.reason}`;
                   await this.writeHaltMarker(reason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -7654,9 +7707,11 @@ export class Conductor {
                   failureDetails.length > 0
                     ? failureDetails.join('\n')
                     : 'grader returned FAIL without reasons';
+                kickbackLedgerBeforeConsumption = await readKickbackLedger(this.projectRoot);
                 const kickback = await consumeKickbackBudget('build_review', evidence);
                 const count = kickback.entry.count;
                 if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
+                  if (await reenterBuildReviewIfEffectivePass()) continue;
                   const reason =
                     `build_review cumulative kickback cap exceeded (cumulative ` +
                     `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
@@ -7706,6 +7761,7 @@ export class Conductor {
                       { source: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT },
                     );
                     if (outcome.kind === 'halt') {
+                      if (await reenterBuildReviewIfEffectivePass()) continue;
                       const reason =
                         `build_review completeness FAIL needs a human: ${outcome.detail}`;
                       await this.writeHaltMarker(reason + '\n', 'needs-human');
@@ -7725,41 +7781,7 @@ export class Conductor {
                     // fall through to the unchanged kickback-to-build path.
                   }
 
-                  // Disposition-race guard: an operator `build-review accept`
-                  // can land while this block (and especially the /remediate
-                  // dispatch above, which takes minutes) composes rework from
-                  // the RAW aggregate. Re-read the disposition store and use
-                  // the EFFECTIVE verdict at routing time: when every raw
-                  // finding is now operator-accepted, the composed rework
-                  // would order removal of exactly the surfaces the operator
-                  // accepted, so drop it and re-land build_review instead —
-                  // its re-run settles from cache, applies the dispositions,
-                  // and re-dispatches only infrastructure-failed rubrics.
-                  // (2026-08-15: remediate dispatched 20:10:36 kicked back at
-                  // 20:13 with tasks removing a scope surface accepted at
-                  // 20:12:19.)
-                  try {
-                    const routingResolution = await (
-                      this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
-                    )(this.projectRoot, verdictRaw);
-                    if (
-                      routingResolution.ok &&
-                      routingResolution.effective.unresolvedFindingIds.length === 0 &&
-                      routingResolution.effective.acceptedFindingIds.length > 0
-                    ) {
-                      this.log?.(
-                        'build_review kickback dropped: every graded finding was accepted ' +
-                          'by operator disposition at routing time; re-running build_review.',
-                      );
-                      await this.saveConductorStepStatus(state, step.name, 'failed');
-                      await this.persistPendingStateChanges(state, 'persist conductor transition');
-                      i = i - 1; // for-loop i++ re-lands on build_review
-                      continue;
-                    }
-                  } catch {
-                    // Never block routing on disposition-store failures — the
-                    // pre-guard behavior (raw-aggregate routing) proceeds.
-                  }
+                  if (await reenterBuildReviewIfEffectivePass()) continue;
 
                   await emitTracked({
                     type: 'kickback',
@@ -7792,6 +7814,7 @@ export class Conductor {
                 const reason =
                   `build_review FAIL unresolved after ${count} build kickback(s) ` +
                   `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+                if (await reenterBuildReviewIfEffectivePass()) continue;
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);

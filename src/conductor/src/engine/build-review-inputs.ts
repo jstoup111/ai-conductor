@@ -14,6 +14,7 @@ import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskVerifyOnly } from './autoheal.js';
 import { parsePlanTaskPaths, parsePlanTaskPreserves } from './plan-task-parse.js';
+import { classifyTautologyPaths } from './build-review-tautology-preflight.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -118,6 +119,16 @@ export interface BuildReviewSourceSnapshot {
   readonly verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
   /** Engine-parsed preserved-behavior plan evidence frozen with the source read. */
   readonly preservationContext?: readonly BuildReviewPreservationContext[];
+  /** Static title evidence read from the graded HEAD, never the live worktree. */
+  readonly changedTestTitles?: readonly BuildReviewChangedTestTitle[];
+}
+
+/** One executable changed-test selector's declared title evidence. */
+export interface BuildReviewChangedTestTitle {
+  readonly selector: string;
+  readonly titleText: string;
+  /** True when static parsing could not safely recover every declared title. */
+  readonly staticExtractionFallback: boolean;
 }
 
 /** Immutable operator reseal record captured in a source snapshot. */
@@ -214,6 +225,181 @@ function withoutDiffBlobIdentities(diff: string): string {
 /** Repair-record identity and invalidation timing explain provenance, not remediation meaning. */
 function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
   return repairs.map(({ gate, reason, diagnostic }) => ({ gate, reason, diagnostic }));
+}
+
+function changedPathsFromDiff(diff: string): readonly string[] {
+  return [...diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+}
+
+type StaticTestTitle = Pick<BuildReviewChangedTestTitle, 'titleText' | 'staticExtractionFallback'>;
+
+const TEST_DECLARATION = /\b(describe|context|suite|it|test|specify)\s*\(/y;
+const TEST_SUITE_NAMES = new Set(['describe', 'context', 'suite']);
+
+function skipQuotedSource(source: string, index: number): number | undefined {
+  const quote = source[index]!;
+  for (let cursor = index + 1; cursor < source.length; cursor += 1) {
+    if (source[cursor] === '\\') {
+      cursor += 1;
+    } else if (source[cursor] === quote) {
+      return cursor + 1;
+    }
+  }
+  return undefined;
+}
+
+function skipRegexLiteral(source: string, index: number): number | undefined {
+  let inCharacterClass = false;
+  for (let cursor = index + 1; cursor < source.length; cursor += 1) {
+    if (source[cursor] === '\\') {
+      cursor += 1;
+    } else if (source[cursor] === '[') {
+      inCharacterClass = true;
+    } else if (source[cursor] === ']') {
+      inCharacterClass = false;
+    } else if (source[cursor] === '/' && !inCharacterClass) {
+      cursor += 1;
+      while (/[a-z]/i.test(source[cursor] ?? '')) cursor += 1;
+      return cursor;
+    } else if (source[cursor] === '\n' || source[cursor] === '\r') {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function regexCanStartAt(source: string, index: number): boolean {
+  let cursor = index - 1;
+  while (cursor >= 0 && /\s/.test(source[cursor]!)) cursor -= 1;
+  if (cursor < 0) return true;
+  if (/[([{:;,=!?&|^~+\-*%<>]/.test(source[cursor]!)) return true;
+  const precedingWord = source.slice(0, cursor + 1).match(/[A-Za-z_$][\w$]*$/)?.[0];
+  return precedingWord === 'return' || precedingWord === 'throw' || precedingWord === 'case';
+}
+
+/** Skip source trivia and literals so static extraction never treats their text as executable. */
+function skipNonCodeSource(source: string, index: number): number | undefined {
+  if (source[index] === "'" || source[index] === '"' || source[index] === '`') {
+    return skipQuotedSource(source, index);
+  }
+  if (source[index] === '/' && source[index + 1] === '/') {
+    const newline = source.indexOf('\n', index + 2);
+    return newline < 0 ? source.length : newline + 1;
+  }
+  if (source[index] === '/' && source[index + 1] === '*') {
+    const end = source.indexOf('*/', index + 2);
+    return end < 0 ? undefined : end + 2;
+  }
+  if (source[index] === '/' && regexCanStartAt(source, index)) {
+    return skipRegexLiteral(source, index);
+  }
+  return index;
+}
+
+function balancedSourceEnd(source: string, start: number, open: string, close: string): number | undefined {
+  let depth = 0;
+  for (let cursor = start; cursor < source.length; cursor += 1) {
+    const next = skipNonCodeSource(source, cursor);
+    if (next === undefined) return undefined;
+    if (next !== cursor) {
+      cursor = next - 1;
+    } else if (source[cursor] === open) {
+      depth += 1;
+    } else if (source[cursor] === close && --depth === 0) {
+      return cursor;
+    }
+  }
+  return undefined;
+}
+
+function staticTitleArgument(source: string, index: number): { title?: string; next: number } {
+  let cursor = index;
+  while (/\s/.test(source[cursor] ?? '')) cursor += 1;
+  if (source[cursor] !== "'" && source[cursor] !== '"' && source[cursor] !== '`') return { next: cursor };
+  const end = skipQuotedSource(source, cursor);
+  if (end === undefined) return { next: source.length };
+  const raw = source.slice(cursor + 1, end - 1);
+  return raw.includes('${')
+    ? { next: end }
+    : { title: raw.replace(/\\(.)/g, '$1'), next: end };
+}
+
+function callbackBody(source: string, callStart: number, callEnd: number): { start: number; end: number } | undefined {
+  const callbackSource = source.slice(callStart, callEnd);
+  const arrowOffset = callbackSource.indexOf('=>');
+  const functionOffset = /\bfunction\b/.exec(callbackSource)?.index;
+  const isFunctionCallback = functionOffset !== undefined && (arrowOffset < 0 || functionOffset < arrowOffset);
+  const callbackOffset = isFunctionCallback
+    ? functionOffset + callbackSource.slice(functionOffset).indexOf('{')
+    : arrowOffset;
+  if (callbackOffset < 0) return undefined;
+  let start = callStart + callbackOffset + (isFunctionCallback ? 0 : 2);
+  while (/\s/.test(source[start] ?? '')) start += 1;
+  if (source[start] !== '{') return { start, end: callEnd };
+  const end = balancedSourceEnd(source, start, '{', '}');
+  return end === undefined || end > callEnd ? undefined : { start: start + 1, end };
+}
+
+function staticTestTitles(source: string): readonly StaticTestTitle[] {
+  const titles: StaticTestTitle[] = [];
+  let malformed = false;
+const collect = (start: number, end: number, ancestors: readonly string[], inheritedFallback: boolean): void => {
+    for (let cursor = start; cursor < end;) {
+      const next = skipNonCodeSource(source, cursor);
+      if (next === undefined) {
+        malformed = true;
+        return;
+      }
+      if (next !== cursor) {
+        cursor = next;
+        continue;
+      }
+      TEST_DECLARATION.lastIndex = cursor;
+      const match = TEST_DECLARATION.exec(source);
+      if (match === null || match.index >= end) {
+        cursor += 1;
+        continue;
+      }
+      const callStart = cursor;
+      const callEnd = balancedSourceEnd(source, TEST_DECLARATION.lastIndex - 1, '(', ')');
+      if (callEnd === undefined || callEnd > end) {
+        malformed = true;
+        return;
+      }
+      const title = staticTitleArgument(source, TEST_DECLARATION.lastIndex);
+      const fallback = inheritedFallback || title.title === undefined;
+      if (TEST_SUITE_NAMES.has(match[1]!)) {
+        const body = callbackBody(source, title.next, callEnd);
+        if (body === undefined) malformed = true;
+        else collect(body.start, body.end, title.title === undefined ? ancestors : [...ancestors, title.title], fallback);
+      } else {
+        titles.push(fallback
+          ? { titleText: '', staticExtractionFallback: true }
+          : { titleText: [...ancestors, title.title!].join(' > '), staticExtractionFallback: false });
+      }
+      cursor = callEnd + 1;
+    }
+  };
+  collect(0, source.length, [], false);
+  return malformed || titles.length === 0
+    ? [{ titleText: '', staticExtractionFallback: true }]
+    : titles;
+}
+
+async function snapshotChangedTestTitles(
+  git: GitRunner,
+  headSha: string,
+  diff: string,
+): Promise<readonly BuildReviewChangedTestTitle[]> {
+  const selectors = classifyTautologyPaths(changedPathsFromDiff(diff)).tests;
+  const titles = await Promise.all(selectors.map(async (selector) => {
+    const result = await git(['show', `${headSha}:${selector}`]);
+    const extracted = result.exitCode === 0
+      ? staticTestTitles(result.stdout)
+      : [{ titleText: '', staticExtractionFallback: true }];
+    return extracted.map((title) => Object.freeze({ selector, ...title }));
+  }));
+  return Object.freeze(titles.flat());
 }
 
 function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): readonly AcceptedScopeWidening[] {
@@ -319,6 +505,7 @@ export async function assembleBuildReviewInputs(
   }
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
+  const changedTestTitles = await snapshotChangedTestTitles(git, inspection.evidence.provenanceHeadSha, diffResult.stdout);
   const snapshotWithoutDigest = {
     baseRef,
     mergeBase: mergeBaseSha,
@@ -350,6 +537,7 @@ export async function assembleBuildReviewInputs(
       taskId: context.taskId,
       behavior: context.behavior,
     }))),
+    changedTestTitles,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,

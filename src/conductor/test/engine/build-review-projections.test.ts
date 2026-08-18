@@ -301,7 +301,7 @@ describe('build-review rubric projections', () => {
 
     expect(Object.keys(projections)).toEqual(['tautology', 'scope', 'rootCause', 'completeness']);
     expect(Object.keys(projections.tautology).sort()).toEqual([
-      'changedFiles', 'changedTestSelectors', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
+      'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'preflightEvidence', 'projectionVersion', 'removalContext', 'repairContext',
       'revertedProductionManifest', 'rubric', 'snapshotDigest', 'testSuiteProof',
       'verifyOnlyContext',
@@ -365,7 +365,7 @@ describe('build-review rubric projections', () => {
       expect(projection).not.toHaveProperty('operatorReseals');
     }
     for (const projection of Object.values(projections)) {
-      expect(projection.contractVersion).toBe('v1');
+      expect(projection.contractVersion).toBe('v3');
       expect(projection.contentDigest).toBe('sha256:content');
       expect(projection.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     }
@@ -742,15 +742,15 @@ describe('build-review rubric projections', () => {
       {
         path: 'src/kept.ts', changeKind: 'modified',
         hunks: [
-          { oldStart: 10, oldCount: 4, newStart: 10, newCount: 6 },
-          { oldStart: 40, oldCount: 1, newStart: 42, newCount: 0 },
+          { oldStart: 10, oldCount: 4, newStart: 10, newCount: 6, contentHash: 'sha256:40e1dac31c43a032d6e6681887bb188d68980d6881884495cf776a9c22ad5a50' },
+          { oldStart: 40, oldCount: 1, newStart: 42, newCount: 0, contentHash: 'sha256:3295b11d83ea93de0d25ecd955af250d843f8337c57dbf93c80715cea57ca684' },
         ],
       },
-      { path: 'src/new.ts', changeKind: 'added', hunks: [{ oldStart: 0, oldCount: 0, newStart: 1, newCount: 2 }] },
-      { path: 'src/gone.ts', changeKind: 'deleted', hunks: [{ oldStart: 1, oldCount: 1, newStart: 0, newCount: 0 }] },
+      { path: 'src/new.ts', changeKind: 'added', hunks: [{ oldStart: 0, oldCount: 0, newStart: 1, newCount: 2, contentHash: 'sha256:919b1d2ddefb109d9af7518dc903b3451927f27574c6dc167d6394d2a8b63842' }] },
+      { path: 'src/gone.ts', changeKind: 'deleted', hunks: [{ oldStart: 1, oldCount: 1, newStart: 0, newCount: 0, contentHash: 'sha256:ffcb1224e9f840636892ab01e9518d523d00b29934eaa8588ee54524c34b8d43' }] },
       {
         path: 'src/new-name.ts', changeKind: 'renamed', previousPath: 'src/old-name.ts',
-        hunks: [{ oldStart: 3, oldCount: 2, newStart: 3, newCount: 2 }],
+        hunks: [{ oldStart: 3, oldCount: 2, newStart: 3, newCount: 2, contentHash: 'sha256:f5fbd28f77098cd3e707b7b4e5b73327fdfa7c8cf8fddaafaa2bcc1766eeac51' }],
       },
     ]);
     // Deterministic: the same diff text always yields the same references.

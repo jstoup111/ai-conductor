@@ -46,8 +46,8 @@ function lock(result: Awaited<ReturnType<ConductStateLease['acquire']>>): Conduc
 const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
 const otherFeature = { ...feature, feature: 'other-feature' };
 const finding = canonicalizeBuildReviewFindingIdentity({
-  rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-  anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+  rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+  anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
 })!;
 
 describe('build-review dispositions', () => {
@@ -72,6 +72,26 @@ describe('build-review dispositions', () => {
     });
     await expect(store.list(feature)).resolves.toMatchObject({ ok: true, records: [expect.objectContaining({ finding })] });
     await expect(store.list(otherFeature)).resolves.toEqual({ ok: true, records: [] });
+  });
+
+  it('reads a stored v1 canonical finding record without treating the disposition state as malformed', async () => {
+    const filesystem = new MemoryFilesystem();
+    filesystem.files.set('/repo/.pipeline/build-review-dispositions.json', JSON.stringify({
+      version: 'v1',
+      records: [{
+        version: 'v1', feature, finding, sourceLapId: 'lap-7', summary: 'stored before contract v2',
+        rationale: 'accepted migration risk', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+      }],
+    }));
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(store.list(feature)).resolves.toEqual({
+      ok: true,
+      records: [expect.objectContaining({ finding, summary: 'stored before contract v2' })],
+    });
   });
 
   it('uses same-directory temporary replacement only after acquiring the shared lock', async () => {
@@ -132,8 +152,8 @@ describe('build-review dispositions', () => {
       summary: 'Earlier wording at src/a.ts:8', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
     };
     const changed = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'outside-plan' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'out-of-plan-change' },
     })!;
 
     expect(matchesBuildReviewDisposition(feature, finding, [accepted])).toBe(true);

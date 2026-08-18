@@ -21,7 +21,7 @@ function judged(
   findings: readonly BuildReviewFinding[] = [],
 ): BuildReviewJudgedResult {
   return {
-    kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never,
+    kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never,
     findings, verdict: findings.length === 0 ? 'PASS' as const : 'FAIL' as const,
   };
 }
@@ -61,11 +61,11 @@ describe('build-review raw aggregate', () => {
   });
 
   it('retains complete named findings and derives FAIL without folding the rubric result', () => {
-    const finding = { concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+    const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [finding]) }),
     });
-    expect(aggregate).toMatchObject({ verdict: 'FAIL', rubric: { scope: true }, findings: { scope: ['unplanned change'] } });
+    expect(aggregate).toMatchObject({ verdict: 'FAIL', rubric: { scope: true }, findings: { scope: ['out-of-plan-change'] } });
     expect(aggregate.results.scope).toMatchObject({ kind: 'judged', findings: [finding] });
   });
 
@@ -75,7 +75,7 @@ describe('build-review raw aggregate', () => {
       kind: 'infrastructure-failure', rubric: 'completeness' as const, reason: 'provider-error', detail: 'provider unavailable',
     };
     const finding = {
-      concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' },
+      concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     };
     const cases = [
       {
@@ -205,11 +205,11 @@ describe('build-review raw aggregate', () => {
   });
 
   it('derives effective state only after strict raw judgement, without changing raw findings', () => {
-    const finding = { concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+    const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [finding]) }),
     });
-    const id = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!.id;
+    const id = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!.id;
 
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
       verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [id], rawVerdict: 'FAIL',
@@ -221,13 +221,13 @@ describe('build-review raw aggregate', () => {
   });
 
   it('matches only a feature-scoped full canonical payload after raw grading', () => {
-    const first = { concernKind: 'unplanned change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
-    const second = { concernKind: 'missing approval', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/b.ts', relation: 'outside-plan' } };
+    const first = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
+    const second = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/b.ts', relation: 'not-authorized-by-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId, snapshotDigest: 'sha256:snapshot', results: results({ scope: judged('scope', [first, second]) }),
     });
-    const firstIdentity = canonicalizeBuildReviewFindingIdentity({ ...first, rubric: 'scope', contractVersion: 'v1' })!;
-    const differentIdentity = canonicalizeBuildReviewFindingIdentity({ ...first, rubric: 'scope', contractVersion: 'v1', anchor: { ...first.anchor, path: 'src/other.ts' } })!;
+    const firstIdentity = canonicalizeBuildReviewFindingIdentity({ ...first, rubric: 'scope', contractVersion: 'v2' })!;
+    const differentIdentity = canonicalizeBuildReviewFindingIdentity({ ...first, rubric: 'scope', contractVersion: 'v2', anchor: { ...first.anchor, path: 'src/other.ts' } })!;
     const accepted: BuildReviewDispositionRecord = {
       version: 'v1', feature, finding: firstIdentity, sourceLapId: lapId,
       summary: 'Older wording at src/a.ts:8', rationale: 'Accepted migration risk', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
@@ -238,7 +238,7 @@ describe('build-review raw aggregate', () => {
     const foreignFeature: BuildReviewDispositionRecord = { ...accepted, feature: { ...feature, feature: 'other-feature' } };
 
     expect(deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, [accepted, sameIdButDifferentPayload, foreignFeature]))
-      .toMatchObject({ rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [firstIdentity.id], unresolvedFindingIds: [canonicalizeBuildReviewFindingIdentity({ ...second, rubric: 'scope', contractVersion: 'v1' })!.id] });
+      .toMatchObject({ rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [firstIdentity.id], unresolvedFindingIds: [canonicalizeBuildReviewFindingIdentity({ ...second, rubric: 'scope', contractVersion: 'v2' })!.id] });
     expect(aggregate.results.scope).toMatchObject({ findings: [first, second] });
   });
 
@@ -266,8 +266,8 @@ describe('build-review raw aggregate', () => {
     const stored: BuildReviewDispositionRecord = {
       version: 'v1', feature,
       finding: canonicalizeBuildReviewFindingIdentity({
-        rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+        rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+        anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
       })!,
       sourceLapId: lapId, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
     };

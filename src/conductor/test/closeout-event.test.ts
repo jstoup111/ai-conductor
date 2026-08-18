@@ -44,24 +44,24 @@ describe('ConductorEvent union includes pipeline closeout events', () => {
     const engineLedger = join(worktree, '.pipeline', 'events.jsonl');
     const lapId = parseBuildReviewLapId('lap-current')!;
     const finding = {
-      concernKind: 'outside plan',
+      concernKind: 'out-of-plan-change',
       summary: 'src/a.ts is outside the plan',
       evidenceLocations: ['src/a.ts:1'],
-      anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' },
+      anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     };
     const identity = canonicalizeBuildReviewFindingIdentity({
       ...finding,
       rubric: 'scope',
-      contractVersion: 'v1',
+      contractVersion: 'v2',
     })!;
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: 'sha256:snapshot',
       results: {
-        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never, findings: [], verdict: 'PASS' },
-        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never, findings: [finding], verdict: 'FAIL' },
-        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
-        completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [finding], verdict: 'FAIL' },
+        rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
       },
     });
     const engineRecords = [

@@ -1,5 +1,8 @@
-import type { BuildReviewFinding, BuildReviewFindingAnchor } from './build-review-domain.js';
-import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import type { BuildReviewFinding } from './build-review-domain.js';
+import {
+  canonicalizeBuildReviewFindingIdentity,
+  type BuildReviewFindingCanonicalPayload,
+} from './build-review-finding-identity.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 
 type PriorLap = {
@@ -31,19 +34,19 @@ export function planContractPointers(
 
     if (anchor.rubric !== 'completeness') return [];
 
-    const { planTask, missingOutcome } = anchor;
+    const { planTask, missingSurface } = anchor;
     const taskHeader = new RegExp(`^### Task ${escapeRegExp(planTask)}:`, 'm');
     if (!taskHeader.test(plan)) return [];
 
-    return [`plan contract: ${planPath} — Task ${planTask} (anchor: ${missingOutcome})`];
+    return [`plan contract: ${planPath} — Task ${planTask} (anchor: ${missingSurface})`];
   });
 }
 
-function fileAnchorFor(anchor: BuildReviewFindingAnchor): string | undefined {
+function fileAnchorFor(anchor: BuildReviewFindingCanonicalPayload['anchor']): string | undefined {
   switch (anchor.rubric) {
     case 'scope': return anchor.path;
-    case 'tautology': return anchor.changedTest;
-    case 'rootCause': return anchor.locus;
+    case 'tautology': return typeof anchor.changedTest === 'string' ? anchor.changedTest : anchor.changedTest.path;
+    case 'rootCause': return typeof anchor.locus === 'string' ? anchor.locus : anchor.locus.path;
     case 'completeness': return undefined;
   }
 }

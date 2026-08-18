@@ -176,7 +176,7 @@ describe('acceptance: independent build_review rubric execution', () => {
             rubric: projection.rubric,
             lapId: projection.lapId,
             snapshotDigest: projection.snapshotDigest,
-            contractVersion: 'v1',
+            contractVersion: 'v3',
             findings: [],
             verdict: 'PASS',
           }),
@@ -213,7 +213,7 @@ describe('acceptance: independent build_review rubric execution', () => {
       invoke: vi.fn(async (options) => {
         const projection = projectionFromPrompt(options.prompt);
         projections.push({ rubric: projection.rubric, digest: projection.digest, snapshotDigest: projection.snapshotDigest });
-        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
+        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [], verdict: 'PASS' }), exitCode: 0 };
       }),
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
@@ -279,7 +279,7 @@ describe('acceptance: independent build_review rubric execution', () => {
         if (options.model === (provider === 'claude' ? 'opus' : 'gpt-5.6-sol')) {
           return { success: false, output: 'fixture model unavailable', exitCode: 1, modelUnavailable: true };
         }
-        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
+        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [], verdict: 'PASS' }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
     });
     const claude = fake('claude');
@@ -328,12 +328,12 @@ describe('acceptance: independent build_review rubric execution', () => {
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
         if (projection.rubric === 'scope' && !returnFinding) return { success: false, output: 'fake provider outage', exitCode: 1 };
         const findings = projection.rubric === 'scope' && returnFinding ? [{
-          concernKind: 'unresolved surface',
+          concernKind: 'out-of-plan-change',
           summary: 'src/feature.ts changes an unresolved surface.',
           evidenceLocations: ['src/feature.ts:1'],
-          anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'outside-plan' },
+          anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'not-authorized-by-plan' },
         }] : [];
-        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings, verdict: findings.length ? 'FAIL' : 'PASS' }), exitCode: 0 };
+        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings, verdict: findings.length ? 'FAIL' : 'PASS' }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const runner = new DefaultStepRunner(provider, 'maker-session', dir, { planPath, pipelineDir: join(dir, '.pipeline'), config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig, buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) } });
@@ -351,17 +351,17 @@ describe('acceptance: independent build_review rubric execution', () => {
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
         const findings = projection.rubric === 'scope'
           ? [{
-            concernKind: 'outside approved plan',
+            concernKind: 'out-of-plan-change',
             summary: 'src/feature.ts changes behavior outside the approved plan.',
             evidenceLocations: ['src/feature.ts:1', '.docs/plans/fixture.md:3'],
-            anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'outside-plan' },
+            anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'not-authorized-by-plan' },
           }]
           : [];
         return {
           success: true,
           output: JSON.stringify({
             kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-            snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings,
+            snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings,
             verdict: findings.length === 0 ? 'PASS' : 'FAIL',
           }),
           exitCode: 0,
@@ -426,7 +426,7 @@ describe('acceptance: independent build_review rubric execution', () => {
       invoke: vi.fn(async (options) => {
         providerCalls += 1;
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
-        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v1', findings: [], verdict: 'PASS' }), exitCode: 0 };
+        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [], verdict: 'PASS' }), exitCode: 0 };
       }),
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };

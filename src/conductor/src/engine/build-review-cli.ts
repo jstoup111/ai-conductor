@@ -48,13 +48,45 @@ export interface BuildReviewAcceptDeps extends BuildReviewFindingsDeps {
   readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_disposition_accepted' | 'build_review_disposition_refused' }>) => void;
 }
 
-function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>): string {
+type AcceptedDisposition = {
+  readonly findingId: string;
+  readonly disposition: BuildReviewDispositionRecord;
+};
+
+function acceptedDispositions(
+  aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
+  feature: BuildReviewFeatureIdentity,
+  effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>,
+  records: readonly BuildReviewDispositionRecord[],
+): readonly AcceptedDisposition[] {
+  const identities = new Map<string, ReturnType<typeof canonicalizeBuildReviewFindingIdentity>>();
+  for (const result of Object.values(aggregate.results)) {
+    if (result.kind !== 'judged') continue;
+    for (const finding of result.findings) {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
+      });
+      if (identity) identities.set(identity.id, identity);
+    }
+  }
+  return effective.acceptedFindingIds.flatMap((findingId) => {
+    const identity = identities.get(findingId);
+    const disposition = identity && records.find((record) =>
+      record.feature.version === feature.version && record.feature.repository === feature.repository && record.feature.feature === feature.feature &&
+      record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson,
+    );
+    return disposition ? [{ findingId, disposition }] : [];
+  });
+}
+
+function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[]): string {
   return [
     `Build review findings: ${feature}`,
     `Lap: ${aggregate.lapId}`,
     `Raw verdict: ${effective.rawVerdict}`,
     `Effective verdict: ${effective.verdict}`,
     `Accepted findings: ${effective.acceptedFindingIds.join(', ') || 'none'}`,
+    ...accepted.map(({ findingId, disposition }) => `Accepted disposition: ${findingId} (lap ${disposition.sourceLapId}; operator ${disposition.operator}; rationale: ${disposition.rationale})`),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
@@ -98,8 +130,9 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const records = listed.records;
     const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records);
     if (!effective) throw new Error('current findings are invalid');
-    const output = { feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...effective };
-    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective));
+    const accepted = acceptedDispositions(aggregate, feature, effective, records);
+    const output = { feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...effective, acceptedDispositions: accepted };
+    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted));
     return 0;
   } catch {
     print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}'.`);

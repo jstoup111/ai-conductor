@@ -63,6 +63,41 @@ text*. Once every identity input is a closed member or a verified reference, "sa
 judgement call — it is equality. The principle warns against mechanizing an irreducibly judgemental
 question; it does not require preserving a free-text substrate in order to keep one judgemental.
 
+> **Amended 2026-08-18 by #1695:** the review left each rubric's anchor *reference schema*
+> undefined ("every rubric needs a carefully designed identity schema" per
+> adr-2026-08-13), and that vacuum was filled lap-by-lap in BUILD by the remediation
+> planner — culminating in an unapproved line-coordinate rootCause hunk locus
+> (`path@a,b:c,d`, commit d8fa79150, operator-rejected and reverted as rebase-fragile).
+> The schema is now ruled class-level by
+> `adr-2026-08-18-content-anchored-finding-reference-schema`: a closed set of three
+> reference kinds (path, plan-task, content-region with sha256 of normalized content),
+> coordinate encodings forbidden, per-rubric bindings pinned by an integrity test, any
+> fourth kind requiring an operator-approved supersession.
+
+> **Amended 2026-08-18 (second note, at `architecture_review`) — scope reconciliation and
+> reseal of the note above.** The 2026-08-18 amendment note landed in commit `58c87dce4`
+> together with the new ADR, and `build_review` lap `58c87dce4` correctly failed Scope on
+> both: the projection it graded carried no accepted widening and no reseal covering
+> either path (`.pipeline/protected-artifact-seal.json` was rotated at 05:58, three minutes
+> *after* the 05:55 grading, and the reseal entry it carried named
+> `.docs/architecture/equivalent-re-worded-findings-escape-their-accepte.md` — a file
+> commit `58c87dce4` never touched — instead of this artifact, which it did). Both DECIDE
+> artifacts are retained, not reverted, and this pass records the missing evidence:
+>
+> - **Retained, not removed.** `adr-2026-08-18-content-anchored-finding-reference-schema`
+>   is `Status: APPROVED`, operator-approved 2026-08-18, and is the ruling that ends the
+>   lap-by-lap grammar authoring intake #1695 filed. Removing it would restore the vacuum
+>   this review left open, so the alternative disposition offered by `rem-scope-1`
+>   (delete the artifact) is declined with cause.
+> - **Reseal evidence.** `.pipeline/protected-artifact-seal.json` now carries a reseal
+>   naming the two paths actually amended by `58c87dce4` — this artifact and the ADR —
+>   with the correction of the mis-named path stated in its rationale, so the next
+>   `build_review` projection can judge the amendment on its recorded justification
+>   rather than on absent evidence.
+> - **Widening scope.** The widening is exactly these two `.docs/decisions/` artifacts.
+>   It authorizes no source, test, or skill change; every such change remains subject to
+>   every rubric item on its own merits.
+
 ## Conditions
 
 1. **The vocabularies are derived from the corpus, not invented.** Each rubric's initial member set
@@ -76,6 +111,24 @@ question; it does not require preserving a free-text substrate in order to keep 
    hand reproduces #1611's second surface on a path nobody checked.
 4. **The normalization ambiguity guard is proven, not assumed.** A test must assert that no two
    members of any rubric's set collide under normalization.
+5. **The `rootCause` locus outcome is bound to the approved reference schema, and the
+   coordinate steps are retired.** The outcome this review owes — two same-class `rootCause`
+   findings in distinct hunks of one changed file must not share an identity — is delivered
+   *only* through the `content-region` reference kind of
+   `adr-2026-08-18-content-anchored-finding-reference-schema` (`sha256` of the projected
+   hunk's whitespace-normalized added+removed line content, `display` excluded from the
+   hash). Plan tasks `rem-rootcause-9` and `rem-rootcause-10` are **retired**: their steps
+   prescribe the line-coordinate selector `path@oldStart,oldCount:newStart,newCount` that
+   the operator rejected and `8977ba7c7` reverted, which the ADR now forbids in every
+   reference kind. `/plan` re-authors the RED/GREEN pair against `content-region` and must
+   not carry the coordinate steps forward; no distinct-hunk implementation is authorized
+   until those replacement tasks exist. (Discharges `rem-rootcause-11` and
+   `rem-completeness-6`.)
+6. **A reference kind is never invented downstream.** Any anchor field that later proves
+   un-canonical binds to one of the ADR's three kinds, or the ADR is superseded with
+   operator approval. Neither BUILD nor a remediation lap may author a new reference
+   grammar — that is the process defect intake #1695 records, and it is what turned this
+   review's undefined-schema gap into an unapproved, rebase-fragile mechanism.
 
 ## Assumption surfaced (per `/verify-claims`)
 

@@ -398,7 +398,7 @@ describe('appendTimingSection', () => {
 
 describe('accepted build-review risk shipped projection', () => {
   it('reuses the deterministic accepted-risk section without changing frontmatter or cost blocks', () => {
-    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' } })!;
+    const finding = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change', anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' } })!;
     const accepted: BuildReviewDispositionRecord = { version: 'v1', feature: { version: 'v1', repository: 'repo', feature: 'feature' }, finding, sourceLapId: parseBuildReviewLapId('lap-1')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z' };
     const body = '---\nslug: feature\n---\n\n## Cost\ninput: 1\n\n## Time\nstate: measured\n';
 

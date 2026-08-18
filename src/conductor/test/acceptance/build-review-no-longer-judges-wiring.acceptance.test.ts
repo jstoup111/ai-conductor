@@ -92,14 +92,14 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
         success: true,
         output: JSON.stringify({
           kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest, contractVersion: 'v1',
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3',
         findings: projection.rubric === 'scope'
           ? [{
-                concernKind: 'orphanedProductionSurface is outside the approved plan',
-                summary: 'src/orphan.ts adds production behavior outside the approved plan.',
+                concernKind: 'out-of-plan-change',
+                summary: 'orphanedProductionSurface in src/orphan.ts adds production behavior outside the approved plan.',
                 evidenceLocations: ['src/orphan.ts:1'],
                 anchor: {
-                  rubric: 'scope', path: 'src/orphan.ts', relation: 'outside-plan',
+                  rubric: 'scope', path: 'src/orphan.ts', relation: 'not-authorized-by-plan',
                 },
               }]
             : [],

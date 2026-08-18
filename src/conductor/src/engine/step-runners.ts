@@ -55,6 +55,7 @@ import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
+  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
   describeBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
@@ -1821,6 +1822,23 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `build_review evidence write failed for ${writeFailure.rubric}: ${writeFailure.reason}` };
     }
 
+    // A result that still violates the judged contract after its one repair
+    // turn is not a reviewer decision about the diff.  Do not publish it as
+    // a fresh FAIL aggregate: completion deliberately classifies a missing
+    // verdict as `absent`, which re-dispatches this rubric without consuming
+    // the build_review kickback budget.
+    const rejectedAfterRepair = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
+      branch.kind === 'infrastructure-failure' &&
+      branch.reason === 'invalid-provider-result' &&
+      branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true,
+    );
+    if (rejectedAfterRepair) {
+      return {
+        success: false,
+        output: `build_review ${rejectedAfterRepair.rubric} rubric rejected after repair: ${rejectedAfterRepair.detail}`,
+      };
+    }
+
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
         const artifact = await this.buildReviewArtifactReader(
@@ -1867,7 +1885,9 @@ export class DefaultStepRunner implements StepRunner {
     if (!publication.ok) {
       return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
     }
-    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate);
+    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
+      emit: (event) => this.events?.emit(event),
+    });
     await this.events?.emit({
       type: 'build_review_outer_verdict',
       lapId,
@@ -1892,8 +1912,8 @@ export class DefaultStepRunner implements StepRunner {
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
         'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
-        `Return exactly one JSON judged result for rubric ${branch.rubric}: a single JSON object whose top-level field \`kind\` is exactly the string "judged" (not \`result\`, not any other field name), whose \`rubric\` is "${branch.rubric}", whose \`contractVersion\` is "v1", whose \`lapId\` and \`snapshotDigest\` echo the projection's values verbatim, and whose \`findings\` is an array. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
-        `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; every anchor value is a plain string, nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
+        `Return exactly one JSON judged result for rubric ${branch.rubric}: a single JSON object whose top-level field \`kind\` is exactly the string "judged" (not \`result\`, not any other field name), whose \`rubric\` is "${branch.rubric}", whose \`contractVersion\` is "${CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION}", whose \`lapId\` and \`snapshotDigest\` echo the projection's values verbatim, and whose \`findings\` is an array. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display}\` objects and every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
         JSON.stringify(projection),
       ].join('\n\n');
     // Regression visibility for prompt bloat (#projection-size): record the

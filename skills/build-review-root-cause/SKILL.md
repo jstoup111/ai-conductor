@@ -35,18 +35,29 @@ concern when it masks an observed effect without addressing the mechanism or loc
 evidence identifies as responsible for the defect. Assess each independent defect and implementation
 relation separately; do not merge distinct mechanisms into one finding.
 
-## Result contract (v1)
+## Result contract (v3)
 
 Return exactly one JSON `judged` result for rubric `rootCause`: its top-level `kind` field is
-exactly the string `judged` (never `result` or any other field name), carrying contract version `v1`.
+exactly the string `judged` (never `result` or any other field name), carrying contract version `v3`.
 It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means a PASS for this rubric. Each finding contains:
 
-- an enumerated concern kind in a `concernKind` field (never `kind`);
+**Closed vocabulary:** `root-cause-unaddressed`, `symptom-only-fix`,
+`provenance-sensitive-cache-identity`.
+
+- a `concernKind` field (never `kind`) with one of: `root-cause-unaddressed`,
+  `symptom-only-fix`, or `provenance-sensitive-cache-identity`;
 - typed logical anchors for the stated defect/outcome and implementation mechanism or locus judged
   symptomatic, carried in a nested `anchor` object — `{"rubric": "rootCause", "statedDefect":
-  "<string>", "locus": "<string>", "relation": "<string>"}` — with plain string values, never
-  flattened to the finding's top level and never renamed;
+  "<string>", "locus": {"path": "<repository-relative path>",
+  "contentHash": "sha256:<normalized-hunk-content>", "display": "<human-readable non-coordinate label>"}, "relation": "<member>"}` — where `relation` must be one
+  of `root-cause-unaddressed`, `symptom-only-fix`, or `provenance-sensitive-cache-identity`, and
+  must match `concernKind` after canonical normalization.
+  `locus` is a content-region reference from the immutable projection; `statedDefect` remains report prose. When the same
+  normalized hunk content appears more than once in one path, add `"occurrence": <0-based ordinal
+  in projection order>` to the region (omit it for the first or only occurrence) — never a line
+  number or any other coordinate. Never flatten the anchor to the finding's top level or
+  rename it;
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 

@@ -94,6 +94,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_skipped',
   'build_review_cache_hit',
   'build_review_rubric_infrastructure_failure',
+  'build_review_disposition_version_invalidated',
   'build_review_outer_verdict',
   'loop_halt',
   'halt_marker_write_failed',
@@ -400,6 +401,12 @@ describe('event sink subscriptions', () => {
     });
   });
 
+  it('audits engine-reported non-binding build-review dispositions', () => {
+    expect(EVENT_SINKS.build_review_disposition_version_invalidated).toEqual({
+      render: false, persist: true, audit: true,
+    });
+  });
+
   it('defines provider-neutral operator park boundary telemetry without completion authority', () => {
     const boundaries = [
       { kind: 'step', name: 'memory' },
@@ -527,6 +534,7 @@ describe('event sink subscriptions', () => {
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
       'verdict_freshness',
       'halt_marker_write_failed',
+      'build_review_disposition_version_invalidated',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));

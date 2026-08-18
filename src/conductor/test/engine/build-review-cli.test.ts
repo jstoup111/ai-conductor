@@ -6,12 +6,12 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings } from '../../src/engine/build-review-cli.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
-const finding = { concernKind: 'outside plan', summary: 'src/a.ts is outside the plan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'outside-plan' } };
+const finding = { concernKind: 'out-of-plan-change', summary: 'src/a.ts is outside the plan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
 const aggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:snapshot',
   results: {
-    tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never, findings: [], verdict: 'PASS' },
-    scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1' as never, findings: [finding], verdict: 'FAIL' },
+    tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+    scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [finding], verdict: 'FAIL' },
     rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
     completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
   },
@@ -19,7 +19,7 @@ const aggregate = joinBuildReviewRubricOutcomes({
 
 describe('build-review findings CLI', () => {
   it('accepts exactly one unresolved finding for a verified interactive operator and leaves siblings untouched', async () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!;
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
     const append = vi.fn(async (input) => ({
       ok: true as const,
       record: { version: 'v1' as const, ...input, acceptedAt: '2026-08-14T12:00:00.000Z' },
@@ -63,7 +63,7 @@ describe('build-review findings CLI', () => {
   });
 
   it('refuses malformed state, lock failure, and a replacement lap observed after waiting for the shared store', async () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!;
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
     const nextLap = { ...aggregate, lapId: parseBuildReviewLapId('lap-next')!, results: { ...aggregate.results, scope: { ...aggregate.results.scope, lapId: parseBuildReviewLapId('lap-next')! } } };
     const append = vi.fn();
     const store = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append };
@@ -83,7 +83,7 @@ describe('build-review findings CLI', () => {
   });
 
   it('reads the canonical feature worktree and deterministically renders raw, accepted, unresolved, skipped, and infrastructure state', async () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!;
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
     const print = vi.fn();
     const store = { list: vi.fn(async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' }, finding: identity, sourceLapId: lapId, summary: 'accepted', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T12:00:00.000Z' }] })), append: vi.fn() };
     const readFile = vi.fn(async (_path: string) => JSON.stringify(aggregate));
@@ -99,11 +99,26 @@ describe('build-review findings CLI', () => {
     expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({
       feature: 'review-rubrics', lapId: 'lap-current', rawVerdict: 'FAIL', verdict: 'FAIL',
       acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['completeness'], infrastructureFailureRubrics: ['rootCause'],
+      acceptedDispositions: [{
+        findingId: identity.id,
+        disposition: expect.objectContaining({
+          sourceLapId: 'lap-current', summary: 'accepted', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T12:00:00.000Z',
+        }),
+      }],
     });
+
+    const humanPrint = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      cwd: '/main/.worktrees/review-rubrics', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile, createStore: () => store, print: humanPrint,
+    })).resolves.toBe(0);
+    expect(humanPrint).toHaveBeenCalledWith(expect.stringContaining(
+      `Accepted disposition: ${identity.id} (lap lap-current; operator operator; rationale: risk)`,
+    ));
   });
 
   it('uses the live runner canonical identity for both findings reads and acceptance writes through an alternate main root', async () => {
-    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v1' })!;
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
     const realpath = async (path: string) => path
       .replace('/alternate-main', '/canonical-main');
     const findingsStore = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append: vi.fn() };

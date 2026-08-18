@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import {
+  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+} from './build-review-domain.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 
 export type BuildReviewRubricCachePolicy = 'content-addressed';
@@ -8,7 +11,7 @@ export type BuildReviewRubricPrerequisite = 'none';
 
 export interface BuildReviewRubricDescriptor {
   readonly skillName: string;
-  readonly contractVersion: 'v1';
+  readonly contractVersion: typeof CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION;
   readonly projectionVersion: 'v2';
   readonly cachePolicy: BuildReviewRubricCachePolicy;
   readonly prerequisite: BuildReviewRubricPrerequisite;
@@ -25,28 +28,28 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
 > = Object.freeze({
   tautology: Object.freeze({
     skillName: 'build-review-tautology',
-    contractVersion: 'v1',
+    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
     projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
   }),
   scope: Object.freeze({
     skillName: 'build-review-scope',
-    contractVersion: 'v1',
+    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
     projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
   }),
   rootCause: Object.freeze({
     skillName: 'build-review-root-cause',
-    contractVersion: 'v1',
+    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
     projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
   }),
   completeness: Object.freeze({
     skillName: 'build-review-completeness',
-    contractVersion: 'v1',
+    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
     projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',

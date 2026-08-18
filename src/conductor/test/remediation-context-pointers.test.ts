@@ -17,13 +17,15 @@ describe('planContractPointers', () => {
       planContractPointers(
         [
           {
-            concernKind: 'missing-outcome',
+            concernKind: 'missing-deliverable',
             summary: 'The remediation context omits the governing plan task.',
             evidenceLocations: ['src/engine/conductor.ts:1'],
             anchor: {
               rubric: 'completeness',
               planTask: '1',
+              missingSurface: 'src/engine/remediation-context-pointers.ts',
               missingOutcome: 'renders the plan contract pointer',
+              missingKind: 'missing-deliverable',
             },
           },
         ],
@@ -31,7 +33,7 @@ describe('planContractPointers', () => {
         '.docs/plans/remediation-context.md',
       ),
     ).toEqual([
-      'plan contract: .docs/plans/remediation-context.md — Task 1 (anchor: renders the plan contract pointer)',
+      'plan contract: .docs/plans/remediation-context.md — Task 1 (anchor: src/engine/remediation-context-pointers.ts)',
     ]);
   });
 
@@ -52,22 +54,22 @@ describe('planContractPointers', () => {
       planContractPointers(
         [
           {
-            concernKind: 'out-of-scope-change',
+            concernKind: 'out-of-plan-change',
             summary: 'The owned file is outside the approved scope.',
             evidenceLocations: ['src/engine/owned.ts:1'],
-            anchor: { rubric: 'scope', path: 'src/engine/owned.ts', relation: 'outside-plan' },
+            anchor: { rubric: 'scope', path: 'src/engine/owned.ts', relation: 'not-authorized-by-plan' },
           },
           {
-            concernKind: 'out-of-scope-change',
+            concernKind: 'out-of-plan-change',
             summary: 'The shared file has more than one plan owner.',
             evidenceLocations: ['src/engine/shared.ts:1'],
-            anchor: { rubric: 'scope', path: 'src/engine/shared.ts', relation: 'outside-plan' },
+            anchor: { rubric: 'scope', path: 'src/engine/shared.ts', relation: 'not-authorized-by-plan' },
           },
           {
-            concernKind: 'out-of-scope-change',
+            concernKind: 'out-of-plan-change',
             summary: 'The unmapped file has no plan owner.',
             evidenceLocations: ['src/engine/unmapped.ts:1'],
-            anchor: { rubric: 'scope', path: 'src/engine/unmapped.ts', relation: 'outside-plan' },
+            anchor: { rubric: 'scope', path: 'src/engine/unmapped.ts', relation: 'not-authorized-by-plan' },
           },
         ],
         plan,
@@ -95,36 +97,36 @@ describe('planContractPointers', () => {
       planContractPointers(
         [
           {
-            concernKind: 'tautological-test',
+            concernKind: 'test-does-not-exercise-changed-behavior',
             summary: 'The owned test does not distinguish the changed behavior.',
             evidenceLocations: ['src/engine/owned.test.ts:1'],
             anchor: {
               rubric: 'tautology',
               changedTest: 'src/engine/owned.test.ts',
               exercisedBehavior: 'owns a focused test file',
-              violationKind: 'still-passes-before-change',
+              violationKind: 'test-does-not-exercise-changed-behavior',
             },
           },
           {
-            concernKind: 'tautological-test',
+            concernKind: 'test-does-not-exercise-changed-behavior',
             summary: 'The shared test has more than one plan owner.',
             evidenceLocations: ['src/engine/shared.test.ts:1'],
             anchor: {
               rubric: 'tautology',
               changedTest: 'src/engine/shared.test.ts',
               exercisedBehavior: 'is shared',
-              violationKind: 'still-passes-before-change',
+              violationKind: 'test-does-not-exercise-changed-behavior',
             },
           },
           {
-            concernKind: 'tautological-test',
+            concernKind: 'test-does-not-exercise-changed-behavior',
             summary: 'The unmapped test has no plan owner.',
             evidenceLocations: ['src/engine/unmapped.test.ts:1'],
             anchor: {
               rubric: 'tautology',
               changedTest: 'src/engine/unmapped.test.ts',
               exercisedBehavior: 'is unmapped',
-              violationKind: 'still-passes-before-change',
+              violationKind: 'test-does-not-exercise-changed-behavior',
             },
           },
         ],
@@ -153,36 +155,36 @@ describe('planContractPointers', () => {
       planContractPointers(
         [
           {
-            concernKind: 'incomplete-root-cause-fix',
+            concernKind: 'root-cause-unaddressed',
             summary: 'The owned locus identifies the missing mechanism.',
             evidenceLocations: ['src/engine/root-owned.ts:1'],
             anchor: {
               rubric: 'rootCause',
               statedDefect: 'The governing plan task is unavailable.',
               locus: 'src/engine/root-owned.ts',
-              relation: 'omits the ownership join',
+              relation: 'root-cause-unaddressed',
             },
           },
           {
-            concernKind: 'incomplete-root-cause-fix',
+            concernKind: 'root-cause-unaddressed',
             summary: 'The shared locus has more than one plan owner.',
             evidenceLocations: ['src/engine/root-shared.ts:1'],
             anchor: {
               rubric: 'rootCause',
               statedDefect: 'The governing plan task is unavailable.',
               locus: 'src/engine/root-shared.ts',
-              relation: 'omits the ownership join',
+              relation: 'root-cause-unaddressed',
             },
           },
           {
-            concernKind: 'incomplete-root-cause-fix',
+            concernKind: 'root-cause-unaddressed',
             summary: 'The unmapped locus has no plan owner.',
             evidenceLocations: ['src/engine/root-unmapped.ts:1'],
             anchor: {
               rubric: 'rootCause',
               statedDefect: 'The governing plan task is unavailable.',
               locus: 'src/engine/root-unmapped.ts',
-              relation: 'omits the ownership join',
+              relation: 'root-cause-unaddressed',
             },
           },
         ],
@@ -196,10 +198,10 @@ describe('planContractPointers', () => {
 
   it('renders concise references to same-anchor findings from prior review laps', () => {
     const currentFinding: BuildReviewFinding = {
-      concernKind: 'out-of-scope-change',
+      concernKind: 'out-of-plan-change',
       summary: 'The current change is outside the approved plan.',
       evidenceLocations: ['src/engine/conductor.ts:1'],
-      anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'outside-plan' },
+      anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'not-authorized-by-plan' },
     };
     const priorLaps: readonly {
       artifactPath: string;
@@ -210,10 +212,10 @@ describe('planContractPointers', () => {
         findings: [{
           findingRef: 'finding-1',
           finding: {
-            concernKind: 'out-of-scope-change',
+            concernKind: 'out-of-plan-change',
             summary: 'The first lap described a different scope concern.',
             evidenceLocations: ['src/engine/conductor.ts:10'],
-            anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'outside-plan' },
+            anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'not-authorized-by-plan' },
           },
         }],
       },
@@ -222,10 +224,10 @@ describe('planContractPointers', () => {
         findings: [{
           findingRef: 'finding-2',
           finding: {
-            concernKind: 'out-of-scope-change',
+            concernKind: 'out-of-plan-change',
             summary: 'The second lap described another scope concern.',
             evidenceLocations: ['src/engine/conductor.ts:20'],
-            anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'outside-plan' },
+            anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'not-authorized-by-plan' },
           },
         }],
       },
@@ -236,16 +238,16 @@ describe('planContractPointers', () => {
     ]);
   });
 
-  it('renders a prior-attempt pointer when a same root-cause anchor has a drifted concern kind', () => {
+  it('renders a prior-attempt pointer when the root-cause anchor is canonical', () => {
     const anchor = {
       rubric: 'rootCause' as const,
       statedDefect: 'Equivalent prior attempts must remain visible.',
       locus: 'src/engine/remediation-context-pointers.ts',
-      relation: 'joins findings by anchor rather than concern label',
+      relation: 'root-cause-unaddressed',
     };
 
     expect(priorAttemptPointers([{
-      concernKind: 'missing-anchor-join',
+      concernKind: 'root-cause-unaddressed',
       summary: 'The current review describes the same underlying defect differently.',
       evidenceLocations: ['src/engine/remediation-context-pointers.ts:52'],
       anchor,
@@ -254,7 +256,7 @@ describe('planContractPointers', () => {
       findings: [{
         findingRef: 'finding-prior',
         finding: {
-          concernKind: 'incomplete-root-cause-fix',
+          concernKind: 'root-cause-unaddressed',
           summary: 'The prior review used another concern label.',
           evidenceLocations: ['src/engine/remediation-context-pointers.ts:52'],
           anchor,
@@ -267,24 +269,24 @@ describe('planContractPointers', () => {
 
   it('ignores unresolvable plan, prior-lap, and malformed finding inputs', () => {
     const scopeFinding: BuildReviewFinding = {
-      concernKind: 'out-of-scope-change',
+      concernKind: 'out-of-plan-change',
       summary: 'The current change is outside the approved plan.',
       evidenceLocations: ['src/engine/conductor.ts:1'],
-      anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'outside-plan' },
+      anchor: { rubric: 'scope', path: 'src/engine/conductor.ts', relation: 'not-authorized-by-plan' },
     };
     const differentAnchorFinding: BuildReviewFinding = {
-      concernKind: 'out-of-scope-change',
+      concernKind: 'out-of-plan-change',
       summary: 'The prior change was anchored to another file.',
       evidenceLocations: ['src/engine/other.ts:1'],
-      anchor: { rubric: 'scope', path: 'src/engine/other.ts', relation: 'outside-plan' },
+      anchor: { rubric: 'scope', path: 'src/engine/other.ts', relation: 'not-authorized-by-plan' },
     };
 
     const results = [
       planContractPointers([{
-        concernKind: 'missing-outcome',
+        concernKind: 'missing-deliverable',
         summary: 'The requested plan task is absent.',
         evidenceLocations: ['src/engine/conductor.ts:1'],
-        anchor: { rubric: 'completeness', planTask: '999', missingOutcome: 'renders the plan contract pointer' },
+        anchor: { rubric: 'completeness', planTask: '999', missingSurface: 'src/engine/remediation-context-pointers.ts', missingOutcome: 'renders the plan contract pointer', missingKind: 'missing-deliverable' },
       }], '### Task 1: Existing task\n', '.docs/plans/remediation-context.md'),
       priorAttemptPointers([scopeFinding], [{
         artifactPath: '.pipeline/build-review/lap-different/scope.json',

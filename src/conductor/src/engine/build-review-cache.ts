@@ -2,9 +2,11 @@ import { join } from "node:path";
 
 import type { BuildReviewRubricId } from "../types/config.js";
 import {
+  parseBuildReviewRubricContractVersion,
   parseBuildReviewJudgedResult,
   type BuildReviewLapId,
   type BuildReviewJudgedResult,
+  type BuildReviewRubricContractVersion,
 } from "./build-review-domain.js";
 
 const CACHE_VERSION = 1;
@@ -14,7 +16,7 @@ const CACHE_DIRECTORY = ".pipeline/build-review/cache";
 export interface BuildReviewCacheEntry {
   version: typeof CACHE_VERSION;
   rubric: BuildReviewRubricId;
-  contractVersion: "v1";
+  contractVersion: "v3";
   projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
@@ -32,7 +34,7 @@ export interface BuildReviewCacheFilesystem {
 /** The complete identity that must match before a semantic cache entry is reusable. */
 export interface BuildReviewCacheLookup {
   rubric: BuildReviewRubricId;
-  contractVersion: "v1";
+  contractVersion: "v3";
   projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
@@ -41,7 +43,8 @@ export interface BuildReviewCacheLookup {
 }
 
 /** Safely parsed persisted state, including legacy entries that must miss closed. */
-export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "projectionVersion"> {
+export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "contractVersion" | "projectionVersion"> {
+  contractVersion: BuildReviewRubricContractVersion;
   projectionVersion: "v1" | "v2";
 }
 
@@ -98,8 +101,9 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
   if (Object.keys(candidate).length !== keys.length || Object.keys(candidate).some((key) => !keys.includes(key))) {
     return undefined;
   }
-  if (candidate.version !== CACHE_VERSION || !isRubric(candidate.rubric) ||
-    candidate.contractVersion !== "v1" || (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2") ||
+  const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
+  if (candidate.version !== CACHE_VERSION || !isRubric(candidate.rubric) || !contractVersion ||
+    (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2") ||
     !isNonEmptyString(candidate.projectionDigest) || !isNonEmptyString(candidate.policyFingerprint)) {
     return undefined;
   }
@@ -110,7 +114,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
   return {
     version: CACHE_VERSION,
     rubric: candidate.rubric,
-    contractVersion: candidate.contractVersion,
+    contractVersion,
     projectionVersion: candidate.projectionVersion,
     projectionDigest: candidate.projectionDigest,
     policyFingerprint: candidate.policyFingerprint,
@@ -121,7 +125,9 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
 /** Strictly parses entries current code may persist or reuse. */
 export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
   const entry = parseBuildReviewCacheEntryCandidate(value);
-  return entry?.projectionVersion === "v2" ? { ...entry, projectionVersion: "v2" } : undefined;
+  return entry?.contractVersion === "v3" && entry.projectionVersion === "v2"
+    ? { ...entry, contractVersion: "v3", projectionVersion: "v2" }
+    : undefined;
 }
 
 /** Reads a cached semantic judgement, treating every read/parse error as a miss. */

@@ -13,7 +13,9 @@ import {
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
 } from './build-review-dispositions.js';
+import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { resolveMainRepoRoot } from './park-marker.js';
+import type { ConductorEvent } from '../types/events.js';
 
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
@@ -23,6 +25,8 @@ export interface BuildReviewEffectiveResolverDeps {
   readonly resolveMainRoot?: (projectRoot: string) => Promise<string>;
   readonly realpath?: (path: string) => Promise<string>;
   readonly createStore?: (projectRoot: string) => DispositionStore;
+  /** Reports durable dispositions that no longer bind the current contract. */
+  readonly emit?: (event: Extract<ConductorEvent, { type: 'build_review_disposition_version_invalidated' }>) => void | Promise<void>;
 }
 
 export type BuildReviewEffectiveResolution =
@@ -79,6 +83,17 @@ export async function resolveEffectiveBuildReviewVerdict(
   if (!listed.ok) return { ok: false, reason: `build-review disposition state is unavailable: ${listed.message}` };
   if (listed.records.some((record) => !sameFeature(record.feature, feature))) {
     return { ok: false, reason: 'build-review disposition state returned a foreign feature record' };
+  }
+  for (const record of listed.records) {
+    if (record.finding.canonicalPayload.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) {
+      await deps.emit?.({
+        type: 'build_review_disposition_version_invalidated',
+        feature: feature.feature,
+        findingId: record.finding.id,
+        rubric: record.finding.canonicalPayload.rubric,
+        contractVersion: record.finding.canonicalPayload.contractVersion,
+      });
+    }
   }
   const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records);
   return effective

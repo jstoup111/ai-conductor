@@ -9,8 +9,8 @@ import {
 import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 
 const finding = canonicalizeBuildReviewFindingIdentity({
-  rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-  anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+  rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+  anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
 })!;
 
 function record(id = finding.id): BuildReviewDispositionRecord {
@@ -25,8 +25,8 @@ function record(id = finding.id): BuildReviewDispositionRecord {
 describe('accepted build-review risk rendering', () => {
   it('renders only ids, rubrics, a count, and the disposition-store pointer', () => {
     const secondFinding = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'missing-approval',
-      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'outside-plan' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/b.ts', relation: 'out-of-plan-change' },
     })!;
     const rendered = renderBuildReviewAcceptedRisk([record(), { ...record(), finding: secondFinding, summary: 'second risk' }]);
 
