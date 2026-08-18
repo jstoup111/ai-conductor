@@ -7,6 +7,12 @@ export type ContainmentVerdict =
   | { readonly contained: true; readonly evidence: string }
   | { readonly contained: false; readonly reason: string };
 
+/** Executes the isolated containment probe without coupling it to process spawning. */
+export type ContainmentProbeRunner = (
+  executable: string,
+  args: readonly string[],
+) => Promise<{ readonly stdout: string }>;
+
 const MAX_NODE_MODULES_DISCOVERY_DEPTH = 8;
 
 function discoverNodeModules(liveCheckout: string): readonly string[] {
@@ -62,4 +68,50 @@ export function deriveBindSet(liveCheckout: string, _worktreeRoot: string): read
     '--ro-bind', liveCheckout, liveCheckout,
     ...writablePaths.flatMap((path) => ['--bind', path, path]),
   ];
+}
+
+const CONTAINMENT_PROBE = [
+  'if test -w "$1"; then printf "live-root-writable\\n"; else printf "live-root-not-writable\\n"; fi',
+  'if test -w "$2"; then printf "worktree-writable\\n"; else printf "worktree-not-writable\\n"; fi',
+].join('; ');
+
+/**
+ * Verifies that the live checkout is read-only while the dispatched worktree
+ * remains writable under the exact bind set that will wrap the child process.
+ */
+export async function probeContainment(
+  bindSet: readonly string[],
+  liveCheckout: string,
+  worktreeRoot: string,
+  runner: ContainmentProbeRunner,
+): Promise<ContainmentVerdict> {
+  const { stdout } = await runner('bwrap', [
+    ...bindSet,
+    '--',
+    '/bin/sh',
+    '-c',
+    CONTAINMENT_PROBE,
+    'containment-probe',
+    liveCheckout,
+    worktreeRoot,
+  ]);
+  const observations = new Set(stdout.trim().split(/\s+/));
+
+  if (observations.has('live-root-writable')) {
+    return { contained: false, reason: `probe found ${liveCheckout} writable` };
+  }
+  if (observations.has('worktree-not-writable')) {
+    return { contained: false, reason: `probe found ${worktreeRoot} not writable` };
+  }
+  if (!observations.has('live-root-not-writable')) {
+    return { contained: false, reason: `probe did not prove ${liveCheckout} is not writable` };
+  }
+  if (!observations.has('worktree-writable')) {
+    return { contained: false, reason: `probe did not prove ${worktreeRoot} is writable` };
+  }
+
+  return {
+    contained: true,
+    evidence: 'probe confirmed live-root-not-writable and worktree-writable',
+  };
 }

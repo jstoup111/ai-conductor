@@ -26,6 +26,24 @@ function deriveBindSet(liveCheckout: string, worktreeRoot: string): readonly str
   return (candidate as (live: string, worktree: string) => readonly string[])(liveCheckout, worktreeRoot);
 }
 
+type ProbeRunner = (executable: string, args: readonly string[]) => Promise<{ readonly stdout: string }>;
+
+function probeContainment(
+  bindSet: readonly string[],
+  liveCheckout: string,
+  worktreeRoot: string,
+  runner: ProbeRunner,
+): Promise<ContainmentVerdict> {
+  const candidate: unknown = Reflect.get(liveContainment, 'probeContainment');
+  if (typeof candidate !== 'function') throw new Error('probeContainment is not available');
+  return (candidate as (
+    binds: readonly string[],
+    live: string,
+    worktree: string,
+    commandRunner: ProbeRunner,
+  ) => Promise<ContainmentVerdict>)(bindSet, liveCheckout, worktreeRoot, runner);
+}
+
 describe('ContainmentVerdict', () => {
   it('narrows evidence and reason by containment', () => {
     const contained: ContainmentVerdict = { contained: true, evidence: 'bubblewrap enforced' };
@@ -112,5 +130,78 @@ describe('deriveBindSet', () => {
       '--bind', discovered, discovered,
     ]));
     for (const path of pruned) expect(bindSet).not.toContain(path);
+  });
+});
+
+describe('probeContainment', () => {
+  it('proves both the live root is read-only and the worktree is writable in one bwrap probe', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const bindSet = ['--dev-bind', '/', '/', '--ro-bind', liveCheckout, liveCheckout];
+    const calls: Array<{ executable: string; args: readonly string[] }> = [];
+    const runner: ProbeRunner = async (executable, args) => {
+      calls.push({ executable, args });
+      return { stdout: 'live-root-not-writable\nworktree-writable\n' };
+    };
+
+    const verdict = await probeContainment(bindSet, liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: true,
+      evidence: expect.stringContaining('live-root-not-writable'),
+    });
+    expect(verdict.contained && verdict.evidence).toContain('worktree-writable');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ executable: 'bwrap' });
+    expect(calls[0]?.args.slice(0, bindSet.length)).toEqual(bindSet);
+    expect(calls[0]?.args).toHaveLength(bindSet.length + 7);
+    expect(calls[0]?.args.slice(bindSet.length)).toMatchObject([
+      '--',
+      '/bin/sh',
+      '-c',
+      expect.any(String),
+      'containment-probe',
+      liveCheckout,
+      worktreeRoot,
+    ]);
+  });
+
+  it('refuses containment when the probe reports the live checkout writable', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const runner: ProbeRunner = async () => ({
+      stdout: 'live-root-writable\nworktree-writable\n',
+    });
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringContaining(liveCheckout),
+    });
+  });
+
+  it('refuses containment when the probe reports the worktree is not writable', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const runner: ProbeRunner = async () => ({
+      stdout: 'live-root-not-writable\nworktree-not-writable\n',
+    });
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringContaining(worktreeRoot),
+    });
+  });
+
+  it('refuses containment unless the probe proves both assertions', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const runner: ProbeRunner = async () => ({ stdout: 'worktree-writable\n' });
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringContaining(liveCheckout),
+    });
   });
 });
