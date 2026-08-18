@@ -14,6 +14,19 @@ vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 
+// The pre-halt boundary is reached before the fixture needs a real Git repo.
+// Keeping this local setup fake makes the entrypoint regression test runnable
+// in sandboxes that prohibit shell-backed git setup.
+vi.mock('./git-repo.js', () => ({
+  initTestRepo: vi.fn(),
+}));
+
+vi.mock('execa', () => ({
+  execa: vi.fn(async (_command: string, args: readonly string[]) => ({
+    stdout: args[0] === 'rev-parse' ? 'fixture-sha' : '',
+  })),
+}));
+
 describe('ProvisionedHome', () => {
   it.each(['invoke', 'invokeInteractive'] as const)('injects its isolated self-host settings into %s', async (method) => {
     const { ProvisionedHome } = await import('./live-e2e-run-body.js') as {
@@ -94,15 +107,20 @@ describe('Codex live-leg model policy', () => {
 });
 
 describe('runLiveE2ERunBody authentication source', () => {
-  it('does not dispatch or report a successful terminal state when the live fixture is already halted', async () => {
+  it('resolves the live-leg cap at entry and reports observed spend when the fixture halts before dispatch', async () => {
     const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
       runLiveE2ERunBody: (
         descriptor: LiveE2EProviderDescriptor,
-        tokenCap: number,
+        tokenCap?: number,
         dependencies?: LiveE2ERunBodyDependencies,
       ) => Promise<void>;
     };
     const priorKey = process.env.CODEX_API_KEY;
+    const priorCap = process.env.DAEMON_E2E_LIVE_TOKEN_CAP;
+    const spendReports: string[] = [];
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation((message: string) => {
+      spendReports.push(message);
+    });
     const provider: LLMProvider = {
       invoke: vi.fn(async () => ({ success: true, output: 'unexpected dispatch', exitCode: 0 })),
       invokeInteractive: vi.fn(async () => ({ success: true, output: 'unexpected dispatch', exitCode: 0 })),
@@ -124,8 +142,9 @@ describe('runLiveE2ERunBody authentication source', () => {
 
     try {
       process.env.CODEX_API_KEY = 'live-codex-key';
+      process.env.DAEMON_E2E_LIVE_TOKEN_CAP = '321';
 
-      const runError = await runLiveE2ERunBody(descriptor, 1, {
+      const runError = await runLiveE2ERunBody(descriptor, undefined, {
         binaryAvailable: () => true,
         provisionProviderHome: async () => ({
           provider: 'codex', homeDir, childEnv: () => ({}), childArgs: () => [], teardown,
@@ -152,13 +171,18 @@ describe('runLiveE2ERunBody authentication source', () => {
       expect({
         providerDispatches: vi.mocked(provider.invoke).mock.calls.length + vi.mocked(provider.invokeInteractive).mock.calls.length,
         terminalStates,
+        spendReports,
       }).toEqual({
         providerDispatches: 0,
         terminalStates: [{ done: false, halt: true, successful: false }],
+        spendReports: ['daemon E2E live smoke observed total: 0; dispatch count: 0; cap: 321'],
       });
     } finally {
+      infoSpy.mockRestore();
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
       else process.env.CODEX_API_KEY = priorKey;
+      if (priorCap === undefined) delete process.env.DAEMON_E2E_LIVE_TOKEN_CAP;
+      else process.env.DAEMON_E2E_LIVE_TOKEN_CAP = priorCap;
       await rm(homeDir, { recursive: true, force: true });
     }
   });
@@ -766,37 +790,6 @@ describe('live E2E shared spend policy', () => {
       { dispatches: 1 },
       { totalTurns: 1, totalTokens: 1, unmetered: 2, unmeteredSteps: ['finish', 'unattributed'] },
     )).toThrow('Unattributable unmetered dispatch cannot be allow-listed.');
-  });
-
-  it('resolves the live-leg cap from its default or override and reports the observed spend', async () => {
-    const {
-      DEFAULT_LIVE_E2E_TOKEN_CAP,
-      reportLiveE2ESpend,
-      resolveLiveE2ETokenCap,
-    } = await import('./live-e2e-run-body.js') as {
-      DEFAULT_LIVE_E2E_TOKEN_CAP: number;
-      resolveLiveE2ETokenCap: (environment?: NodeJS.ProcessEnv) => number;
-      reportLiveE2ESpend: (
-        metrics: { totalTokens: number; dispatches: number },
-        cap: number,
-        report?: (message: string) => void,
-      ) => void;
-    };
-    const report = vi.fn();
-
-    const defaultCap = resolveLiveE2ETokenCap({});
-    const overrideCap = resolveLiveE2ETokenCap({ DAEMON_E2E_LIVE_TOKEN_CAP: '321' });
-    reportLiveE2ESpend({ totalTokens: 123, dispatches: 4 }, 321, report);
-
-    expect({
-      defaultCap: DEFAULT_LIVE_E2E_TOKEN_CAP,
-      resolvedCaps: { defaultCap, overrideCap },
-      report: report.mock.calls,
-    }).toEqual({
-      defaultCap: 100000,
-      resolvedCaps: { defaultCap: 100000, overrideCap: 321 },
-      report: [['daemon E2E live smoke observed total: 123; dispatch count: 4; cap: 321']],
-    });
   });
 
   it.each([
