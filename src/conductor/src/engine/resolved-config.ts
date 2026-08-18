@@ -651,7 +651,9 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
     skillRelinkPreflight: block?.skill_relink_preflight ?? true,
     sandboxBuildEnv: block?.sandbox_build_env ?? true,
-    liveContainment: block?.live_containment ?? true,
+    liveContainment: typeof block?.live_containment === 'boolean'
+      ? block.live_containment
+      : true,
     versionApprovalGate: block?.version_approval_gate ?? true,
     releaseArtifactGate: block?.release_artifact_gate ?? true,
     // Blank/whitespace normalizes to null so a freeze can never "match" an
