@@ -32,6 +32,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Fixed a stale manual-test verdict discovered at FINISH becoming unroutable, so the daemon no longer stalls on that SHIP validator instead of routing it back for retry. ([implementation PR #1673](https://github.com/jstoup111/ai-conductor/pull/1673)).
 - Provider token telemetry now reports fresh input consistently across Claude and Codex, with cached prompt volume shown separately in daemon logs and feature usage totals. ([implementation PR #1689](https://github.com/jstoup111/ai-conductor/pull/1689)).
 - Codex usage-cap exhaustion is now reported as usage exhaustion with an hour-scale wait instead of a misleading 300-second rate-limit retry loop. ([implementation PR #1704](https://github.com/jstoup111/ai-conductor/pull/1704)).
+- build_review finding identities are content-anchored, so re-worded findings can no longer escape their accepted dispositions across review laps. ([implementation PR #1696](https://github.com/jstoup111/ai-conductor/pull/1696)).
 
 ## [0.103.0] - 2026-08-17
 
