@@ -1638,41 +1638,34 @@ async function groundDispositionOnlyEvidence(
     );
   }
 
-  const uncovered: string[] = [];
-  for (const block of splitStoryBlocks(storiesText)) {
-    for (const type of ['happy', 'negative'] as const) {
-      const present =
-        type === 'happy' ? /happy\s*path/i.test(block.text) : /negative\s*paths?/i.test(block.text);
-      if (!present) continue;
-      const covered = evidence.dispositions.some((entry) => {
-        if (!entry.criterion.toLowerCase().includes(type)) return false;
-        if (!block.id) return true;
-        return new RegExp(`\\bstory\\s+${escapeDispositionRegExp(block.id)}\\b`, 'i').test(
-          entry.criterion,
-        );
-      });
-      if (!covered) uncovered.push(`${block.id ? `Story ${block.id} ` : ''}${type} path`);
-    }
-  }
-  if (uncovered.length > 0) {
+  // Callers without a feature identity are legacy predicate users. They have
+  // no authoritative feature artifact to bind, so retain their established
+  // shape-only behavior rather than guessing which stories document applies.
+  if (!ctx.featureDesc && !ctx.planPath && !ctx.artifactResolution) return null;
+
+  const authoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
+  const authoritativeSet = new Set(authoritativeCriteria);
+  const recordedCriteria = evidence.dispositions.map((entry) =>
+    canonicalizeDispositionCriterion(entry.criterion, authoritativeCriteria),
+  );
+  const recordedSet = new Set(recordedCriteria);
+  const unexpected = recordedCriteria.filter((criterion) => !authoritativeSet.has(criterion));
+  const omitted = authoritativeCriteria.filter((criterion) => !recordedSet.has(criterion));
+  if (unexpected.length > 0 || omitted.length > 0) {
+    const differences = [
+      unexpected.length > 0 ? `invented: ${unexpected.join(', ')}` : '',
+      omitted.length > 0 ? `omitted: ${omitted.join(', ')}` : '',
+    ].filter(Boolean);
     return dispositionGroundingRefusal(
-      `disposition-only records do not cover every active story criterion — uncovered: ${uncovered.join(', ')} (each happy and negative path needs a disposition whose criterion names "Story <id>" and its path type)`,
+      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — ${differences.join('; ')}`,
     );
   }
 
   let planTaskIds: Set<string> | null = null;
   for (const entry of evidence.dispositions) {
-    if (entry.disposition === 'existing-sufficient-test') {
-      const citedPath = entry.citation.trim().replace(/(?::\d+){1,2}$/, '');
-      try {
-        await access(isAbsolute(citedPath) ? citedPath : join(dir, citedPath));
-      } catch {
-        return dispositionGroundingRefusal(
-          `disposition-only citation does not resolve: "${entry.citation}" — an existing-sufficient-test must cite a test file that exists`,
-        );
-      }
-      continue;
-    }
+    const citationFailure = await resolveDispositionCitation(dir, entry.citation);
+    if (citationFailure) return dispositionGroundingRefusal(citationFailure);
+    if (entry.disposition === 'existing-sufficient-test') continue;
     if (planTaskIds === null) {
       const planPath = ctx.planPath ?? (await resolveFeaturePlanPath(dir, ctx.featureDesc));
       if (!planPath) {
@@ -1699,6 +1692,71 @@ async function groundDispositionOnlyEvidence(
         `disposition-only owning task "${entry.owningTask}" does not exist in the plan — a planned-lower-layer-test must name a real plan task`,
       );
     }
+  }
+  return null;
+}
+
+function extractAuthoritativeStoryCriteria(storiesText: string): string[] {
+  const criteria: string[] = [];
+  for (const block of splitStoryBlocks(storiesText)) {
+    for (const type of ['happy', 'negative'] as const) {
+      const body = sectionBody(
+        block.text,
+        type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
+      );
+      if (body === null) continue;
+      const prefix = `${block.id ? `Story ${block.id} ` : ''}${type}: `;
+      for (const line of body.split('\n')) {
+        const match = line.match(/^\s*(?:[-*+] |\d+[.)] )(.+?)\s*$/);
+        if (!match || !/\bgiven\b/i.test(match[1]) || !/\bthen\b/i.test(match[1])) continue;
+        criteria.push(`${prefix}${match[1]}`);
+      }
+    }
+  }
+  return criteria;
+}
+
+function canonicalizeDispositionCriterion(criterion: string, authoritativeCriteria: string[]): string {
+  const exact = criterion.trim();
+  if (authoritativeCriteria.includes(exact)) return exact;
+
+  // Prior evidence used `Story <id> happy path: <outcome>` shorthand. It is
+  // unambiguous only when that story/path has one actual G/W/T criterion; a
+  // multi-criterion path must use the exact authoritative statement.
+  const legacy = exact.match(/^(?:(Story\s+[A-Za-z0-9.\-]+)\s+)?(happy|negative)\s+path:\s*(.+)$/i);
+  if (!legacy) return exact;
+  const [, storyLabel, type, summary] = legacy;
+  const prefix = `${storyLabel ? `${storyLabel} ` : ''}${type.toLowerCase()}: `;
+  const candidates = authoritativeCriteria.filter((candidate) =>
+    candidate.toLowerCase().startsWith(prefix.toLowerCase()),
+  );
+  if (candidates.length !== 1 || !criterionSummaryOccursIn(candidates[0], summary)) return exact;
+  return candidates[0];
+}
+
+function criterionSummaryOccursIn(criterion: string, summary: string): boolean {
+  const words = summary.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  return words.length > 0 && words.every((word) => criterion.toLowerCase().includes(word));
+}
+
+async function resolveDispositionCitation(dir: string, citation: string): Promise<string | null> {
+  const match = citation.trim().match(/^(.*\S):(\d+)(?::(\d+))?$/);
+  if (!match) {
+    return `disposition-only citation does not resolve: "${citation}" — citations must name an existing file and in-range line`;
+  }
+  const [, citedPath, startText, endText] = match;
+  const start = Number(startText);
+  const end = endText === undefined ? start : Number(endText);
+  const path = isAbsolute(citedPath) ? citedPath : join(dir, citedPath);
+  let citedText: string;
+  try {
+    citedText = await readFile(path, 'utf-8');
+  } catch {
+    return `disposition-only citation does not resolve: "${citation}" — cited file does not exist`;
+  }
+  const lineCount = citedText.split('\n').length;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > lineCount) {
+    return `disposition-only citation does not resolve: "${citation}" — cited line is outside the file`;
   }
   return null;
 }
