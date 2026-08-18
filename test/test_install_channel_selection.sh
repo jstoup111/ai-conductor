@@ -171,7 +171,11 @@ mkdir -p "$PTY_FLAG_HOME" "$PTY_ENV_HOME"
 PTY_FLAG_OUT=$(run_pty_case "$PTY_FLAG_HOME" pty-flag '--channel tagged')
 PTY_ENV_OUT=$(AI_CONDUCTOR_CHANNEL=main run_pty_case "$PTY_ENV_HOME" pty-env '')
 if ! grep -Fq 'Harness update channel' <<< "$PTY_FLAG_OUT" \
-  && ! grep -Fq 'Harness update channel' <<< "$PTY_ENV_OUT"; then
+  && ! grep -Fq 'Harness update channel' <<< "$PTY_ENV_OUT" \
+  && grep -Fq 'Created conductor configuration (channel: tagged, source: --channel flag' <<< "$PTY_FLAG_OUT" \
+  && grep -Fq 'Created conductor configuration (channel: main, source: AI_CONDUCTOR_CHANNEL environment variable' <<< "$PTY_ENV_OUT" \
+  && grep -Fxq '  update_channel: tagged' "$PTY_FLAG_HOME/.ai-conductor/config.yml" \
+  && grep -Fxq '  update_channel: main' "$PTY_ENV_HOME/.ai-conductor/config.yml"; then
   echo 'PASS explicit flag and environment channel choices suppress the TTY prompt'
 else
   FAILURES="${FAILURES}explicit channel choices did not suppress the TTY prompt\n"
@@ -183,7 +187,8 @@ printf 'conductor:\n  update_channel: main\n' > "$CONFIGURED_PTY_HOME/.ai-conduc
 CONFIGURED_PTY_OUT=$(run_pty_case "$CONFIGURED_PTY_HOME" configured-pty '')
 UPDATE_PTY_OUT=$(run_pty_case "$CONFIGURED_PTY_HOME" update-pty '--update')
 if ! grep -Fq 'Harness update channel' <<< "$CONFIGURED_PTY_OUT" \
-  && ! grep -Fq 'Harness update channel' <<< "$UPDATE_PTY_OUT"; then
+  && ! grep -Fq 'Harness update channel' <<< "$UPDATE_PTY_OUT" \
+  && grep -Fxq '  update_channel: main' "$CONFIGURED_PTY_HOME/.ai-conductor/config.yml"; then
   echo 'PASS configured and update-mode installs never re-prompt or overwrite the channel'
 else
   FAILURES="${FAILURES}configured or update-mode install re-prompted or changed the channel\n"
