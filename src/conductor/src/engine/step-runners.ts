@@ -2059,7 +2059,10 @@ export class DefaultStepRunner implements StepRunner {
           const detachedDependencies = join(path, 'src', 'conductor', 'node_modules');
           await access(sourceDependencies);
           await mkdir(join(path, 'src', 'conductor'), { recursive: true });
-          await symlink(sourceDependencies, detachedDependencies, 'dir');
+          await Promise.all([
+            symlink(sourceDependencies, detachedDependencies, 'dir'),
+            symlink(sourceDependencies, join(path, 'node_modules'), 'dir'),
+          ]);
         } catch (error: unknown) {
           // Missing dependencies remain the scoped command's ordinary
           // launch/runtime concern.  Do not make projects without a local

@@ -3248,7 +3248,7 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
-    it('materializes checkout-local dependencies before a uuid-importing counterfactual selector runs', async () => {
+    it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
       const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
       const featureRoot = join(repository, '.worktrees', 'feature');
       const selector = 'src/conductor/spec/example_spec.mjs';
@@ -3275,12 +3275,15 @@ TIER: M`,
         await mkdir(join(repository, '.worktrees'), { recursive: true });
         await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
         await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
-        await writeFile(join(featureRoot, selector), "import { v4 as uuidv4 } from 'uuid';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || answer !== 2) { process.stderr.write('selector-loaded-uuid\\n'); process.exit(1); }\n");
+        await writeFile(join(featureRoot, selector), "import { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { process.stderr.write('selector-loaded-checkout-dependencies\\n'); process.exit(1); }\n");
         await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
         await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
         await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
         await writeFile(join(sourceDependencies, 'uuid/package.json'), '{"name":"uuid","type":"module","exports":"./index.mjs"}\n');
         await writeFile(join(sourceDependencies, 'uuid/index.mjs'), "export function v4() { return 'fixture-uuid'; }\n");
+        await mkdir(join(sourceDependencies, 'execa'), { recursive: true });
+        await writeFile(join(sourceDependencies, 'execa/package.json'), '{"name":"execa","type":"module","exports":"./index.mjs"}\n');
+        await writeFile(join(sourceDependencies, 'execa/index.mjs'), 'export function execa() {}\n');
 
         const provider: LLMProvider = {
           invoke: vi.fn(async (options) => {
@@ -3316,6 +3319,9 @@ TIER: M`,
         const checkoutDependencies = join(checkoutRoot!, 'src/conductor/node_modules');
         expect((await lstat(checkoutDependencies)).isSymbolicLink()).toBe(true);
         expect(await realpath(checkoutDependencies)).toBe(await realpath(sourceDependencies));
+        const checkoutCommandDependencies = join(checkoutRoot!, 'node_modules');
+        expect((await lstat(checkoutCommandDependencies)).isSymbolicLink()).toBe(true);
+        expect(await realpath(checkoutCommandDependencies)).toBe(await realpath(sourceDependencies));
         expect(observedProjections[0]).toMatchObject({
           preflightEvidence: { classification: 'red', scopedRun: { exitCode: 1, runKind: 'nonzero-exit' } },
         });
