@@ -207,35 +207,26 @@ function probeContainment(
 }
 
 describe('ContainmentVerdict', () => {
-  it('narrows evidence and reason by containment', () => {
-    const contained: ContainmentVerdict = { contained: true, evidence: 'bubblewrap enforced' };
-    const unavailable: ContainmentVerdict = { contained: false, reason: 'bubblewrap unavailable' };
+  it('returns discriminated evidence or reason from containment probe outcomes', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const bindSet = deriveBindSet(liveCheckout, worktreeRoot);
+    const contained = await probeContainment(bindSet, liveCheckout, worktreeRoot, async () => ({
+      stdout: 'live-root-not-writable\nworktree-writable\n',
+      stderr: '',
+      exitCode: 0,
+    }));
+    const unavailable = await probeContainment(bindSet, liveCheckout, worktreeRoot, async () => {
+      throw Object.assign(new Error('bwrap unavailable'), { code: 'ENOENT' });
+    });
 
-    const invalidContained: ContainmentVerdict = {
+    expect(contained).toEqual({
       contained: true,
-      evidence: 'bubblewrap enforced',
-      // @ts-expect-error A contained verdict cannot carry failure-only detail.
-      reason: 'bubblewrap unavailable',
-    };
-    const invalidUnavailable: ContainmentVerdict = {
+      evidence: 'probe confirmed live-root-not-writable and worktree-writable',
+    });
+    expect(unavailable).toEqual({
       contained: false,
-      // @ts-expect-error An unavailable verdict cannot carry containment-only detail.
-      evidence: 'bubblewrap enforced',
-      reason: 'bubblewrap unavailable',
-    };
-
-    const detail = (verdict: ContainmentVerdict): string => {
-      if (verdict.contained) return verdict.evidence;
-      return verdict.reason;
-    };
-
-    void invalidContained;
-    void invalidUnavailable;
-
-    expect([detail(contained), detail(unavailable)]).toEqual([
-      'bubblewrap enforced',
-      'bubblewrap unavailable',
-    ]);
+      reason: 'containment unavailable: bwrap not found',
+    });
   });
 });
 
