@@ -182,25 +182,16 @@ function mapProviderLifecycleHalt(
   };
 }
 
-/**
- * A non-zero scoped command is counterfactual RED evidence only when its
- * output shows that a selected test actually ran and failed an assertion.
- * Discovery and collection failures must stop the rubric rather than being
- * mistaken for a test proving the reverted production is wrong.
- */
-export function classifyTautologyScopedFailure(
-  exitCode: number,
+/** Maps the scoped process outcome without interpreting runner-specific output. */
+export function toTautologyScopedRunResult(
+  exitCode: number | null,
+  receivedSignal: string | null,
   stdout: string,
   stderr: string,
 ): TautologyScopedRunResult {
-  const output = `${stdout}\n${stderr}`;
-  if (/\b(?:no test files found|no tests? (?:found|collected)|no test suite found|did not match any test files)\b/i.test(output)) {
-    return { kind: 'no-tests', exitCode, stdout, stderr };
-  }
-  if (/\b(?:assertionerror|assertion failed|tests?\s+\d+\s+failed|test files?\s+\d+\s+failed)\b/i.test(output)) {
-    return { kind: 'test-failure', exitCode, stdout, stderr };
-  }
-  return { kind: 'collection-failure', exitCode, stdout, stderr };
+  if (receivedSignal) return { kind: 'signal', signal: receivedSignal, stdout, stderr };
+  if (exitCode === 0) return { exitCode: 0, stdout, stderr };
+  return { kind: 'nonzero-exit', exitCode: exitCode ?? 1, stdout, stderr };
 }
 
 /**
@@ -2126,9 +2117,7 @@ export class DefaultStepRunner implements StepRunner {
       child.stderr.on('data', (chunk) => { stderr += String(chunk); });
       child.once('error', () => finish({ kind: 'launch-error', stdout, stderr }));
       child.once('close', (code, receivedSignal) => {
-        if (receivedSignal) finish({ kind: 'signal', signal: receivedSignal, stdout, stderr });
-        else if (code === 0) finish({ exitCode: 0, stdout, stderr });
-        else finish(classifyTautologyScopedFailure(code ?? 1, stdout, stderr));
+        finish(toTautologyScopedRunResult(code, receivedSignal, stdout, stderr));
       });
       signal.addEventListener('abort', () => {
         child.kill('SIGTERM');

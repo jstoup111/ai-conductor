@@ -9,8 +9,27 @@ import {
   TAUTOLOGY_EXCERPT_CAP_BYTES,
   type TautologyScopedRunResult,
 } from '../../src/engine/build-review-tautology-preflight.js';
+import { toTautologyScopedRunResult } from '../../src/engine/step-runners.js';
 
 describe('build-review Tautology preflight', () => {
+  it.each([
+    ['RSpec', '3 examples, 1 failure', ''],
+    ['go test', '--- FAIL: TestCounterfactual', 'FAIL\texample.com/project\t0.002s'],
+    ['Vitest', '', 'FAIL test/a.test.ts > counterfactual'],
+    ['pytest', '=========================== short test summary info ============================', 'FAILED test_a.py::test_counterfactual'],
+    ['unstructured runner', 'runner exited unsuccessfully', ''],
+  ])('classifies a nonzero scoped %s exit without parsing its output', (_runner, stdout, stderr) => {
+    expect(toTautologyScopedRunResult(1, null, stdout, stderr)).toEqual({
+      kind: 'nonzero-exit', exitCode: 1, stdout, stderr,
+    });
+  });
+
+  it('classifies a zero scoped exit as success', () => {
+    expect(toTautologyScopedRunResult(0, null, 'passed', '')).toEqual({
+      exitCode: 0, stdout: 'passed', stderr: '',
+    });
+  });
+
   it('maps only process-level scoped-run failures to infrastructure reasons', () => {
     expect(scopedRunFailure({ kind: 'launch-error', stdout: '', stderr: '' })).toBe('scoped-run-launch-failed');
     expect(scopedRunFailure({ kind: 'timeout', stdout: '', stderr: '' })).toBe('scoped-run-timeout');
