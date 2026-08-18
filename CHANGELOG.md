@@ -16,6 +16,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Added
 
 - Task-attributed commits are checked against the active task's declared files at commit time, with violations and accepted scope widenings carried into build_review evidence. ([implementation PR #1534](https://github.com/jstoup111/ai-conductor/pull/1534)).
+- Self-host dispatches now prove the live checkout is read-only with a two-sided bwrap probe, so concurrent operator edits during a contained build no longer halt the run; unproven or opted-out dispatches keep the prior fail-closed behavior. ([implementation PR #1698](https://github.com/jstoup111/ai-conductor/pull/1698)).
 
 ### Changed
 
