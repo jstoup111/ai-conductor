@@ -92,7 +92,7 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
         success: true,
         output: JSON.stringify({
           kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest, contractVersion: 'v2',
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3',
         findings: projection.rubric === 'scope'
           ? [{
                 concernKind: 'out-of-plan-change',
