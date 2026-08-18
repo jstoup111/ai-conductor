@@ -15,6 +15,7 @@ import {
 } from './test-suite-remediation.js';
 import { dirname, relative, join, isAbsolute } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
+import { execa } from 'execa';
 import {
   HALT_MARKER,
   PROTECTED_ARTIFACT_HALT_CLASS,
@@ -32,6 +33,7 @@ import type {
   AuthenticationReadiness,
   CodexProbeFailure,
   InvokeResult,
+  SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
@@ -236,6 +238,11 @@ import {
   snapshotReleaseMetadataBlock,
 } from './release-metadata.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
+import {
+  deriveBindSet,
+  probeContainment,
+  wrapForContainment,
+} from './self-host/live-containment.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
@@ -3140,6 +3147,20 @@ export class Conductor {
           provider: codex ? 'codex' : 'claude',
           selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
         });
+        const bindSet = deriveBindSet(liveCheckout, this.projectRoot);
+        const containment = await probeContainment(
+          bindSet,
+          liveCheckout,
+          this.projectRoot,
+          async (executable, args) => {
+            const result = await execa(executable, args, { reject: false });
+            return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
+          },
+        );
+        const prepareInvocation = (invocation: SelfHostInvocation): SelfHostInvocation => {
+          if (!containment.contained) return invocation;
+          return { ...invocation, ...wrapForContainment(invocation, bindSet) };
+        };
         // Runs in the candidate's teardown — i.e. AFTER the dispatch it guards
         // has already produced its result. Record the verdict instead of
         // throwing: a throw here propagates out of the `finally` that calls
@@ -3174,7 +3195,7 @@ export class Conductor {
             runId: identity.runId,
             attempt: identity.attempt,
           });
-          return { executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } };
+          return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
         }
         if (candidate.providerKey === 'claude') {
           const sandbox = await this.guardrails.provisionSandbox({
@@ -3185,12 +3206,12 @@ export class Conductor {
             runId: identity.runId,
             attempt: identity.attempt,
           });
-          return {
+          return prepareInvocation({
             executable: 'claude',
             env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
             args: [],
             teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
-          };
+          });
         }
         return priorPreparation?.(candidate, runtime, identity);
       };

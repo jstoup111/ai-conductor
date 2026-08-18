@@ -1,10 +1,20 @@
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { delimiter, join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Conductor } from '../../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult } from '../../../src/engine/conductor.js';
 import * as liveContainment from '../../../src/engine/self-host/live-containment.js';
 import { LIVE_CHECKOUT_VOLATILE } from '../../../src/engine/self-host/live-boundary.js';
 import type { ContainmentVerdict } from '../../../src/engine/self-host/live-containment.js';
+import type { ProviderExecutionContext } from '../../../src/engine/provider-execution.js';
+import { ProviderRuntimeSet } from '../../../src/engine/provider-runtime.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../../src/engine/model-availability.js';
+import { writeState } from '../../../src/engine/state.js';
+import type { SelfHostGuardrails } from '../../../src/engine/self-host/wiring.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import type { ConductState, StepName } from '../../../src/types/index.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -18,6 +28,154 @@ async function createCheckout(): Promise<{ liveCheckout: string; worktreeRoot: s
   const worktreeRoot = join(liveCheckout, '.worktrees', 'build');
   await mkdir(worktreeRoot, { recursive: true });
   return { liveCheckout, worktreeRoot };
+}
+
+const BUILD_ONLY: ConductState = {
+  worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+  stories: 'done', conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
+  architecture_review: 'done', acceptance_specs: 'done', test_suite: 'done',
+  build_review: 'done', wiring_check: 'done', manual_test: 'done', prd_audit: 'done',
+  architecture_review_as_built: 'done', retro: 'done', rebase: 'done', finish: 'done',
+  complexity_tier: 'M', track: 'technical', feature_desc: 'live-containment',
+} as ConductState;
+
+function fullSuiteVerifierStub() {
+  return {
+    ensure: vi.fn().mockResolvedValue({ status: 'REUSED', evidence: {} as never }),
+    inspect: vi.fn().mockResolvedValue({ status: 'CURRENT', evidence: {} as never }),
+  };
+}
+
+type Prepared = NonNullable<Awaited<ReturnType<NonNullable<ProviderExecutionContext['prepareCandidateSelfHost']>>>>;
+
+async function prepareCandidate(
+  providerKey: 'claude' | 'codex',
+  containmentAvailable: boolean,
+): Promise<{
+  readonly prepared: Prepared;
+  readonly unwrapped: Omit<Prepared, 'teardown'>;
+  readonly providerTeardown: ReturnType<typeof vi.fn>;
+  readonly bindSet: readonly string[];
+}> {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'live-containment-project-'));
+  const liveCheckout = await mkdtemp(join(tmpdir(), 'live-containment-live-'));
+  const fakeBin = await mkdtemp(join(tmpdir(), 'live-containment-bin-'));
+  temporaryDirectories.push(projectRoot, liveCheckout, fakeBin);
+  await Promise.all([
+    mkdir(join(projectRoot, '.pipeline'), { recursive: true }),
+    mkdir(join(liveCheckout, '.claude'), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(join(projectRoot, 'VERSION'), '0.1.0\n', 'utf8'),
+    writeFile(join(liveCheckout, 'VERSION'), '0.1.0\n', 'utf8'),
+    writeFile(join(liveCheckout, '.claude', 'settings.local.json'), '{}\n', 'utf8'),
+    writeFile(
+      join(fakeBin, 'bwrap'),
+      '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "--" ]; then\n    shift\n    exec "$@"\n  fi\n  shift\ndone\nexit 2\n',
+      { mode: 0o755 },
+    ),
+    writeState(join(projectRoot, 'conduct-state.json'), BUILD_ONLY),
+  ]);
+  if (!containmentAvailable) await rm(join(fakeBin, 'bwrap'));
+
+  const policy = providerKey === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
+  const env = providerKey === 'codex'
+    ? { CODEX_HOME: join(projectRoot, '.daemon', 'scratch', 'codex-home') }
+    : { CLAUDE_CONFIG_DIR: join(projectRoot, '.pipeline', 'sandbox-config') };
+  const args = providerKey === 'codex' ? ['--isolated-home'] : [];
+  const teardown = vi.fn(async () => {});
+  const runtimes = new ProviderRuntimeSet([{
+    key: providerKey,
+    provider: {
+      invoke: vi.fn(),
+      invokeInteractive: vi.fn(async () => {}),
+      prepareSelfHostAuth: vi.fn(async () => ({})),
+      resolveSelfHostExecutable: vi.fn(async () => providerKey),
+      lifecycleCapability: { synchronousSpawnPermit: true },
+    },
+    policy,
+    builtIn: true,
+    availability: new ModelAvailability(policy.modelFallbackLadder),
+  }] as never);
+  const providerExecution: ProviderExecutionContext = {
+    runtimes,
+    sessions: {} as never,
+    configuredProviders: [providerKey],
+  };
+  let prepared: Prepared | undefined;
+  const runner: StepRunner = {
+    selfHostRunId: () => 'containment-red',
+    run: async (step: StepName): Promise<StepRunResult> => {
+      const prepare = providerExecution.prepareCandidateSelfHost;
+      if (!prepare) throw new Error('self-host candidate preparation was not installed');
+      prepared = await prepare(
+        { step, providerKey, model: policy.modelFallbackLadder[0], effort: 'high' } as never,
+        runtimes.get(providerKey) as never,
+        { runId: 'containment-red', attempt: 1 },
+      );
+      if (!prepared) throw new Error('self-host candidate preparation returned no command');
+      return { success: true, output: 'prepared' };
+    },
+  };
+  const guardrails: SelfHostGuardrails = {
+    resolveHarnessRoot: vi.fn(async () => liveCheckout),
+    resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: liveCheckout })),
+    relink: vi.fn(async () => {}),
+    provisionSandbox: vi.fn(async () => ({
+      configDir: join(projectRoot, '.pipeline', 'sandbox-config'),
+      childEnv: () => env,
+      teardown,
+    })) as never,
+    provisionProviderHome: vi.fn(async () => ({
+      childEnv: () => env,
+      childArgs: () => args,
+      teardown,
+    })) as never,
+    versionGate: vi.fn(async () => ({ ok: true as const })),
+    releaseGate: vi.fn(async () => ({ ok: true as const })),
+  };
+  const priorPath = process.env.PATH;
+  process.env.PATH = containmentAvailable ? `${fakeBin}${delimiter}${priorPath ?? ''}` : fakeBin;
+  await chmod(liveCheckout, 0o555);
+  try {
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, 'conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      selfHost: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      baseBranch: 'main',
+      selfHostGuardrails: guardrails,
+      escalateBuildFailure: async () => ({}),
+      providerExecution,
+      fullSuiteVerifier: fullSuiteVerifierStub(),
+      sleepFn: vi.fn(async () => {}),
+      config: {
+        llm_provider: [providerKey],
+        harness_self_host: { sandbox_build_env: true, build_auth: { mode: 'api-key' } },
+        steps: { build: { llm_provider: providerKey } },
+      } as never,
+    });
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', BUILD_ONLY);
+  } finally {
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
+    await chmod(liveCheckout, 0o755);
+  }
+  if (!prepared) throw new Error('candidate was not prepared');
+  return {
+    prepared,
+    unwrapped: { executable: providerKey, env, args },
+    providerTeardown: teardown,
+    bindSet: deriveBindSet(liveCheckout, projectRoot),
+  };
 }
 
 function deriveBindSet(liveCheckout: string, worktreeRoot: string): readonly string[] {
@@ -157,6 +315,34 @@ describe('wrapForContainment', () => {
       env: { A: '1' },
     });
   });
+});
+
+describe('prepareCandidateSelfHost containment seam', () => {
+  it.each([
+    ['claude', 'claude'],
+    ['codex', 'codex'],
+  ] as const)('wraps the contained %s candidate without changing its provider environment', async (providerKey, executable) => {
+    const { prepared, unwrapped, providerTeardown, bindSet } = await prepareCandidate(providerKey, true);
+
+    expect(prepared.executable).toBe('bwrap');
+    expect(prepared.args).toEqual([...bindSet, '--', executable, ...unwrapped.args]);
+    expect(prepared.env).toEqual(unwrapped.env);
+    if (providerKey === 'codex') expect(prepared.env.CODEX_HOME).toBe(unwrapped.env.CODEX_HOME);
+    await prepared.teardown();
+    expect(providerTeardown).toHaveBeenCalledOnce();
+  });
+
+  it.each(['claude', 'codex'] as const)(
+    'leaves the %s candidate unwrapped with its teardown when containment is unavailable',
+    async (providerKey) => {
+      const { prepared, unwrapped, providerTeardown } = await prepareCandidate(providerKey, false);
+
+      expect({ executable: prepared.executable, args: prepared.args, env: prepared.env }).toEqual(unwrapped);
+      expect(prepared.env).toEqual(unwrapped.env);
+      await expect(prepared.teardown()).resolves.toBeUndefined();
+      expect(providerTeardown).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe('probeContainment', () => {
