@@ -182,18 +182,6 @@ function mapProviderLifecycleHalt(
   };
 }
 
-/** Maps the scoped process outcome without interpreting runner-specific output. */
-export function toTautologyScopedRunResult(
-  exitCode: number | null,
-  receivedSignal: string | null,
-  stdout: string,
-  stderr: string,
-): TautologyScopedRunResult {
-  if (receivedSignal) return { kind: 'signal', signal: receivedSignal, stdout, stderr };
-  if (exitCode === 0) return { exitCode: 0, stdout, stderr };
-  return { kind: 'nonzero-exit', exitCode: exitCode ?? 1, stdout, stderr };
-}
-
 /**
  * Extract a complexity tier (S/M/L) from Claude's complexity-assessment output.
  * Looks for the last occurrence of `TIER: <letter>` (case-insensitive). Falls back
@@ -2117,7 +2105,9 @@ export class DefaultStepRunner implements StepRunner {
       child.stderr.on('data', (chunk) => { stderr += String(chunk); });
       child.once('error', () => finish({ kind: 'launch-error', stdout, stderr }));
       child.once('close', (code, receivedSignal) => {
-        finish(toTautologyScopedRunResult(code, receivedSignal, stdout, stderr));
+        if (receivedSignal) finish({ kind: 'signal', signal: receivedSignal, stdout, stderr });
+        else if (code === 0) finish({ exitCode: 0, stdout, stderr });
+        else finish({ kind: 'nonzero-exit', exitCode: code ?? 1, stdout, stderr });
       });
       signal.addEventListener('abort', () => {
         child.kill('SIGTERM');

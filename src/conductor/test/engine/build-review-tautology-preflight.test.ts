@@ -9,7 +9,16 @@ import {
   TAUTOLOGY_EXCERPT_CAP_BYTES,
   type TautologyScopedRunResult,
 } from '../../src/engine/build-review-tautology-preflight.js';
-import { toTautologyScopedRunResult } from '../../src/engine/step-runners.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+
+function scopedCommandResult(command: string) {
+  const runner = new DefaultStepRunner({} as never, 'test', process.cwd(), {
+    config: { test_suite: { scoped_command: command } } as never,
+  });
+  return (runner as unknown as {
+    runScopedTautologyCommand(cwd: string, selectors: readonly string[], signal: AbortSignal): Promise<TautologyScopedRunResult>;
+  }).runScopedTautologyCommand(process.cwd(), ['spec/example_spec.rb'], new AbortController().signal);
+}
 
 describe('build-review Tautology preflight', () => {
   it.each([
@@ -18,14 +27,15 @@ describe('build-review Tautology preflight', () => {
     ['Vitest', '', 'FAIL test/a.test.ts > counterfactual'],
     ['pytest', '=========================== short test summary info ============================', 'FAILED test_a.py::test_counterfactual'],
     ['unstructured runner', 'runner exited unsuccessfully', ''],
-  ])('classifies a nonzero scoped %s exit without parsing its output', (_runner, stdout, stderr) => {
-    expect(toTautologyScopedRunResult(1, null, stdout, stderr)).toEqual({
+  ])('maps a completed nonzero scoped %s command at the process close boundary without parsing output', async (_runner, stdout, stderr) => {
+    const result = await scopedCommandResult(`printf %b ${JSON.stringify(stdout)}; printf %b ${JSON.stringify(stderr)} >&2; exit 1`);
+    expect(result).toEqual({
       kind: 'nonzero-exit', exitCode: 1, stdout, stderr,
     });
   });
 
-  it('classifies a zero scoped exit as success', () => {
-    expect(toTautologyScopedRunResult(0, null, 'passed', '')).toEqual({
+  it('maps a zero scoped command to success at the process close boundary', async () => {
+    expect(await scopedCommandResult("printf 'passed'; exit 0")).toEqual({
       exitCode: 0, stdout: 'passed', stderr: '',
     });
   });

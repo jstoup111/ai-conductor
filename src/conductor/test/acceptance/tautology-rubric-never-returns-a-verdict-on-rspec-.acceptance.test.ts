@@ -25,7 +25,7 @@
  */
 
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -39,8 +39,8 @@ import type { HarnessConfig } from '../../src/types/config.js';
 
 const execFile = promisify(execFileCallback);
 const PLAN_PATH = '.docs/plans/feature.md';
-const FEATURE_PATH = 'src/example.ts';
-const SPEC_PATH = 'spec/example_spec.rb';
+const FEATURE_PATH = 'src/conductor/src/example.mjs';
+const SPEC_PATH = 'src/conductor/spec/example_spec.mjs';
 const scratchRoots: string[] = [];
 
 interface Fixture {
@@ -98,7 +98,12 @@ async function makeFixture(name: string): Promise<Fixture> {
     '',
   ].join('\n'));
   await writeRepoFile(repository, FEATURE_PATH, 'export const answer = 1;\n');
-  await writeRepoFile(repository, SPEC_PATH, 'RSpec.describe("answer") { it { expect(1).to eq(1) } }\n');
+  await writeRepoFile(repository, SPEC_PATH, [
+    "import { v4 as uuidv4 } from 'uuid';",
+    "import { answer } from '../src/example.mjs';",
+    'if (!uuidv4() || answer !== 1) process.exit(1);',
+    '',
+  ].join('\n'));
   await git(repository, 'add', '.');
   await git(repository, 'commit', '-q', '-m', 'base behavior');
 
@@ -109,8 +114,18 @@ async function makeFixture(name: string): Promise<Fixture> {
   const root = join(repository, '.worktrees', name);
   await mkdir(dirname(root), { recursive: true });
   await git(repository, 'worktree', 'add', '-q', '-b', `feature/${name}`, root);
+  // This is deliberately ignored (and therefore absent from detached git
+  // worktrees). The runner must materialize it by reference for selectors
+  // that import a project dependency.
+  await mkdir(join(root, 'src', 'conductor'), { recursive: true });
+  await symlink(join(process.cwd(), 'node_modules'), join(root, 'src', 'conductor', 'node_modules'), 'dir');
   await writeRepoFile(root, FEATURE_PATH, 'export const answer = 2;\n');
-  await writeRepoFile(root, SPEC_PATH, 'RSpec.describe("answer") { it { expect(2).to eq(2) } }\n');
+  await writeRepoFile(root, SPEC_PATH, [
+    "import { v4 as uuidv4 } from 'uuid';",
+    "import { answer } from '../src/example.mjs';",
+    'if (!uuidv4() || answer !== 2) process.exit(1);',
+    '',
+  ].join('\n'));
   await git(root, 'add', FEATURE_PATH, SPEC_PATH);
   await git(root, 'commit', '-q', '-m', 'change behavior and its example');
 
@@ -174,7 +189,7 @@ describe('acceptance: RSpec counterfactuals always settle the Tautology rubric (
     const projections: TautologyProjection[] = [];
     const provider = judgedProvider(projections);
     const runner = new DefaultStepRunner(provider, 'acceptance-maker', fixture.root, {
-      config: tautologyOnlyConfig("printf '2 examples, 1 failure\\n'; exit 1"),
+      config: tautologyOnlyConfig(`node {selectors}; printf '2 examples, 1 failure\\n'; exit 1`),
       planPath: fixture.planPath,
       pipelineDir: join(fixture.root, '.pipeline'),
       buildReviewInputOptions: currentProof(fixture.head),
@@ -199,6 +214,9 @@ describe('acceptance: RSpec counterfactuals always settle the Tautology rubric (
     expect(projections[0]!.preflightEvidence.scopedRun?.failureExcerpt).toContain(
       '2 examples, 1 failure',
     );
+    expect(projections[0]!.preflightEvidence.scopedRun?.failureExcerpt).not.toMatch(
+      /Cannot find package|ERR_MODULE_NOT_FOUND/,
+    );
 
     const aggregate = JSON.parse(
       await readFile(join(fixture.root, '.pipeline', 'build-review.json'), 'utf8'),
@@ -217,7 +235,7 @@ describe('acceptance: RSpec counterfactuals always settle the Tautology rubric (
     const persister = new EventPersister(eventsPath, events);
     persister.start();
     const runner = new DefaultStepRunner(provider, 'acceptance-maker', fixture.root, {
-      config: tautologyOnlyConfig("printf 'RSpec worker terminated after selecting example\\n' >&2; kill -TERM $$"),
+      config: tautologyOnlyConfig("node {selectors}; printf 'RSpec worker terminated after selecting example\\n' >&2; kill -TERM $$"),
       events,
       planPath: fixture.planPath,
       pipelineDir: join(fixture.root, '.pipeline'),
@@ -247,5 +265,6 @@ describe('acceptance: RSpec counterfactuals always settle the Tautology rubric (
       reason: 'scoped-run-signaled',
       excerpt: expect.stringContaining('RSpec worker terminated after selecting example'),
     }));
+    expect(JSON.stringify(ledger)).not.toMatch(/Cannot find package|ERR_MODULE_NOT_FOUND/);
   });
 });
