@@ -55,6 +55,7 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
   }
 
   const validEvidence = {
+    outcome: 'specs-generated',
     command: 'pytest spec/integration/test_x.py',
     targetSpecs: ['spec/integration/test_x.py'],
     executed: 3,
@@ -130,10 +131,81 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
     expect(result.done).toBe(false);
     expect(result.reason).toContain(ACCEPTANCE_SPECS_RED_EVIDENCE);
   });
+
+  it('completes a disposition-only outcome without spec files, a run contract, or RED counters', async () => {
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({
+        outcome: 'disposition-only',
+        dispositions: [
+          {
+            criterion: 'happy: visible result',
+            disposition: 'existing-sufficient-test',
+            citation: 'src/conductor/test/engine/artifacts.acceptance-specs.test.ts:1',
+          },
+          {
+            criterion: 'negative: missing evidence',
+            disposition: 'planned-lower-layer-test',
+            citation: '.docs/plans/feature.md:42',
+            owningTask: 'Task 12',
+            layer: 'engine',
+          },
+        ],
+      }),
+    );
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs')).resolves.toEqual({
+      done: true,
+      viaException: false,
+    });
+  });
+
+  it('refuses a disposition-only outcome when spec files are present', async () => {
+    await createFile('test/acceptance/foo.spec.ts', 'spec content');
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({
+        outcome: 'disposition-only',
+        dispositions: [
+          {
+            criterion: 'happy: visible result',
+            disposition: 'existing-sufficient-test',
+            citation: 'src/conductor/test/engine/artifacts.acceptance-specs.test.ts:1',
+          },
+        ],
+      }),
+    );
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs')).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
+
+  it('refuses a disposition-only outcome when a run contract is present', async () => {
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({
+        outcome: 'disposition-only',
+        dispositions: [{
+          criterion: 'happy: visible result',
+          disposition: 'existing-sufficient-test',
+          citation: 'src/conductor/test/engine/artifacts.acceptance-specs.test.ts:1',
+        }],
+      }),
+    );
+    await createFile('.pipeline/acceptance-specs-run.json', '{}');
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs')).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
 });
 
 describe('validateAcceptanceRedEvidence refusal classification', () => {
   const validEvidence = {
+    outcome: 'specs-generated',
     command: 'pytest spec/integration/test_x.py',
     targetSpecs: ['spec/integration/test_x.py'],
     executed: 3,
@@ -153,6 +225,46 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
       ok: false,
       class: 'shape',
     });
+  });
+
+  it.each([
+    ['missing outcome', (() => { const { outcome: _outcome, ...evidence } = validEvidence; return evidence; })()],
+    ['unknown outcome', { ...validEvidence, outcome: 'other' }],
+  ])('refuses a %s as a tagged-union shape failure', (_case, evidence) => {
+    expect(validateAcceptanceRedEvidence(evidence)).toMatchObject({ ok: false, class: 'shape' });
+  });
+
+  it('accepts exhaustive citation-bearing disposition-only records', () => {
+    expect(
+      validateAcceptanceRedEvidence({
+        outcome: 'disposition-only',
+        dispositions: [
+          {
+            criterion: 'happy: completion',
+            disposition: 'existing-sufficient-test',
+            citation: 'src/conductor/test/engine/artifacts.acceptance-specs.test.ts:1',
+          },
+          {
+            criterion: 'negative: malformed evidence',
+            disposition: 'planned-lower-layer-test',
+            citation: '.docs/plans/feature.md:42',
+            owningTask: 'Task 12',
+            layer: 'engine',
+          },
+        ],
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it.each([
+    ['empty records', { outcome: 'disposition-only', dispositions: [] }],
+    ['missing citation', { outcome: 'disposition-only', dispositions: [{ criterion: 'happy', disposition: 'existing-sufficient-test' }] }],
+    ['incomplete lower-layer record', { outcome: 'disposition-only', dispositions: [{ criterion: 'negative', disposition: 'planned-lower-layer-test', citation: 'plan.md:1' }] }],
+    ['unknown disposition', { outcome: 'disposition-only', dispositions: [{ criterion: 'happy', disposition: 'acceptance-system-spec', citation: 'spec.ts:1' }] }],
+    ['mixed RED fields', { outcome: 'disposition-only', command: 'npm test', dispositions: [{ criterion: 'happy', disposition: 'existing-sufficient-test', citation: 'test.ts:1' }] }],
+    ['mixed disposition records', { ...validEvidence, dispositions: [{ criterion: 'happy', disposition: 'existing-sufficient-test', citation: 'test.ts:1' }] }],
+  ])('refuses disposition-only evidence with %s', (_case, evidence) => {
+    expect(validateAcceptanceRedEvidence(evidence)).toMatchObject({ ok: false, class: 'shape' });
   });
 
   it('classifies a missing passed counter as a shape refusal', () => {

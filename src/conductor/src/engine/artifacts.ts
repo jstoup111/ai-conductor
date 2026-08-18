@@ -1334,7 +1334,8 @@ export interface AcceptanceRedRemediationException {
   attribution: string;
 }
 
-export interface AcceptanceRedEvidence {
+export interface AcceptanceSpecsGeneratedEvidence {
+  outcome: 'specs-generated';
   /** The exact test command run (for the audit trail / reason messages). */
   command: string;
   /** The feature's own spec files/nodeids that this run targeted. */
@@ -1357,6 +1358,29 @@ export interface AcceptanceRedEvidence {
   summary?: string;
 }
 
+export interface AcceptanceDispositionOnlyEvidence {
+  outcome: 'disposition-only';
+  dispositions: AcceptanceCriterionDisposition[];
+}
+
+export type AcceptanceCriterionDisposition =
+  | {
+      criterion: string;
+      disposition: 'existing-sufficient-test';
+      citation: string;
+    }
+  | {
+      criterion: string;
+      disposition: 'planned-lower-layer-test';
+      citation: string;
+      owningTask: string;
+      layer: string;
+    };
+
+export type AcceptanceRedEvidence =
+  | AcceptanceSpecsGeneratedEvidence
+  | AcceptanceDispositionOnlyEvidence;
+
 /**
  * Validate a parsed acceptance-specs RED evidence object. RED is only
  * "established" when the feature's own specs actually executed and failed:
@@ -1376,6 +1400,23 @@ export function validateAcceptanceRedEvidence(
     };
   }
   const e = ev as Record<string, unknown>;
+  if (e.outcome === 'disposition-only') {
+    return validateDispositionOnlyEvidence(e);
+  }
+  if (e.outcome !== 'specs-generated') {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record an "outcome" of "specs-generated" or "disposition-only"`,
+    };
+  }
+  if ('dispositions' in e) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} specs-generated evidence cannot include disposition-only records`,
+    };
+  }
   const num = (k: string): number | null =>
     typeof e[k] === 'number' && Number.isFinite(e[k]) ? (e[k] as number) : null;
   const failed = num('failed');
@@ -1475,6 +1516,75 @@ export function validateAcceptanceRedEvidence(
     };
   }
   return { ok: true };
+}
+
+function validateDispositionOnlyEvidence(
+  e: Record<string, unknown>,
+): { ok: true } | { ok: false; reason: string; class: 'shape' } {
+  if (Object.keys(e).some((key) => key !== 'outcome' && key !== 'dispositions')) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} disposition-only evidence cannot include RED-run fields`,
+    };
+  }
+  if (!Array.isArray(e.dispositions) || e.dispositions.length === 0) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} disposition-only evidence must list every happy and negative criterion`,
+    };
+  }
+  const criteria = new Set<string>();
+  for (const record of e.dispositions) {
+    if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+      return invalidDispositionRecord();
+    }
+    const disposition = record as Record<string, unknown>;
+    const criterion = disposition.criterion;
+    const citation = disposition.citation;
+    if (
+      typeof criterion !== 'string' || criterion.trim() === '' ||
+      typeof citation !== 'string' || !isVerifiableCitation(citation) ||
+      criteria.has(criterion)
+    ) {
+      return invalidDispositionRecord();
+    }
+    criteria.add(criterion);
+    if (disposition.disposition === 'existing-sufficient-test') {
+      if (!hasOnlyKeys(disposition, ['criterion', 'disposition', 'citation'])) return invalidDispositionRecord();
+      continue;
+    }
+    if (
+      disposition.disposition !== 'planned-lower-layer-test' ||
+      !hasOnlyKeys(disposition, ['criterion', 'disposition', 'citation', 'owningTask', 'layer']) ||
+      typeof disposition.owningTask !== 'string' || disposition.owningTask.trim() === '' ||
+      typeof disposition.layer !== 'string' || disposition.layer.trim() === ''
+    ) {
+      return invalidDispositionRecord();
+    }
+  }
+  return { ok: true };
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function isVerifiableCitation(value: string): boolean {
+  return /\S+:\d+(?::\d+)?$/.test(value.trim());
+}
+
+function invalidDispositionRecord(): { ok: false; reason: string; class: 'shape' } {
+  return {
+    ok: false,
+    class: 'shape',
+    reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} disposition-only records must use exactly existing-sufficient-test with a test citation or planned-lower-layer-test with citation, owningTask, and layer`,
+  };
+}
+
+function isDispositionOnlyEvidence(ev: unknown): ev is AcceptanceDispositionOnlyEvidence {
+  return typeof ev === 'object' && ev !== null && (ev as Record<string, unknown>).outcome === 'disposition-only';
 }
 
 function hasRecordedRemediationException(exception: unknown): boolean {
@@ -2116,28 +2226,16 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     return { done: true };
   },
 
-  // Acceptance-specs is "done" only when (a) at least one spec file exists AND
-  // (b) a RED execution-evidence file proves the feature's own specs actually
-  // RAN and FAILED — not that they were skipped/deselected/collection-errored.
-  // The step previously had only a file-existence glob, so a generated spec that
-  // never executed (an integration spec `importorskip`-ed away for want of a
-  // testcontainer, or a suite scoped to a unit-only dir) satisfied the gate; the
-  // daemon then declared GREEN and opened a PR whose own acceptance specs failed
-  // in CI. Evidence is written by the writing-system-tests skill from the real
-  // RED run (gitignored run evidence, not a committed design artifact).
+  // Acceptance specs have two explicit outcomes. Generated specs require their
+  // existing genuine-RED proof; a disposition-only outcome proves every
+  // criterion below this layer and therefore must have no spec files or RED-run
+  // contract. Both shapes are validated before completion.
   acceptance_specs: async (dir, ctx): Promise<CompletionResult> => {
     const files = await findArtifactFiles(
       dir,
       'acceptance_specs',
       extraArtifactGlobs('acceptance_specs', ctx.config),
     );
-    if (files.length === 0) {
-      return {
-        done: false,
-        reason:
-          'no acceptance spec files present — the writing-system-tests skill must generate failing specs',
-      };
-    }
     const evidencePath = join(dir, ACCEPTANCE_SPECS_RED_EVIDENCE);
     let raw: string;
     try {
@@ -2162,6 +2260,33 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const verdict = validateAcceptanceRedEvidence(parsed);
     if (!verdict.ok) {
       return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
+    }
+    if (isDispositionOnlyEvidence(parsed)) {
+      if (files.length > 0) {
+        return {
+          done: false,
+          acceptanceRedRefusalClass: 'shape',
+          reason: 'disposition-only acceptance evidence requires zero acceptance spec files',
+        };
+      }
+      try {
+        await access(join(dir, '.pipeline/acceptance-specs-run.json'));
+        return {
+          done: false,
+          acceptanceRedRefusalClass: 'shape',
+          reason: 'disposition-only acceptance evidence cannot include an acceptance run contract',
+        };
+      } catch {
+        // A disposition-only outcome intentionally has no acceptance run.
+      }
+      return { done: true, viaException: false };
+    }
+    if (files.length === 0) {
+      return {
+        done: false,
+        reason:
+          'no acceptance spec files present — specs-generated evidence requires failing specs',
+      };
     }
     return {
       done: true,

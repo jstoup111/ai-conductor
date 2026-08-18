@@ -224,9 +224,14 @@ name would normally suggest another label.
 If no criterion needs `acceptance-system-spec`, generate no acceptance specs. The disposition
 record must still show sufficient existing proof or a specific lower-layer assignment for every
 happy and negative criterion. This avoids duplicate acceptance coverage without treating any
-criterion as optional. Do not fabricate an acceptance RED run in this case: the assigned
-lower-layer test must produce its genuine RED evidence during `/tdd`. Whenever this step copies or
-generates an acceptance/system spec, however, §6's executable RED machinery remains mandatory.
+criterion as optional. Record `outcome: "disposition-only"` in
+`.pipeline/acceptance-specs-red.json` with an exhaustive `dispositions` array: each record names
+one happy or negative criterion and is exactly either `existing-sufficient-test` with a verifiable
+test `citation`, or `planned-lower-layer-test` with a verifiable plan `citation`, `owningTask`, and
+`layer`. Do not fabricate an acceptance RED run in this case: the assigned lower-layer test must
+produce its genuine RED evidence during `/tdd`, and no acceptance run contract or failing-spec
+commit is written. Whenever this step copies or generates an acceptance/system spec, record
+`outcome: "specs-generated"`; §6's executable RED machinery remains mandatory.
 
 ### 3b. Replacement Tasks: Drive the REAL Entry Point
 
@@ -486,12 +491,13 @@ not a failing test. Two rules follow:
   daemon is a gate hole: the build will be declared GREEN while the specs never ran, and CI (which
   has the infra) then fails.
 
-**Record the RED evidence (gating).** After the RED run, write `.pipeline/acceptance-specs-red.json`
+**Record the RED evidence (gating, `specs-generated` only).** After the RED run, write `.pipeline/acceptance-specs-red.json`
 capturing the REAL result of running the feature's own specs, so the harness can verify they
 actually executed — not merely that spec files exist on disk:
 
 ```json
 {
+  "outcome": "specs-generated",
   "command": "cd backend && pytest spec/integration/test_017_sec_edgar_acceptance.py",
   "targetSpecs": ["spec/integration/test_017_sec_edgar_acceptance.py"],
   "executed": 5,
@@ -568,7 +574,30 @@ stop (a hard stop under the daemon, not a logged warning).
 On complete resolution, report the task as PASS with the evidence file written and the verdict
 "Coverage: COMPLETE".
 
-#### Record the run contract (deterministic RED backstop)
+For `disposition-only`, write only this outcome record instead; it must contain no RED counters,
+run command, target specs, exception, or other generated-spec fields:
+
+```json
+{
+  "outcome": "disposition-only",
+  "dispositions": [
+    {
+      "criterion": "happy: reports the persisted result",
+      "disposition": "existing-sufficient-test",
+      "citation": "test/engine/result.test.ts:42"
+    },
+    {
+      "criterion": "negative: rejects a missing result",
+      "disposition": "planned-lower-layer-test",
+      "citation": ".docs/plans/<feature-stem>.md:88",
+      "owningTask": "Task 5",
+      "layer": "engine"
+    }
+  ]
+}
+```
+
+#### Record the run contract (deterministic RED backstop, `specs-generated` only)
 
 **Write `.pipeline/acceptance-specs-run.json` before reporting complete.** The RED evidence in
 `.pipeline/acceptance-specs-red.json` captures the RESULT of one run this skill happened to
@@ -620,24 +649,28 @@ committed design artifact, same as `acceptance-specs-red.json`.
 - Example of a correct boundary stub: freeze the clock, or pin the random generator to a known
   value, using the framework's idiomatic stub/mock facility.
 
-### 7. Commit the Failing Tests
+### 7. Commit the Failing Tests (`specs-generated` only)
 
 ```bash
 git add <acceptance test dir> <test support dir>   # paths per the project's layout
 git commit -m "test: add failing acceptance specs for [feature area]"
 ```
 
-Failing tests get committed. They represent the acceptance criteria.
-Implementation (via `/pipeline` or `/tdd`) makes them pass.
+For `specs-generated`, failing tests get committed. They represent the acceptance criteria and
+implementation (via `/pipeline` or `/tdd`) makes them pass. For `disposition-only`, do not commit
+an acceptance spec; the cited lower-layer task owns its genuine RED test and commit.
 
 **Verification checklist before completing this skill:**
-- RED evidence written to `.pipeline/acceptance-specs-red.json` (§6)
-- Run contract written to `.pipeline/acceptance-specs-run.json` (command, cwd, targetSpecs) (§6)
-  — BEFORE reporting complete
+- `.pipeline/acceptance-specs-red.json` records exactly one outcome:
+  `specs-generated` with RED evidence, or `disposition-only` with exhaustive cited happy and
+  negative criterion records
+- For `specs-generated`, RED evidence and the run contract are written before reporting complete
+- For `disposition-only`, no acceptance spec, RED-run evidence fields, run contract, or
+  failing-spec commit is written
 - Evidence file written to `.pipeline/fr-coverage.md` (only for product-track runs with an
   approved PRD) with verdict "Coverage: COMPLETE" — otherwise the step is a hard stop per §6's
   FR-coverage gate
-- Failing tests committed
+- For `specs-generated`, failing tests committed
 
 ## How This Relates to Other Test Types
 
@@ -665,17 +698,18 @@ lower level. This skill handles the top layer. TDD handles the bottom two.
       `existing-sufficient-test`, `planned-lower-layer-test`, or `acceptance-system-spec`
 - [ ] Acceptance specs generated only for the assigned distinct multi-step externally observable
       flows that cannot be proven sufficiently below
-- [ ] When an acceptance/system spec was generated or copied, it was EXECUTED, not just written —
+- [ ] `.pipeline/acceptance-specs-red.json` declares `specs-generated` or `disposition-only`
+- [ ] When `specs-generated`, an acceptance/system spec was EXECUTED, not just written —
       a spec that never ran does not establish RED
-- [ ] When an acceptance/system spec was generated or copied, the real RED run's results are
+- [ ] When `specs-generated`, the real RED run's results are
       recorded to `.pipeline/acceptance-specs-red.json`
       (command, targetSpecs, executed/passed/failed/skipped/errors counts, failing-test identity,
       `ranAt`, and `intentRationale`) — the
       completion gate validates this file and rejects runs where the feature's own
       specs were skipped, deselected, or errored at collection
-- [ ] Failures are for the RIGHT reason (missing implementation), not
+- [ ] When `specs-generated`, failures are for the RIGHT reason (missing implementation), not
       import/syntax/collection errors
-- [ ] Specs use the project's own test framework and directory conventions
-- [ ] The run contract written to `.pipeline/acceptance-specs-run.json` (command, cwd,
+- [ ] When `specs-generated`, specs use the project's own test framework and directory conventions
+- [ ] When `specs-generated`, the run contract is written to `.pipeline/acceptance-specs-run.json` (command, cwd,
       targetSpecs) before reporting complete — the deterministic RED backstop the engine's
       self-heal runner consumes when the RED evidence marker is missing or misplaced
