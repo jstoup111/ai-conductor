@@ -35,6 +35,8 @@ export type BuildReviewFindingAnchor =
 export interface BuildReviewFindingReferenceContext {
   readonly changedTests: readonly string[];
   readonly changedPaths: readonly string[];
+  /** Root-cause loci are immutable path-plus-hunk selectors from the projection. */
+  readonly rootCauseLoci?: readonly string[];
   readonly planTasks: readonly string[];
   readonly planTaskSurfaces?: Readonly<Record<string, readonly string[]>>;
 }
@@ -44,12 +46,18 @@ export function buildReviewFindingReferenceContext(
   projection: BuildReviewRubricProjection,
 ): BuildReviewFindingReferenceContext {
   const changedPaths = projection.changedFiles.map((file) => file.path);
+  const rootCauseLoci = projection.rubric === 'rootCause'
+    ? projection.changedFiles.flatMap((file) => file.hunks.map((hunk) =>
+      `${file.path}@${hunk.oldStart},${hunk.oldCount}:${hunk.newStart},${hunk.newCount}`,
+    ))
+    : [];
   if (projection.rubric !== 'completeness') {
     return Object.freeze({
       changedTests: projection.rubric === 'tautology'
         ? Object.freeze([...projection.changedTestSelectors])
         : [],
       changedPaths: Object.freeze(changedPaths),
+      rootCauseLoci: Object.freeze(rootCauseLoci),
       planTasks: [],
     });
   }
@@ -215,6 +223,7 @@ function parseAnchorClassification(
 
 const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9][A-Za-z0-9._/@+-]*)*$/;
 const CANONICAL_PLAN_TASK_REFERENCE = new RegExp(`^${TASK_ID_PATTERN}$`);
+const CANONICAL_ROOT_CAUSE_LOCUS = /^(.+)@(\d+),(\d+):(\d+),(\d+)$/;
 
 /** A stable, unformatted path/reference token suitable for a finding identity. */
 export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined {
@@ -223,6 +232,18 @@ export function parseBuildReviewCanonicalPathReference(value: unknown): string |
 
 export function parseBuildReviewCanonicalPlanTaskReference(value: unknown): string | undefined {
   return typeof value === 'string' && CANONICAL_PLAN_TASK_REFERENCE.test(value) ? value : undefined;
+}
+
+/** A root-cause locus binds a changed-file path to one immutable projected hunk. */
+export function parseBuildReviewCanonicalRootCauseLocus(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = CANONICAL_ROOT_CAUSE_LOCUS.exec(value);
+  if (!match) return undefined;
+  const [, path, oldStart, oldCount, newStart, newCount] = match;
+  return parseBuildReviewCanonicalPathReference(path) &&
+    [oldStart, oldCount, newStart, newCount].every((part) => Number.isSafeInteger(Number(part)))
+    ? value
+    : undefined;
 }
 
 function verifiedReference(value: unknown, allowed: readonly string[] | undefined, parser: (value: unknown) => string | undefined): string | undefined {
@@ -266,7 +287,11 @@ export function parseBuildReviewFindingAnchor(value: unknown, references?: Build
     }
     case 'rootCause': {
       const relation = parseAnchorClassification(source.relation, source.rubric, 'relation');
-      const locus = verifiedReference(source.locus, references?.changedPaths, parseBuildReviewCanonicalPathReference);
+      const locus = verifiedReference(
+        source.locus,
+        allowLegacyV1 ? references?.changedPaths : references?.rootCauseLoci,
+        allowLegacyV1 ? parseBuildReviewCanonicalPathReference : parseBuildReviewCanonicalRootCauseLocus,
+      );
       return nonEmptyString(source.statedDefect) && locus && relation
         ? { rubric: source.rubric, statedDefect: source.statedDefect, locus, relation }
         : undefined;

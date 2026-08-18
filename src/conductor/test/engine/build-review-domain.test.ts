@@ -6,6 +6,7 @@ import {
   describeBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewDispatchFailure,
+  parseBuildReviewFindingAnchor,
   parseBuildReviewInfrastructureFailure,
   parseBuildReviewJudgedResult,
   parseBuildReviewLapId,
@@ -56,6 +57,49 @@ describe('build-review domain', () => {
 
   it.each([' rem-rootcause-1 ', '`T0`', 'Task 8.1'])('rejects formatted or prose plan task reference %s', (planTask) => {
     expect(parseBuildReviewCanonicalPlanTaskReference(planTask)).toBeUndefined();
+  });
+
+  it('accepts only immutable projected path-plus-hunk selectors for root-cause loci', () => {
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'rootCause',
+      changedFiles: [{
+        path: 'src/handler.ts', changeKind: 'modified',
+        hunks: [
+          { oldStart: 10, oldCount: 2, newStart: 10, newCount: 3 },
+          { oldStart: 44, oldCount: 1, newStart: 45, newCount: 2 },
+          { oldStart: 0, oldCount: 0, newStart: 80, newCount: 2 },
+        ],
+      }],
+    } as unknown as BuildReviewRubricProjection);
+    const base = {
+      rubric: 'rootCause', statedDefect: 'the cache key ignores the hunk',
+      relation: 'provenance-sensitive-cache-identity',
+    } as const;
+
+    expect(parseBuildReviewFindingAnchor({ ...base, locus: 'src/handler.ts@10,2:10,3' }, references)).toEqual({
+      ...base, locus: 'src/handler.ts@10,2:10,3',
+    });
+    expect(parseBuildReviewFindingAnchor({ ...base, locus: 'src/handler.ts@44,1:45,2' }, references)).toEqual({
+      ...base, locus: 'src/handler.ts@44,1:45,2',
+    });
+    expect(parseBuildReviewFindingAnchor({ ...base, locus: 'src/handler.ts@0,0:80,2' }, references)).toEqual({
+      ...base, locus: 'src/handler.ts@0,0:80,2',
+    });
+    for (const locus of [
+      'src/handler.ts',
+      'src/handler.ts@10,2:10,4',
+      'src/handler.ts@44,1:45,3',
+      ' src/handler.ts@10,2:10,3 ',
+      'The affected hunk is src/handler.ts@10,2:10,3.',
+    ]) {
+      expect(parseBuildReviewFindingAnchor({ ...base, locus }, references)).toBeUndefined();
+    }
+
+    expect(parseBuildReviewFindingAnchor(
+      { ...base, locus: 'src/handler.ts' },
+      { changedTests: [], changedPaths: ['src/handler.ts'], planTasks: [] },
+      true,
+    )).toEqual({ ...base, locus: 'src/handler.ts' });
   });
 
   it('accepts only the typed anchors belonging to each rubric', () => {
@@ -152,8 +196,8 @@ describe('build-review domain', () => {
         invalid: { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'assertion-insensitive-to-production' } },
       },
       {
-        valid: { rubric: 'rootCause', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'symptom-only-fix' } },
-        invalid: { rubric: 'rootCause', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' } },
+        valid: { rubric: 'rootCause', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts@1,1:1,1', relation: 'symptom-only-fix' } },
+        invalid: { rubric: 'rootCause', concernKind: 'symptom-only-fix', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts@1,1:1,1', relation: 'root-cause-unaddressed' } },
       },
       {
         valid: { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' } },
