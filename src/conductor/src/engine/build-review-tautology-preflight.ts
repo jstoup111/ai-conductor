@@ -116,6 +116,8 @@ export interface TautologyCompletedPreflight {
 export type TautologyPreflightResult = TautologyCompletedPreflight | {
       readonly classification: 'infrastructure-failure';
       readonly reason: 'no-changed-tests' | 'no-production-changes' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
+      /** Bounded combined output from a scoped-run infrastructure failure. */
+      readonly failureExcerpt?: string;
       readonly changedPaths: readonly string[];
       readonly changedTestSelectors: readonly string[];
       readonly sourceIdentities: { readonly mergeBase: string; readonly headSha: string };
@@ -260,8 +262,12 @@ function failure(
   paths: readonly string[],
   selectors: readonly string[],
   sourceIdentities: { readonly mergeBase: string; readonly headSha: string },
+  failureExcerpt?: string,
 ): TautologyPreflightResult {
-  return { classification: 'infrastructure-failure', reason, changedPaths: paths, changedTestSelectors: selectors, sourceIdentities };
+  return {
+    classification: 'infrastructure-failure', reason, changedPaths: paths, changedTestSelectors: selectors, sourceIdentities,
+    ...(failureExcerpt === undefined ? {} : { failureExcerpt }),
+  };
 }
 
 function cacheKey(deps: TautologyPreflightDependencies, paths: readonly string[]): string {
@@ -396,7 +402,15 @@ export async function materializeTautologyPreflight(
         // Per #1593, a reverted-tree collection failure is evidence that the
         // changed production matters, not output-derived infrastructure. Only
         // launch, timeout, and signal outcomes remain infrastructure failures.
-        if ('kind' in execution && execution.kind !== 'nonzero-exit') result = failure(scopedRunFailure(execution)!, paths, classified.tests, sourceIdentities);
+        if ('kind' in execution && execution.kind !== 'nonzero-exit') {
+          result = failure(
+            scopedRunFailure(execution)!,
+            paths,
+            classified.tests,
+            sourceIdentities,
+            boundedHeadTailExcerpt([execution.stdout, execution.stderr].filter((chunk) => chunk.length > 0).join('\n')),
+          );
+        }
         else if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else {
           result = {

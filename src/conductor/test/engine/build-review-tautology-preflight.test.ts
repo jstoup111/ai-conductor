@@ -406,6 +406,39 @@ describe('build-review Tautology preflight', () => {
     else expect(removeCheckout).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['launch', { kind: 'launch-error' as const, stdout: 'launch stdout', stderr: 'launch stderr' }, 'scoped-run-launch-failed'],
+    ['timeout', { kind: 'timeout' as const, stdout: 'timeout stdout', stderr: 'timeout stderr' }, 'scoped-run-timeout'],
+    ['signal', { kind: 'signal' as const, signal: 'SIGTERM', stdout: 'signal stdout', stderr: 'signal stderr' }, 'scoped-run-signaled'],
+  ])('retains bounded combined output for a scoped %s infrastructure failure', async (_name, execution, reason) => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => execution,
+      removeCheckout: async () => {},
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason, failureExcerpt: `${execution.stdout}\n${execution.stderr}` });
+  });
+
+  it('marks truncated scoped-run infrastructure output explicitly', async () => {
+    const noise = 'x'.repeat(TAUTOLOGY_EXCERPT_CAP_BYTES * 2);
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: 'timeout', stdout: `HEAD ${noise}`, stderr: 'TAIL' }),
+      removeCheckout: async () => {},
+    });
+
+    if (result.classification !== 'infrastructure-failure') throw new Error('expected infrastructure failure');
+    expect(Buffer.byteLength(result.failureExcerpt!, 'utf8')).toBeLessThanOrEqual(TAUTOLOGY_EXCERPT_CAP_BYTES);
+    expect(result.failureExcerpt).toContain('HEAD');
+    expect(result.failureExcerpt).toContain('TAIL');
+    expect(result.failureExcerpt).toMatch(/\[\.\.\.truncated \d+ bytes\.\.\.\]/);
+  });
+
   it('cleans up after an aborted scoped run and leaves live bytes unchanged', async () => {
     const controller = new AbortController();
     const liveBytes = JSON.stringify({ 'src/a.ts': 'HEAD production', 'test/a.test.ts': 'HEAD test' });
