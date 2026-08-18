@@ -4059,7 +4059,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     rubric: 'tautology', contractVersion: 'v2', projectionVersion: 'v2',
     lapId, snapshotDigest, digest: 'sha256:projection',
     mergeBase: 'base', headSha: 'head', changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
-    changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
+    changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
   const policy = {
     enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,

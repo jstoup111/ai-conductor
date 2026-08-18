@@ -67,7 +67,7 @@ describe('engine/build-review rubric skill contracts', () => {
     // content-free manifest (path + merge-base blob sha per file).
     expect(skill).toMatch(/reverted-production manifest/i);
 
-    expect(skill).toMatch(/contract version.*`v1`/i);
+    expect(skill).toMatch(/contract version.*`v2`/i);
     expect(skill).toMatch(/concern kind/i);
     expect(skill).toMatch(/changed test/i);
     expect(skill).toMatch(/exercised behavior\/assertion/i);
@@ -110,7 +110,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/unmatched paths?.*normally/i);
     expect(skill).toMatch(/does not.*exempt/i);
 
-    expect(skill).toMatch(/contract version.*`v1`/i);
+    expect(skill).toMatch(/contract version.*`v2`/i);
     expect(skill).toMatch(/out-of-plan path or surface/i);
     expect(skill).toMatch(/plan-scope relation/i);
     expect(skill).toMatch(/"rubric": "scope", "path": "<string>"/);

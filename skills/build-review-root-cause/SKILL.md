@@ -35,10 +35,10 @@ concern when it masks an observed effect without addressing the mechanism or loc
 evidence identifies as responsible for the defect. Assess each independent defect and implementation
 relation separately; do not merge distinct mechanisms into one finding.
 
-## Result contract (v1)
+## Result contract (v2)
 
 Return exactly one JSON `judged` result for rubric `rootCause`: its top-level `kind` field is
-exactly the string `judged` (never `result` or any other field name), carrying contract version `v1`.
+exactly the string `judged` (never `result` or any other field name), carrying contract version `v2`.
 It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means a PASS for this rubric. Each finding contains:
 

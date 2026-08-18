@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import * as buildReviewDomain from '../../src/engine/build-review-domain.js';
+import { BUILD_REVIEW_FINDING_VOCABULARIES } from '../../src/engine/build-review-domain.js';
 import {
   canonicalizeBuildReviewFindingIdentity,
   canonicalizeBuildReviewFindingSet,
@@ -10,8 +10,7 @@ import {
 type FindingVocabulary = { readonly members: readonly string[]; readonly concernKinds: readonly string[]; readonly anchorFields: Readonly<Record<string, readonly string[]>> };
 type FindingVocabularies = Readonly<Record<string, FindingVocabulary>>;
 
-function normalizedVocabularyMembers(vocabularies: FindingVocabularies | undefined): readonly string[] {
-  if (!vocabularies) throw new Error('build-review finding vocabularies are not exported');
+function normalizedVocabularyMembers(vocabularies: FindingVocabularies): readonly string[] {
   return Object.values(vocabularies).flatMap((rubric) => [rubric.members, rubric.concernKinds, ...Object.values(rubric.anchorFields)].flat());
 }
 
@@ -108,10 +107,9 @@ describe('build-review finding identity', () => {
   });
 
   it('keeps every closed finding vocabulary unambiguous after normalization', () => {
-    const vocabularies = (buildReviewDomain as typeof buildReviewDomain & {
-      readonly BUILD_REVIEW_FINDING_VOCABULARIES?: FindingVocabularies;
-    }).BUILD_REVIEW_FINDING_VOCABULARIES;
-    for (const rubric of Object.values(vocabularies ?? {})) {
+    const members = normalizedVocabularyMembers(BUILD_REVIEW_FINDING_VOCABULARIES);
+    expect(members.length).toBeGreaterThan(0);
+    for (const rubric of Object.values(BUILD_REVIEW_FINDING_VOCABULARIES)) {
       for (const members of [rubric.members, rubric.concernKinds, ...Object.values(rubric.anchorFields)]) {
         const normalized = members.map((member) => member.toLowerCase().replaceAll('_', '-'));
         expect(new Set(normalized).size).toBe(normalized.length);
@@ -165,7 +163,7 @@ describe('build-review finding identity', () => {
     ] as const;
 
     const identities = subjects.flatMap((subject) => {
-      const finding = { ...subject, contractVersion: 'v2' } as Record<string, unknown>;
+      const finding = { ...subject, contractVersion: 'v1' } as Record<string, unknown>;
       const reference = String((subject.anchor as Record<string, string>)[subject.field]);
       return [
         canonicalizeBuildReviewFindingIdentity({ ...finding, anchor: { ...subject.anchor, [subject.field]: ` ${reference} ` } }),
@@ -175,6 +173,18 @@ describe('build-review finding identity', () => {
     });
 
     expect(identities).toEqual(Array(12).fill(undefined));
+  });
+
+  it.each(['rem-rootcause-1', 'T0', '8.1'])('gives repository-valid plan task ID %s a stable completeness identity', (planTask) => {
+    const finding = {
+      rubric: 'completeness' as const, contractVersion: 'v1' as const, concernKind: 'missing-deliverable',
+      anchor: { rubric: 'completeness' as const, planTask, missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' as const },
+    };
+
+    expect(canonicalizeBuildReviewFindingIdentity(finding)).toMatchObject({
+      id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      canonicalPayload: { anchor: { planTask } },
+    });
   });
 
   it('keeps distinct canonical snapshot references as distinct identities', () => {

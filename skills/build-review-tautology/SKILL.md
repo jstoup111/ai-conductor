@@ -69,10 +69,10 @@ judged normally. This is not a finding: it must name both paths and whether prod
 move, which distinguishes relocation from deletion or masking. Unevaluated tests and non-Tautology
 results must not manufacture relocation-audit evidence.
 
-## Result contract (v1)
+## Result contract (v2)
 
 Return exactly one JSON `judged` result for rubric `tautology`: its top-level `kind` field is
-exactly the string `judged` (never `result` or any other field name), carrying contract version `v1`.
+exactly the string `judged` (never `result` or any other field name), carrying contract version `v2`.
 It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means no Tautology concern was found. Each finding
 contains:

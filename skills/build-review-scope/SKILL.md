@@ -41,10 +41,10 @@ For each operator reseal, judge whether its rationale justifies the named protec
 amendment in its commit range. Assess unmatched paths normally under this Scope contract; a reseal
 does not exempt them. Reseal evidence does not weaken another rubric.
 
-## Result contract (v1)
+## Result contract (v2)
 
 Return exactly one JSON `judged` result for rubric `scope`: its top-level `kind` field is exactly
-the string `judged` (never `result` or any other field name), it carries contract version `v1`, it
+the string `judged` (never `result` or any other field name), it carries contract version `v2`, it
 echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means no Scope concern was found. Each finding
 contains:

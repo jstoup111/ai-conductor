@@ -2,17 +2,20 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
+  buildReviewFindingReferenceContext,
   describeBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewDispatchFailure,
   parseBuildReviewInfrastructureFailure,
   parseBuildReviewJudgedResult,
   parseBuildReviewLapId,
+  parseBuildReviewCanonicalPlanTaskReference,
   parseBuildReviewRubricContractVersion,
   parseBuildReviewSkip,
   renderBuildReviewJudgedResultShape,
   type BuildReviewFindingAnchor,
 } from '../../src/engine/build-review-domain.js';
+import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
 
 describe('build-review domain', () => {
   it('brands lap and rubric-contract identities from their closed grammars', () => {
@@ -22,6 +25,37 @@ describe('build-review domain', () => {
 
     expect(parseBuildReviewRubricContractVersion('v1')).toBe('v1');
     expect(parseBuildReviewRubricContractVersion('v2')).toBe('v2');
+  });
+
+  it('uses immutable tautology changed-test selectors without reclassifying their paths', () => {
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'tautology',
+      changedFiles: [
+        { path: 'src/production.ts', changeKind: 'modified', hunks: [] },
+        { path: 'test/legacy.test.ts', changeKind: 'modified', hunks: [] },
+      ],
+      changedTestSelectors: ['src/unit/widget.spec.ts', 'spec/widget.ts'],
+    } as unknown as BuildReviewRubricProjection);
+
+    expect(references.changedTests).toEqual(['src/unit/widget.spec.ts', 'spec/widget.ts']);
+    for (const changedTest of references.changedTests) {
+      expect(parseBuildReviewJudgedResult({
+        kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+        findings: [{ concernKind: 'source-text-mirror', summary: 'x', evidenceLocations: [`${changedTest}:1`], anchor: { rubric: 'tautology', changedTest, exercisedBehavior: 'x', violationKind: 'source-text-mirror' } }],
+      }, references)).toMatchObject({ findings: [{ anchor: { changedTest } }] });
+    }
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
+      findings: [{ concernKind: 'source-text-mirror', summary: 'x', evidenceLocations: ['test/legacy.test.ts:1'], anchor: { rubric: 'tautology', changedTest: 'test/legacy.test.ts', exercisedBehavior: 'x', violationKind: 'source-text-mirror' } }],
+    }, references)).toBeUndefined();
+  });
+
+  it.each(['rem-rootcause-1', 'T0', '8.1'])('accepts repository-valid plan task reference %s', (planTask) => {
+    expect(parseBuildReviewCanonicalPlanTaskReference(planTask)).toBe(planTask);
+  });
+
+  it.each([' rem-rootcause-1 ', '`T0`', 'Task 8.1'])('rejects formatted or prose plan task reference %s', (planTask) => {
+    expect(parseBuildReviewCanonicalPlanTaskReference(planTask)).toBeUndefined();
   });
 
   it('accepts only the typed anchors belonging to each rubric', () => {

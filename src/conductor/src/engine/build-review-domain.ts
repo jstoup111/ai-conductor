@@ -1,5 +1,5 @@
 import type { BuildReviewRubricId } from '../types/config.js';
-import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { parsePlanTaskPaths, TASK_ID_PATTERN } from './plan-task-parse.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
 
 /** A validated lap identity; callers cannot accidentally substitute a bare string. */
@@ -47,7 +47,7 @@ export function buildReviewFindingReferenceContext(
   if (projection.rubric !== 'completeness') {
     return Object.freeze({
       changedTests: projection.rubric === 'tautology'
-        ? projection.changedFiles.map((file) => file.path).filter((path) => /(?:^|\/)test(?:\/|$)|\.test\.[^.]+$/.test(path))
+        ? Object.freeze([...projection.changedTestSelectors])
         : [],
       changedPaths: Object.freeze(changedPaths),
       planTasks: [],
@@ -214,7 +214,7 @@ function parseAnchorClassification(
 }
 
 const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9][A-Za-z0-9._/@+-]*)*$/;
-const CANONICAL_PLAN_TASK_REFERENCE = /^[1-9][0-9]*$/;
+const CANONICAL_PLAN_TASK_REFERENCE = new RegExp(`^${TASK_ID_PATTERN}$`);
 
 /** A stable, unformatted path/reference token suitable for a finding identity. */
 export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined {
