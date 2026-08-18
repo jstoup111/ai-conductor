@@ -3446,9 +3446,8 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
-          config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
           ...currentBuildReviewProof(),
-          config: { build_review: { scopeContainmentEnforced: true } },
         },
       );
 
@@ -3488,9 +3487,8 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           log: (message) => console.warn(message),
-          ...tautologyOptIn(),
+          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
           ...currentBuildReviewProof(),
-          config: { build_review: { scopeContainmentEnforced: true } },
         },
       );
 
