@@ -129,7 +129,7 @@ export interface SelfHostAuthPreparation {
 }
 
 export interface SelfHostAuthContext {
-  provider: 'codex';
+  provider: 'claude' | 'codex';
   homeDir: string;
 }
 

@@ -1,5 +1,12 @@
 import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
-import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
+import type {
+  LLMProvider,
+  InvokeOptions,
+  InvokeResult,
+  SelfHostAuthContext,
+  SelfHostAuthPreparation,
+  TokenUsage,
+} from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
   observeInterval,
@@ -488,11 +495,25 @@ type ClaudeSubprocessFactory = (
 export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
+  private readonly oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
   constructor(
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: ClaudeSubprocessFactory = execa,
   ) {}
+
+  /** Safe selected-auth state for live fixture assertions; never exposes the token. */
+  authenticationSource(): 'oauth-token' | 'missing' {
+    return this.oauthToken ? 'oauth-token' : 'missing';
+  }
+
+  /** Restore the construction-time Claude credential in an isolated child home. */
+  async prepareSelfHostAuth(_context: SelfHostAuthContext): Promise<SelfHostAuthPreparation> {
+    return {
+      ...(this.oauthToken ? { env: { CLAUDE_CODE_OAUTH_TOKEN: this.oauthToken } } : {}),
+      args: [],
+    };
+  }
 
   private async runClaude(
     args: string[],

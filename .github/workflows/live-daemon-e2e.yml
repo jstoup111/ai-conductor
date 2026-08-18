@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       require_credentials:
-        description: Fail when the live-provider credential is unavailable.
+        description: Retained compatibility input; each available live-provider credential enables its own gate-enforced leg.
         required: false
         type: boolean
         default: false
@@ -14,31 +14,79 @@ permissions:
   contents: read
 
 jobs:
+  require-live-provider-credential:
+    name: Require a live-provider credential
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require at least one provider credential
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || [ -n "$CODEX_API_KEY" ]; then
+            echo "### Live daemon E2E: at least one provider credential is available" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Live daemon E2E: no provider credential is available" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+  complete-smoke-tier:
+    name: Complete release smoke tier
+    needs: require-live-provider-credential
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - name: Install smoke toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes tmux
+          npm install --global @anthropic-ai/claude-code @openai/codex
+      - name: Install conductor dependencies
+        run: npm ci
+        working-directory: src/conductor
+      - name: Build conductor
+        run: npm run build
+        working-directory: src/conductor
+      - name: Run complete release smoke tier in gate mode
+        run: SMOKE_MODE=gate npm run smoke
+        working-directory: src/conductor
   live-daemon-e2e:
     name: Live daemon E2E (${{ matrix.provider }})
+    needs: require-live-provider-credential
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        provider: [claude]
+        include:
+          - provider: claude
+            credential_env: CLAUDE_CODE_OAUTH_TOKEN
+            smoke_file: test/engine/daemon-e2e-live-claude.smoke.test.ts
+          - provider: codex
+            credential_env: CODEX_API_KEY
+            smoke_file: test/engine/daemon-e2e-live-codex.smoke.test.ts
     env:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check live-provider credentials
         env:
-          REQUIRE_CREDENTIALS: ${{ inputs.require_credentials }}
+          LIVE_PROVIDER_CREDENTIAL: ${{ secrets[matrix.credential_env] }}
         run: |
           set -euo pipefail
-          if [ "$REQUIRE_CREDENTIALS" = "true" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-            echo "Missing required secret: CLAUDE_CODE_OAUTH_TOKEN" >&2
-            exit 1
-          fi
-          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-            echo "### Live daemon E2E: claude credentialed" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$LIVE_PROVIDER_CREDENTIAL" ]; then
+            echo "### Live daemon E2E: ${{ matrix.provider }} gating run (${{ matrix.credential_env }} available)" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "### Live daemon E2E: claude skipped (CLAUDE_CODE_OAUTH_TOKEN is unavailable)" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Live daemon E2E: ${{ matrix.provider }} non-gating skip (${{ matrix.credential_env }} is unavailable)" >> "$GITHUB_STEP_SUMMARY"
           fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,7 +106,13 @@ jobs:
         run: npm run build
         working-directory: src/conductor
       - name: Run complete release smoke tier in gate mode
-        run: npm run smoke
-        working-directory: src/conductor
         env:
-          SMOKE_MODE: ${{ inputs.require_credentials && 'gate' || 'advisory' }}
+          LIVE_PROVIDER_CREDENTIAL: ${{ secrets[matrix.credential_env] }}
+        run: |
+          set -euo pipefail
+          if [ -n "$LIVE_PROVIDER_CREDENTIAL" ]; then
+            export "${{ matrix.credential_env }}=$LIVE_PROVIDER_CREDENTIAL"
+          fi
+          unset LIVE_PROVIDER_CREDENTIAL
+          SMOKE_MODE=gate npm run smoke -- "${{ matrix.smoke_file }}"
+        working-directory: src/conductor
