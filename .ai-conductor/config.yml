@@ -75,7 +75,7 @@ test_suite:
   # The counterfactual checkout is nested below this worktree and excludes
   # ignored dependencies. This runs before selector collection and is captured
   # before production files are reverted.
-  scoped_command: '[ -d src/conductor/node_modules ] || ln -s "$PWD/../../../src/conductor/node_modules" src/conductor/node_modules; npx vitest run {selectors}'
+  scoped_command: 'npx vitest run {selectors}'
   working_directory: src/conductor
   timeout_seconds: 1800
 

@@ -283,7 +283,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
 
     expect(projectConfig.ok && projectConfig.config.test_suite).toEqual({
       command: 'npm test',
-      scoped_command: '[ -d src/conductor/node_modules ] || ln -s "$PWD/../../../src/conductor/node_modules" src/conductor/node_modules; npx vitest run {selectors}',
+      scoped_command: 'npx vitest run {selectors}',
       working_directory: 'src/conductor',
       timeout_seconds: 1800,
     });

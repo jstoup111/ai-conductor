@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, access, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -3246,6 +3246,82 @@ TIER: M`,
       });
       expect(coordinate).toHaveBeenCalledOnce();
       expect(provider.invoke).not.toHaveBeenCalled();
+    });
+
+    it('materializes checkout-local dependencies before a uuid-importing counterfactual selector runs', async () => {
+      const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
+      const featureRoot = join(repository, '.worktrees', 'feature');
+      const selector = 'src/conductor/spec/example_spec.mjs';
+      const sourceDependencies = join(featureRoot, 'src/conductor/node_modules');
+      let checkoutRoot: string | undefined;
+      const observedProjections: Array<{ preflightEvidence: { scopedRun?: { failureExcerpt?: string } } }> = [];
+      try {
+        await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
+        await execa('git', ['config', 'user.name', 'Test'], { cwd: repository });
+        await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: repository });
+        await writeFile(join(repository, '.gitignore'), '.pipeline/\nnode_modules/\n');
+        await mkdir(join(repository, 'src/conductor/src'), { recursive: true });
+        await mkdir(join(repository, 'src/conductor/spec'), { recursive: true });
+        await mkdir(join(repository, '.docs/plans'), { recursive: true });
+        await writeFile(join(repository, '.docs/plans/feature.md'), `### Task 1: distinguish the selector\n- Update ${selector}.\n`);
+        await writeFile(join(repository, 'src/conductor/src/example.mjs'), 'export const answer = 1;\n');
+        await writeFile(join(repository, selector), "import { v4 as uuidv4 } from 'uuid';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || answer !== 1) process.exit(1);\n");
+        await execa('git', ['add', '.'], { cwd: repository });
+        await execa('git', ['commit', '-q', '-m', 'base behavior'], { cwd: repository });
+        await execa('git', ['remote', 'add', 'origin', repository], { cwd: repository });
+        await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: repository });
+        await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: repository });
+        await mkdir(join(repository, '.worktrees'), { recursive: true });
+        await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
+        await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
+        await writeFile(join(featureRoot, selector), "import { v4 as uuidv4 } from 'uuid';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || answer !== 2) { process.stderr.write('selector-loaded-uuid\\n'); process.exit(1); }\n");
+        await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
+        await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
+        await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
+        await writeFile(join(sourceDependencies, 'uuid/package.json'), '{"name":"uuid","type":"module","exports":"./index.mjs"}\n');
+        await writeFile(join(sourceDependencies, 'uuid/index.mjs'), "export function v4() { return 'fixture-uuid'; }\n");
+
+        const provider: LLMProvider = {
+          invoke: vi.fn(async (options) => {
+            const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as typeof observedProjections[number];
+            observedProjections.push(projection);
+            return { success: true, exitCode: 0, output: JSON.stringify({
+              kind: 'judged', rubric: 'tautology', lapId: (projection as any).lapId,
+              snapshotDigest: (projection as any).snapshotDigest, contractVersion: 'v1', findings: [],
+            }) };
+          }),
+          invokeInteractive: vi.fn().mockResolvedValue(undefined),
+        };
+        const gitRunner = async (args: string[]) => {
+          if (args[0] === 'worktree' && args[1] === 'add') checkoutRoot = args[3];
+          if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
+          const result = await execa('git', args, { cwd: featureRoot, reject: false });
+          return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+        };
+        const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: featureRoot })).stdout;
+        const runner = new DefaultStepRunner(provider, 'checkout-proof', featureRoot, {
+          gitRunner,
+          planPath: join(featureRoot, '.docs/plans/feature.md'),
+          pipelineDir: join(featureRoot, '.pipeline'),
+          config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
+            enabled: true, perTaskFloor: false,
+            rubrics: { tautology: { enabled: true }, scope: { enabled: false }, rootCause: { enabled: false }, completeness: { enabled: false } },
+          } } as HarnessConfig,
+          buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },
+        });
+
+        await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
+        expect(checkoutRoot).toBe(join(featureRoot, '.pipeline', 'build-review-preflight', head));
+        const checkoutDependencies = join(checkoutRoot!, 'src/conductor/node_modules');
+        expect((await lstat(checkoutDependencies)).isSymbolicLink()).toBe(true);
+        expect(await realpath(checkoutDependencies)).toBe(await realpath(sourceDependencies));
+        expect(observedProjections[0]).toMatchObject({
+          preflightEvidence: { classification: 'red', scopedRun: { exitCode: 1, runKind: 'nonzero-exit' } },
+        });
+      } finally {
+        await rm(repository, { recursive: true, force: true });
+      }
     });
 
     it('writes the raw aggregate but returns and emits the shared effective verdict', async () => {
