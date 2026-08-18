@@ -662,6 +662,7 @@ describe('acceptance_specs disposition-only records are grounded in the story an
     '',
     '### Happy Path',
     '- Given a valid input, When the engine runs, Then the visible result appears',
+    '- Given a detailed input, When the engine runs, Then the detailed result appears',
     '',
     '### Negative Paths',
     '- Given malformed evidence, When the engine runs, Then it refuses fail-closed',
@@ -702,15 +703,16 @@ describe('acceptance_specs disposition-only records are grounded in the story an
   }
 
   const fullCoverage = [
-    record('Story 1 happy path: visible result'),
-    record('Story 1 negative path: refuses malformed evidence', {
+    record('Story 1 happy: Given a valid input, When the engine runs, Then the visible result appears'),
+    record('Story 1 happy: Given a detailed input, When the engine runs, Then the detailed result appears'),
+    record('Story 1 negative: Given malformed evidence, When the engine runs, Then it refuses fail-closed', {
       disposition: 'planned-lower-layer-test',
       citation: '.docs/plans/my-feature.md:3',
       owningTask: 'Task 12',
       layer: 'engine',
     }),
-    record('Story 2 happy path: second result'),
-    record('Story 2 negative path: refuses a bad citation'),
+    record('Story 2 happy: Given another input, When the engine runs, Then the second result appears'),
+    record('Story 2 negative: Given a bad citation, When the gate runs, Then it refuses'),
   ];
 
   async function seedFixtures(dispositions: unknown[]) {
@@ -743,9 +745,34 @@ describe('acceptance_specs disposition-only records are grounded in the story an
     });
   });
 
+  it('refuses an omitted authoritative criterion even when its story path has another disposition', async () => {
+    await seedFixtures(fullCoverage.filter((entry) => !entry.criterion.includes('detailed input')));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('detailed input'),
+    });
+  });
+
+  it('refuses an invented criterion name in place of an authoritative story criterion', async () => {
+    const inventedCriterion = fullCoverage.map((entry) =>
+      entry.criterion.includes('detailed input')
+        ? { ...entry, criterion: 'Story 1 happy: invented result name' }
+        : entry,
+    );
+    await seedFixtures(inventedCriterion);
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('invented result name'),
+    });
+  });
+
   it('refuses an existing-sufficient-test citation whose test file does not exist', async () => {
     const badCitation = [
-      record('Story 1 happy path: visible result', {
+      record('Story 1 happy: Given a valid input, When the engine runs, Then the visible result appears', {
         citation: 'test/engine/never-written.test.ts:1',
       }),
       ...fullCoverage.slice(1),
@@ -756,6 +783,22 @@ describe('acceptance_specs disposition-only records are grounded in the story an
       done: false,
       acceptanceRedRefusalClass: 'shape',
       reason: expect.stringContaining('never-written.test.ts'),
+    });
+  });
+
+  it('refuses a citation whose line is outside the cited file', async () => {
+    const outOfRangeCitation = [
+      record('Story 1 happy: Given a valid input, When the engine runs, Then the visible result appears', {
+        citation: 'test/engine/existing-behavior.test.ts:2',
+      }),
+      ...fullCoverage.slice(1),
+    ];
+    await seedFixtures(outOfRangeCitation);
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('existing-behavior.test.ts:2'),
     });
   });
 
