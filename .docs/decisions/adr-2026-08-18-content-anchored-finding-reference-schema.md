@@ -120,3 +120,23 @@ dispositions (content change ⇒ new identity), while staying inside
   coordinate fragility under rebase and content stability under clean rebase —
   inferred from git rebase semantics, 95%, corroborated by the approved content-only
   cache-identity plan (2026-08-15). No unconfirmed load-bearing assumptions remain.
+
+> **Amended 2026-08-18 at `architecture_review` (remediation `rem-rootcause-11`, from
+> `build_review` lap `58c87dce4`):** the authoritative `rootCause.locus` contract is
+> stated here and nowhere else. `locus` binds to **`content-region`** —
+> `{ path, contentHash, display }` where `contentHash` is `sha256` of the projected
+> hunk's added+removed line content, whitespace-normalized, and `display` is excluded
+> from the identity hash. Two same-class `rootCause` findings in distinct hunks of one
+> changed file therefore canonicalize to distinct identities, while a pure rewording of
+> either finding's prose changes neither. No other locus encoding is authoritative.
+>
+> **Plan tasks `rem-rootcause-9` and `rem-rootcause-10` are retired, not deferred.**
+> Their steps prescribe the line-coordinate selector
+> `path@oldStart,oldCount:newStart,newCount` that the operator rejected and `8977ba7c7`
+> reverted; the Decision above forbids coordinate encodings in every reference kind, so
+> those steps are unimplementable as written and no later step may carry them forward or
+> reintroduce the mechanism. What survives them is their *outcome* — a `rootCause` locus
+> identity that distinguishes different hunks of the same changed file — which `/plan`
+> re-authors as RED/GREEN tasks bound to `content-region` above. Until those replacement
+> tasks exist, no distinct-hunk implementation is authorized: the earlier absence of this
+> ruling is what let a remediation lap invent an unapproved grammar in the first place.
