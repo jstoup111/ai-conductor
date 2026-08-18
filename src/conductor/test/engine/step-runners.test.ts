@@ -3253,6 +3253,9 @@ TIER: M`,
       const featureRoot = join(repository, '.worktrees', 'feature');
       const selector = 'src/conductor/spec/example_spec.mjs';
       const sourceDependencies = join(featureRoot, 'src/conductor/node_modules');
+      const selectorMarker = join(repository, 'counterfactual-selector-ran');
+      const selectorMarkerEnv = 'BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER';
+      const priorSelectorMarker = process.env[selectorMarkerEnv];
       let checkoutRoot: string | undefined;
       const observedProjections: Array<{ preflightEvidence: { scopedRun?: { failureExcerpt?: string } } }> = [];
       try {
@@ -3275,7 +3278,7 @@ TIER: M`,
         await mkdir(join(repository, '.worktrees'), { recursive: true });
         await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
         await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
-        await writeFile(join(featureRoot, selector), "import { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { process.stderr.write('selector-loaded-checkout-dependencies\\n'); process.exit(1); }\n");
+        await writeFile(join(featureRoot, selector), "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { await writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies'); process.exit(1); }\n");
         await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
         await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
         await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
@@ -3303,6 +3306,7 @@ TIER: M`,
           return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
         };
         const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: featureRoot })).stdout;
+        process.env[selectorMarkerEnv] = selectorMarker;
         const runner = new DefaultStepRunner(provider, 'checkout-proof', featureRoot, {
           gitRunner,
           planPath: join(featureRoot, '.docs/plans/feature.md'),
@@ -3322,10 +3326,19 @@ TIER: M`,
         const checkoutCommandDependencies = join(checkoutRoot!, 'node_modules');
         expect((await lstat(checkoutCommandDependencies)).isSymbolicLink()).toBe(true);
         expect(await realpath(checkoutCommandDependencies)).toBe(await realpath(sourceDependencies));
+        expect(await readFile(selectorMarker, 'utf8')).toBe('selector-loaded-checkout-dependencies');
         expect(observedProjections[0]).toMatchObject({
-          preflightEvidence: { classification: 'red', scopedRun: { exitCode: 1, runKind: 'nonzero-exit' } },
+          preflightEvidence: {
+            classification: 'red',
+            scopedRun: {
+              exitCode: 1,
+              runKind: 'nonzero-exit',
+            },
+          },
         });
       } finally {
+        if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
+        else process.env[selectorMarkerEnv] = priorSelectorMarker;
         await rm(repository, { recursive: true, force: true });
       }
     });
