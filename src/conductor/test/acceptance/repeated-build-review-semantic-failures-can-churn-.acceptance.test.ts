@@ -255,7 +255,7 @@ describe('acceptance: removal evidence reaches the real build_review prompt (#15
           success: true,
           output: JSON.stringify({
             kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-            snapshotDigest: projection.snapshotDigest, contractVersion: 'v2', findings: [],
+            snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
           }),
           exitCode: 0,
         };
