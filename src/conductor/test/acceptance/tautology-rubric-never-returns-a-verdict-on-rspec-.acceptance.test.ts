@@ -25,7 +25,7 @@
  */
 
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -110,15 +110,27 @@ async function makeFixture(name: string): Promise<Fixture> {
   await git(repository, 'remote', 'add', 'origin', repository);
   await git(repository, 'update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
   await git(repository, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  // The detached checkout lives below this repository, so Node finds this
+  // deterministic dependency by ordinary parent-directory resolution. It is
+  // intentionally outside the feature worktree: a reverted production runner
+  // must still execute each selector and fail on the missing verdict/event,
+  // never before the selector loads.
+  await writeRepoFile(repository, 'node_modules/uuid/package.json', [
+    '{',
+    '  "name": "uuid",',
+    '  "type": "module",',
+    '  "exports": "./index.mjs"',
+    '}',
+    '',
+  ].join('\n'));
+  await writeRepoFile(repository, 'node_modules/uuid/index.mjs', [
+    "export function v4() { return 'fixture-uuid'; }",
+    '',
+  ].join('\n'));
 
   const root = join(repository, '.worktrees', name);
   await mkdir(dirname(root), { recursive: true });
   await git(repository, 'worktree', 'add', '-q', '-b', `feature/${name}`, root);
-  // This is deliberately ignored (and therefore absent from detached git
-  // worktrees). The runner must materialize it by reference for selectors
-  // that import a project dependency.
-  await mkdir(join(root, 'src', 'conductor'), { recursive: true });
-  await symlink(join(process.cwd(), 'node_modules'), join(root, 'src', 'conductor', 'node_modules'), 'dir');
   await writeRepoFile(root, FEATURE_PATH, 'export const answer = 2;\n');
   await writeRepoFile(root, SPEC_PATH, [
     "import { v4 as uuidv4 } from 'uuid';",
