@@ -207,11 +207,15 @@ describe('build-review finding identity', () => {
 
   it('changes identity for a materially different concern or logical anchor', () => {
     const base = {
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
+      rubric: 'rootCause', contractVersion: 'v1', concernKind: 'root-cause-unaddressed',
+      anchor: { rubric: 'rootCause', statedDefect: 'save fails', locus: 'src/a.ts', relation: 'root-cause-unaddressed' },
     };
-    const changedConcern = canonicalizeBuildReviewFindingIdentity({ ...base, concernKind: 'missing-approval' });
-    const changedAnchor = canonicalizeBuildReviewFindingIdentity({ ...base, anchor: { ...base.anchor, path: 'src/b.ts' } });
+    const changedConcern = canonicalizeBuildReviewFindingIdentity({
+      ...base,
+      concernKind: 'symptom-only-fix',
+      anchor: { ...base.anchor, relation: 'symptom-only-fix' },
+    });
+    const changedAnchor = canonicalizeBuildReviewFindingIdentity({ ...base, anchor: { ...base.anchor, locus: 'src/b.ts' } });
 
     expect([changedConcern?.id, changedAnchor?.id]).not.toContain(canonicalizeBuildReviewFindingIdentity(base)?.id);
   });
@@ -259,8 +263,8 @@ describe('build-review finding identity', () => {
 
   it('fails closed instead of omitting invalid, duplicate, or colliding finding records', () => {
     const first = {
-      rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface',
-      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'outside-plan' },
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
     };
     const second = { ...first, anchor: { ...first.anchor, path: 'src/b.ts' } };
     const firstId = canonicalizeBuildReviewFindingIdentity(first)?.id;
