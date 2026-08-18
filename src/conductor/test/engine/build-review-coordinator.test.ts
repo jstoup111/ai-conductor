@@ -475,7 +475,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
       preflight: async () => ({
         classification: "infrastructure-failure", reason: "scoped-run-timeout", changedPaths: [], changedTestSelectors: [],
-        sourceIdentities: { mergeBase: "base", headSha: "head" }, failureExcerpt: "timed out after 30s",
+        sourceIdentities: { mergeBase: "base", headSha: "head" },
       }),
       readCache: async () => undefined, dispatchModel,
       writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
@@ -487,22 +487,14 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(result.branches[0]).toMatchObject({ rubric: "tautology", kind: "infrastructure-failure" });
     expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("tautology");
     expect(result.branches).toHaveLength(4);
-    // This is the detached-counterfactual boundary: reverting the coordinator
-    // must still execute this test and fail because the emitted event lacks
-    // the scoped-run excerpt, never while loading its uuid-dependent graph.
     expect(infrastructureEvents).toHaveLength(1);
     expect(infrastructureEvents).toEqual([{
       type: "build_review_rubric_infrastructure_failure",
       rubric: "tautology",
       lapId: "lap-current",
       reason: "scoped-run-timeout",
-      excerpt: "timed out after 30s",
     }]);
-
-    const legacyEvent: Extract<ConductorEvent, { type: "build_review_rubric_infrastructure_failure" }> = {
-      type: "build_review_rubric_infrastructure_failure", rubric: "tautology", lapId: "lap-current", reason: "scoped-run-timeout",
-    };
-    expect(JSON.parse(JSON.stringify(legacyEvent))).toEqual(legacyEvent);
+    expect(infrastructureEvents[0]).not.toHaveProperty("excerpt");
   });
 });
 

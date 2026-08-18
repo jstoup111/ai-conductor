@@ -80,9 +80,6 @@ async function invokeSuite(
       env: {
         ...process.env,
         AI_CONDUCTOR_NO_REAL_EXEC: '1',
-        // This fixture exercises the public CLI from a daemon-managed test
-        // process. Use only the guard's test valve; production never sets it.
-        CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW: '1',
         ...env,
       },
       reject: false,
@@ -105,7 +102,7 @@ function invokeRealSuite(
   try {
     exitCode = spawnSync(REAL_CONDUCT_TS, ['test-suite'], {
       cwd: repo,
-      env: { ...process.env, CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW: '1', ...env },
+      env: { ...process.env, ...env },
       stdio: ['ignore', stdout, stderr],
       timeout: 20_000,
     }).status;
