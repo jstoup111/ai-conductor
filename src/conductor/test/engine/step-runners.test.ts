@@ -4131,6 +4131,19 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(prompt).toContain('never flattened');
   });
 
+  it('instructs graders with the current v3 structured-anchor contract, not the retired v2 plain-string one', async () => {
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    await dispatch(runner);
+
+    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
+    expect(prompt).toContain('`contractVersion` is "v3"');
+    expect(prompt).not.toContain('`contractVersion` is "v2"');
+    expect(prompt).not.toContain('every anchor value is a plain string');
+    expect(prompt).toContain('content-region');
+  });
+
   it('yields a bounded dispatch-failure report with the raw output excerpt when the repair turn is still bad', async () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
