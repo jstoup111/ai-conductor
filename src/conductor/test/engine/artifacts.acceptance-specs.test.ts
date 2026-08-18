@@ -489,3 +489,132 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
     });
   });
 });
+
+// rem-build-review-task13-1: the disposition-only zero-spec check must count
+// only the FEATURE's own acceptance spec files, not the repository-wide
+// acceptance corpus — any unrelated pre-existing test previously refused a
+// legitimate disposition-only completion.
+describe('acceptance_specs disposition-only zero-spec check is feature-scoped', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'artifacts-acceptance-disposition-scope-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function createFile(relativePath: string, content = 'test') {
+    const fullPath = join(dir, relativePath);
+    await mkdir(join(fullPath, '..'), { recursive: true });
+    await writeFile(fullPath, content, 'utf-8');
+  }
+
+  const STORIES_DOC = [
+    '# Stories',
+    '',
+    '**Status:** ACCEPTED',
+    '',
+    '## Story 1: Observable behavior',
+    '',
+    '### Happy Path',
+    '- Given a valid input, When the engine runs, Then the visible result appears',
+    '',
+    '### Negative Paths',
+    '- Given malformed evidence, When the engine runs, Then it refuses fail-closed',
+    '',
+  ].join('\n');
+
+  const PLAN_DOC = [
+    '# Plan',
+    '',
+    '### Task 12: Cover the lower-layer behavior',
+    '**Files:** src/engine/foo.ts',
+    '',
+  ].join('\n');
+
+  async function seedFeatureFixtures() {
+    await createFile('.docs/stories/my-feature.md', STORIES_DOC);
+    await createFile('.docs/plans/my-feature.md', PLAN_DOC);
+    await createFile('test/engine/existing-behavior.test.ts', '// existing test');
+  }
+
+  const dispositionEvidence = {
+    outcome: 'disposition-only',
+    dispositions: [
+      {
+        criterion: 'Story 1 happy path: visible result',
+        disposition: 'existing-sufficient-test',
+        citation: 'test/engine/existing-behavior.test.ts:1',
+      },
+      {
+        criterion: 'Story 1 negative path: refuses malformed evidence',
+        disposition: 'planned-lower-layer-test',
+        citation: '.docs/plans/my-feature.md:3',
+        owningTask: 'Task 12',
+        layer: 'engine',
+      },
+    ],
+  };
+
+  const featureCtx = {
+    featureDesc: 'my-feature',
+    artifactResolution: {
+      featureIdentities: ['my-feature'],
+      changedPaths: new Set<string>(),
+    },
+  };
+
+  it('completes when only pre-existing unrelated acceptance specs exist', async () => {
+    await seedFeatureFixtures();
+    await createFile('test/acceptance/unrelated-legacy-feature.acceptance.test.ts', '// legacy');
+    await createFile('spec/acceptance/other_corpus_spec.rb', '# legacy');
+    await createFile(ACCEPTANCE_SPECS_RED_EVIDENCE, JSON.stringify(dispositionEvidence));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toEqual({
+      done: true,
+      viaException: false,
+    });
+  });
+
+  it('refuses when a spec file is attributed to the feature by identity', async () => {
+    await seedFeatureFixtures();
+    await createFile('test/acceptance/my-feature.acceptance.test.ts', '// this feature');
+    await createFile(ACCEPTANCE_SPECS_RED_EVIDENCE, JSON.stringify(dispositionEvidence));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
+
+  it("refuses when a spec file is among the feature's changed paths", async () => {
+    await seedFeatureFixtures();
+    await createFile('test/acceptance/renamed-elsewhere.spec.ts', '// this feature');
+    await createFile(ACCEPTANCE_SPECS_RED_EVIDENCE, JSON.stringify(dispositionEvidence));
+
+    const ctx = {
+      ...featureCtx,
+      artifactResolution: {
+        featureIdentities: ['my-feature'],
+        changedPaths: new Set(['test/acceptance/renamed-elsewhere.spec.ts']),
+      },
+    };
+    await expect(checkStepCompletion(dir, 'acceptance_specs', ctx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
+
+  it('falls back fail-closed to the whole corpus without any attribution context', async () => {
+    await seedFeatureFixtures();
+    await createFile('test/acceptance/unrelated-legacy-feature.acceptance.test.ts', '// legacy');
+    await createFile(ACCEPTANCE_SPECS_RED_EVIDENCE, JSON.stringify(dispositionEvidence));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs')).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
+});

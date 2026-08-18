@@ -1583,6 +1583,18 @@ function invalidDispositionRecord(): { ok: false; reason: string; class: 'shape'
   };
 }
 
+/**
+ * Filename stem of an acceptance spec, with test-framework suffixes stripped
+ * (e.g. `my-feature.acceptance.test.ts` → `my-feature`), so the stem can be
+ * compared against a feature identity via `artifactMatchesFeatureIdentity`.
+ */
+function acceptanceSpecStem(file: string): string {
+  return basename(file)
+    .replace(/\.[A-Za-z0-9]+$/, '')
+    .replace(/[._-](test|spec)$/i, '')
+    .replace(/[._-](acceptance|system|e2e|integration|request)$/i, '');
+}
+
 function isDispositionOnlyEvidence(ev: unknown): ev is AcceptanceDispositionOnlyEvidence {
   return typeof ev === 'object' && ev !== null && (ev as Record<string, unknown>).outcome === 'disposition-only';
 }
@@ -2262,11 +2274,45 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
     }
     if (isDispositionOnlyEvidence(parsed)) {
-      if (files.length > 0) {
+      // rem-build-review-task13-1: the zero-spec check counts only the
+      // FEATURE's own acceptance specs — the acceptance corpus is
+      // repository-scoped by design, so unrelated pre-existing tests must
+      // not refuse a legitimate disposition-only completion. Attribution
+      // follows resolveArtifactFiles' feature association: a spec belongs
+      // to the feature when it is among the feature's changed paths or its
+      // filename stem matches a feature identity. With no attribution
+      // context at all (legacy callers), fall back fail-closed to the
+      // whole corpus, exactly as before.
+      const featureIdentities = [
+        ...(ctx.artifactResolution?.featureIdentities ?? []),
+        ctx.planPath ? planStem(ctx.planPath) : undefined,
+        ctx.featureDesc ? slugify(ctx.featureDesc) : undefined,
+      ].filter((identity): identity is string => Boolean(identity));
+      const changedPaths = ctx.artifactResolution?.changedPaths ?? new Set<string>();
+      const hasAttributionContext = featureIdentities.length > 0 || changedPaths.size > 0;
+      const featureSpecFiles = hasAttributionContext
+        ? files.filter((file) => {
+            const repoPath = relative(dir, file).replaceAll('\\', '/');
+            return (
+              changedPaths.has(repoPath) ||
+              featureIdentities.some((identity) =>
+                artifactMatchesFeatureIdentity(acceptanceSpecStem(file), identity, {
+                  strategy: 'normalized-stem',
+                  stripDatePrefix: true,
+                }),
+              )
+            );
+          })
+        : files;
+      if (featureSpecFiles.length > 0) {
+        const named = featureSpecFiles
+          .slice(0, 3)
+          .map((file) => relative(dir, file).replaceAll('\\', '/'))
+          .join(', ');
         return {
           done: false,
           acceptanceRedRefusalClass: 'shape',
-          reason: 'disposition-only acceptance evidence requires zero acceptance spec files',
+          reason: `disposition-only acceptance evidence requires zero acceptance spec files for this feature (found: ${named})`,
         };
       }
       try {
