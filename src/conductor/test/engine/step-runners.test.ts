@@ -27,7 +27,6 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
-import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
 import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
@@ -3297,7 +3296,7 @@ TIER: M`,
             observedProjections.push(projection);
             return { success: true, exitCode: 0, output: JSON.stringify({
               kind: 'judged', rubric: 'tautology', lapId: (projection as any).lapId,
-              snapshotDigest: (projection as any).snapshotDigest, contractVersion: 'v1', findings: [],
+              snapshotDigest: (projection as any).snapshotDigest, contractVersion: (projection as any).contractVersion, findings: [],
             }) };
           }),
           invokeInteractive: vi.fn().mockResolvedValue(undefined),
