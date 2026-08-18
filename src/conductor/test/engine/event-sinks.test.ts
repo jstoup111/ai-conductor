@@ -464,9 +464,10 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 91 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(91);
-  });
+  // There is deliberately no total-count assertion here. EVENT_SINKS is typed
+  // Record<ConductorEvent['type'], SinkDeclaration>, so tsc already rejects a
+  // missing or unknown key — the @ts-expect-error probe above proves it. A runtime
+  // count only duplicates the compiler and breaks on every added event variant.
 
   it('routes verdict_freshness to every sink', () => {
     expect(EVENT_SINKS.verdict_freshness).toEqual({
