@@ -34,6 +34,9 @@ cat > "$STUBS/conduct-ts" <<'EOF'
 set -euo pipefail
 
 if [ "$1" = config ] && [ "$2" = set ]; then
+  if [ "${CONDUCT_TS_FAIL_SET:-}" = 1 ]; then
+    exit 1
+  fi
   config_dir="${HOME}/.ai-conductor"
   config_file="${config_dir}/config.yml"
   mkdir -p "$config_dir"
@@ -95,6 +98,12 @@ run_case() {
   (cd "$CHECKOUT" && HOME="$case_home" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" "$@" --allow-worktree-root </dev/null 2>&1)
 }
 
+run_pty_case() {
+  local case_home=$1 case_name=$2 install_args=$3
+  printf '3\n1\n1\n' | timeout -k 1s 8s script -qec "env HOME='$case_home' PATH='$STUBS:$PATH' '$CHECKOUT/bin/install' $install_args --allow-worktree-root" \
+    "$TMP_ROOT/${case_name}.log" < /dev/null 2>&1 || true
+}
+
 ENV_HOME="$TMP_ROOT/home-env"
 EMPTY_ENV_HOME="$TMP_ROOT/home-empty-env"
 PRECEDENCE_HOME="$TMP_ROOT/home-precedence"
@@ -154,6 +163,44 @@ if [ "$HELP_LONG" = "$HELP_SHORT" ] && grep -Fq -- '--channel' <<< "$HELP_LONG" 
   echo 'PASS help documents the channel flag and environment equivalent'
 else
   FAILURES="${FAILURES}installer help does not document channel selection\n"
+fi
+
+PTY_FLAG_HOME="$TMP_ROOT/home-pty-flag"
+PTY_ENV_HOME="$TMP_ROOT/home-pty-env"
+mkdir -p "$PTY_FLAG_HOME" "$PTY_ENV_HOME"
+PTY_FLAG_OUT=$(run_pty_case "$PTY_FLAG_HOME" pty-flag '--channel tagged')
+PTY_ENV_OUT=$(AI_CONDUCTOR_CHANNEL=main run_pty_case "$PTY_ENV_HOME" pty-env '')
+if ! grep -Fq 'Harness update channel' <<< "$PTY_FLAG_OUT" \
+  && ! grep -Fq 'Harness update channel' <<< "$PTY_ENV_OUT"; then
+  echo 'PASS explicit flag and environment channel choices suppress the TTY prompt'
+else
+  FAILURES="${FAILURES}explicit channel choices did not suppress the TTY prompt\n"
+fi
+
+CONFIGURED_PTY_HOME="$TMP_ROOT/home-configured-pty"
+mkdir -p "$CONFIGURED_PTY_HOME/.ai-conductor"
+printf 'conductor:\n  update_channel: main\n' > "$CONFIGURED_PTY_HOME/.ai-conductor/config.yml"
+CONFIGURED_PTY_OUT=$(run_pty_case "$CONFIGURED_PTY_HOME" configured-pty '')
+UPDATE_PTY_OUT=$(run_pty_case "$CONFIGURED_PTY_HOME" update-pty '--update')
+if ! grep -Fq 'Harness update channel' <<< "$CONFIGURED_PTY_OUT" \
+  && ! grep -Fq 'Harness update channel' <<< "$UPDATE_PTY_OUT"; then
+  echo 'PASS configured and update-mode installs never re-prompt or overwrite the channel'
+else
+  FAILURES="${FAILURES}configured or update-mode install re-prompted or changed the channel\n"
+fi
+
+FAILED_WRITE_HOME="$TMP_ROOT/home-failed-write"
+mkdir -p "$FAILED_WRITE_HOME"
+set +e
+FAILED_WRITE_OUT=$(CONDUCT_TS_FAIL_SET=1 run_case "$FAILED_WRITE_HOME" --channel main)
+FAILED_WRITE_CODE=$?
+set -e
+if [ "$FAILED_WRITE_CODE" -eq 0 ] \
+  && grep -Fq 'Could not create conductor configuration' <<< "$FAILED_WRITE_OUT" \
+  && ! grep -Fq 'Created conductor configuration' <<< "$FAILED_WRITE_OUT"; then
+  echo 'PASS a failed channel write emits no false recorded-channel confirmation'
+else
+  FAILURES="${FAILURES}failed configuration write emitted false success or unexpected exit\n"
 fi
 
 if [ -z "$FAILURES" ]; then
