@@ -163,6 +163,33 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
     });
 
+    it('ignores declaration-shaped text in comments and literals when capturing title chains', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/widget.test.ts b/test/widget.test.ts',
+          '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
+        ].join('\n') } },
+        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: [
+          "// describe('comment suite', () => it('comment test', () => {}));",
+          "const ordinary = \"describe('string suite', () => it('string test', () => {}));\";",
+          "const templated = `describe('template suite', () => it('template test', () => {}));`;",
+          "describe('actual suite', () => it('actual test', () => {}));",
+        ].join('\n') } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
+        {
+          selector: 'test/widget.test.ts',
+          titleText: 'actual suite > actual test',
+          staticExtractionFallback: false,
+        },
+      ]);
+    });
+
     it('captures nested title chains declared through function suite callbacks', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,

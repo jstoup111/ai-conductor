@@ -233,7 +233,7 @@ function changedPathsFromDiff(diff: string): readonly string[] {
 
 type StaticTestTitle = Pick<BuildReviewChangedTestTitle, 'titleText' | 'staticExtractionFallback'>;
 
-const TEST_DECLARATION = /\b(describe|context|suite|it|test|specify)\s*\(/g;
+const TEST_DECLARATION = /\b(describe|context|suite|it|test|specify)\s*\(/y;
 const TEST_SUITE_NAMES = new Set(['describe', 'context', 'suite']);
 
 function skipQuotedSource(source: string, index: number): number | undefined {
@@ -248,12 +248,28 @@ function skipQuotedSource(source: string, index: number): number | undefined {
   return undefined;
 }
 
+/** Skip source trivia and literals so static extraction never treats their text as executable. */
+function skipNonCodeSource(source: string, index: number): number | undefined {
+  if (source[index] === "'" || source[index] === '"' || source[index] === '`') {
+    return skipQuotedSource(source, index);
+  }
+  if (source[index] === '/' && source[index + 1] === '/') {
+    const newline = source.indexOf('\n', index + 2);
+    return newline < 0 ? source.length : newline + 1;
+  }
+  if (source[index] === '/' && source[index + 1] === '*') {
+    const end = source.indexOf('*/', index + 2);
+    return end < 0 ? undefined : end + 2;
+  }
+  return index;
+}
+
 function balancedSourceEnd(source: string, start: number, open: string, close: string): number | undefined {
   let depth = 0;
   for (let cursor = start; cursor < source.length; cursor += 1) {
-    if (source[cursor] === "'" || source[cursor] === '"' || source[cursor] === '`') {
-      const next = skipQuotedSource(source, cursor);
-      if (next === undefined) return undefined;
+    const next = skipNonCodeSource(source, cursor);
+    if (next === undefined) return undefined;
+    if (next !== cursor) {
       cursor = next - 1;
     } else if (source[cursor] === open) {
       depth += 1;
@@ -295,10 +311,24 @@ function callbackBody(source: string, callStart: number, callEnd: number): { sta
 function staticTestTitles(source: string): readonly StaticTestTitle[] {
   const titles: StaticTestTitle[] = [];
   let malformed = false;
-  const collect = (start: number, end: number, ancestors: readonly string[], inheritedFallback: boolean): void => {
-    TEST_DECLARATION.lastIndex = start;
-    for (let match = TEST_DECLARATION.exec(source); match && match.index < end; match = TEST_DECLARATION.exec(source)) {
-      const callStart = match.index;
+const collect = (start: number, end: number, ancestors: readonly string[], inheritedFallback: boolean): void => {
+    for (let cursor = start; cursor < end;) {
+      const next = skipNonCodeSource(source, cursor);
+      if (next === undefined) {
+        malformed = true;
+        return;
+      }
+      if (next !== cursor) {
+        cursor = next;
+        continue;
+      }
+      TEST_DECLARATION.lastIndex = cursor;
+      const match = TEST_DECLARATION.exec(source);
+      if (match === null || match.index >= end) {
+        cursor += 1;
+        continue;
+      }
+      const callStart = cursor;
       const callEnd = balancedSourceEnd(source, TEST_DECLARATION.lastIndex - 1, '(', ')');
       if (callEnd === undefined || callEnd > end) {
         malformed = true;
@@ -315,7 +345,7 @@ function staticTestTitles(source: string): readonly StaticTestTitle[] {
           ? { titleText: '', staticExtractionFallback: true }
           : { titleText: [...ancestors, title.title!].join(' > '), staticExtractionFallback: false });
       }
-      TEST_DECLARATION.lastIndex = callEnd + 1;
+      cursor = callEnd + 1;
     }
   };
   collect(0, source.length, [], false);
