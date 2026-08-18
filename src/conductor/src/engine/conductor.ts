@@ -3172,7 +3172,24 @@ export class Conductor {
         // where the HALT marker is written and the run stops.
         const verify = async () => {
           const result = await verifyLiveBoundary(boundary, containment)
-            .catch(() => ({ ok: false, reason: 'Live boundary could not be verified.' }));
+            .catch(() => ({
+              ok: false,
+              reason: 'Live boundary could not be verified.',
+              containedDrift: undefined,
+            }));
+          await this.events.emit(
+            containment.contained
+              ? { type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence }
+              : { type: 'self_host_containment_verdict', contained: false, reason: containment.reason },
+          );
+          if (result.containedDrift) {
+            await this.events.emit({
+              type: 'contained_live_checkout_drift',
+              evidence: result.containedDrift.evidence,
+              attribution: 'concurrent-operator',
+              summary: result.containedDrift.summary,
+            });
+          }
           if (!result.ok) {
             this.pendingLiveBoundaryHalt =
               result.reason ?? 'Live boundary could not be verified.';

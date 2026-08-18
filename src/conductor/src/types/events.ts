@@ -143,6 +143,25 @@ export interface ProviderAttemptEvent {
 
 export type ConductorEvent =
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
+  | {
+      /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
+      type: 'contained_live_checkout_drift';
+      evidence: string;
+      attribution: 'concurrent-operator';
+      summary: string;
+    }
+  | {
+      /** The containment verdict for one completed self-host dispatch verification closure. */
+      type: 'self_host_containment_verdict';
+      contained: true;
+      evidence: string;
+    }
+  | {
+      /** The containment verdict for one completed self-host dispatch verification closure. */
+      type: 'self_host_containment_verdict';
+      contained: false;
+      reason: string;
+    }
   /** Serialized rubric-prompt size at dispatch — regression visibility for projection bloat. */
   | { type: 'build_review_rubric_prompt'; rubric: string; lapId: string; promptBytes: number }
   | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }

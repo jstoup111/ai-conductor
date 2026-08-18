@@ -80,7 +80,7 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it('accepts a git-ignored live-checkout change after a contained dispatch', async () => {
+  it('attributes a git-ignored live-checkout change after a contained dispatch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-ignored-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
     await Promise.all([mkdir(live), mkdir(provider)]);
@@ -91,11 +91,17 @@ describe('live self-host boundary', () => {
     const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
     await writeFile(join(live, '.claude', 'settings.local.json'), 'after');
     try {
-      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toEqual({ ok: true });
+      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toEqual({
+        ok: true,
+        containedDrift: {
+          evidence: 'sandboxed',
+          summary: '0 added, 0 removed, 1 changed: changed .claude/settings.local.json',
+        },
+      });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
-  it('accepts an untracked live-checkout addition after a contained dispatch', async () => {
+  it('attributes an untracked live-checkout addition after a contained dispatch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-untracked-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
     await Promise.all([mkdir(live), mkdir(provider)]);
@@ -103,7 +109,13 @@ describe('live self-host boundary', () => {
     const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
     await writeFile(join(live, 'escaped.txt'), 'untracked');
     try {
-      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toEqual({ ok: true });
+      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toEqual({
+        ok: true,
+        containedDrift: {
+          evidence: 'sandboxed',
+          summary: '1 added, 0 removed, 0 changed: added escaped.txt',
+        },
+      });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

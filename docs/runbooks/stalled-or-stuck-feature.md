@@ -205,6 +205,14 @@ checkout or to the operator's real `~/.claude`/`~/.codex` while a step was in fl
 names the paths** — each tagged `added`, `removed`, or `changed`, capped at eight entries followed by
 `and N more`, with exact counts. Read them before investigating anything else.
 
+First determine whether the completed dispatch was proven contained. A contained dispatch records
+`self_host_containment_verdict` and, when the live checkout changed, a
+`contained_live_checkout_drift` event in `.pipeline/events.jsonl`. That event names the containment
+evidence, labels the drift `concurrent-operator`, and does not write a HALT: the dispatch could not
+have made the live checkout writable. A clean contained dispatch still records its containment
+verdict. If the verdict says containment was unavailable, disabled, or its probe failed, the
+ordinary fail-closed behavior below applies.
+
 - A path under the live checkout is usually an untracked file an operator session wrote — a
   permission or approval grant (Claude Code's `.claude/settings.local.json` is untracked and
   fingerprinted), a scratch or generated artifact, or a new file staged with `git add`. Git can
@@ -221,6 +229,21 @@ names the paths** — each tagged `added`, `removed`, or `changed`, capped at ei
 - A provider-state path that is pure telemetry or cache means the exclusion list needs a new entry;
   see [self-hosting: provider-state
   exclusions](../guides/self-hosting.md#provider-state-exclusions).
+
+**`EROFS` during a contained dispatch:** a `Read-only file system` failure usually means the
+dispatch attempted a legitimate live-checkout write that is absent from the shared
+`LIVE_CHECKOUT_VOLATILE` policy. Confirm the attempted path from the provider output and verify it
+is an intended, safe volatile surface. As a short-lived recovery, set
+`harness_self_host.live_containment: false` for the affected run; this restores the fail-closed
+boundary guard, so avoid concurrent root-checkout changes. Then correct the shared
+`LIVE_CHECKOUT_VOLATILE` policy and its containment bind set with focused tests; do not add an
+ad-hoc local carve-out. Resume the feature using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** after resume, inspect `.pipeline/events.jsonl`. A repaired contained dispatch has
+one `self_host_containment_verdict` with `contained: true`; concurrent live-checkout drift, if any,
+has one `contained_live_checkout_drift` record with `attribution: "concurrent-operator"` and its
+changed-path summary. A temporary opt-out instead must either remain clean or halt with the
+uncontained reason, never silently ignore drift.
 
 This is a `mechanical`-class HALT, so the daemon's ordinary re-kick sweep clears it on the next
 base-branch advance. The step that was running keeps its own real verdict, so the re-kick resumes

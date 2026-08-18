@@ -35,6 +35,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { writeState } from '../../src/engine/state.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 
@@ -149,10 +150,13 @@ describe('acceptance: self-host live-checkout containment', () => {
       releaseGate: vi.fn(async () => ({ ok: true as const })),
     };
 
-    return new Conductor({
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
-      events: new ConductorEventEmitter(),
+      events,
       projectRoot,
       fromStep: 'build',
       mode: 'auto',
@@ -170,6 +174,7 @@ describe('acceptance: self-host live-checkout containment', () => {
         harness_self_host: { build_auth: { mode: 'api-key' }, ...config },
       } as never,
     });
+    return { conductor, persister };
   }
 
   async function haltReason(): Promise<string | null> {
@@ -182,7 +187,7 @@ describe('acceptance: self-host live-checkout containment', () => {
     await chmod(liveCheckout, 0o555);
     let observedExecutable: string | undefined;
     let observedArgs: readonly string[] | undefined;
-    const conductor = harness(async (prepared) => {
+    const { conductor, persister } = harness(async (prepared) => {
       observedExecutable = prepared.executable;
       observedArgs = prepared.args;
       await chmod(liveCheckout, 0o755);
@@ -195,20 +200,34 @@ describe('acceptance: self-host live-checkout containment', () => {
     });
 
     await conductor.run();
+    persister.stop();
 
     expect(observedExecutable).toBe('bwrap');
     expect(observedArgs).toEqual(expect.arrayContaining(['--', 'claude']));
     expect(await haltReason()).toBeNull();
+    const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+    expect(records.filter(record => record.type === 'contained_live_checkout_drift')).toEqual([
+      expect.objectContaining({
+        evidence: expect.any(String),
+        attribution: 'concurrent-operator',
+        summary: expect.stringContaining('changed .claude/settings.local.json'),
+      }),
+    ]);
+    expect(records.filter(record => record.type === 'self_host_containment_verdict')).toEqual([
+      expect.objectContaining({ contained: true, evidence: expect.any(String) }),
+    ]);
   });
 
   it('fails closed when containment is disabled and names that evidence in the halt', async () => {
-    const conductor = harness(async (prepared) => {
+    const { conductor, persister } = harness(async (prepared) => {
       expect(prepared.executable).toBe('claude');
       await writeFile(join(liveCheckout, 'escaped.txt'), 'unattributed write\n', 'utf8');
       return { success: true, output: 'build complete' };
     }, { live_containment: false });
 
     await conductor.run();
+    persister.stop();
 
     const reason = await haltReason();
     expect(reason).toContain('added escaped.txt');
