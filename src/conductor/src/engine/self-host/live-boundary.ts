@@ -340,7 +340,7 @@ function describeDiff(diff: { added: string[]; removed: string[]; changed: strin
 
 export async function verifyLiveBoundary(
   snapshot: LiveBoundarySnapshot,
-  _containmentVerdict: ContainmentVerdict = { contained: false, reason: 'containment not evaluated' },
+  containmentVerdict: ContainmentVerdict = { contained: false, reason: 'containment not evaluated' },
 ): Promise<{ ok: boolean; reason?: string }> {
   for (const surface of snapshot.surfaces) {
     const current = await manifest(
@@ -351,6 +351,7 @@ export async function verifyLiveBoundary(
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
       if (surface.label === 'live checkout') {
+        if (containmentVerdict.contained) continue;
         const paths = [...diff.added, ...diff.removed, ...diff.changed];
         const classifications = await classifyLiveCheckoutDiff(surface.root, paths);
         if (paths.every(path => classifications.get(path) === 'operator-edit')) continue;
