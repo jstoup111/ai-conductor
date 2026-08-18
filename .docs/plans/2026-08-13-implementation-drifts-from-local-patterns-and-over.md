@@ -392,7 +392,6 @@ No `build_review` surface is included. The scan is advisory and changes no task 
 - [ ] No task is a terminal whole-feature validation or speculative repair task.
 - [ ] All tasks are scoped to approximately 2–5 minutes and the dependency graph is acyclic.
 ### Task rem-pipeline-coverage-gate-1: skills/pipeline/SKILL.md:388 — replace the evaluator checklist question requiring corresponding tests for every acceptance criterion with the shared lowest-sufficient-layer coverage rule: require concrete sufficient behavioral proof for every happy and negative criterion, permit compatible criteria to share coverage, and do not require one new test per criterion
-### Task rem-pipeline-coverage-gate-1-e5e414: skills/pipeline/SKILL.md:386-390 — replace the evaluator's corresponding-tests question with a requirement that every happy and negative criterion has a concrete sufficient behavioral coverage disposition at the lowest sufficient layer, preserving mandatory happy/negative coverage and existing evaluator dispatch behavior
 
 ---
 
