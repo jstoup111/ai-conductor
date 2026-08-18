@@ -183,7 +183,10 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
       // API-key mode intentionally skips the daemon-token preflight, keeping
       // the test's first observable boundary at candidate preparation.
       config: {
-        harness_self_host: { build_auth: { mode: 'api-key' } },
+        // These cases prove the fail-closed fallback. With containment proven,
+        // live-checkout drift is intentionally attributed away from the dispatch
+        // and must not halt (ADR-2026-08-17).
+        harness_self_host: { build_auth: { mode: 'api-key' }, live_containment: false },
       } as never,
     });
 
