@@ -31,7 +31,7 @@ describe('acceptance: a correct FINISH refusal stops with its guidance', () => {
     await writeFile(join(pipelineDir, 'finish-choice'), 'pr\n');
     await writeFile(join(projectRoot, '.docs', 'shipped', 'finish-correct-refusal.md'), 'shipped\n');
     const state: Record<string, unknown> = {
-      complexity_tier: 'M',
+      complexity_tier: 'S',
       track: 'technical',
       feature_desc: 'finish-correct-refusal',
       worktree_branch: 'feat/finish-correct-refusal',

@@ -444,7 +444,11 @@ describe('FINISH human-required halt marker', () => {
         projectRoot,
         fromStep: 'finish',
         mode: 'auto',
-        daemon: true,
+        // This fixture isolates the coordinator's human-required routing.
+        // It deliberately uses mocked-dispatch mode rather than pretending
+        // missing validator artifacts are production-grade gate evidence.
+        daemon: false,
+        verifyArtifacts: false,
         git: async () => ({ stdout: '' }),
         gh: async () => ({ stdout: '' }),
         runGh: async () => ({ stdout: '' }),
@@ -898,29 +902,33 @@ describe('FINISH publication disposition routing', () => {
       'implementation_evidence_invalid',
       'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
       'rerun_build_verification',
+      'Implementation evidence is invalid and must be re-established before FINISH can continue.',
     ],
     [
       'implementation_evidence_indeterminate',
       'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.',
       'restore_implementation_observation',
+      'Implementation evidence could not be determined; restore its observer before FINISH can continue.',
     ],
     [
       'ship_evidence_invalid',
       'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
       'rerun_ship_validators',
+      'SHIP evidence is invalid and must be re-established before FINISH can continue.',
     ],
     [
       'ship_evidence_indeterminate',
       'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
       'restore_ship_observation',
+      'SHIP evidence could not be determined; restore its observer before FINISH can continue.',
     ],
-  ] as const)('halts evidence-invalid condition %s pending dedicated BUILD routing', async (code, message, nextAction) => {
-    await expect(
-      routeFinishPublicationDisposition({
-        kind: 'publication_retry',
-        condition: { code, message, nextAction },
-      }),
-    ).resolves.toMatchObject({ kind: 'halt', reason: expect.stringContaining(code) });
+  ] as const)('halts evidence-invalid condition %s with its unresolved observation', async (code, message, nextAction, reason) => {
+    const result = await routeFinishPublicationDisposition({
+      kind: 'publication_retry',
+      condition: { code, message, nextAction },
+    });
+    expect(result).toEqual({ kind: 'halt', reason });
+    expect(result.kind === 'halt' && result.reason).not.toContain('dedicated BUILD routing rule');
   });
 
   it('permits only cited implementation-invalid evidence to route BUILD', async () => {

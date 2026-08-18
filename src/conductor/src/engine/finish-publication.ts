@@ -701,23 +701,10 @@ export function routeFinishPublicationDisposition(
     case 'publication_progress':
       return { kind: 'progress_finish', transition: disposition.transition };
     case 'publication_retry':
-      if (
-        'condition' in disposition &&
-        (disposition.condition.code === 'implementation_evidence_invalid' ||
-          disposition.condition.code === 'implementation_evidence_indeterminate' ||
-          disposition.condition.code === 'ship_evidence_invalid' ||
-          disposition.condition.code === 'ship_evidence_indeterminate')
-      ) {
-        return {
-          kind: 'halt',
-          reason:
-            'FINISH evidence-invalid disposition requires its dedicated BUILD routing rule: ' +
-            disposition.condition.code,
-        };
-      }
+      if ('condition' in disposition) return PUBLICATION_CONDITION_ROUTES[disposition.condition.code];
       return {
         kind: 'retry_finish',
-        reason: 'reason' in disposition ? disposition.reason : disposition.condition.code,
+        reason: disposition.reason,
       };
     case 'implementation_invalid':
       return {
@@ -854,6 +841,33 @@ export type PublicationCondition =
       message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.';
       nextAction: 'restore_release_readiness_observation';
     };
+
+/** Exhaustive routing for every condition emitted by FINISH observation. */
+const PUBLICATION_CONDITION_ROUTES: {
+  [Code in PublicationCondition['code']]: FinishPublicationRoute;
+} = {
+  publication_snapshot_incoherent: { kind: 'retry_finish', reason: 'publication_snapshot_incoherent' },
+  publication_snapshot_indeterminate: { kind: 'retry_finish', reason: 'publication_snapshot_indeterminate' },
+  implementation_evidence_invalid: {
+    kind: 'halt',
+    reason: 'Implementation evidence is invalid and must be re-established before FINISH can continue.',
+  },
+  implementation_evidence_indeterminate: {
+    kind: 'halt',
+    reason: 'Implementation evidence could not be determined; restore its observer before FINISH can continue.',
+  },
+  ship_evidence_invalid: {
+    kind: 'halt',
+    reason: 'SHIP evidence is invalid and must be re-established before FINISH can continue.',
+  },
+  ship_evidence_indeterminate: {
+    kind: 'halt',
+    reason: 'SHIP evidence could not be determined; restore its observer before FINISH can continue.',
+  },
+  release_readiness_missing: { kind: 'retry_finish', reason: 'release_readiness_missing' },
+  release_readiness_invalid: { kind: 'retry_finish', reason: 'release_readiness_invalid' },
+  release_readiness_indeterminate: { kind: 'retry_finish', reason: 'release_readiness_indeterminate' },
+};
 
 export type PublicationPreflightResult =
   | { kind: 'ready_for_judgment' }

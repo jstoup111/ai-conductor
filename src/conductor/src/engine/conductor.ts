@@ -1609,8 +1609,10 @@ export class Conductor {
     // `verifyArtifacts:false` is the intentional mocked-dispatch mode used by
     // focused unit tests. Its success authority is the runner result, so the
     // publication fence must not reintroduce artifact-only validation and
-    // invalidate an otherwise green SHIP round indefinitely.
-    if (this.finishPublication || (!this.verifyArtifacts && !this.daemon)) return [];
+    // invalidate an otherwise green SHIP round indefinitely. A production
+    // publication coordinator is not an exemption: ADR 2026-07-26 requires
+    // current-HEAD validation before every FINISH publication side effect.
+    if (!this.verifyArtifacts && !this.daemon) return [];
 
     const track = await this.resolveTrack(state);
     const membership = resolveGroupMembership(
@@ -3896,6 +3898,11 @@ export class Conductor {
     // (and cleared) when that step's dispatch begins, so it only seeds the first
     // attempt; later attempts use the step's own failure/gate-miss hint.
     const pendingRetryHints = new Map<StepName, string>();
+    // The FINISH fence has just recomputed and rejected these validators' own
+    // evidence. Keep that evidence through the redirected retry so the
+    // validator can inspect or replace it; the ordinary stale sweep still
+    // applies to every other re-entry.
+    const finishFenceEvidenceTargets = new Set<StepName>();
 
     // D2 (adr-2026-07-13-kickback-build-no-op-escalation): context captured
     // immediately before a kickback routes back to BUILD, keyed by the
@@ -5469,6 +5476,7 @@ export class Conductor {
           const nonGreen = await this.nonGreenFinishValidators(state);
           if (nonGreen.length > 0) {
             for (const member of nonGreen) {
+              finishFenceEvidenceTargets.add(member.name);
               await this.saveConductorStepStatus(state, member.name, 'stale');
               await emitTracked({
                 type: 'gate_verdict',
@@ -5534,7 +5542,8 @@ export class Conductor {
         // could reuse instead of rewriting — looping the freshness gate to a HALT.
         // Deleting it forces regeneration this session. A first run has no prior
         // attempt and nothing to reuse, so it is left untouched.
-        if (currentStatus === 'failed' || currentStatus === 'stale') {
+        const preserveFenceEvidence = finishFenceEvidenceTargets.delete(step.name);
+        if ((currentStatus === 'failed' || currentStatus === 'stale') && !preserveFenceEvidence) {
           await sweepStaleReviewArtifacts(
             this.projectRoot,
             step.name,
