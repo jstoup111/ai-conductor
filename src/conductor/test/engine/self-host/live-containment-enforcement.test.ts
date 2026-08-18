@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -41,6 +41,44 @@ describe('live containment enforcement', () => {
 
         expect(result.exitCode).toBe(0);
         expect(result.stderr).toContain(deniedPath);
+      } finally {
+        await rm(liveCheckout, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!bubblewrapAvailable)(
+    'permits writes in the worktree, .git, and .pipeline carve-outs',
+    async () => {
+      const liveCheckout = await mkdtemp(join(tmpdir(), 'live-containment-enforcement-'));
+      const worktreeRoot = join(liveCheckout, '.worktrees', 'build');
+      const gitPath = join(liveCheckout, '.git', 'write-allowed');
+      const pipelinePath = join(liveCheckout, '.pipeline', 'write-allowed');
+      const worktreePath = join(worktreeRoot, 'write-allowed');
+
+      try {
+        await Promise.all([
+          mkdir(worktreeRoot, { recursive: true }),
+          mkdir(join(liveCheckout, '.git'), { recursive: true }),
+          mkdir(join(liveCheckout, '.pipeline'), { recursive: true }),
+        ]);
+        const result = await execa(
+          'bwrap',
+          [
+            ...deriveBindSet(liveCheckout, worktreeRoot),
+            '--',
+            '/bin/sh',
+            '-c',
+            'printf allowed > "$1" && printf allowed > "$2" && printf allowed > "$3"',
+            'live-containment-enforcement',
+            worktreePath,
+            gitPath,
+            pipelinePath,
+          ],
+          { reject: false },
+        );
+
+        expect(result.exitCode).toBe(0);
       } finally {
         await rm(liveCheckout, { recursive: true, force: true });
       }
