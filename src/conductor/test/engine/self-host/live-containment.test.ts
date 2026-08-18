@@ -26,7 +26,11 @@ function deriveBindSet(liveCheckout: string, worktreeRoot: string): readonly str
   return (candidate as (live: string, worktree: string) => readonly string[])(liveCheckout, worktreeRoot);
 }
 
-type ProbeRunner = (executable: string, args: readonly string[]) => Promise<{ readonly stdout: string }>;
+type ProbeRunner = (executable: string, args: readonly string[]) => Promise<{
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+}>;
 
 function probeContainment(
   bindSet: readonly string[],
@@ -162,7 +166,7 @@ describe('probeContainment', () => {
     const calls: Array<{ executable: string; args: readonly string[] }> = [];
     const runner: ProbeRunner = async (executable, args) => {
       calls.push({ executable, args });
-      return { stdout: 'live-root-not-writable\nworktree-writable\n' };
+      return { stdout: 'live-root-not-writable\nworktree-writable\n', stderr: '', exitCode: 0 };
     };
 
     const verdict = await probeContainment(bindSet, liveCheckout, worktreeRoot, runner);
@@ -191,6 +195,8 @@ describe('probeContainment', () => {
     const { liveCheckout, worktreeRoot } = await createCheckout();
     const runner: ProbeRunner = async () => ({
       stdout: 'live-root-writable\nworktree-writable\n',
+      stderr: '',
+      exitCode: 0,
     });
 
     const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
@@ -205,6 +211,8 @@ describe('probeContainment', () => {
     const { liveCheckout, worktreeRoot } = await createCheckout();
     const runner: ProbeRunner = async () => ({
       stdout: 'live-root-not-writable\nworktree-not-writable\n',
+      stderr: '',
+      exitCode: 0,
     });
 
     const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
@@ -217,13 +225,71 @@ describe('probeContainment', () => {
 
   it('refuses containment unless the probe proves both assertions', async () => {
     const { liveCheckout, worktreeRoot } = await createCheckout();
-    const runner: ProbeRunner = async () => ({ stdout: 'worktree-writable\n' });
+    const runner: ProbeRunner = async () => ({ stdout: 'worktree-writable\n', stderr: '', exitCode: 0 });
 
     const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
 
     expect(verdict).toEqual({
       contained: false,
       reason: expect.stringContaining(liveCheckout),
+    });
+  });
+
+  it('collapses a missing bwrap executable to an unavailable verdict', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const missingBwrap = Object.assign(new Error('spawn bwrap ENOENT'), { code: 'ENOENT' });
+    const runner: ProbeRunner = async () => { throw missingBwrap; };
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringMatching(/bwrap.*not found/i),
+    });
+  });
+
+  it('collapses a non-zero probe result to an unavailable verdict carrying stderr', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const runner: ProbeRunner = async () => ({
+      stdout: 'live-root-not-writable\nworktree-writable\n',
+      stderr: 'bwrap: Creating new namespace failed: Operation not permitted',
+      exitCode: 1,
+    });
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringContaining('Operation not permitted'),
+    });
+  });
+
+  it('collapses a timed-out probe to an unavailable verdict', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const timeout = Object.assign(new Error('probe timed out after 5000ms'), { timedOut: true });
+    const runner: ProbeRunner = async () => { throw timeout; };
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringMatching(/timed out/i),
+    });
+  });
+
+  it('never promotes unparseable probe output to contained', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const runner: ProbeRunner = async () => ({
+      stdout: 'live-root-not-writable\nworktree-writable\nunexpected-output\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringMatching(/unparseable/i),
     });
   });
 });

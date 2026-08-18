@@ -11,7 +11,11 @@ export type ContainmentVerdict =
 export type ContainmentProbeRunner = (
   executable: string,
   args: readonly string[],
-) => Promise<{ readonly stdout: string }>;
+) => Promise<{
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+}>;
 
 const MAX_NODE_MODULES_DISCOVERY_DEPTH = 8;
 
@@ -87,6 +91,27 @@ const CONTAINMENT_PROBE = [
   'if test -w "$2"; then printf "worktree-writable\\n"; else printf "worktree-not-writable\\n"; fi',
 ].join('; ');
 
+function unavailableProbeFailure(error: unknown): ContainmentVerdict {
+  const failure = error as Partial<{ code: unknown; message: unknown; stderr: unknown; timedOut: unknown }>;
+  if (failure.code === 'ENOENT') {
+    return { contained: false, reason: 'containment unavailable: bwrap not found' };
+  }
+
+  const detail = typeof failure.stderr === 'string' && failure.stderr.trim()
+    ? failure.stderr.trim()
+    : typeof failure.message === 'string' && failure.message.trim()
+      ? failure.message.trim()
+      : 'unknown probe failure';
+  const timedOut = failure.timedOut === true
+    || failure.code === 'ETIMEDOUT'
+    || /timed out/i.test(detail);
+
+  return {
+    contained: false,
+    reason: `containment unavailable: probe ${timedOut ? 'timed out' : 'failed'} — ${detail}`,
+  };
+}
+
 /**
  * Verifies that the live checkout is read-only while the dispatched worktree
  * remains writable under the exact bind set that will wrap the child process.
@@ -97,29 +122,55 @@ export async function probeContainment(
   worktreeRoot: string,
   runner: ContainmentProbeRunner,
 ): Promise<ContainmentVerdict> {
-  const { stdout } = await runner('bwrap', [
-    ...bindSet,
-    '--',
-    '/bin/sh',
-    '-c',
-    CONTAINMENT_PROBE,
-    'containment-probe',
-    liveCheckout,
-    worktreeRoot,
-  ]);
-  const observations = new Set(stdout.trim().split(/\s+/));
+  let probe: Awaited<ReturnType<ContainmentProbeRunner>>;
+  try {
+    probe = await runner('bwrap', [
+      ...bindSet,
+      '--',
+      '/bin/sh',
+      '-c',
+      CONTAINMENT_PROBE,
+      'containment-probe',
+      liveCheckout,
+      worktreeRoot,
+    ]);
+  } catch (error) {
+    return unavailableProbeFailure(error);
+  }
 
-  if (observations.has('live-root-writable')) {
+  if (probe.exitCode !== 0) {
+    return unavailableProbeFailure({
+      message: `bwrap exited ${probe.exitCode}`,
+      stderr: probe.stderr,
+    });
+  }
+
+  const observations = probe.stdout.trim().split(/\s+/);
+  const recognizedObservations = new Set([
+    'live-root-writable',
+    'live-root-not-writable',
+    'worktree-writable',
+    'worktree-not-writable',
+  ]);
+  if (observations.some((observation) => !recognizedObservations.has(observation))) {
+    return { contained: false, reason: 'containment unavailable: probe produced unparseable output' };
+  }
+  const proven = new Set(observations);
+
+  if (proven.has('live-root-writable')) {
     return { contained: false, reason: `probe found ${liveCheckout} writable` };
   }
-  if (observations.has('worktree-not-writable')) {
+  if (proven.has('worktree-not-writable')) {
     return { contained: false, reason: `probe found ${worktreeRoot} not writable` };
   }
-  if (!observations.has('live-root-not-writable')) {
+  if (!proven.has('live-root-not-writable')) {
     return { contained: false, reason: `probe did not prove ${liveCheckout} is not writable` };
   }
-  if (!observations.has('worktree-writable')) {
+  if (!proven.has('worktree-writable')) {
     return { contained: false, reason: `probe did not prove ${worktreeRoot} is writable` };
+  }
+  if (observations.length !== 2 || proven.size !== 2) {
+    return { contained: false, reason: 'containment unavailable: probe produced unparseable output' };
   }
 
   return {
