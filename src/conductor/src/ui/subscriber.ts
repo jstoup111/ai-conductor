@@ -50,12 +50,18 @@ export class TerminalSubscriber implements UISubscriber {
       'session_policy',
       'feature_usage_total',
       'halt_marker_write_failed',
+      'contained_live_checkout_drift',
+      'self_host_containment_verdict',
     ];
 
     for (const type of eventTypes) {
       const handler: EventHandler = async (event) => {
         await this.onRender(event);
-        if (event.type === 'halt_marker_write_failed') {
+        if (
+          event.type === 'halt_marker_write_failed'
+          || event.type === 'contained_live_checkout_drift'
+          || event.type === 'self_host_containment_verdict'
+        ) {
           await this.terminalRenderer?.handle(event);
         }
       };
