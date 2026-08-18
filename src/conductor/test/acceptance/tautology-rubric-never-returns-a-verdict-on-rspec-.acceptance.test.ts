@@ -25,7 +25,7 @@
  */
 
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -123,12 +123,9 @@ async function makeFixture(name: string): Promise<Fixture> {
   await git(root, 'add', FEATURE_PATH, SPEC_PATH);
   await git(root, 'commit', '-q', '-m', 'change behavior and its example');
 
-  // The dependency belongs only to the source worktree. The detached
-  // counterfactual can load it only through DefaultStepRunner's ignored
-  // node_modules materialization; no ancestor installation can mask a
-  // regression. With that materialization removed, these selectors still run
-  // but their excerpt contains ERR_MODULE_NOT_FOUND, making both assertions
-  // below fail before their verdict/event contracts are evaluated.
+  // The dependency belongs only to the source worktree. Make it resolvable
+  // through the detached checkout's immutable ancestor, independently of any
+  // production-side materialization being reverted by the counterfactual.
   await writeRepoFile(root, 'src/conductor/node_modules/uuid/package.json', [
     '{',
     '  "name": "uuid",',
@@ -141,6 +138,14 @@ async function makeFixture(name: string): Promise<Fixture> {
     "export function v4() { return 'fixture-uuid'; }",
     '',
   ].join('\n'));
+  const detachedDependencyRoot = join(root, '.pipeline', 'build-review-preflight');
+  await mkdir(detachedDependencyRoot, { recursive: true });
+  await symlink(
+    join(root, 'src/conductor/node_modules'),
+    join(detachedDependencyRoot, 'node_modules'),
+    'dir',
+  );
+  expect((await lstat(join(detachedDependencyRoot, 'node_modules'))).isSymbolicLink()).toBe(true);
 
   return {
     root,

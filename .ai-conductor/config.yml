@@ -72,7 +72,10 @@ build_review:
 # in one operation. Harness integrity remains a separate self-host gate.
 test_suite:
   command: npm test
-  scoped_command: npx vitest run {selectors}
+  # The counterfactual checkout is nested below this worktree and excludes
+  # ignored dependencies. This runs before selector collection and is captured
+  # before production files are reverted.
+  scoped_command: '[ -d src/conductor/node_modules ] || ln -s "$PWD/../../../src/conductor/node_modules" src/conductor/node_modules; npx vitest run {selectors}'
   working_directory: src/conductor
   timeout_seconds: 1800
 
