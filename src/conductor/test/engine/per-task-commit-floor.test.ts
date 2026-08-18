@@ -283,14 +283,26 @@ describe('per-task-commit-floor', () => {
   });
 
   it.each([
-    ['an unstaged trailer', 'Scope: absent.ts — not staged', 'fallback\n\nScope: absent.ts — not staged'],
-    ['a malformed trailer', 'Scope: other/derived.ts missing separator', 'fallback\n\nScope: other/derived.ts missing separator'],
+    [
+      'an unstaged trailer',
+      'Scope: absent.ts — not staged',
+      'fallback subject\n\nFallback body explains the derived widening.\n\nScope: absent.ts — not staged',
+    ],
+    [
+      'a malformed trailer',
+      'Scope: other/derived.ts missing separator',
+      'fallback subject\n\nFallback body explains the derived widening.\n\nScope: other/derived.ts missing separator',
+    ],
   ])('derives the commit rationale when given %s', async (_caseName, scopeLine, expectedRationale) => {
     await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
     await mkdir(join(dir, 'other'), { recursive: true });
     await writeFile(join(dir, 'other/derived.ts'), 'x');
     await execa('git', ['add', 'other/derived.ts'], { cwd: dir });
-    await execa('git', ['commit', '-m', `fallback\n\nTask: 3\n${scopeLine}`], { cwd: dir });
+    await execa('git', [
+      'commit',
+      '-m',
+      `fallback subject\n\nFallback body explains the derived widening.\n\nTask: 3\n${scopeLine}`,
+    ], { cwd: dir });
 
     const report = await runContainmentFloor({ projectRoot: dir, planPath });
 
