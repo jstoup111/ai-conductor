@@ -532,6 +532,8 @@ export interface StepRunResult {
    * burning the retry budget.
    */
   rateLimited?: boolean;
+  /** The rate-limit signal is a hard usage-cap exhaustion, not a transient throttle. */
+  usageExhausted?: boolean;
   /**
    * Number of seconds to wait before retrying after a rate-limit. Default 300.
    */
@@ -6125,7 +6127,11 @@ export class Conductor {
             }
             const waitSeconds = Math.ceil(waitMs / 1000);
 
-            await emitTracked({ type: 'rate_limit', waitSeconds });
+            await emitTracked({
+              type: 'rate_limit',
+              waitSeconds,
+              ...(result.usageExhausted ? { reason: 'usage-exhausted' as const } : {}),
+            });
 
             // Enter episode with deadline for coordinated backoff
             if (this.rateLimitEpisode) {

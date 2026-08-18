@@ -283,7 +283,7 @@ export type ConductorEvent =
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
   | { type: 'config_skip'; step: StepName }
   | { type: 'navigation_back'; from: StepName; to: StepName }
-  | { type: 'rate_limit'; waitSeconds: number }
+  | { type: 'rate_limit'; waitSeconds: number; reason?: 'usage-exhausted' }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
   | {

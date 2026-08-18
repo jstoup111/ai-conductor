@@ -2229,7 +2229,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     case 'rate_limit':
-      log(`${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`rate limited: waiting ${event.waitSeconds}s`)}`);
+      log(`${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`${event.reason === 'usage-exhausted' ? 'usage exhausted' : 'rate limited'}: waiting ${event.waitSeconds}s`)}`);
       break;
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);

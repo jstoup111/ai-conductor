@@ -28,7 +28,12 @@ import { validateSpawnPermit } from '../engine/provider-runtime.js';
 export const CODEX_AUTH_FAILURE_RE =
   /not logged in|please (?:log in|run codex login)|authentication required|unauthorized|invalid api key|api error:\s*401/i;
 export const CODEX_RATE_LIMIT_RE =
-  /rate limit|too many requests|\b429\b|usage limit|quota exceeded|capacity exceeded/i;
+  /rate limit|too many requests|\b429\b|capacity exceeded/i;
+// A hard usage-cap exhaustion recovers on the plan's usage window, not on a
+// throttle backoff. It keeps rate-limit retry coordination (no budget burn)
+// but waits on an hour-scale default and is reported as usage exhaustion.
+export const CODEX_USAGE_EXHAUSTED_RE =
+  /usage limit|quota exceeded|exhausted [^\n]{0,40}usage|usage [^\n]{0,40}exhausted/i;
 export const CODEX_MODEL_UNAVAILABLE_RE =
   /(?:requested |selected )?model .{0,80}(?:not found|unavailable|not available|unsupported|not supported)|unknown model|model not found|do not have access to (?:the )?model/i;
 export const CODEX_SESSION_EXPIRED_RE =
@@ -148,9 +153,9 @@ export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: 
   return { output: output ?? stdout, tokenUsage };
 }
 
-function parseWaitSeconds(output: string): number {
+function parseWaitSeconds(output: string, fallbackSeconds = 300): number {
   const match = output.match(/(?:retry|try again)\s*(?:after|in)?\s*(\d+)\s*(?:seconds?|secs?|s)\b/i);
-  return match ? Number(match[1]) : 300;
+  return match ? Number(match[1]) : fallbackSeconds;
 }
 
 export class CodexProvider implements LLMProvider {
@@ -414,7 +419,8 @@ export class CodexProvider implements LLMProvider {
 
     // Rate limits take precedence over auth: some service responses include
     // both quota and sign-in wording, but retry coordination must win.
-    const rateLimited = exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(rawOutput);
+    const usageExhausted = exitCode !== 0 && CODEX_USAGE_EXHAUSTED_RE.test(rawOutput);
+    const rateLimited = usageExhausted || (exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(rawOutput));
     const modelUnavailable = exitCode !== 0 && CODEX_MODEL_UNAVAILABLE_RE.test(rawOutput);
     const authFailure = exitCode !== 0 && !rateLimited && !modelUnavailable && CODEX_AUTH_FAILURE_RE.test(rawOutput);
     const sessionExpired = CODEX_SESSION_EXPIRED_RE.test(rawOutput);
@@ -444,7 +450,12 @@ export class CodexProvider implements LLMProvider {
         : output,
       exitCode,
       rateLimited: rateLimited || undefined,
-      waitSeconds: rateLimited ? parseWaitSeconds(rawOutput) : undefined,
+      usageExhausted: usageExhausted || undefined,
+      waitSeconds: usageExhausted
+        ? parseWaitSeconds(rawOutput, 3600)
+        : rateLimited
+          ? parseWaitSeconds(rawOutput)
+          : undefined,
       modelUnavailable: modelUnavailable || undefined,
       authFailure: authFailure || undefined,
       permissionDenied: permissionDenied || undefined,

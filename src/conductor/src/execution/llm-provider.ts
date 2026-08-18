@@ -154,6 +154,8 @@ export interface InvokeResult {
   /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */
   observedIntervals?: readonly ObservedInterval[];
   rateLimited?: boolean;
+  /** The failure is a hard usage-cap exhaustion, not a transient throttle. */
+  usageExhausted?: boolean;
   waitSeconds?: number;
   /**
    * Task 18: Parsed absolute deadline (milliseconds since epoch) from rate-limit message.
