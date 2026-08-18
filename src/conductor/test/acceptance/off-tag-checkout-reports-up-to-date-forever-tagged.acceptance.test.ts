@@ -231,7 +231,7 @@ describe('off-tag checkout reports its real update identity (#1437)', () => {
     const before = await git(fixture.root, 'rev-parse', 'HEAD');
     const home = await makeHome('past-newest', {
       update_channel: 'tagged',
-      current_version: 'v0.4.0',
+      current_version: 'v9.9.9',
     });
 
     const result = await runEntry(fixture, home);

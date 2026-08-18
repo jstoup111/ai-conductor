@@ -330,12 +330,7 @@ check_harness_update_main() {
 
   local rollback_ref
   rollback_ref=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD")
-  # Explicit remote+branch: relies on origin/<branch> already having been
-  # fetched above, not on upstream tracking config being set (a checkout
-  # whose branch has no "branch.<name>.merge" set — e.g. never pushed with
-  # -u — would otherwise make plain `git pull` fail with "no tracking
-  # information" even though the ff-only merge itself is perfectly safe).
-  if ! git -C "$HARNESS_DIR" pull --ff-only origin "$branch" 2>/dev/null; then
+  if ! git -C "$HARNESS_DIR" pull --ff-only 2>/dev/null; then
     fail "Fast-forward pull failed — update manually: cd ${HARNESS_DIR} && git pull"
     return 0
   fi
