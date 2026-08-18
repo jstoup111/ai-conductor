@@ -260,6 +260,7 @@ describe('structural: smoke test entry point', () => {
         await expect(runSmokeCli(config, {
           mode: 'gate',
           environment: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+          hasCommand: () => true,
         })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
 
         expect(ledger, ledger.join('\n')).toContain(
