@@ -245,7 +245,7 @@ describe('acceptance: RSpec counterfactuals always settle the Tautology rubric (
       type: 'build_review_rubric_infrastructure_failure',
       rubric: 'tautology',
       reason: 'scoped-run-signaled',
-      failureExcerpt: expect.stringContaining('RSpec worker terminated after selecting example'),
+      excerpt: expect.stringContaining('RSpec worker terminated after selecting example'),
     }));
   });
 });
