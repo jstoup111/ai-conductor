@@ -67,12 +67,12 @@ describe('engine/build-review rubric skill contracts', () => {
     // content-free manifest (path + merge-base blob sha per file).
     expect(skill).toMatch(/reverted-production manifest/i);
 
-    expect(skill).toMatch(/contract version.*`v2`/i);
+    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/concern kind/i);
     expect(skill).toMatch(/changed test/i);
     expect(skill).toMatch(/exercised behavior\/assertion/i);
     expect(skill).toMatch(/violation kind/i);
-    expect(skill).toMatch(/"rubric": "tautology", "changedTest": "<string>"/);
+    expect(skill).toMatch(/"rubric": "tautology", "changedTest": \{"path": "<repository-relative path>",/);
     expect(skill).toMatch(/never\s+flattened/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
@@ -110,7 +110,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/unmatched paths?.*normally/i);
     expect(skill).toMatch(/does not.*exempt/i);
 
-    expect(skill).toMatch(/contract version.*`v2`/i);
+    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/out-of-plan path or surface/i);
     expect(skill).toMatch(/plan-scope relation/i);
     expect(skill).toMatch(/"rubric": "scope", "path": "<string>"/);
@@ -143,7 +143,9 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/stated defect\/outcome/i);
     expect(skill).toMatch(/symptom-only/i);
     expect(skill).toMatch(/implementation mechanism or locus/i);
+    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/"rubric": "rootCause", "statedDefect":/);
+    expect(skill).toMatch(/"locus": \{"path": "<repository-relative path>",/);
     expect(skill).toMatch(/typed logical anchors/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
@@ -173,6 +175,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/plan.*diff.*whole/i);
 
     expect(skill).toMatch(/default-enabled/i);
+    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/engine.*explicit disablement/i);
     expect(skill).toMatch(/missing deliverable/i);
     expect(skill).toMatch(/approved plan outcome\/task/i);

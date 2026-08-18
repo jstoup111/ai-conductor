@@ -3367,7 +3367,7 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v2',
+        contractVersion: 'v3',
         findings: branch.rubric === 'scope' ? [{
           concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
           evidenceLocations: ['src/example.ts:1'],
@@ -3392,7 +3392,7 @@ TIER: M`,
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v2', findings: [], verdict: 'PASS',
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: false });
@@ -4044,7 +4044,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
   const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
   const snapshotDigest = 'sha256:434fa33612c7d7188d5ba5398a748b54a28400bcb534988863610f64a70896f8';
   const projection = {
-    rubric: 'tautology', contractVersion: 'v2', projectionVersion: 'v2',
+    rubric: 'tautology', contractVersion: 'v3', projectionVersion: 'v2',
     lapId, snapshotDigest, digest: 'sha256:projection',
     mergeBase: 'base', headSha: 'head', changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
     changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
@@ -4062,7 +4062,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     'I read the referenced diff and measured each changed test.',
     '```json',
     JSON.stringify({
-      kind: 'judged', rubric: 'tautology', contractVersion: 'v2', lapId, snapshotDigest,
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v3', lapId, snapshotDigest,
       findings: [{
         concernKind: 'assertion-insensitive-to-production',
         changedTest: { path: 'test/engine/event-sinks.test.ts', suite: 'event sink subscriptions', name: 'rejects an unrelated sink' },
@@ -4075,14 +4075,18 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     '```',
   ].join('\n');
   const validOutput = JSON.stringify({
-    kind: 'judged', rubric: 'tautology', contractVersion: 'v2', lapId, snapshotDigest,
+    kind: 'judged', rubric: 'tautology', contractVersion: 'v3', lapId, snapshotDigest,
     findings: [{
       concernKind: 'assertion-insensitive-to-production',
       summary: 'The assertion compares a test-local mutated copy and can never fail.',
       evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
       anchor: {
         rubric: 'tautology',
-        changedTest: 'test/engine/event-sinks.test.ts',
+        changedTest: {
+          path: 'test/engine/event-sinks.test.ts',
+          contentHash: 'sha256:7849045d0fc1c72a360be630bf414918ecda92a8f0fcd56b79ec0a1bd93c92ca',
+          display: 'test/engine/event-sinks.test.ts changed test',
+        },
         exercisedBehavior: 'EVENT_SINKS persisted routing',
         violationKind: 'assertion-insensitive-to-production',
       },
@@ -4123,7 +4127,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
 
     expect(invoke).toHaveBeenCalledTimes(1);
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": "<canonical projection reference or report string>", "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
+    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>"}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
     expect(prompt).toContain('never flattened');
   });
 

@@ -12,9 +12,14 @@ DOMAIN_FILE="$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts"
 
 failures=0
 
-extract_engine_vocabulary() {
+extract_current_engine_vocabulary() {
   local rubric=$1
-  awk "/^  ${rubric}: Object\.freeze\\(\{/,/^  \}\),$/" "$DOMAIN_FILE" \
+  awk -v rubric="$rubric" '
+    /^export const BUILD_REVIEW_FINDING_VOCABULARIES = Object\.freeze\(\{$/ { in_vocabularies = 1; next }
+    in_vocabularies && $0 ~ "^  " rubric ": Object\\.freeze\\(\\{" { in_rubric = 1; next }
+    in_rubric && /^  \}\),$/ { exit }
+    in_rubric { print }
+  ' "$DOMAIN_FILE" \
     | grep -oE "'[^']+'" \
     | sed "s/^'//; s/'$//" \
     | sort -u
@@ -36,7 +41,7 @@ for rubric in tautology scope rootCause completeness; do
     continue
   fi
 
-  engine_vocabulary=$(extract_engine_vocabulary "$rubric")
+  engine_vocabulary=$(extract_current_engine_vocabulary "$rubric")
   documented_vocabulary=$(extract_documented_vocabulary "$skill_file")
   if [ -z "$engine_vocabulary" ] || [ -z "$documented_vocabulary" ]; then
     echo "could not extract closed vocabulary for ${rubric}" >&2

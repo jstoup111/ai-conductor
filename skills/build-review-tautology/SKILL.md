@@ -69,10 +69,10 @@ judged normally. This is not a finding: it must name both paths and whether prod
 move, which distinguishes relocation from deletion or masking. Unevaluated tests and non-Tautology
 results must not manufacture relocation-audit evidence.
 
-## Result contract (v2)
+## Result contract (v3)
 
 Return exactly one JSON `judged` result for rubric `tautology`: its top-level `kind` field is
-exactly the string `judged` (never `result` or any other field name), carrying contract version `v2`.
+exactly the string `judged` (never `result` or any other field name), carrying contract version `v3`.
 It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
 Return every independent finding; an empty array means no Tautology concern was found. Each finding
 contains:
@@ -86,11 +86,13 @@ contains:
   `test-does-not-exercise-changed-behavior`, `assertion-derived-from-test-data`, or
   `source-text-mirror`;
 - typed logical anchors for the changed test, exercised behavior/assertion, and violation kind,
-  carried in a nested `anchor` object — `{"rubric": "tautology", "changedTest": "<string>",
+  carried in a nested `anchor` object — `{"rubric": "tautology", "changedTest": {"path": "<repository-relative path>",
+  "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>"},
   "exercisedBehavior": "<string>", "violationKind": "<member>"}` — where `violationKind` must
   be one of `assertion-insensitive-to-production`, `test-does-not-exercise-changed-behavior`,
-  `assertion-derived-from-test-data`, or `source-text-mirror`. The subject fields remain plain
-  strings; `violationKind` must match `concernKind` after canonical normalization. The anchor is never flattened to the finding's top level or renamed (no `anchors`, no
+  `assertion-derived-from-test-data`, or `source-text-mirror`. `changedTest` is a content-region
+  reference from the immutable projection; `exercisedBehavior` remains report prose, and
+  `violationKind` must match `concernKind` after canonical normalization. The anchor is never flattened to the finding's top level or renamed (no `anchors`, no
   per-field objects);
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
