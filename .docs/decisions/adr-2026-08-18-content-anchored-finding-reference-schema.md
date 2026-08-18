@@ -155,3 +155,16 @@ dispositions (content change ⇒ new identity), while staying inside
 > the grader may treat identity as coarse for that entry (fail-open on identity precision,
 > never on execution).
 
+> **Amended 2026-08-18 (operator, superseding approval for equal-content disambiguation):**
+> a `content-region` reference MAY carry an optional `occurrence` field — the 0-based
+> ordinal of this region among regions of the SAME path (rootCause) or the same full
+> title chain (tautology `changedTest`) whose normalized content hashes are equal,
+> ordered by frozen-projection order. `occurrence` participates in the identity hash;
+> occurrence 0 hashes identically to an omitted field, so unique regions keep their
+> existing identities. This is a content-stable disambiguator assigned within
+> equal-content groups — NOT a coordinate encoding (no line numbers, offsets, or byte
+> ranges), and NOT a fourth reference kind. Selector renames with unchanged titles
+> retain identity when the title chain is unique; among genuine duplicates, identity
+> follows projection order, which is the accepted precision limit. This amendment is
+> the operator approval the base ADR requires for identity-semantics changes.
+
