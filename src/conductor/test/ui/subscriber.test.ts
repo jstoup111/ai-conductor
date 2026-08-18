@@ -2,21 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import type { ConductorEvent } from '../../src/types/index.js';
-import type { UIRenderer } from '../../src/ui/types.js';
 
 describe('TerminalSubscriber', () => {
   let emitter: ConductorEventEmitter;
   let renderCallback: ReturnType<typeof vi.fn>;
-  let terminalHandle: ReturnType<typeof vi.fn>;
   let subscriber: TerminalSubscriber;
 
   beforeEach(() => {
     vi.useFakeTimers();
     emitter = new ConductorEventEmitter();
     renderCallback = vi.fn();
-    terminalHandle = vi.fn().mockResolvedValue(undefined);
-    const terminalRenderer: UIRenderer = { handle: terminalHandle, stop: vi.fn() };
-    subscriber = new TerminalSubscriber(emitter, renderCallback, terminalRenderer);
+    subscriber = new TerminalSubscriber(emitter, renderCallback);
   });
 
   afterEach(() => {
@@ -84,29 +80,5 @@ describe('TerminalSubscriber', () => {
     await emitter.emit(event);
 
     expect(renderCallback).toHaveBeenCalledWith(event);
-  });
-
-  it('forwards only containment events to the terminal renderer', async () => {
-    subscriber.start();
-    const containedDrift: ConductorEvent = {
-      type: 'contained_live_checkout_drift',
-      evidence: 'bwrap live checkout read-only',
-      attribution: 'concurrent-operator',
-      summary: 'changed .claude/settings.local.json',
-    };
-    const containmentVerdict: ConductorEvent = {
-      type: 'self_host_containment_verdict',
-      contained: true,
-      evidence: 'bwrap probe passed',
-    };
-
-    await emitter.emit(containedDrift);
-    await emitter.emit(containmentVerdict);
-    await emitter.emit({ type: 'step_started', step: 'explore', index: 2 });
-
-    expect(terminalHandle.mock.calls.map(([event]) => event)).toEqual([
-      containedDrift,
-      containmentVerdict,
-    ]);
   });
 });
