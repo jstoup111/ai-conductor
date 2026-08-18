@@ -328,6 +328,22 @@ describe('build-review Tautology preflight', () => {
     expect(base.createCheckout).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ['cache read', { readCache: async () => { throw new Error('cache unavailable'); } }, 'cache-read-failed'],
+    ['cache write', { writeCache: async () => { throw new Error('cache unavailable'); } }, 'cache-write-failed'],
+  ])('preserves the output-free %s infrastructure reason', async (_name, cache, reason) => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: 'nonzero-exit', exitCode: 1, stdout: 'RED', stderr: '' }),
+      removeCheckout: async () => {},
+      ...cache,
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason });
+  });
+
   it('reuses an exact cached completed result without another checkout or scoped command', async () => {
     const cached = { classification: 'red', cacheable: true, cacheProvenance: 'miss', changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'], revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, scopedRun: { exitCode: 1, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'RED' } } as const;
     const createCheckout = vi.fn(async () => {});
@@ -373,6 +389,7 @@ describe('build-review Tautology preflight', () => {
     ['launch error', async () => ({ runScoped: async () => ({ kind: 'launch-error' as const, stdout: '', stderr: 'spawn failed' }) }), 'scoped-run-launch-failed'],
     ['timeout', async () => ({ runScoped: async () => ({ kind: 'timeout' as const, stdout: '', stderr: '' }) }), 'scoped-run-timeout'],
     ['signal termination', async () => ({ runScoped: async () => ({ kind: 'signal' as const, signal: 'SIGTERM', stdout: '', stderr: '' }) }), 'scoped-run-signaled'],
+    ['scoped command rejection', async () => ({ runScoped: async () => { throw new Error('command failed'); } }), 'scoped-run-failed'],
   ])('fails closed for %s without producing RED evidence', async (_name, overrides, reason) => {
     const removeCheckout = vi.fn(async () => {});
     const result = await materializeTautologyPreflight({
