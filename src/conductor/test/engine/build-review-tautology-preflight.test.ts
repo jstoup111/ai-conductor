@@ -344,6 +344,34 @@ describe('build-review Tautology preflight', () => {
     expect(result).toMatchObject({ classification: 'infrastructure-failure', reason });
   });
 
+  it.each([
+    ['no changed tests', () => ({ diff: 'not a git diff' }), 'no-changed-tests'],
+    ['no production changes', () => ({ diff: 'diff --git a/test/a.test.ts b/test/a.test.ts' }), 'no-production-changes'],
+    ['missing scoped configuration', () => ({ scopedWorkingDirectory: ' ' }), 'missing-scoped-configuration'],
+    ['materialization failure', () => ({ createCheckout: async () => { throw new Error('disk full'); } }), 'materialization-failed'],
+    ['missing merge-base file', () => ({ readMergeBaseFile: async () => undefined }), 'missing-merge-base-file'],
+    ['aborted run', () => {
+      const controller = new AbortController();
+      controller.abort();
+      return { abortSignal: controller.signal };
+    }, 'aborted'],
+    ['cleanup failure', () => ({ removeCheckout: async () => { throw new Error('cleanup failed'); } }), 'cleanup-failed'],
+    ['cache read failure', () => ({ readCache: async () => { throw new Error('cache unavailable'); } }), 'cache-read-failed'],
+    ['cache write failure', () => ({ writeCache: async () => { throw new Error('cache unavailable'); } }), 'cache-write-failed'],
+  ])('does not fabricate an excerpt for %s', async (_name, overrides, reason) => {
+    const result = await materializeTautologyPreflight({
+      scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head',
+      diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+      createCheckout: async () => {}, readMergeBaseFile: async () => 'BASE', writeFile: async () => {},
+      runScoped: async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }),
+      removeCheckout: async () => {},
+      ...overrides(),
+    });
+
+    expect(result).toMatchObject({ classification: 'infrastructure-failure', reason });
+    expect(result).not.toHaveProperty('failureExcerpt');
+  });
+
   it('reuses an exact cached completed result without another checkout or scoped command', async () => {
     const cached = { classification: 'red', cacheable: true, cacheProvenance: 'miss', changedPaths: ['src/a.ts', 'test/a.test.ts'], changedTestSelectors: ['test/a.test.ts'], revertedProductionManifest: [{ path: 'src/a.ts', mergeBaseBlobSha: 'e79120aab4682bfe81153595c7d2ec1ad3bd3dd8' }], sourceIdentities: { mergeBase: 'base', headSha: 'head' }, scopedRun: { exitCode: 1, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'RED' } } as const;
     const createCheckout = vi.fn(async () => {});
