@@ -1,4 +1,4 @@
-import { writeFile, access, readFile, mkdir, rename, rm } from 'node:fs/promises';
+import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
@@ -2072,6 +2072,21 @@ export class DefaultStepRunner implements StepRunner {
       createCheckout: async (path, headSha) => {
         const result = await this.gitRunner(['worktree', 'add', '--detach', path, headSha]);
         if (result.exitCode !== 0) throw new Error(result.stderr);
+        // A detached worktree contains tracked files only.  The source
+        // worktree's dependency installation is deliberately ignored by git,
+        // so expose it by reference rather than copying or tracking it.
+        try {
+          const sourceDependencies = join(this.projectDir, 'src', 'conductor', 'node_modules');
+          const detachedDependencies = join(path, 'src', 'conductor', 'node_modules');
+          await access(sourceDependencies);
+          await mkdir(join(path, 'src', 'conductor'), { recursive: true });
+          await symlink(sourceDependencies, detachedDependencies, 'dir');
+        } catch (error: unknown) {
+          // Missing dependencies remain the scoped command's ordinary
+          // launch/runtime concern.  Do not make projects without a local
+          // node_modules directory fail materialization merely for this aid.
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
       },
       readMergeBaseFile: async (path) => {
         const result = await this.gitRunner(['show', `${inputs.sourceSnapshot.mergeBase}:${path}`]);
