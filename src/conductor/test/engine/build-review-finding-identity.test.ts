@@ -230,6 +230,10 @@ describe('build-review finding identity', () => {
     const whitespaceOnlyHunk = '-  return   staleState;\n+\treturn persistedState;  ';
     const distinctHunk = '- return cachedState;\n+ return recomputedState;';
     const changedHunk = '- return staleState;\n+ return fallbackState;';
+    // Precomputed independently of the helpers under test:
+    // sha256 of "return staleState;\nreturn persistedState;" after
+    // whitespace normalization ("return staleState; return persistedState;").
+    const expectedContentHash = 'sha256:67a8c9094cb9d5c2e93d5b5adba5543970592651c73948b9f441433cc017c3e6';
     const contentHash = contentHashForHunk(hunk);
     const base = {
       rubric: 'rootCause' as const, contractVersion: 'v3' as const, concernKind: 'root-cause-unaddressed',
@@ -260,9 +264,10 @@ describe('build-review finding identity', () => {
       anchor: { ...base.anchor, locus: { ...base.anchor.locus, contentHash: contentHashForHunk(changedHunk) } },
     } as unknown as BuildReviewFindingIdentityInput);
 
-    expect(contentHashForHunk(whitespaceOnlyHunk)).toBe(contentHash);
+    expect(contentHash).toBe(expectedContentHash);
+    expect(contentHashForHunk(whitespaceOnlyHunk)).toBe(expectedContentHash);
     expect(first).toMatchObject({
-      canonicalPayload: { anchor: { locus: { path: 'src/handler.ts', contentHash: base.anchor.locus.contentHash } } },
+      canonicalPayload: { anchor: { locus: { path: 'src/handler.ts', contentHash: expectedContentHash } } },
     });
     expect(reworded).toEqual(first);
     expect(lineShifted).toEqual(first);
