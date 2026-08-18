@@ -3503,6 +3503,9 @@ TIER: M`,
       expect(scopePrompt).toContain('out of scope');
       expect(scopePrompt).toContain('"taskId":"3"');
       expect(scopePrompt).toContain(sha);
+      // Commit-message-derived widenings must carry their derived provenance
+      // flag into the grader prompt, not just path/rationale/task/sha.
+      expect(scopePrompt).toContain('"derived":true');
     });
 
     it('keeps grader failure output separate from derived scope-widening evidence', async () => {
