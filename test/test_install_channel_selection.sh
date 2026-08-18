@@ -51,6 +51,18 @@ if [ "$1" = config ] && [ "$2" = set ]; then
   exit 0
 fi
 
+if [ "$1" = config ] && [ "$2" = read ]; then
+  case "$3" in
+    conductor.update_channel) key=update_channel ;;
+    conductor.auto_check) key=auto_check ;;
+    conductor.current_version) key=current_version ;;
+    conductor.last_checked_at) key=last_checked_at ;;
+    *) exit 1 ;;
+  esac
+  sed -n "s/^  ${key}: //p" "${HOME}/.ai-conductor/config.yml" | tail -n 1
+  exit 0
+fi
+
 exit 1
 EOF
 chmod +x "$STUBS/conduct-ts"
@@ -77,11 +89,78 @@ for CHANNEL_CASE in 'separate-main:--channel main:main' 'equals-main:--channel=m
   fi
 done
 
+run_case() {
+  local case_home=$1
+  shift
+  (cd "$CHECKOUT" && HOME="$case_home" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" "$@" --allow-worktree-root </dev/null 2>&1)
+}
+
+ENV_HOME="$TMP_ROOT/home-env"
+EMPTY_ENV_HOME="$TMP_ROOT/home-empty-env"
+PRECEDENCE_HOME="$TMP_ROOT/home-precedence"
+mkdir -p "$ENV_HOME" "$EMPTY_ENV_HOME" "$PRECEDENCE_HOME"
+ENV_OUT=$(AI_CONDUCTOR_CHANNEL=tagged run_case "$ENV_HOME")
+EMPTY_ENV_OUT=$(AI_CONDUCTOR_CHANNEL='   ' run_case "$EMPTY_ENV_HOME")
+PRECEDENCE_OUT=$(AI_CONDUCTOR_CHANNEL=main run_case "$PRECEDENCE_HOME" --channel stable)
+if grep -Fxq '  update_channel: tagged' "$ENV_HOME/.ai-conductor/config.yml" \
+  && grep -Fq 'AI_CONDUCTOR_CHANNEL environment variable' <<< "$ENV_OUT" \
+  && grep -Fxq '  update_channel: stable' "$EMPTY_ENV_HOME/.ai-conductor/config.yml" \
+  && grep -Fq 'stable fallback' <<< "$EMPTY_ENV_OUT" \
+  && grep -Fxq '  update_channel: stable' "$PRECEDENCE_HOME/.ai-conductor/config.yml" \
+  && grep -Fq -- '--channel flag' <<< "$PRECEDENCE_OUT"; then
+  echo 'PASS environment fallback, whitespace fallback, and flag precedence choose the expected source'
+else
+  FAILURES="${FAILURES}environment precedence or source confirmation failed\n"
+fi
+
+for INVALID_CASE in 'flag:--channel bogus' 'missing:--channel' 'empty:--channel=' 'env:'; do
+  IFS=':' read -r CASE_NAME INVALID_ARGS <<< "$INVALID_CASE"
+  CASE_HOME="$TMP_ROOT/home-invalid-$CASE_NAME"
+  mkdir -p "$CASE_HOME"
+  set +e
+  if [ "$CASE_NAME" = env ]; then
+    INVALID_OUT=$(AI_CONDUCTOR_CHANNEL=bogus run_case "$CASE_HOME")
+  else
+    read -r -a ARGS <<< "$INVALID_ARGS"
+    INVALID_OUT=$(run_case "$CASE_HOME" "${ARGS[@]}")
+  fi
+  INVALID_CODE=$?
+  set -e
+  if [ "$INVALID_CODE" -ne 0 ] && [ ! -e "$CASE_HOME/.ai-conductor/config.yml" ] \
+    && grep -Fq 'stable, tagged, main' <<< "$INVALID_OUT"; then
+    echo "PASS invalid ${CASE_NAME} channel is rejected before configuration"
+  else
+    FAILURES="${FAILURES}invalid ${CASE_NAME} channel was not rejected before configuration\n"
+  fi
+done
+
+CONFIGURED_HOME="$TMP_ROOT/home-configured"
+mkdir -p "$CONFIGURED_HOME/.ai-conductor"
+printf 'conductor:\n  update_channel: main\n' > "$CONFIGURED_HOME/.ai-conductor/config.yml"
+CONFIGURED_OUT=$(run_case "$CONFIGURED_HOME" --channel stable)
+if grep -Fxq '  update_channel: main' "$CONFIGURED_HOME/.ai-conductor/config.yml" \
+  && grep -Fq 'Ignoring --channel flag channel' <<< "$CONFIGURED_OUT" \
+  && grep -Fq 'bin/update --set-channel' <<< "$CONFIGURED_OUT"; then
+  echo 'PASS an existing channel is preserved and an explicit first-run choice is explained'
+else
+  FAILURES="${FAILURES}configured channel was overwritten or ignored silently\n"
+fi
+
+HELP_LONG=$(HOME="$TMP_ROOT/help-home" "$CHECKOUT/bin/install" --help)
+HELP_SHORT=$(HOME="$TMP_ROOT/help-home" "$CHECKOUT/bin/install" -h)
+if [ "$HELP_LONG" = "$HELP_SHORT" ] && grep -Fq -- '--channel' <<< "$HELP_LONG" \
+  && grep -Fq 'stable, tagged, or main' <<< "$HELP_LONG" \
+  && grep -Fq 'AI_CONDUCTOR_CHANNEL' <<< "$HELP_LONG"; then
+  echo 'PASS help documents the channel flag and environment equivalent'
+else
+  FAILURES="${FAILURES}installer help does not document channel selection\n"
+fi
+
 if [ -z "$FAILURES" ]; then
-  echo 'PASS explicit --channel selection is preserved on every non-interactive first run'
+  echo 'PASS explicit channel selection behavior is fully covered'
   exit 0
 fi
 
-echo 'FAIL explicit --channel selection is preserved on every non-interactive first run'
+echo 'FAIL explicit channel selection behavior is fully covered'
 printf '%b' "$FAILURES"
 exit 1
