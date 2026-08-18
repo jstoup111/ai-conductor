@@ -158,6 +158,76 @@ describe('build-review domain', () => {
     }))).toEqual(Array(6).fill(undefined));
   });
 
+  it('assigns occurrence ordinals to equal-content hunks in one path, in projection order', () => {
+    const repeatedHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const distinctHash = 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+    const hunk = (contentHash: string, oldStart: number) =>
+      ({ oldStart, oldCount: 1, newStart: oldStart + 2, newCount: 1, contentHash });
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'rootCause',
+      changedFiles: [
+        { path: 'src/handler.ts', changeKind: 'modified', hunks: [hunk(repeatedHash, 12), hunk(distinctHash, 40), hunk(repeatedHash, 90)] },
+        { path: 'src/other.ts', changeKind: 'modified', hunks: [hunk(repeatedHash, 5)] },
+      ],
+    } as unknown as BuildReviewRubricProjection) as unknown as {
+      readonly rootCauseLoci: readonly { readonly path: string; readonly contentHash: string; readonly occurrence?: number }[];
+    };
+
+    expect(references.rootCauseLoci.map(({ path, contentHash, occurrence }) => ({ path, contentHash, occurrence }))).toEqual([
+      { path: 'src/handler.ts', contentHash: repeatedHash, occurrence: undefined },
+      { path: 'src/handler.ts', contentHash: distinctHash, occurrence: undefined },
+      { path: 'src/handler.ts', contentHash: repeatedHash, occurrence: 1 },
+      { path: 'src/other.ts', contentHash: repeatedHash, occurrence: undefined },
+    ]);
+  });
+
+  it('assigns occurrence ordinals to duplicate full title chains among changed tests', () => {
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'tautology', changedFiles: [],
+      changedTestSelectors: ['test/widget.test.ts'],
+      changedTestTitles: [
+        { selector: 'test/widget.test.ts', titleText: 'widget > persists state', staticExtractionFallback: false },
+        { selector: 'test/widget.test.ts', titleText: 'widget > persists state', staticExtractionFallback: false },
+        { selector: 'test/widget.test.ts', titleText: 'widget > loads state', staticExtractionFallback: false },
+      ],
+    } as unknown as BuildReviewRubricProjection) as unknown as {
+      readonly changedTestRegions: readonly { readonly path: string; readonly contentHash: string; readonly occurrence?: number }[];
+    };
+
+    expect(references.changedTestRegions).toHaveLength(3);
+    const [first, second, third] = references.changedTestRegions;
+    expect(second.contentHash).toBe(first.contentHash);
+    expect(first.occurrence).toBeUndefined();
+    expect(second.occurrence).toBe(1);
+    expect(third.occurrence).toBeUndefined();
+    expect(third.contentHash).not.toBe(first.contentHash);
+  });
+
+  it('matches grader-cited occurrences against the derived context and rejects unknown or malformed ones', () => {
+    const repeatedHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const hunk = (oldStart: number) => ({ oldStart, oldCount: 1, newStart: oldStart, newCount: 1, contentHash: repeatedHash });
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'rootCause',
+      changedFiles: [{ path: 'src/handler.ts', changeKind: 'modified', hunks: [hunk(12), hunk(90)] }],
+    } as unknown as BuildReviewRubricProjection);
+    const judged = (locus: Record<string, unknown>) => parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'rootCause', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      findings: [{
+        concernKind: 'root-cause-unaddressed', summary: 'The persisted state is skipped.', evidenceLocations: ['src/handler.ts:14'],
+        anchor: { rubric: 'rootCause', statedDefect: 'state is not persisted', locus, relation: 'root-cause-unaddressed' },
+      }],
+    }, references);
+    const locus = { path: 'src/handler.ts', contentHash: repeatedHash, display: 'persistence return branch' };
+
+    expect(judged(locus)).toMatchObject({ findings: [{ anchor: { locus: { contentHash: repeatedHash } } }] });
+    expect(judged({ ...locus, occurrence: 1 })).toMatchObject({ findings: [{ anchor: { locus: { occurrence: 1 } } }] });
+    expect(judged({ ...locus, occurrence: 0 })).toMatchObject({ findings: [{ anchor: { locus: { contentHash: repeatedHash } } }] });
+    expect(judged({ ...locus, occurrence: 2 })).toBeUndefined();
+    expect(judged({ ...locus, occurrence: -1 })).toBeUndefined();
+    expect(judged({ ...locus, occurrence: 1.5 })).toBeUndefined();
+    expect(judged({ ...locus, occurrence: '1' })).toBeUndefined();
+  });
+
   it('pins the closed three-kind reference schema and rubric anchor bindings', () => {
     expect({
       kinds: buildReviewDomain.BUILD_REVIEW_FINDING_REFERENCE_KINDS,
@@ -358,13 +428,13 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
 
   it('renders the exact per-rubric anchor schema', () => {
     expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
-      '"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>"}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
+      '"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
     );
     expect(renderBuildReviewJudgedResultShape('scope')).toContain(
       '"anchor": {"rubric": "scope", "path": "<canonical projection reference or report string>", "relation": "<one of: not-authorized-by-plan>"}',
     );
     expect(renderBuildReviewJudgedResultShape('rootCause')).toContain(
-      '"anchor": {"rubric": "rootCause", "statedDefect": "<canonical projection reference or report string>", "locus": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-hunk-content>", "display": "<human-readable non-coordinate label>"}, "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>"}',
+      '"anchor": {"rubric": "rootCause", "statedDefect": "<canonical projection reference or report string>", "locus": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-hunk-content>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>"}',
     );
     expect(renderBuildReviewJudgedResultShape('completeness')).toContain(
       '"anchor": {"rubric": "completeness", "planTask": "<canonical projection reference or report string>", "missingSurface": "<canonical projection reference or report string>", "missingOutcome": "<canonical projection reference or report string>", "missingKind": "<one of: missing-deliverable>"}',

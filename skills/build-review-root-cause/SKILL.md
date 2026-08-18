@@ -53,7 +53,10 @@ Return every independent finding; an empty array means a PASS for this rubric. E
   "contentHash": "sha256:<normalized-hunk-content>", "display": "<human-readable non-coordinate label>"}, "relation": "<member>"}` — where `relation` must be one
   of `root-cause-unaddressed`, `symptom-only-fix`, or `provenance-sensitive-cache-identity`, and
   must match `concernKind` after canonical normalization.
-  `locus` is a content-region reference from the immutable projection; `statedDefect` remains report prose. Never flatten the anchor to the finding's top level or
+  `locus` is a content-region reference from the immutable projection; `statedDefect` remains report prose. When the same
+  normalized hunk content appears more than once in one path, add `"occurrence": <0-based ordinal
+  in projection order>` to the region (omit it for the first or only occurrence) — never a line
+  number or any other coordinate. Never flatten the anchor to the finding's top level or
   rename it;
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.

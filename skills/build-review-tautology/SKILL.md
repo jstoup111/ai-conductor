@@ -91,7 +91,10 @@ contains:
   "exercisedBehavior": "<string>", "violationKind": "<member>"}` — where `violationKind` must
   be one of `assertion-insensitive-to-production`, `test-does-not-exercise-changed-behavior`,
   `assertion-derived-from-test-data`, or `source-text-mirror`. `changedTest` is a content-region
-  reference from the immutable projection; `exercisedBehavior` remains report prose, and
+  reference from the immutable projection; when two changed tests in one selector path carry an
+  identical full declared title chain, add `"occurrence": <0-based ordinal in projection order>`
+  to the region (omit it for the first or only occurrence) — never a line number or any other
+  coordinate. `exercisedBehavior` remains report prose, and
   `violationKind` must match `concernKind` after canonical normalization. The anchor is never flattened to the finding's top level or renamed (no `anchors`, no
   per-field objects);
 - an actionable summary; and

@@ -19,7 +19,7 @@ export interface BuildReviewFindingIdentityInput {
 }
 
 type BuildReviewFindingCanonicalAnchor =
-  | { readonly rubric: 'tautology'; readonly changedTest: string | { readonly contentHash: string; readonly path?: string }; readonly violationKind: string }
+  | { readonly rubric: 'tautology'; readonly changedTest: string | { readonly contentHash: string; readonly path?: string; readonly occurrence?: number }; readonly violationKind: string }
   | { readonly rubric: 'scope'; readonly path: string; readonly relation: string }
   | { readonly rubric: 'rootCause'; readonly locus: string | Omit<BuildReviewContentRegionReference, 'display'>; readonly relation: string }
   | { readonly rubric: 'completeness'; readonly planTask: string; readonly missingSurface: string };
@@ -59,7 +59,10 @@ function canonicalAnchor(anchor: BuildReviewFindingAnchor): BuildReviewFindingCa
         rubric: anchor.rubric,
         changedTest: typeof anchor.changedTest === 'string'
           ? anchor.changedTest
-          : { contentHash: anchor.changedTest.contentHash },
+          : {
+              contentHash: anchor.changedTest.contentHash,
+              ...(anchor.changedTest.occurrence ? { occurrence: anchor.changedTest.occurrence } : {}),
+            },
         violationKind: anchor.violationKind,
       };
     case 'scope':
@@ -69,7 +72,11 @@ function canonicalAnchor(anchor: BuildReviewFindingAnchor): BuildReviewFindingCa
         rubric: anchor.rubric,
         locus: typeof anchor.locus === 'string'
           ? anchor.locus
-          : { path: anchor.locus.path, contentHash: anchor.locus.contentHash },
+          : {
+              path: anchor.locus.path,
+              contentHash: anchor.locus.contentHash,
+              ...(anchor.locus.occurrence ? { occurrence: anchor.locus.occurrence } : {}),
+            },
         relation: anchor.relation,
       };
     case 'completeness':

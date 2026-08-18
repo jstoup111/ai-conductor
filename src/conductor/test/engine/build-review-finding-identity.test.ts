@@ -270,6 +270,47 @@ describe('build-review finding identity', () => {
     expect(changedContent?.id).not.toBe(first?.id);
   });
 
+  it('disambiguates equal-content regions in one path by their occurrence ordinal', () => {
+    const locus = {
+      path: 'src/handler.ts',
+      contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      display: 'persistence return branch',
+    };
+    const rootCauseFinding = (occurrence?: number) => ({
+      rubric: 'rootCause' as const, contractVersion: 'v3' as const, concernKind: 'root-cause-unaddressed',
+      anchor: {
+        rubric: 'rootCause' as const, statedDefect: 'state is not persisted', relation: 'root-cause-unaddressed',
+        locus: occurrence === undefined ? locus : { ...locus, occurrence },
+      },
+    });
+    const changedTest = {
+      path: 'test/widget.test.ts',
+      contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      display: 'widget persists state',
+    };
+    const tautologyFinding = (occurrence?: number) => ({
+      rubric: 'tautology' as const, contractVersion: 'v3' as const, concernKind: 'source-text-mirror',
+      anchor: {
+        rubric: 'tautology' as const, exercisedBehavior: 'persists state', violationKind: 'source-text-mirror',
+        changedTest: occurrence === undefined ? changedTest : { ...changedTest, occurrence },
+      },
+    });
+
+    const rootCauseOmitted = canonicalizeBuildReviewFindingIdentity(rootCauseFinding());
+    const rootCauseZero = canonicalizeBuildReviewFindingIdentity(rootCauseFinding(0));
+    const rootCauseSecond = canonicalizeBuildReviewFindingIdentity(rootCauseFinding(1));
+    const tautologyOmitted = canonicalizeBuildReviewFindingIdentity(tautologyFinding());
+    const tautologyZero = canonicalizeBuildReviewFindingIdentity(tautologyFinding(0));
+    const tautologySecond = canonicalizeBuildReviewFindingIdentity(tautologyFinding(1));
+
+    expect(rootCauseSecond).toMatchObject({ id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) });
+    expect(tautologySecond).toMatchObject({ id: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) });
+    expect(rootCauseZero).toEqual(rootCauseOmitted);
+    expect(rootCauseSecond?.id).not.toBe(rootCauseOmitted?.id);
+    expect(tautologyZero).toEqual(tautologyOmitted);
+    expect(tautologySecond?.id).not.toBe(tautologyOmitted?.id);
+  });
+
   it('binds v3 tautology identity to the declared test title rather than its selector', () => {
     const originalTitle = 'widget persists state';
     const base = {

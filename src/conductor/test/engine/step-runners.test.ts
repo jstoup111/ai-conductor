@@ -4127,7 +4127,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
 
     expect(invoke).toHaveBeenCalledTimes(1);
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>"}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
+    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
     expect(prompt).toContain('never flattened');
   });
 
