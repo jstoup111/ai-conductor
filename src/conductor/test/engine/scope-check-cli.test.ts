@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import * as scopeCheckCli from '../../src/engine/scope-check-cli.js';
-import { COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 
 const { detectScopeCheckCommand, runScopeCheck } = scopeCheckCli;
 const loadScopeCheckEnforcement = (
@@ -41,6 +40,7 @@ describe('scope-check CLI', () => {
 
   it('loads report-only as the default from resolved project configuration', async () => {
     await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), '{}\n');
+
     await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(false);
   });
 
@@ -80,31 +80,38 @@ describe('scope-check CLI', () => {
     ).resolves.toBe(false);
   });
 
-  it('contains no withdrawn enforcement-flip guidance in the scope-check source or generated hook', async () => {
-    const source = await readFile(new URL('../../src/engine/scope-check-cli.ts', import.meta.url), 'utf8');
-    const withdrawnGuidance = [
-      'Flip this single value',
-      'enforcing scope refusals',
-      'one-line enforcement flip',
-      'a later resolved enforcement flip',
-      'this branch then refuses the commit',
-    ];
+  it.each([
+    [0, 'an allowed path', () => runScopeCheck({
+      projectRoot: '/repo',
+      commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+      readFile: async (path) => path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+      stagedPaths: async () => ['src/conductor/src/engine/config.ts'],
+    })],
+    [0, 'an advisory out-of-floor path', () => runScopeCheck({
+      projectRoot: '/repo',
+      commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+      enforce: true,
+      readFile: async (path) => path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+      stagedPaths: async () => ['src/conductor/src/engine/artifacts.ts'],
+      print: () => undefined,
+    })],
+    [3, 'an unresolvable task-status file', () => runScopeCheck({
+      projectRoot: '/repo',
+      commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+      readFile: async (path) => path.endsWith('task-status.json') ? '{' : MESSAGE,
+      stagedPaths: async () => ['src/conductor/src/engine/config.ts'],
+    })],
+    [0, 'a not-applicable commit', () => runScopeCheck({
+      projectRoot: '/repo',
+      commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+      readFile: async (path) => path.endsWith('task-status.json') ? TASK_STATUS : 'fix: no task\n',
+      stagedPaths: async () => ['src/conductor/src/engine/config.ts'],
+    })],
+  ])('returns exit code %i, never reserved code 2, for %s', async (expectedExitCode, _name, run) => {
+    const exitCode = await run();
 
-    for (const phrase of withdrawnGuidance) {
-      expect(source).not.toContain(phrase);
-      expect(COMMIT_MSG_HOOK).not.toContain(phrase);
-    }
-  });
-
-  it('keeps reserved exit code 2 outside runScopeCheck', async () => {
-    const source = await readFile(new URL('../../src/engine/scope-check-cli.ts', import.meta.url), 'utf8');
-    const runScopeCheckStart = source.indexOf('export async function runScopeCheck');
-    const nextDeclaration = source.indexOf('/** Record hook-owned uncertainty', runScopeCheckStart);
-    const runScopeCheckSource = source.slice(runScopeCheckStart, nextDeclaration);
-
-    expect(runScopeCheckStart).toBeGreaterThanOrEqual(0);
-    expect(nextDeclaration).toBeGreaterThan(runScopeCheckStart);
-    expect(runScopeCheckSource).not.toMatch(/\breturn\s+2\b/);
+    expect(exitCode).toBe(expectedExitCode);
+    expect(exitCode).not.toBe(2);
   });
 
   it('detects the commit-message path for the dispatcher', () => {

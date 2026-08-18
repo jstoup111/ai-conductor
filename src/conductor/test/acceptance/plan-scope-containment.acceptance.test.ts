@@ -181,7 +181,7 @@ describe('acceptance: out-of-plan production edits reach build_review with conte
     });
     expect(report.acceptedWidenings).toEqual([]);
     expect(report.skipNotes).toEqual([]);
-    expect(graderPrompt([])).not.toContain(unrelatedPath);
+    expect(graderPrompt(report.acceptedWidenings)).not.toContain(unrelatedPath);
   });
 
   it('carries authored and derived rationales from a real commit into build_review', async () => {

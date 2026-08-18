@@ -70,13 +70,6 @@ build_review:
       llm_provider: codex
       model: gpt-5.6-sol
 
-wiring:
-  entry_points:
-    - src/conductor/src/index.ts
-    - src/conductor/src/daemon-cli.ts
-    - src/conductor/src/intake-loop-cli.ts
-    - src/conductor/src/engine/engineer-cli.ts
-
 # Native pre-SHIP aggregate verification. The project-owned npm script runs
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
 # in one operation. Harness integrity remains a separate self-host gate.

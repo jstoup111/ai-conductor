@@ -283,9 +283,9 @@ describe('per-task-commit-floor', () => {
   });
 
   it.each([
-    ['an unstaged trailer', 'Scope: absent.ts — not staged'],
-    ['a malformed trailer', 'Scope: other/derived.ts missing separator'],
-  ])('derives a rationale when given %s', async (_caseName, scopeLine) => {
+    ['an unstaged trailer', 'Scope: absent.ts — not staged', 'fallback\n\nScope: absent.ts — not staged'],
+    ['a malformed trailer', 'Scope: other/derived.ts missing separator', 'fallback\n\nScope: other/derived.ts missing separator'],
+  ])('derives the commit rationale when given %s', async (_caseName, scopeLine, expectedRationale) => {
     await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
     await mkdir(join(dir, 'other'), { recursive: true });
     await writeFile(join(dir, 'other/derived.ts'), 'x');
@@ -294,9 +294,11 @@ describe('per-task-commit-floor', () => {
 
     const report = await runContainmentFloor({ projectRoot: dir, planPath });
 
-    expect(report.acceptedWidenings).toMatchObject([
-      { path: 'other/derived.ts', rationale: expect.any(String), derived: true },
-    ]);
+    const rationale = report.acceptedWidenings[0]?.rationale;
+    expect(report.acceptedWidenings).toMatchObject([{ path: 'other/derived.ts', derived: true }]);
+    expect(rationale).toBe(expectedRationale);
+    expect(rationale).not.toContain('Task: 3');
+    expect(rationale).not.toContain('Commit message unavailable');
   });
 
   it('visibly truncates an over-long derived rationale', async () => {
