@@ -248,6 +248,35 @@ function skipQuotedSource(source: string, index: number): number | undefined {
   return undefined;
 }
 
+function skipRegexLiteral(source: string, index: number): number | undefined {
+  let inCharacterClass = false;
+  for (let cursor = index + 1; cursor < source.length; cursor += 1) {
+    if (source[cursor] === '\\') {
+      cursor += 1;
+    } else if (source[cursor] === '[') {
+      inCharacterClass = true;
+    } else if (source[cursor] === ']') {
+      inCharacterClass = false;
+    } else if (source[cursor] === '/' && !inCharacterClass) {
+      cursor += 1;
+      while (/[a-z]/i.test(source[cursor] ?? '')) cursor += 1;
+      return cursor;
+    } else if (source[cursor] === '\n' || source[cursor] === '\r') {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function regexCanStartAt(source: string, index: number): boolean {
+  let cursor = index - 1;
+  while (cursor >= 0 && /\s/.test(source[cursor]!)) cursor -= 1;
+  if (cursor < 0) return true;
+  if (/[([{:;,=!?&|^~+\-*%<>]/.test(source[cursor]!)) return true;
+  const precedingWord = source.slice(0, cursor + 1).match(/[A-Za-z_$][\w$]*$/)?.[0];
+  return precedingWord === 'return' || precedingWord === 'throw' || precedingWord === 'case';
+}
+
 /** Skip source trivia and literals so static extraction never treats their text as executable. */
 function skipNonCodeSource(source: string, index: number): number | undefined {
   if (source[index] === "'" || source[index] === '"' || source[index] === '`') {
@@ -260,6 +289,9 @@ function skipNonCodeSource(source: string, index: number): number | undefined {
   if (source[index] === '/' && source[index + 1] === '*') {
     const end = source.indexOf('*/', index + 2);
     return end < 0 ? undefined : end + 2;
+  }
+  if (source[index] === '/' && regexCanStartAt(source, index)) {
+    return skipRegexLiteral(source, index);
   }
   return index;
 }

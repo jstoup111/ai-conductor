@@ -205,7 +205,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
               const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
               return JSON.stringify({
                 kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-                snapshotDigest: projection.snapshotDigest, contractVersion: 'v2', findings: [],
+                snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
               });
             })();
         return {
