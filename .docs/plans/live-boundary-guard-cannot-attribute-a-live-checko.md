@@ -382,6 +382,8 @@ Tasks 7–10 and 13 have no dependency on the 1–6 chain and may run in any ord
 - `CLAUDE.md` — Daemon Operations Safety section 5
 ### Task rem-root-cause-1: src/conductor/src/engine/self-host/live-containment.ts:58-74 and src/conductor/test/engine/self-host/live-containment-enforcement.test.ts:19-48 — isolate the sandbox PID/proc view so /proc/<outside-process-pid>/root cannot reach the live checkout, and extend the real-bwrap test to prove that alternate path cannot mutate it before containment may be trusted
 ### Task rem-completeness-1: src/conductor/src/engine/config.ts:1194-1206, src/conductor/src/types/config.ts:361-371, src/conductor/src/engine/resolved-config.ts:643-644, and src/conductor/test/engine/self-host-config.test.ts:13-66 — admit and type harness_self_host.live_containment as a boolean, remove the resolver cast, and prove validateConfig accepts false before resolveSelfHostConfig preserves the opt-out
+### Task rem-adr-001: src/conductor/src/types/events.ts:144, src/conductor/src/engine/self-host/live-boundary.ts:354, and src/conductor/src/engine/conductor.ts:3169-3176 — add and emit a contained-live-checkout-drift ConductorEvent through the existing EventPersister spine carrying ContainmentVerdict.evidence, explicit concurrent-operator attribution, and the describeDiff summary
+### Task rem-adr-002: src/conductor/test/acceptance/contained-live-checkout-drift-attribution.acceptance.test.ts — add failing-then-green Story 4 AC3 coverage proving contained drift does not halt and produces an events.jsonl record stating containment evidence, concurrent-operator attribution, and the changed-path summary
 
 ---
 
