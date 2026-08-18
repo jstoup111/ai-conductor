@@ -114,14 +114,6 @@ export class TerminalRenderer implements UIRenderer {
     }
 
     switch (event.type) {
-      case 'contained_live_checkout_drift':
-        this.region.log(chalk.dim(`  self-host contained; concurrent operator drift: ${event.summary}`));
-        break;
-      case 'self_host_containment_verdict':
-        this.region.log(chalk.dim(event.contained
-          ? `  self-host containment verified: ${event.evidence}`
-          : `  self-host containment unavailable: ${event.reason}`));
-        break;
       case 'step_started': {
         const def = this.steps.find((s) => s.name === event.step);
         this.currentStep = {
