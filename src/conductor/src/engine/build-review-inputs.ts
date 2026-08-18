@@ -14,6 +14,7 @@ import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskVerifyOnly } from './autoheal.js';
 import { parsePlanTaskPaths, parsePlanTaskPreserves } from './plan-task-parse.js';
+import { classifyTautologyPaths } from './build-review-tautology-preflight.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -118,6 +119,16 @@ export interface BuildReviewSourceSnapshot {
   readonly verifyOnlyContext?: readonly BuildReviewVerifyOnlyContext[];
   /** Engine-parsed preserved-behavior plan evidence frozen with the source read. */
   readonly preservationContext?: readonly BuildReviewPreservationContext[];
+  /** Static title evidence read from the graded HEAD, never the live worktree. */
+  readonly changedTestTitles?: readonly BuildReviewChangedTestTitle[];
+}
+
+/** One executable changed-test selector's declared title evidence. */
+export interface BuildReviewChangedTestTitle {
+  readonly selector: string;
+  readonly titleText: string;
+  /** True when static parsing could not safely recover every declared title. */
+  readonly staticExtractionFallback: boolean;
 }
 
 /** Immutable operator reseal record captured in a source snapshot. */
@@ -214,6 +225,43 @@ function withoutDiffBlobIdentities(diff: string): string {
 /** Repair-record identity and invalidation timing explain provenance, not remediation meaning. */
 function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
   return repairs.map(({ gate, reason, diagnostic }) => ({ gate, reason, diagnostic }));
+}
+
+function changedPathsFromDiff(diff: string): readonly string[] {
+  return [...diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+}
+
+function staticTestTitle(source: string): { titleText: string; staticExtractionFallback: boolean } {
+  const calls = [...source.matchAll(/\b(?:describe|context|suite|it|test|specify)\s*\(\s*/g)];
+  const titles: string[] = [];
+  let fallback = false;
+  for (const call of calls) {
+    const rest = source.slice(call.index! + call[0].length);
+    const match = /^(?:'((?:\\.|[^'])*)'|"((?:\\.|[^"])*)"|`((?:\\.|[^`])*)`)/.exec(rest);
+    if (!match) {
+      fallback = true;
+      continue;
+    }
+    titles.push(match[1] ?? match[2] ?? match[3] ?? '');
+  }
+  return titles.length > 0 && !fallback
+    ? { titleText: titles.join(' > '), staticExtractionFallback: false }
+    : { titleText: '', staticExtractionFallback: true };
+}
+
+async function snapshotChangedTestTitles(
+  git: GitRunner,
+  headSha: string,
+  diff: string,
+): Promise<readonly BuildReviewChangedTestTitle[]> {
+  const selectors = classifyTautologyPaths(changedPathsFromDiff(diff)).tests;
+  return Object.freeze(await Promise.all(selectors.map(async (selector) => {
+    const result = await git(['show', `${headSha}:${selector}`]);
+    const extracted = result.exitCode === 0
+      ? staticTestTitle(result.stdout)
+      : { titleText: '', staticExtractionFallback: true };
+    return Object.freeze({ selector, ...extracted });
+  })));
 }
 
 function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): readonly AcceptedScopeWidening[] {
@@ -319,6 +367,7 @@ export async function assembleBuildReviewInputs(
   }
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
+  const changedTestTitles = await snapshotChangedTestTitles(git, inspection.evidence.provenanceHeadSha, diffResult.stdout);
   const snapshotWithoutDigest = {
     baseRef,
     mergeBase: mergeBaseSha,
@@ -350,6 +399,7 @@ export async function assembleBuildReviewInputs(
       taskId: context.taskId,
       behavior: context.behavior,
     }))),
+    changedTestTitles,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,

@@ -29,6 +29,10 @@ function contentHashForHunk(hunk: string): string {
   return `sha256:${createHash('sha256').update(normalized).digest('hex')}`;
 }
 
+function contentHashForText(value: string): string {
+  return `sha256:${createHash('sha256').update(value.replaceAll(/\s+/g, ' ').trim()).digest('hex')}`;
+}
+
 describe('build-review finding identity', () => {
   const fixtures: readonly BuildReviewFindingIdentityInput[] = [
     {
@@ -266,28 +270,43 @@ describe('build-review finding identity', () => {
     expect(changedContent?.id).not.toBe(first?.id);
   });
 
-  it('canonicalizes v3 tautology changed-test content regions without their display', () => {
+  it('binds v3 tautology identity to the declared test title rather than its selector', () => {
+    const originalTitle = 'widget persists state';
     const base = {
       rubric: 'tautology', contractVersion: 'v3', concernKind: 'source-text-mirror',
       anchor: {
         rubric: 'tautology', exercisedBehavior: 'persists state', violationKind: 'source-text-mirror',
         changedTest: {
           path: 'test/widget.test.ts',
-          contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          display: 'widget persists state',
+          contentHash: contentHashForText(originalTitle),
+          display: originalTitle,
         },
       },
     };
     const first = canonicalizeBuildReviewFindingIdentity(base);
-    const reworded = canonicalizeBuildReviewFindingIdentity({
-      ...base, anchor: { ...base.anchor, changedTest: { ...base.anchor.changedTest, display: 'reworded test title' } },
+    const rewordedTitle = canonicalizeBuildReviewFindingIdentity({
+      ...base, anchor: {
+        ...base.anchor,
+        changedTest: {
+          ...base.anchor.changedTest,
+          contentHash: contentHashForText('widget saves its persisted state'),
+          display: 'widget saves its persisted state',
+        },
+      },
+    });
+    const renamedSelector = canonicalizeBuildReviewFindingIdentity({
+      ...base, anchor: {
+        ...base.anchor,
+        changedTest: { ...base.anchor.changedTest, path: 'test/widget-state.test.ts' },
+      },
     });
     const changedContent = canonicalizeBuildReviewFindingIdentity({
       ...base, anchor: { ...base.anchor, changedTest: { ...base.anchor.changedTest, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' } },
     });
 
-    expect(first).toMatchObject({ canonicalPayload: { anchor: { changedTest: { path: 'test/widget.test.ts', contentHash: base.anchor.changedTest.contentHash } } } });
-    expect(reworded).toEqual(first);
+    expect(first).toMatchObject({ canonicalPayload: { anchor: { changedTest: { contentHash: base.anchor.changedTest.contentHash } } } });
+    expect(rewordedTitle?.id).not.toBe(first?.id);
+    expect(renamedSelector).toEqual(first);
     expect(changedContent?.id).not.toBe(first?.id);
   });
 

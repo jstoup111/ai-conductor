@@ -79,6 +79,8 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
 
 export interface TautologyProjection extends CommonProjection<'tautology'> {
   readonly changedTestSelectors: readonly string[];
+  /** Frozen declared title chains, with an explicit selector-hash fallback marker. */
+  readonly changedTestTitles: BuildReviewSourceSnapshot['changedTestTitles'];
   readonly testSuiteProof: BuildReviewProjectionJson;
   /** By-reference reverted-production identity; never embedded file content. */
   readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
@@ -292,6 +294,7 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
   const tautology = seal({
     ...common(source, 'tautology'),
     changedTestSelectors: canonicalArray(source.tautology.changedTestSelectors) as readonly string[],
+    changedTestTitles: inputs.sourceSnapshot.changedTestTitles,
     testSuiteProof: canonicalize(json(inputs.testSuiteProof)),
     revertedProductionManifest: canonicalArray(
       source.tautology.revertedProductionManifest as unknown as readonly BuildReviewProjectionJson[],

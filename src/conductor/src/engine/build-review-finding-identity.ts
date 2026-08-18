@@ -19,7 +19,7 @@ export interface BuildReviewFindingIdentityInput {
 }
 
 type BuildReviewFindingCanonicalAnchor =
-  | { readonly rubric: 'tautology'; readonly changedTest: string | Omit<BuildReviewContentRegionReference, 'display'>; readonly violationKind: string }
+  | { readonly rubric: 'tautology'; readonly changedTest: string | { readonly contentHash: string; readonly path?: string }; readonly violationKind: string }
   | { readonly rubric: 'scope'; readonly path: string; readonly relation: string }
   | { readonly rubric: 'rootCause'; readonly locus: string | Omit<BuildReviewContentRegionReference, 'display'>; readonly relation: string }
   | { readonly rubric: 'completeness'; readonly planTask: string; readonly missingSurface: string };
@@ -59,7 +59,7 @@ function canonicalAnchor(anchor: BuildReviewFindingAnchor): BuildReviewFindingCa
         rubric: anchor.rubric,
         changedTest: typeof anchor.changedTest === 'string'
           ? anchor.changedTest
-          : { path: anchor.changedTest.path, contentHash: anchor.changedTest.contentHash },
+          : { contentHash: anchor.changedTest.contentHash },
         violationKind: anchor.violationKind,
       };
     case 'scope':

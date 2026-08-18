@@ -82,9 +82,15 @@ export function buildReviewFindingReferenceContext(
       changedPaths: Object.freeze(changedPaths),
       planTasks: [],
       ...(projection.rubric === 'tautology'
-        ? { changedTestRegions: Object.freeze(projection.changedTestSelectors.flatMap((selector) => {
-          const path = parseBuildReviewCanonicalPathReference(selector);
-          return path ? [contentRegionReference(path, contentHashForText(selector), `${path} changed test`)] : [];
+        ? { changedTestRegions: Object.freeze((projection.changedTestTitles?.length
+          ? projection.changedTestTitles
+          : projection.changedTestSelectors.map((selector) => ({ selector, titleText: '', staticExtractionFallback: true }))).flatMap((title) => {
+          const path = parseBuildReviewCanonicalPathReference(title.selector);
+          return path ? [contentRegionReference(
+            path,
+            contentHashForText(title.staticExtractionFallback ? title.selector : title.titleText),
+            title.staticExtractionFallback ? `${path} changed test (static-title fallback)` : title.titleText,
+          )] : [];
         })) }
         : {}),
       ...(projection.rubric === 'rootCause'

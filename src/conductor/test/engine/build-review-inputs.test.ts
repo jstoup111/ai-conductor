@@ -105,6 +105,28 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs).not.toHaveProperty('acceptedDispositions');
     });
 
+    it('captures declared changed-test title chains from the graded HEAD with an explicit static fallback', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/widget.test.ts b/test/widget.test.ts',
+          '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
+          'diff --git a/test/dynamic.test.ts b/test/dynamic.test.ts',
+          '--- a/test/dynamic.test.ts', '+++ b/test/dynamic.test.ts', '+change',
+        ].join('\n') } },
+        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: "describe('widget', () => it('persists state', () => {}));" } },
+        { match: ['show', 'head123:test/dynamic.test.ts'], result: { stdout: 'it(titleFromFixture, () => {});' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
+        { selector: 'test/dynamic.test.ts', titleText: '', staticExtractionFallback: true },
+        { selector: 'test/widget.test.ts', titleText: 'widget > persists state', staticExtractionFallback: false },
+      ]);
+    });
+
     it('derives content identity from review content rather than git provenance or operator reseals', async () => {
       const scopedPlanPath = join(dir, '.docs/plans/identity.md');
 
