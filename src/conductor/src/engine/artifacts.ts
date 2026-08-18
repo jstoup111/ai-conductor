@@ -1595,6 +1595,114 @@ function acceptanceSpecStem(file: string): string {
     .replace(/[._-](acceptance|system|e2e|integration|request)$/i, '');
 }
 
+function dispositionGroundingRefusal(reason: string): CompletionResult {
+  return { done: false, acceptanceRedRefusalClass: 'shape', reason };
+}
+
+function escapeDispositionRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Ground disposition-only evidence in the feature's authoritative artifacts
+ * (rem-build-review-root-cause-2). Two checks, both fail-closed:
+ *
+ * 1. Exhaustiveness — the records must cover every active story's happy AND
+ *    negative criteria, read from the feature's stories doc, not merely be
+ *    non-empty. A record covers a story-path unit when its criterion names
+ *    the path type and (for multi-story docs) references `Story <id>`.
+ * 2. Citation resolution — an `existing-sufficient-test` citation must point
+ *    at a test file that exists on disk; a `planned-lower-layer-test` must
+ *    name an owning task that exists in the feature's plan.
+ *
+ * Returns a refusing CompletionResult, or null when the evidence is grounded.
+ */
+async function groundDispositionOnlyEvidence(
+  dir: string,
+  ctx: CompletionContext,
+  evidence: AcceptanceDispositionOnlyEvidence,
+): Promise<CompletionResult | null> {
+  const storiesPath = await resolveFeatureStoriesPath(dir, ctx.featureDesc);
+  if (!storiesPath) {
+    const desc = ctx.featureDesc ? ` for feature "${ctx.featureDesc}"` : '';
+    return dispositionGroundingRefusal(
+      `disposition-only evidence cannot be validated: cannot resolve this feature's stories doc${desc} — the records must be checked against the active story criteria`,
+    );
+  }
+  let storiesText: string;
+  try {
+    storiesText = await readFile(storiesPath, 'utf-8');
+  } catch {
+    return dispositionGroundingRefusal(
+      `disposition-only evidence cannot be validated: cannot read this feature's stories doc at ${relative(dir, storiesPath)}`,
+    );
+  }
+
+  const uncovered: string[] = [];
+  for (const block of splitStoryBlocks(storiesText)) {
+    for (const type of ['happy', 'negative'] as const) {
+      const present =
+        type === 'happy' ? /happy\s*path/i.test(block.text) : /negative\s*paths?/i.test(block.text);
+      if (!present) continue;
+      const covered = evidence.dispositions.some((entry) => {
+        if (!entry.criterion.toLowerCase().includes(type)) return false;
+        if (!block.id) return true;
+        return new RegExp(`\\bstory\\s+${escapeDispositionRegExp(block.id)}\\b`, 'i').test(
+          entry.criterion,
+        );
+      });
+      if (!covered) uncovered.push(`${block.id ? `Story ${block.id} ` : ''}${type} path`);
+    }
+  }
+  if (uncovered.length > 0) {
+    return dispositionGroundingRefusal(
+      `disposition-only records do not cover every active story criterion — uncovered: ${uncovered.join(', ')} (each happy and negative path needs a disposition whose criterion names "Story <id>" and its path type)`,
+    );
+  }
+
+  let planTaskIds: Set<string> | null = null;
+  for (const entry of evidence.dispositions) {
+    if (entry.disposition === 'existing-sufficient-test') {
+      const citedPath = entry.citation.trim().replace(/(?::\d+){1,2}$/, '');
+      try {
+        await access(isAbsolute(citedPath) ? citedPath : join(dir, citedPath));
+      } catch {
+        return dispositionGroundingRefusal(
+          `disposition-only citation does not resolve: "${entry.citation}" — an existing-sufficient-test must cite a test file that exists`,
+        );
+      }
+      continue;
+    }
+    if (planTaskIds === null) {
+      const planPath = ctx.planPath ?? (await resolveFeaturePlanPath(dir, ctx.featureDesc));
+      if (!planPath) {
+        const desc = ctx.featureDesc ? ` for feature "${ctx.featureDesc}"` : '';
+        return dispositionGroundingRefusal(
+          `disposition-only evidence cannot be validated: cannot resolve this feature's plan${desc} to verify planned-lower-layer-test owning tasks`,
+        );
+      }
+      let planText: string;
+      try {
+        planText = await readFile(isAbsolute(planPath) ? planPath : join(dir, planPath), 'utf-8');
+      } catch {
+        return dispositionGroundingRefusal(
+          `disposition-only evidence cannot be validated: cannot read this feature's plan to verify planned-lower-layer-test owning tasks`,
+        );
+      }
+      const { parsePlanTaskPaths } = await import('./plan-task-parse.js');
+      planTaskIds = new Set(parsePlanTaskPaths(planText).keys());
+    }
+    const trimmedTask = entry.owningTask.trim();
+    const normalizedTask = trimmedTask.replace(/^task\s+/i, '');
+    if (!planTaskIds.has(normalizedTask) && !planTaskIds.has(trimmedTask)) {
+      return dispositionGroundingRefusal(
+        `disposition-only owning task "${entry.owningTask}" does not exist in the plan — a planned-lower-layer-test must name a real plan task`,
+      );
+    }
+  }
+  return null;
+}
+
 function isDispositionOnlyEvidence(ev: unknown): ev is AcceptanceDispositionOnlyEvidence {
   return typeof ev === 'object' && ev !== null && (ev as Record<string, unknown>).outcome === 'disposition-only';
 }
@@ -2325,6 +2433,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         // A disposition-only outcome intentionally has no acceptance run.
       }
+      const grounding = await groundDispositionOnlyEvidence(dir, ctx, parsed);
+      if (grounding) return grounding;
       return { done: true, viaException: false };
     }
     if (files.length === 0) {
