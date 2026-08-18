@@ -21,6 +21,11 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - The FINISH publication retry budget no longer exhausts on verified transitions, and new halt reasons name a stuck PR-state check or an unmoved publication transition. ([implementation PR #1565](https://github.com/jstoup111/ai-conductor/pull/1565)).
 - The tautology rubric's counterfactual checkout now resolves the conductor's dependency installation, so changed suites execute instead of aborting at import. ([implementation PR #1699](https://github.com/jstoup111/ai-conductor/pull/1699)).
+- The opt-in Tautology build-review rubric now classifies counterfactual test runs by process exit code instead of parsing Vitest/pytest-shaped output, so it returns a real verdict on RSpec and other frameworks instead of always reporting an infrastructure failure. ([implementation PR #1705](https://github.com/jstoup111/ai-conductor/pull/1705)).
+- `conduct --update`/`bin/update` now detect the real installed release from the checkout instead of misreporting an off-tag tagged-channel install as permanently up to date. ([implementation PR #1578](https://github.com/jstoup111/ai-conductor/pull/1578)).
+- Fixed a stale manual-test verdict discovered at FINISH becoming unroutable, so the daemon no longer stalls on that SHIP validator instead of routing it back for retry. ([implementation PR #1673](https://github.com/jstoup111/ai-conductor/pull/1673)).
+- Provider token telemetry now reports fresh input consistently across Claude and Codex, with cached prompt volume shown separately in daemon logs and feature usage totals. ([implementation PR #1689](https://github.com/jstoup111/ai-conductor/pull/1689)).
+- Codex usage-cap exhaustion is now reported as usage exhaustion with an hour-scale wait instead of a misleading 300-second rate-limit retry loop. ([implementation PR #1704](https://github.com/jstoup111/ai-conductor/pull/1704)).
 
 ## [0.103.0] - 2026-08-17
 
