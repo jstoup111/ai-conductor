@@ -87,36 +87,36 @@ happened and corrupted daemon state:
    shipped-record.
 
 5. **Do not create or rewrite files in the LIVE root checkout while a self-host build is
-   running.** The self-host live boundary fingerprints the root checkout before a build and
-   re-verifies it at the next dispatch boundary. Git can tell the guard that a path is
-   tracked, never *who* wrote it — so it fails closed on any change it cannot attribute and
-   halts the run, discarding the whole step's work. This has already happened: on
-   2026-08-04 the `mechanically-verify-llm-rebase-conflict-resolution` build halted
-   immediately after `build_review` passed (18 turns, 2m19s, $2.29, all wasted) because an
-   interactive operator session granted a Bash permission, writing the root checkout's
-   untracked `.claude/settings.local.json`:
+   running unless the dispatch is proven contained.** The self-host live boundary fingerprints
+   the root checkout before a build and re-verifies it at the next dispatch boundary. A
+   proven-contained dispatch runs with that checkout read-only while its feature worktree stays
+   writable. Its own writes therefore cannot be the root-checkout drift, so an operator change
+   there does not halt that dispatch. This has already happened: on 2026-08-04 the
+   `mechanically-verify-llm-rebase-conflict-resolution` build halted immediately after
+   `build_review` passed (18 turns, 2m19s, $2.29, all wasted) because an interactive operator
+   session granted a Bash permission, writing the root checkout's untracked
+   `.claude/settings.local.json`:
 
    ```text
    ✋ loop halted: live checkout changed during self-host execution —
      0 added, 0 removed, 1 changed: changed .claude/settings.local.json.
    ```
 
-   **Safe while a build runs.** Read-only commands (`git status`/`log`/`diff`, `conduct
-   daemon status`, tailing `.daemon/daemon.log`) — the guard only sees writes. Anything
-   under an excluded path: `.git/`, `.daemon/`, `.worktrees/`, `.pipeline/`,
-   `.claude/worktrees/`, `src/conductor/dist-versions/`, or any `node_modules/` tree.
-   Editing or deleting a file that is **already tracked** — Git reports `M`/`D` and the
-   guard classifies it as concurrent operator work rather than halting.
+   **Safe while a proven-contained dispatch runs.** Read-only commands (`git
+   status`/`log`/`diff`, `conduct daemon status`, tailing `.daemon/daemon.log`), any change
+   under an excluded path (`.git/`, `.daemon/`, `.worktrees/`, `.pipeline/`,
+   `.claude/worktrees/`, `src/conductor/dist-versions/`, or any `node_modules/` tree), and
+   operator changes to the root checkout. The guard still protects unrelated provider state.
 
-   **Unsafe.** Anything that leaves an *unattributable* difference in the root checkout:
-   an untracked path appearing, changing, or disappearing (a permission or approval grant —
-   Claude Code writes the checkout's untracked `.claude/settings.local.json`, while Codex's
-   operator config lives in `$CODEX_HOME` and trips the provider-state surface instead — a
-   scratch file, a generated artifact, a new doc you have not committed); `git add` of a new
-   file, which reports `A` and is not in the allow-list; and any git operation that rewrites
-   tracked working-tree content without leaving it modified (`git pull`, `git checkout`,
-   `git stash`), because the file's bytes change while `git status` comes back clean.
-   Batch that work between dispatches, or do it inside a worktree.
+   **Containment unproven: unsafe.** Containment is unproven when it is disabled, `bwrap` is
+   unavailable, or its two-sided probe cannot establish both a read-only live checkout and a
+   writable worktree. Then the existing fail-closed rule applies: an untracked path appearing,
+   changing, or disappearing (for example Claude Code's untracked
+   `.claude/settings.local.json`; Codex operator config lives in `$CODEX_HOME` and trips the
+   provider-state surface), `git add` of a new file, or a git operation that rewrites tracked
+   content without leaving it modified (`git pull`, `git checkout`, `git stash`) halts the
+   run. The halt names why containment was not in force. Batch that work between dispatches, or
+   do it inside a worktree.
 
    Do NOT "fix" this by widening the exclusion list.
    `src/conductor/src/engine/self-host/live-boundary.ts` keeps operator config fingerprinted
