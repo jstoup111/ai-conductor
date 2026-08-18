@@ -285,7 +285,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     const widenedSourceSnapshot = {
       ...rebased.sourceSnapshot,
       digest: "sha256:widened-snapshot",
-      acceptedWidenings: [{ path: "src/widened.ts", rationale: "required coordination", taskId: "5", sha: "widened-sha" }],
+      acceptedWidenings: [{ path: "src/widened.ts", rationale: "required coordination", derived: false, taskId: "5", sha: "widened-sha" }],
     };
     const widened = {
       ...rebased,

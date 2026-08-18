@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ const loadScopeCheckEnforcement = (
   scopeCheckCli as typeof scopeCheckCli & {
     loadScopeCheckEnforcement(
       projectRoot: string,
+      load?: (projectRoot: string) => Promise<any>,
     ): Promise<boolean>;
   }
 ).loadScopeCheckEnforcement;
@@ -52,6 +53,67 @@ describe('scope-check CLI', () => {
     await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(true);
   });
 
+  it('falls back to report-only for a non-boolean containment configuration value', async () => {
+    await expect(
+      loadScopeCheckEnforcement(projectRoot, async () => ({
+        ok: true,
+        config: { build_review: { scopeContainmentEnforced: 'true' } },
+        warnings: [],
+      })),
+    ).resolves.toBe(false);
+  });
+
+  it('falls back to report-only when the configuration loader rejects', async () => {
+    await expect(
+      loadScopeCheckEnforcement(projectRoot, async () => {
+        throw new Error('configuration unreadable');
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it('falls back to report-only for a malformed configuration result', async () => {
+    await expect(
+      loadScopeCheckEnforcement(projectRoot, async () => ({
+        ok: false,
+        error: { type: 'parse_error', message: 'configuration malformed' },
+      })),
+    ).resolves.toBe(false);
+  });
+
+  it.each([
+    [0, 'an allowed path', () => runScopeCheck({
+      projectRoot: '/repo',
+      commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+      readFile: async (path) => path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+      stagedPaths: async () => ['src/conductor/src/engine/config.ts'],
+    })],
+    [0, 'an advisory out-of-floor path', () => runScopeCheck({
+      projectRoot: '/repo',
+      commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+      enforce: true,
+      readFile: async (path) => path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+      stagedPaths: async () => ['src/conductor/src/engine/artifacts.ts'],
+      print: () => undefined,
+    })],
+    [3, 'an unresolvable task-status file', () => runScopeCheck({
+      projectRoot: '/repo',
+      commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+      readFile: async (path) => path.endsWith('task-status.json') ? '{' : MESSAGE,
+      stagedPaths: async () => ['src/conductor/src/engine/config.ts'],
+    })],
+    [0, 'a not-applicable commit', () => runScopeCheck({
+      projectRoot: '/repo',
+      commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+      readFile: async (path) => path.endsWith('task-status.json') ? TASK_STATUS : 'fix: no task\n',
+      stagedPaths: async () => ['src/conductor/src/engine/config.ts'],
+    })],
+  ])('returns exit code %i, never reserved code 2, for %s', async (expectedExitCode, _name, run) => {
+    const exitCode = await run();
+
+    expect(exitCode).toBe(expectedExitCode);
+    expect(exitCode).not.toBe(2);
+  });
+
   it('detects the commit-message path for the dispatcher', () => {
     expect(
       detectScopeCheckCommand(['node', 'conduct-ts', 'scope-check', '/tmp/COMMIT_EDITMSG']),
@@ -76,7 +138,7 @@ describe('scope-check CLI', () => {
     expect(output).toEqual([]);
   });
 
-  it('reports every undeclared path in the shipped report-only mode with copy-pasteable Scope trailers and no deletion advice', async () => {
+  it('advises on every undeclared path with copy-pasteable Scope trailers when recording is enabled', async () => {
     const output: string[] = [];
 
     await expect(
@@ -85,24 +147,47 @@ describe('scope-check CLI', () => {
         commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
         readFile: async (path) =>
           path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+        enforce: true,
         stagedPaths: async () => [
-          'src/conductor/src/engine/artifacts.ts',
-          'src/conductor/src/engine/changelog-pr-finalizer-cli.ts',
+          'src/conductor/src/unrelated/artifacts.ts',
+          'src/conductor/src/other/changelog-pr-finalizer-cli.ts',
         ],
         print: (message) => output.push(message),
       }),
     ).resolves.toBe(0);
 
-    expect(output.join('\n')).toContain('Task 3');
-    expect(output.join('\n')).toContain('src/conductor/src/engine/artifacts.ts');
-    expect(output.join('\n')).toContain('src/conductor/src/engine/changelog-pr-finalizer-cli.ts');
-    expect(output.join('\n')).toContain('Scope: src/conductor/src/engine/artifacts.ts — <rationale>');
-    expect(output.join('\n')).toContain('Scope: src/conductor/src/engine/changelog-pr-finalizer-cli.ts — <rationale>');
-    expect(output.join('\n').toLowerCase()).not.toContain('delete');
+    const diagnostic = output.join('\n');
+    expect(diagnostic).toContain('Task 3');
+    expect(diagnostic).toContain('src/conductor/src/unrelated/artifacts.ts');
+    expect(diagnostic).toContain('src/conductor/src/other/changelog-pr-finalizer-cli.ts');
+    expect(diagnostic).toContain('Scope: src/conductor/src/unrelated/artifacts.ts — feat(engine): scope check');
+    expect(diagnostic).toContain('Scope: src/conductor/src/other/changelog-pr-finalizer-cli.ts — feat(engine): scope check');
+    expect(diagnostic.toLowerCase()).not.toContain('refus');
   });
 
-  it('refuses every undeclared path when enforcement is enabled', async () => {
+  it('keeps a root-level neighbor silent when containment recording is disabled', async () => {
     const output: string[] = [];
+
+    await expect(
+      runScopeCheck({
+        projectRoot: '/repo',
+        commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+        readFile: async (path) =>
+          path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+        stagedPaths: async () => ['neighbor.ts'],
+        print: (message) => output.push(message),
+      }),
+    ).resolves.toBe(0);
+
+    expect(output).toEqual([]);
+  });
+
+  it('bounds its advisory diagnostic for 200 undeclared paths', async () => {
+    const output: string[] = [];
+    const stagedPaths = Array.from(
+      { length: 200 },
+      (_value, index) => `src/conductor/src/unrelated-${index}.ts`,
+    );
 
     await expect(
       runScopeCheck({
@@ -111,22 +196,26 @@ describe('scope-check CLI', () => {
         enforce: true,
         readFile: async (path) =>
           path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
-        stagedPaths: async () => ['src/conductor/src/engine/artifacts.ts'],
+        stagedPaths: async () => stagedPaths,
         print: (message) => output.push(message),
       }),
-    ).resolves.toBe(2);
+    ).resolves.toBe(0);
 
     expect(output).toHaveLength(1);
     expect(output[0]).toContain('Task 3');
-    expect(output[0]).toContain('src/conductor/src/engine/artifacts.ts');
+    expect(output[0]).toContain('src/conductor/src/unrelated-0.ts');
+    expect(output[0]).toContain('more undeclared paths');
+    expect(output[0]).not.toContain('src/conductor/src/unrelated-199.ts');
+    expect(output[0].length).toBeLessThan(5_000);
   });
 
   it.each([
-    ['missing Task trailer', 'feat(engine): no task\n', TASK_STATUS],
-    ['missing task-status data', MESSAGE, undefined],
-    ['a malformed task-status file', MESSAGE, '{'],
-    ['a stale task row', MESSAGE, JSON.stringify({ tasks: [{ id: '3', status: 'completed', files: ['config.ts'] }] })],
-  ])('abstains silently on %s in either mode', async (_name, message, status) => {
+    ['missing Task trailer', 'feat(engine): no task\n', TASK_STATUS, 0],
+    ['missing task-status data', MESSAGE, undefined, 0],
+    ['a stale task row', MESSAGE, JSON.stringify({ tasks: [{ id: '3', status: 'completed', files: ['config.ts'] }] }), 0],
+    ['an active task without declared files', MESSAGE, JSON.stringify({ tasks: [{ id: '3', status: 'in_progress', files: [] }] }), 0],
+    ['a malformed task-status file', MESSAGE, '{', 3],
+  ])('exits with the classified result for %s in either mode', async (_name, message, status, expectedExitCode) => {
     const output: string[] = [];
 
     for (const enforce of [false, true]) {
@@ -137,7 +226,7 @@ describe('scope-check CLI', () => {
           enforce,
           readFile: async (path) => {
             if (path.endsWith('task-status.json')) {
-              if (status === undefined) throw new Error('ENOENT');
+              if (status === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
               return status;
             }
             return message;
@@ -145,9 +234,120 @@ describe('scope-check CLI', () => {
           stagedPaths: async () => ['src/conductor/src/engine/artifacts.ts'],
           print: (line) => output.push(line),
         }),
-      ).resolves.toBe(1);
+      ).resolves.toBe(expectedExitCode);
     }
 
     expect(output).toEqual([]);
+  });
+
+  it.each([
+    ['non-object row', JSON.stringify({ tasks: [null] })],
+    ['missing id', JSON.stringify({ tasks: [{ status: 'in_progress', files: ['config.ts'] }] })],
+    ['null id', JSON.stringify({ tasks: [{ id: null, status: 'in_progress', files: ['config.ts'] }] })],
+    ['non-string status', JSON.stringify({ tasks: [{ id: '3', status: true, files: ['config.ts'] }] })],
+    ['non-string files member', JSON.stringify({ tasks: [{ id: '3', status: 'in_progress', files: ['config.ts', 1] }] })],
+  ])('records task-status-malformed for a structurally malformed %s', async (_name, status) => {
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(messagePath, MESSAGE, 'utf8');
+    await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), status, 'utf8');
+
+    await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
+    await expect(readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8')).resolves.toContain(
+      '"failure":"task-status-malformed"',
+    );
+  });
+
+  it('remains not applicable for a valid task-status file without an active row', async () => {
+    await expect(
+      runScopeCheck({
+        projectRoot: '/repo',
+        commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+        readFile: async (path) => path.endsWith('task-status.json')
+          ? JSON.stringify({ tasks: [{ id: '3', status: 'completed', files: ['config.ts'] }] })
+          : MESSAGE,
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it('exits 3 when staged-path evaluation throws after resolving the active task', async () => {
+    await expect(
+      runScopeCheck({
+        projectRoot: '/repo',
+        commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+        readFile: async (path) =>
+          path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
+        stagedPaths: async () => {
+          throw new Error('git failed');
+        },
+      }),
+    ).resolves.toBe(3);
+  });
+
+  it('appends exactly one unresolved-check event without changing the engine ledger', async () => {
+    const engineLedgerPath = join(projectRoot, '.pipeline', 'events.jsonl');
+    const engineLedger = '{"type":"step_started"}\n';
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(engineLedgerPath, engineLedger, 'utf8');
+    await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), '{', 'utf8');
+    await writeFile(messagePath, MESSAGE, 'utf8');
+
+    await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
+
+    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8'))).toMatchObject({
+      type: 'containment_check_unresolved',
+      failure: 'task-status-malformed',
+      taskId: '3',
+      commitMessage: MESSAGE,
+    });
+    await expect(readFile(engineLedgerPath, 'utf8')).resolves.toBe(engineLedger);
+  });
+
+  it('round-trips a real commit message with escaped body content as one parseable hook-ledger line', async () => {
+    const commitMessage = 'feat(engine): retain "quote" and \\backslash\n\nbody has embedded\nnewlines\n\nTask: 3\n';
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), '{', 'utf8');
+    await writeFile(messagePath, commitMessage, 'utf8');
+
+    await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
+
+    const lines = (await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8')).split('\n');
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      taskId: '3',
+      failure: 'task-status-malformed',
+      commitMessage,
+    });
+  });
+
+  it('swallows an unwritable hook ledger path', async () => {
+    const messagePath = join(projectRoot, 'COMMIT_EDITMSG');
+    await writeFile(join(projectRoot, '.pipeline'), 'not a directory', 'utf8');
+    await writeFile(messagePath, MESSAGE, 'utf8');
+
+    await expect(runScopeCheck({ projectRoot, commitMessagePath: messagePath })).resolves.toBe(3);
+  });
+
+  it('keeps two rapid unresolved checks as individually parseable records', async () => {
+    const firstMessagePath = join(projectRoot, 'COMMIT_EDITMSG-1');
+    const secondMessagePath = join(projectRoot, 'COMMIT_EDITMSG-2');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(join(projectRoot, '.pipeline', 'task-status.json'), '{', 'utf8');
+    await writeFile(firstMessagePath, MESSAGE, 'utf8');
+    await writeFile(secondMessagePath, MESSAGE.replace('Task: 3', 'Task: 4'), 'utf8');
+
+    await expect(Promise.all([
+      runScopeCheck({ projectRoot, commitMessagePath: firstMessagePath }),
+      runScopeCheck({ projectRoot, commitMessagePath: secondMessagePath }),
+    ])).resolves.toEqual([3, 3]);
+
+    const records = (await readFile(join(projectRoot, '.pipeline', 'hook-events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.taskId).sort()).toEqual(['3', '4']);
   });
 });

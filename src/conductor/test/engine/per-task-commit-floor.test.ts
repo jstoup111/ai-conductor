@@ -6,6 +6,7 @@ import { execa } from 'execa';
 import {
   runContainmentFloor,
   runPerTaskCommitFloor,
+  renderContainmentFloorReport,
   renderPerTaskFloorReport,
 } from '../../src/engine/per-task-commit-floor.js';
 
@@ -174,29 +175,40 @@ describe('per-task-commit-floor', () => {
     ]);
   });
 
-  it('reports the Task trailer id, commit sha, and undeclared changed path', async () => {
-    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
-    await writeFile(join(dir, 'undeclared.ts'), 'x');
-    await execa('git', ['add', 'undeclared.ts'], { cwd: dir });
+  it('uses a subject-only commit as a non-empty derived rationale', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/undeclared.ts'), 'x');
+    await execa('git', ['add', 'other/undeclared.ts'], { cwd: dir });
     await execa('git', ['commit', '-m', 'escaped\n\nTask: 3'], { cwd: dir });
     const sha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
 
     const report = await runContainmentFloor({ projectRoot: dir, planPath });
 
     expect(report).toMatchObject({
-      satisfied: false,
-      violations: [{ taskId: '3', sha, paths: ['undeclared.ts'] }],
+      satisfied: true,
+      violations: [],
+      acceptedWidenings: [
+        {
+          path: 'other/undeclared.ts',
+          rationale: 'escaped',
+          taskId: '3',
+          sha,
+          derived: true,
+        },
+      ],
     });
   });
 
   it('accepts a commit-local Scope widening and exposes it for build review', async () => {
-    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
-    await writeFile(join(dir, 'widened.ts'), 'x');
-    await execa('git', ['add', 'widened.ts'], { cwd: dir });
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/widened.ts'), 'x');
+    await execa('git', ['add', 'other/widened.ts'], { cwd: dir });
     await execa('git', [
       'commit',
       '-m',
-      'widened\n\nTask: 3\nScope: widened.ts — needed by the task',
+      'widened\n\nTask: 3\nScope: other/widened.ts — needed by the task',
     ], { cwd: dir });
     const sha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
 
@@ -206,9 +218,113 @@ describe('per-task-commit-floor', () => {
       satisfied: true,
       violations: [],
       acceptedWidenings: [
-        { path: 'widened.ts', rationale: 'needed by the task', taskId: '3', sha },
+        {
+          path: 'other/widened.ts',
+          rationale: 'needed by the task',
+          taskId: '3',
+          sha,
+          derived: false,
+        },
       ],
     });
+  });
+
+  it('derives a non-empty rationale from an untrailered commit subject and body', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/derived.ts'), 'x');
+    await execa('git', ['add', 'other/derived.ts'], { cwd: dir });
+    await execa('git', [
+      'commit',
+      '-m',
+      'derive widening rationale\n\nThis body explains why the extra file belongs to the task.\n\nTask: 3',
+    ], { cwd: dir });
+    const sha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({
+      satisfied: true,
+      violations: [],
+      acceptedWidenings: [
+        {
+          path: 'other/derived.ts',
+          rationale: 'derive widening rationale\n\nThis body explains why the extra file belongs to the task.',
+          taskId: '3',
+          sha,
+          derived: true,
+        },
+      ],
+    });
+  });
+
+  it('keeps an authored rationale alongside a derived rationale for a mixed commit', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/authored.ts'), 'x');
+    await writeFile(join(dir, 'other/derived.ts'), 'x');
+    await execa('git', ['add', 'other'], { cwd: dir });
+    await execa('git', [
+      'commit',
+      '-m',
+      'mixed rationale\n\nBody explains the second path.\n\nTask: 3\nScope: other/authored.ts — explicit reason',
+    ], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.acceptedWidenings).toMatchObject([
+      { path: 'other/authored.ts', rationale: 'explicit reason', derived: false },
+      {
+        path: 'other/derived.ts',
+        rationale: 'mixed rationale\n\nBody explains the second path.\n\nScope: other/authored.ts — explicit reason',
+        derived: true,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      'an unstaged trailer',
+      'Scope: absent.ts — not staged',
+      'fallback subject\n\nFallback body explains the derived widening.\n\nScope: absent.ts — not staged',
+    ],
+    [
+      'a malformed trailer',
+      'Scope: other/derived.ts missing separator',
+      'fallback subject\n\nFallback body explains the derived widening.\n\nScope: other/derived.ts missing separator',
+    ],
+  ])('derives the commit rationale when given %s', async (_caseName, scopeLine, expectedRationale) => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/derived.ts'), 'x');
+    await execa('git', ['add', 'other/derived.ts'], { cwd: dir });
+    await execa('git', [
+      'commit',
+      '-m',
+      `fallback subject\n\nFallback body explains the derived widening.\n\nTask: 3\n${scopeLine}`,
+    ], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    const rationale = report.acceptedWidenings[0]?.rationale;
+    expect(report.acceptedWidenings).toMatchObject([{ path: 'other/derived.ts', derived: true }]);
+    expect(rationale).toBe(expectedRationale);
+    expect(rationale).not.toContain('Task: 3');
+    expect(rationale).not.toContain('Commit message unavailable');
+  });
+
+  it('visibly truncates an over-long derived rationale', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/declared.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/derived.ts'), 'x');
+    await execa('git', ['add', 'other/derived.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', `subject\n\n${'x'.repeat(1_100)}\n\nTask: 3`], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+    const rationale = report.acceptedWidenings[0]?.rationale;
+
+    expect(rationale).toHaveLength(1_000);
+    expect(rationale).toMatch(/…$/);
   });
 
   it('does not record a redundant Scope trailer when the plan path matches by suffix', async () => {
@@ -229,6 +345,126 @@ describe('per-task-commit-floor', () => {
       violations: [],
       acceptedWidenings: [],
     });
+  });
+
+  it.each([
+    ['a test sibling', 'src/engine/config.test.ts'],
+    ['a documentation path', 'docs/containment.md'],
+    ['the generated changelog', 'CHANGELOG.md'],
+  ])('does not record a redundant Scope trailer for %s in the effective floor', async (_name, path) => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/engine/config.ts\n');
+    const directory = path.slice(0, path.lastIndexOf('/'));
+    if (directory) await mkdir(join(dir, directory), { recursive: true });
+    await writeFile(join(dir, path), 'x');
+    await execa('git', ['add', path], { cwd: dir });
+    await execa('git', ['commit', '-m', `already admitted\n\nTask: 3\nScope: ${path} — redundant declaration`], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.acceptedWidenings).toEqual([]);
+  });
+
+  it('admits a same-directory neighbor even when the declared plan file is absent from disk', async () => {
+    // The declared path never exists on disk; the floor's directory grant
+    // must come from the declaration itself, not from disk existence.
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/engine/not-on-disk.ts\n');
+    await mkdir(join(dir, 'src/engine'), { recursive: true });
+    await writeFile(join(dir, 'src/engine/neighbor.ts'), 'x');
+    await execa('git', ['add', 'src/engine/neighbor.ts'], { cwd: dir });
+    await execa('git', [
+      'commit',
+      '-m',
+      'neighbor of an absent declaration\n\nTask: 3\nScope: src/engine/neighbor.ts — redundant declaration',
+    ], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({
+      satisfied: true,
+      violations: [],
+      acceptedWidenings: [],
+    });
+  });
+
+  it('retains a Scope trailer for a genuinely out-of-floor path', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/engine/config.ts\n');
+    await mkdir(join(dir, 'other'), { recursive: true });
+    await writeFile(join(dir, 'other/outside.ts'), 'x');
+    await execa('git', ['add', 'other/outside.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'needed widening\n\nTask: 3\nScope: other/outside.ts — needed by the task'], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.acceptedWidenings).toMatchObject([
+      { path: 'other/outside.ts', rationale: 'needed by the task', derived: false },
+    ]);
+  });
+
+  it('merges unresolved containment checks from both ledgers by timestamp', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'events.jsonl'),
+      JSON.stringify({
+        type: 'containment_check_unresolved',
+        failure: 'evaluation-failed',
+        taskId: '3',
+        ts: 2_000,
+      }) + '\n',
+    );
+    await writeFile(
+      join(dir, '.pipeline', 'hook-events.jsonl'),
+      JSON.stringify({
+        type: 'containment_check_unresolved',
+        failure: 'task-status-malformed',
+        taskId: '2',
+        ts: 1_000,
+      }) + '\n',
+    );
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.unresolvedChecks).toEqual([
+      { type: 'containment_check_unresolved', failure: 'task-status-malformed', taskId: '2', ts: 1_000 },
+      { type: 'containment_check_unresolved', failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
+    ]);
+    expect(renderContainmentFloorReport(report)).toEqual(expect.arrayContaining([
+      'Advisory: containment check unresolved for Task 2; task-status-malformed.',
+      'Advisory: containment check unresolved for Task 3; evaluation-failed.',
+    ]));
+  });
+
+  it('tolerates an absent hook ledger and marks its observations unrecorded', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.unresolvedChecks).toEqual([]);
+    expect(report.skipNotes).toContain('containment-floor: hook-events ledger is unrecorded');
+    expect(renderContainmentFloorReport(report)).toContain(
+      'Advisory: containment-floor: hook-events ledger is unrecorded.',
+    );
+  });
+
+  it('skips malformed hook-ledger lines without losing readable engine-ledger events', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'events.jsonl'),
+      JSON.stringify({
+        type: 'containment_check_unresolved',
+        failure: 'evaluation-failed',
+        taskId: '3',
+        ts: 2_000,
+      }) + '\n',
+    );
+    await writeFile(join(dir, '.pipeline', 'hook-events.jsonl'), '{not json}\n');
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report.unresolvedChecks).toEqual([
+      { type: 'containment_check_unresolved', failure: 'evaluation-failed', taskId: '3', ts: 2_000 },
+    ]);
   });
 
   it.each([

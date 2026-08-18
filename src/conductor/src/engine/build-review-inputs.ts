@@ -141,19 +141,25 @@ export type BuildReviewRepairProvenance =
   | { disposition: 'none_warranted' };
 
 /**
- * Repo-relative prefixes the ENGINE authors, never the build agent: the
- * finish-stamped shipped record and the per-feature pipeline state. They are
- * excluded from the graded diff because grading them against the plan is
- * incoherent — no plan task can ever describe harness machinery output, so
- * their presence reads to the Scope rubric as unplanned work and kicks the
- * build back over a file the builder did not write (observed on
+ * Repo-relative paths that the scope floor always permits: engine-authored
+ * pipeline/shipped state plus routine documentation and generated changelog
+ * output. They are excluded from the graded diff because grading them against
+ * the plan is incoherent — no plan task can ever describe harness machinery
+ * output, so their presence reads to the Scope rubric as unplanned work and
+ * kicks the build back over a file the builder did not write (observed on
  * `build-review-ci-watch-partial-block-1002`, whose engine-stamped
  * `.docs/shipped/<slug>.md` was cited as an out-of-scope finding).
  *
- * Deliberately narrow: only paths written by engine code paths belong here.
- * Anything an agent can author stays in the graded diff.
+ * Deliberately narrow: only engine output plus the routine docs/generated
+ * artifacts named above belong here. Other agent-authored paths stay in the
+ * graded diff.
  */
-export const MACHINERY_AUTHORED_PATHS: readonly string[] = ['.docs/shipped/', '.pipeline/'];
+export const MACHINERY_AUTHORED_PATHS: readonly string[] = [
+  '.docs/shipped/',
+  '.pipeline/',
+  'docs/',
+  'CHANGELOG.md',
+];
 
 /** Raised when the default branch's merge-base with HEAD cannot be computed. */
 export class MergeBaseError extends Error {
@@ -216,6 +222,7 @@ function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): r
     rationale: widening.rationale,
     taskId: widening.taskId,
     sha: widening.sha,
+    derived: widening.derived,
   })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
 }
 

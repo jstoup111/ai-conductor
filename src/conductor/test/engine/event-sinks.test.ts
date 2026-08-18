@@ -71,6 +71,7 @@ const RESEAL_EVENT_TYPES = [
 
 const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
+  'containment_check_unresolved',
   ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
   'verdict_freshness',
   'operator_park_boundary',
@@ -452,8 +453,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 88 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(88);
+  it('is total over all 89 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(89);
   });
 
   it('routes verdict_freshness to every sink', () => {

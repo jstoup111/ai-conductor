@@ -68,6 +68,9 @@ const SESSION_SANCTIONED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   // hooks/claude/post-commit-derive-feedback.sh — the advisory post-commit
   // hook invokes the engine derive path from inside the session's git commit.
   'derive-feedback',
+  // git-hook-assets.ts — the commit-msg hook records advisory containment
+  // evidence for a commit authored inside the daemon-managed maker session.
+  'scope-check',
 ]);
 
 export type DaemonSessionGuardVerdict =

@@ -38,11 +38,11 @@ describe('integration/git-hooks-attribution', () => {
     return stdout;
   }
 
-  async function seedTaskStatus(rows: Array<{ id: string; status: string }>): Promise<void> {
+  async function seedTaskStatus(rows: Array<{ id: string; status: string; files?: string[] }>): Promise<void> {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
       join(dir, '.pipeline', 'task-status.json'),
-      JSON.stringify({ tasks: rows.map((r) => ({ id: r.id, name: `task ${r.id}`, status: r.status })) }, null, 2),
+      JSON.stringify({ tasks: rows.map((r) => ({ id: r.id, name: `task ${r.id}`, status: r.status, files: r.files })) }, null, 2),
       'utf-8',
     );
   }
@@ -329,7 +329,25 @@ describe('integration/git-hooks-attribution', () => {
       const res = await git('commit', '-m', 'feat: bundled change\n\nTask: 1');
       expect(res.code).toBe(0);
       expect(res.stderr).not.toContain('staged diff spans files of multiple plan tasks');
-      expect(res.stderr).toContain('commit-msg: scope-check abstained (exit 1); allowing commit');
+      expect(res.stderr).not.toContain('commit-msg: scope-check abstained (exit 1); allowing commit');
+    });
+
+    it('commits an out-of-floor staged path with the scope advisory on stderr', async () => {
+      await seedTaskStatus([
+        { id: '7', status: 'in_progress', files: ['src/declared.ts'] },
+      ]);
+      await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+      await writeFile(
+        join(dir, '.ai-conductor', 'config.yml'),
+        'build_review:\n  scopeContainmentEnforced: true\n',
+        'utf-8',
+      );
+      const res = await commitFile('outside-floor.ts', 'outside', 'feat: advisory containment\n\nTask: 7');
+
+      expect(res.code).toBe(0);
+      expect(res.stderr).toContain('scope-check: Task 7 has staged paths outside its declared scope (advisory):');
+      expect(res.stderr).toContain('Scope: outside-floor.ts — feat: advisory containment');
+      expect((await git('rev-parse', '--verify', 'HEAD')).code).toBe(0);
     });
 
     it('warns (does not block) on a subject-vs-trailer task mismatch', async () => {

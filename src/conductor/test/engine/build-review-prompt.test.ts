@@ -180,17 +180,19 @@ each plan task to a specific commit.`;
     expect(prompt).toContain(inputs.planBody);
   });
 
-  it('renders accepted scope widenings with path, rationale, task id, and commit sha', () => {
+  it('renders accepted scope widenings with path, rationale, provenance, task id, and commit sha', () => {
     const prompt = buildGraderPrompt({
       ...inputs,
       acceptedWidenings: [{
         path: 'src/conductor/src/engine/shared.ts',
         rationale: 'the shared parser is an atomic dependency',
+        derived: false,
         taskId: '12',
         sha: 'abc123def456',
       }, {
         path: 'docs/reference/cli.md',
         rationale: 'the command contract must stay synchronized',
+        derived: true,
         taskId: '14',
         sha: 'fed987cba654',
       }],
@@ -198,6 +200,7 @@ each plan task to a specific commit.`;
       acceptedWidenings: Array<{
         path: string;
         rationale: string;
+        derived: boolean;
         taskId: string;
         sha: string;
       }>;
@@ -205,10 +208,12 @@ each plan task to a specific commit.`;
 
     expect(prompt).toContain('src/conductor/src/engine/shared.ts');
     expect(prompt).toContain('the shared parser is an atomic dependency');
+    expect(prompt).toContain('Authored trailer');
     expect(prompt).toContain('Task 12');
     expect(prompt).toContain('abc123def456');
     expect(prompt).toContain('docs/reference/cli.md');
     expect(prompt).toContain('the command contract must stay synchronized');
+    expect(prompt).toContain('Derived commit rationale');
     expect(prompt).toContain('Task 14');
     expect(prompt).toContain('fed987cba654');
   });

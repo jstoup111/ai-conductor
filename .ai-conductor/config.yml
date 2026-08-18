@@ -48,6 +48,9 @@ build_progress_halt:
 # putting counterfactual/plan-holistic judgement on the strongest reasoner.
 # rootCause inherits the engine's medium-effort default (narrowest rubric).
 build_review:
+  # Enable this repository's advisory containment recordings. The shipped
+  # default remains false, so consumer repositories must opt in explicitly.
+  scopeContainmentEnforced: true
   rubrics:
     # tautology is opt-in engine-wide (#1682: its scoped-run preflight only
     # recognizes Vitest/pytest output); this repo runs Vitest, so enable it.

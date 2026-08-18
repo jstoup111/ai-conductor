@@ -5,13 +5,14 @@ import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
   parsePlanTaskVerifyOnly,
   canonicalTaskId,
-  fileMatchesPlanPath,
   filesForCommit,
   listCommitsWithTrailers,
 } from './autoheal.js';
 import { evaluateScopeContainment } from './plan-scope-containment.js';
 import { parseScopeTrailers } from './scope-trailer.js';
+import { resolveScopeWideningRationale } from './scope-widening-rationale.js';
 import { normalizeTasks } from './task-progress.js';
+import type { ConductorEvent } from '../types/events.js';
 
 /**
  * Per-task work-happened floor (task 1 of the per-task-commit-floor plan):
@@ -40,6 +41,7 @@ export interface ContainmentFloorViolation {
 export interface AcceptedScopeWidening {
   path: string;
   rationale: string;
+  derived: boolean;
   taskId: string;
   sha: string;
 }
@@ -48,8 +50,14 @@ export interface ContainmentFloorReport {
   satisfied: boolean;
   violations: ContainmentFloorViolation[];
   acceptedWidenings: AcceptedScopeWidening[];
+  unresolvedChecks: ContainmentCheckUnresolvedRecord[];
   skipNotes: string[];
 }
+
+export type ContainmentCheckUnresolvedRecord = Extract<
+  ConductorEvent,
+  { type: 'containment_check_unresolved' }
+>;
 
 export async function runPerTaskCommitFloor(args: {
   projectRoot: string;
@@ -113,6 +121,7 @@ export async function runPerTaskCommitFloor(args: {
 export async function runContainmentFloor(args: {
   projectRoot: string;
   planPath: string;
+  scopeContainmentEnforced?: boolean;
 }): Promise<ContainmentFloorReport> {
   try {
     await assertGitRepository(args.projectRoot);
@@ -134,6 +143,7 @@ export async function runContainmentFloor(args: {
     const commits = await listCommitsWithTrailers(args.projectRoot);
     const violations: ContainmentFloorViolation[] = [];
     const acceptedWidenings: AcceptedScopeWidening[] = [];
+    const unresolvedLedger = await readUnresolvedContainmentChecks(args.projectRoot);
 
     for (const commit of commits) {
       if (await isMergeCommit(args.projectRoot, commit.sha)) continue;
@@ -154,19 +164,34 @@ export async function runContainmentFloor(args: {
           task: { id: task.id, status: 'in_progress', files: task.files },
           scopeTrailers,
         });
-        if (!result.allowed) {
-          violations.push({ taskId: task.id, sha: commit.sha, paths: result.offendingPaths });
-          continue;
-        }
-
         for (const scope of scopeTrailers) {
           if (!files.some((path) => path === scope.path || path.startsWith(`${scope.path}/`))) {
             continue;
           }
-          if (task.files.some((declaredPath) => fileMatchesPlanPath(scope.path, declaredPath))) {
+          const alreadyInEffectiveFloor = evaluateScopeContainment({
+            stagedPaths: [scope.path],
+            task: { id: task.id, status: 'in_progress', files: task.files },
+          }).allowed;
+          if (alreadyInEffectiveFloor) {
             continue;
           }
-          acceptedWidenings.push({ ...scope, taskId: task.id, sha: commit.sha });
+          if (args.scopeContainmentEnforced !== false) acceptedWidenings.push({
+            path: scope.path,
+            ...resolveScopeWideningRationale(scope.path, scopeTrailers, message),
+            taskId: task.id,
+            sha: commit.sha,
+          });
+        }
+
+        if (!result.allowed) {
+          for (const path of result.offendingPaths) {
+            if (args.scopeContainmentEnforced !== false) acceptedWidenings.push({
+              path,
+              ...resolveScopeWideningRationale(path, scopeTrailers, message),
+              taskId: task.id,
+              sha: commit.sha,
+            });
+          }
         }
       }
     }
@@ -174,8 +199,9 @@ export async function runContainmentFloor(args: {
     return {
       satisfied: violations.length === 0,
       violations,
-      acceptedWidenings,
-      skipNotes: [],
+      acceptedWidenings: args.scopeContainmentEnforced === false ? [] : acceptedWidenings,
+      unresolvedChecks: unresolvedLedger.checks,
+      skipNotes: args.scopeContainmentEnforced === false ? [] : unresolvedLedger.skipNotes,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -188,8 +214,94 @@ function skippedContainmentFloor(message: string): ContainmentFloorReport {
     satisfied: true,
     violations: [],
     acceptedWidenings: [],
+    unresolvedChecks: [],
     skipNotes: [`containment-floor: ${message}`],
   };
+}
+
+const UNRESOLVED_CONTAINMENT_FAILURES = new Set<ContainmentCheckUnresolvedRecord['failure']>([
+  'commit-message-unreadable',
+  'task-status-unreadable',
+  'task-status-malformed',
+  'evaluation-failed',
+]);
+
+/**
+ * The hook and engine own separate event files because they are separate
+ * processes. Read both as the same event schema, skipping only bad records so
+ * a corrupt hook append cannot hide valid engine records.
+ */
+async function readUnresolvedContainmentChecks(projectRoot: string): Promise<{
+  checks: ContainmentCheckUnresolvedRecord[];
+  skipNotes: string[];
+}> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  const ledgers = [
+    { name: 'events', path: join(pipelineDir, 'events.jsonl'), required: false },
+    { name: 'hook-events', path: join(pipelineDir, 'hook-events.jsonl'), required: true },
+  ];
+  const checks: ContainmentCheckUnresolvedRecord[] = [];
+  const skipNotes: string[] = [];
+
+  for (const ledger of ledgers) {
+    let raw: string;
+    try {
+      raw = await readFile(ledger.path, 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (ledger.required) skipNotes.push('containment-floor: hook-events ledger is unrecorded');
+        continue;
+      }
+      skipNotes.push(`containment-floor: ${ledger.name} ledger unreadable`);
+      continue;
+    }
+
+    let malformed = false;
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const event = parseUnresolvedContainmentCheck(JSON.parse(line) as unknown);
+        if (event !== undefined) checks.push(event);
+      } catch {
+        malformed = true;
+      }
+    }
+    if (malformed) skipNotes.push(`containment-floor: ${ledger.name} ledger contains malformed records`);
+  }
+
+  return {
+    checks: checks.sort((left, right) => left.ts - right.ts),
+    skipNotes,
+  };
+}
+
+function parseUnresolvedContainmentCheck(value: unknown): ContainmentCheckUnresolvedRecord | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const event = value as Record<string, unknown>;
+  if (
+    event.type !== 'containment_check_unresolved'
+    || typeof event.failure !== 'string'
+    || !UNRESOLVED_CONTAINMENT_FAILURES.has(event.failure as ContainmentCheckUnresolvedRecord['failure'])
+    || !isValidEventTimestamp(event.ts)
+    || (event.taskId !== undefined && typeof event.taskId !== 'string')
+  ) {
+    return undefined;
+  }
+  return {
+    type: 'containment_check_unresolved',
+    failure: event.failure as ContainmentCheckUnresolvedRecord['failure'],
+    ...(event.taskId === undefined ? {} : { taskId: event.taskId }),
+    ts: normalizeEventTimestamp(event.ts),
+  };
+}
+
+function isValidEventTimestamp(value: unknown): value is number | string {
+  return (typeof value === 'number' && Number.isFinite(value))
+    || (typeof value === 'string' && Number.isFinite(Date.parse(value)));
+}
+
+function normalizeEventTimestamp(value: number | string): number {
+  return typeof value === 'number' ? value : Date.parse(value);
 }
 
 async function assertGitRepository(projectRoot: string): Promise<void> {
@@ -285,8 +397,14 @@ export function renderPerTaskFloorReport(report: PerTaskFloorReport): string[] {
 }
 
 export function renderContainmentFloorReport(report: ContainmentFloorReport): string[] {
-  return report.violations.map(
-    (violation) =>
-      `Advisory: containment violation for Task ${violation.taskId} in commit ${violation.sha}; offending paths: ${violation.paths.join(', ')}.`,
-  );
+  return [
+    ...report.violations.map(
+      (violation) =>
+        `Advisory: containment violation for Task ${violation.taskId} in commit ${violation.sha}; offending paths: ${violation.paths.join(', ')}.`,
+    ),
+    ...report.unresolvedChecks.map((check) =>
+      `Advisory: containment check unresolved${check.taskId === undefined ? '' : ` for Task ${check.taskId}`}; ${check.failure}.`,
+    ),
+    ...report.skipNotes.map((note) => `Advisory: ${note}.`),
+  ];
 }

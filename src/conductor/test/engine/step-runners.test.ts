@@ -28,6 +28,7 @@ import { executeProviderCandidates } from '../../src/engine/provider-execution.j
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
+import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -3495,20 +3496,25 @@ TIER: M`,
     async function prepareContainmentRepo(
       changedPaths: string[],
       commitMessage: string,
+      declaredPath = 'config.ts',
     ): Promise<string> {
       await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
       await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
-      writeFileSync(planPath, '### Task 3: Config only\n**Files:** config.ts\n');
-      writeFileSync(join(dir, 'config.ts'), 'base\n');
-      await execa('git', ['add', 'config.ts'], { cwd: dir });
+      writeFileSync(planPath, `### Task 3: Config only\n**Files:** ${declaredPath}\n`);
+      const declaredDirectory = declaredPath.slice(0, declaredPath.lastIndexOf('/'));
+      if (declaredDirectory !== '') await mkdir(join(dir, declaredDirectory), { recursive: true });
+      writeFileSync(join(dir, declaredPath), 'base\n');
+      await execa('git', ['add', declaredPath], { cwd: dir });
       await execa('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
       await execa('git', ['remote', 'add', 'origin', dir], { cwd: dir });
       await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: dir });
       await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: dir });
       await execa('git', ['checkout', '-q', '-b', 'feature/containment'], { cwd: dir });
       for (const path of changedPaths) {
+        const directory = path.slice(0, path.lastIndexOf('/'));
+        if (directory !== '') await mkdir(join(dir, directory), { recursive: true });
         writeFileSync(join(dir, path), `${path}\n`);
       }
       await execa('git', ['add', '--', ...changedPaths], { cwd: dir });
@@ -3520,6 +3526,7 @@ TIER: M`,
       const sha = await prepareContainmentRepo(
         ['shared.ts'],
         'widen shared parser\n\nTask: 3\nScope: shared.ts — shared parser changes atomically',
+        'engine/config.ts',
       );
       const invoke = vi.fn().mockResolvedValue({
         success: true,
@@ -3534,7 +3541,7 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
-          config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
           ...currentBuildReviewProof(),
         },
       );
@@ -3556,9 +3563,9 @@ TIER: M`,
         .not.toContain('shared parser changes atomically');
     });
 
-    it('renders and warning-logs containment violations with task, sha, and every path', async () => {
+    it('passes derived scope-widening evidence into the isolated grader prompt with provenance', async () => {
       const sha = await prepareContainmentRepo(
-        ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
         'out of scope\n\nTask: 3',
       );
       const invoke = vi.fn().mockResolvedValue({
@@ -3566,7 +3573,6 @@ TIER: M`,
         output: '{"verdict":"PASS"}',
         exitCode: 0,
       });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
@@ -3576,42 +3582,28 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           log: (message) => console.warn(message),
-          ...tautologyOptIn(),
+          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
           ...currentBuildReviewProof(),
         },
       );
 
-      try {
-        const result = await runner.run('build_review', emptyState);
-        const warnings = warnSpy.mock.calls.flat().join('\n');
+      await runner.run('build_review', emptyState);
 
-        // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
-        expect(invoke).toHaveBeenCalledTimes(8);
-        expect(result.output).toContain('Task 3');
-        expect(result.output).toContain(sha);
-        expect(result.output).toContain('artifacts.ts');
-        expect(result.output).toContain('changelog-pr-finalizer-cli.ts');
-        expect(warnings).toContain('Task 3');
-        expect(warnings).toContain(sha);
-        expect(warnings).toContain('artifacts.ts');
-        expect(warnings).toContain('changelog-pr-finalizer-cli.ts');
-        const sidecar = JSON.parse(await readFile(
-          join(dir, '.pipeline/containment-floor.json'),
-          'utf-8',
-        )) as { violations: Array<{ taskId: string; sha: string; paths: string[] }> };
-        expect(sidecar.violations).toEqual([{
-          taskId: '3',
-          sha,
-          paths: ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
-        }]);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
+      expect(scopePrompt).toContain('other/artifacts.ts');
+      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
+      expect(scopePrompt).toContain('out of scope');
+      expect(scopePrompt).toContain('"taskId":"3"');
+      expect(scopePrompt).toContain(sha);
+      // Commit-message-derived widenings must carry their derived provenance
+      // flag into the grader prompt, not just path/rationale/task/sha.
+      expect(scopePrompt).toContain('"derived":true');
     });
 
-    it('prepends containment violations to an ordinary grader failure output', async () => {
+    it('keeps grader failure output separate from derived scope-widening evidence', async () => {
       const sha = await prepareContainmentRepo(
-        ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
         'out of scope\n\nTask: 3',
       );
       const invoke = vi.fn().mockResolvedValue({
@@ -3619,7 +3611,6 @@ TIER: M`,
         output: 'grader exited before writing a verdict',
         exitCode: 1,
       });
-      const log = vi.fn();
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
@@ -3628,31 +3619,53 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
-          log,
           ...currentBuildReviewProof(),
+          config: { build_review: { scopeContainmentEnforced: true } },
         },
       );
 
       const result = await runner.run('build_review', emptyState);
       const output = result.output ?? '';
+      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
 
       expect(result.success).toBe(false);
-      expect(output).toContain('Task 3');
-      expect(output).toContain(sha);
-      expect(output).toContain('artifacts.ts');
-      expect(output).toContain('changelog-pr-finalizer-cli.ts');
-      expect(output).toContain('infrastructure failure: invalid-provider-result');
-      expect(log.mock.calls.flat().join('\n')).toContain('artifacts.ts');
-      expect(log.mock.calls.flat().join('\n')).toContain('changelog-pr-finalizer-cli.ts');
-      const sidecar = JSON.parse(await readFile(
-        join(dir, '.pipeline/containment-floor.json'),
-        'utf-8',
-      )) as { violations: Array<{ taskId: string; sha: string; paths: string[] }> };
-      expect(sidecar.violations).toEqual([{
-        taskId: '3',
-        sha,
-        paths: ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
-      }]);
+      expect(output).not.toContain('out of scope');
+      expect(output).toContain('containment-floor: hook-events ledger is unrecorded');
+      expect(scopePrompt).toContain('other/artifacts.ts');
+      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
+      expect(scopePrompt).toContain('out of scope');
+      expect(scopePrompt).toContain('"taskId":"3"');
+      expect(scopePrompt).toContain(sha);
+    });
+
+    it('keeps the widened floor active while containment evidence is disabled', async () => {
+      await prepareContainmentRepo(['src/engine/config.test.ts'], 'test sibling\n\nTask: 3', 'src/engine/config.ts');
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        {
+          gitRunner: makeGitRunner(dir),
+          planPath,
+          pipelineDir: join(dir, '.pipeline'),
+          ...currentBuildReviewProof(),
+          config: { build_review: { scopeContainmentEnforced: false } },
+        },
+      );
+
+      await runner.run('build_review', emptyState);
+
+      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      const floor = JSON.parse(await readFile(join(dir, '.pipeline', 'containment-floor.json'), 'utf8'));
+      expect(floor.acceptedWidenings).toEqual([]);
+      expect(floor.skipNotes).toEqual([]);
+      expect(prompts).not.toContain('test sibling');
+      expect(evaluateScopeContainment({
+        stagedPaths: ['src/engine/config.test.ts'],
+        task: { id: '3', status: 'in_progress', files: ['src/engine/config.ts'] },
+      })).toEqual({ allowed: true });
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {

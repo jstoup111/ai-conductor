@@ -31,10 +31,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { runContainmentFloor } from '../../src/engine/per-task-commit-floor.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFileAsync = promisify(execFile);
 const FLOOR_ARTIFACT_RELATIVE = '.pipeline/per-task-floor.json';
@@ -127,6 +130,8 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
     await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
     await git('checkout', '-b', 'feature/per-task-floor');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'hook-events.jsonl'), '', 'utf-8');
   }
 
   /** Commit a trivial file change carrying the given Task: trailer (or no
@@ -256,6 +261,46 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     expect(report).not.toBeNull();
     expect(report?.satisfied).toBe(true);
     expect(report?.gaps).toEqual([]);
+  });
+
+  it('reconciles a hook ledger record with an ISO-timestamped engine event', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'per-task-floor-ledger-'));
+    await initRepo();
+    const slug = 'per-task-floor-ledger';
+    await writePlan(slug, [{ id: '1', title: 'First' }]);
+
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    await events.emit({
+      type: 'containment_check_unresolved',
+      failure: 'evaluation-failed',
+      taskId: 'engine',
+      ts: 2_000,
+    });
+    persister.stop();
+    await writeFile(
+      join(dir, '.pipeline', 'hook-events.jsonl'),
+      JSON.stringify({
+        type: 'containment_check_unresolved',
+        failure: 'task-status-malformed',
+        taskId: 'hook',
+        ts: 1_000,
+      }) + '\n',
+      'utf8',
+    );
+
+    const report = await runContainmentFloor({
+      projectRoot: dir,
+      planPath: join(dir, '.docs', 'plans', `${slug}.md`),
+      scopeContainmentEnforced: true,
+    });
+
+    expect(report.unresolvedChecks).toEqual([
+      expect.objectContaining({ taskId: 'hook', ts: 1_000 }),
+      expect.objectContaining({ taskId: 'engine', ts: expect.any(Number) }),
+    ]);
+    expect(report.unresolvedChecks[1]!.ts).toBeGreaterThan(report.unresolvedChecks[0]!.ts);
   });
 
   // ── Story 3 — verify-only / skipped task does NOT trip the floor ────────

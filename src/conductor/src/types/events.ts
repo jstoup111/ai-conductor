@@ -154,6 +154,22 @@ export type ConductorEvent =
   | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }
   | { type: 'step_started'; step: StepName; index: number }
   | {
+      /** A hook-owned containment check could not reach a verdict. */
+      type: 'containment_check_unresolved';
+      /** Closed classification of the failed containment-check boundary. */
+      failure:
+        | 'commit-message-unreadable'
+        | 'task-status-unreadable'
+        | 'task-status-malformed'
+        | 'evaluation-failed';
+      /** Present once the commit message yielded a resolvable Task trailer. */
+      taskId?: string;
+      /** Raw commit message, retained when the hook read it before failing. */
+      commitMessage?: string;
+      /** Epoch milliseconds when the hook recorded the unresolved check. */
+      ts: number;
+    }
+  | {
       /** A retained compatibility step ran as a deprecated no-op. */
       type: 'deprecated_step';
       step: StepName;

@@ -155,7 +155,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const changedPlan = await contentDigestFor({ planBody: '# Plan body\n\nChanged plan content.\n' });
       const changedReseal = await contentDigestFor({ resealReason: 'Operator approved the corrected amendment.' });
       const changedWidening = await contentDigestFor({
-        acceptedWidenings: [{ path: 'src/widened.ts', rationale: 'required coordination', taskId: '5', sha: 'widened-sha' }],
+        acceptedWidenings: [{ path: 'src/widened.ts', rationale: 'required coordination', derived: false, taskId: '5', sha: 'widened-sha' }],
       });
 
       expect({
@@ -256,6 +256,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect([...MACHINERY_AUTHORED_PATHS].sort()).toEqual([
         '.docs/shipped/',
         '.pipeline/',
+        'CHANGELOG.md',
+        'docs/',
       ]);
     });
 
