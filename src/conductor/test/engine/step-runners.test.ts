@@ -27,6 +27,7 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
 import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
@@ -3703,6 +3704,9 @@ TIER: M`,
       expect(result.success).toBe(false);
       await expect(access(join(dir, '.pipeline/build-review.json'))).rejects.toThrow();
       expect(invoke).toHaveBeenCalledTimes(8);
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger.gates.build_review?.count ?? 0).toBe(0);
+      expect(ledger.gates.build_review?.cumulative ?? 0).toBe(0);
     });
 
     it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
