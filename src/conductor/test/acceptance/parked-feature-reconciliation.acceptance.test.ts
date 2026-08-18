@@ -368,7 +368,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
   __resetResolveCacheForTests();
-  await rm(tmpBase, { recursive: true, force: true });
+  // Git may finish packing objects immediately after the final child process
+  // exits; retry recursive removal so that teardown race cannot mask the
+  // acceptance assertion.
+  await rm(tmpBase, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
