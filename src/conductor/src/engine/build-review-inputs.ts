@@ -231,22 +231,97 @@ function changedPathsFromDiff(diff: string): readonly string[] {
   return [...diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
 }
 
-function staticTestTitle(source: string): { titleText: string; staticExtractionFallback: boolean } {
-  const calls = [...source.matchAll(/\b(?:describe|context|suite|it|test|specify)\s*\(\s*/g)];
-  const titles: string[] = [];
-  let fallback = false;
-  for (const call of calls) {
-    const rest = source.slice(call.index! + call[0].length);
-    const match = /^(?:'((?:\\.|[^'])*)'|"((?:\\.|[^"])*)"|`((?:\\.|[^`])*)`)/.exec(rest);
-    if (!match) {
-      fallback = true;
-      continue;
+type StaticTestTitle = Pick<BuildReviewChangedTestTitle, 'titleText' | 'staticExtractionFallback'>;
+
+const TEST_DECLARATION = /\b(describe|context|suite|it|test|specify)\s*\(/g;
+const TEST_SUITE_NAMES = new Set(['describe', 'context', 'suite']);
+
+function skipQuotedSource(source: string, index: number): number | undefined {
+  const quote = source[index]!;
+  for (let cursor = index + 1; cursor < source.length; cursor += 1) {
+    if (source[cursor] === '\\') {
+      cursor += 1;
+    } else if (source[cursor] === quote) {
+      return cursor + 1;
     }
-    titles.push(match[1] ?? match[2] ?? match[3] ?? '');
   }
-  return titles.length > 0 && !fallback
-    ? { titleText: titles.join(' > '), staticExtractionFallback: false }
-    : { titleText: '', staticExtractionFallback: true };
+  return undefined;
+}
+
+function balancedSourceEnd(source: string, start: number, open: string, close: string): number | undefined {
+  let depth = 0;
+  for (let cursor = start; cursor < source.length; cursor += 1) {
+    if (source[cursor] === "'" || source[cursor] === '"' || source[cursor] === '`') {
+      const next = skipQuotedSource(source, cursor);
+      if (next === undefined) return undefined;
+      cursor = next - 1;
+    } else if (source[cursor] === open) {
+      depth += 1;
+    } else if (source[cursor] === close && --depth === 0) {
+      return cursor;
+    }
+  }
+  return undefined;
+}
+
+function staticTitleArgument(source: string, index: number): { title?: string; next: number } {
+  let cursor = index;
+  while (/\s/.test(source[cursor] ?? '')) cursor += 1;
+  if (source[cursor] !== "'" && source[cursor] !== '"' && source[cursor] !== '`') return { next: cursor };
+  const end = skipQuotedSource(source, cursor);
+  if (end === undefined) return { next: source.length };
+  const raw = source.slice(cursor + 1, end - 1);
+  return raw.includes('${')
+    ? { next: end }
+    : { title: raw.replace(/\\(.)/g, '$1'), next: end };
+}
+
+function callbackBody(source: string, callStart: number, callEnd: number): { start: number; end: number } | undefined {
+  const callbackSource = source.slice(callStart, callEnd);
+  const arrowOffset = callbackSource.indexOf('=>');
+  const functionOffset = /\bfunction\b/.exec(callbackSource)?.index;
+  const isFunctionCallback = functionOffset !== undefined && (arrowOffset < 0 || functionOffset < arrowOffset);
+  const callbackOffset = isFunctionCallback
+    ? functionOffset + callbackSource.slice(functionOffset).indexOf('{')
+    : arrowOffset;
+  if (callbackOffset < 0) return undefined;
+  let start = callStart + callbackOffset + (isFunctionCallback ? 0 : 2);
+  while (/\s/.test(source[start] ?? '')) start += 1;
+  if (source[start] !== '{') return { start, end: callEnd };
+  const end = balancedSourceEnd(source, start, '{', '}');
+  return end === undefined || end > callEnd ? undefined : { start: start + 1, end };
+}
+
+function staticTestTitles(source: string): readonly StaticTestTitle[] {
+  const titles: StaticTestTitle[] = [];
+  let malformed = false;
+  const collect = (start: number, end: number, ancestors: readonly string[], inheritedFallback: boolean): void => {
+    TEST_DECLARATION.lastIndex = start;
+    for (let match = TEST_DECLARATION.exec(source); match && match.index < end; match = TEST_DECLARATION.exec(source)) {
+      const callStart = match.index;
+      const callEnd = balancedSourceEnd(source, TEST_DECLARATION.lastIndex - 1, '(', ')');
+      if (callEnd === undefined || callEnd > end) {
+        malformed = true;
+        return;
+      }
+      const title = staticTitleArgument(source, TEST_DECLARATION.lastIndex);
+      const fallback = inheritedFallback || title.title === undefined;
+      if (TEST_SUITE_NAMES.has(match[1]!)) {
+        const body = callbackBody(source, title.next, callEnd);
+        if (body === undefined) malformed = true;
+        else collect(body.start, body.end, title.title === undefined ? ancestors : [...ancestors, title.title], fallback);
+      } else {
+        titles.push(fallback
+          ? { titleText: '', staticExtractionFallback: true }
+          : { titleText: [...ancestors, title.title!].join(' > '), staticExtractionFallback: false });
+      }
+      TEST_DECLARATION.lastIndex = callEnd + 1;
+    }
+  };
+  collect(0, source.length, [], false);
+  return malformed || titles.length === 0
+    ? [{ titleText: '', staticExtractionFallback: true }]
+    : titles;
 }
 
 async function snapshotChangedTestTitles(
@@ -255,13 +330,14 @@ async function snapshotChangedTestTitles(
   diff: string,
 ): Promise<readonly BuildReviewChangedTestTitle[]> {
   const selectors = classifyTautologyPaths(changedPathsFromDiff(diff)).tests;
-  return Object.freeze(await Promise.all(selectors.map(async (selector) => {
+  const titles = await Promise.all(selectors.map(async (selector) => {
     const result = await git(['show', `${headSha}:${selector}`]);
     const extracted = result.exitCode === 0
-      ? staticTestTitle(result.stdout)
-      : { titleText: '', staticExtractionFallback: true };
-    return Object.freeze({ selector, ...extracted });
-  })));
+      ? staticTestTitles(result.stdout)
+      : [{ titleText: '', staticExtractionFallback: true }];
+    return extracted.map((title) => Object.freeze({ selector, ...title }));
+  }));
+  return Object.freeze(titles.flat());
 }
 
 function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): readonly AcceptedScopeWidening[] {
