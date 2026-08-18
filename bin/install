@@ -35,6 +35,12 @@ ALLOW_WORKTREE_ROOT=false
 # validate it here so an invalid selection never begins a global installation.
 PROVIDER_SELECTION=""
 
+# CHANNEL_SELECTION is an optional first-run update-channel choice. It is
+# deliberately consulted only while creating conductor configuration, so a
+# re-run cannot overwrite a channel the operator already configured.
+CHANNEL_SELECTION=""
+CHANNEL_SOURCE=""
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -1492,12 +1498,45 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       ;;
+    --channel)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then
+        fail "--channel requires one of: stable, tagged, main"
+        exit 1
+      fi
+      CHANNEL_SELECTION="$1"
+      CHANNEL_SOURCE="--channel flag"
+      ;;
+    --channel=*)
+      CHANNEL_SELECTION="${1#--channel=}"
+      if [ -z "$CHANNEL_SELECTION" ]; then
+        fail "--channel requires one of: stable, tagged, main"
+        exit 1
+      fi
+      CHANNEL_SOURCE="--channel flag"
+      ;;
     *)
       _filtered_args+=("$1")
       ;;
   esac
   shift
 done
+
+if [ -z "$CHANNEL_SELECTION" ] && [ -n "${AI_CONDUCTOR_CHANNEL:-}" ] && \
+  [[ ! "${AI_CONDUCTOR_CHANNEL}" =~ ^[[:space:]]*$ ]]; then
+  CHANNEL_SELECTION="$AI_CONDUCTOR_CHANNEL"
+  CHANNEL_SOURCE="AI_CONDUCTOR_CHANNEL environment variable"
+fi
+
+if [ -n "$CHANNEL_SELECTION" ]; then
+  case "$CHANNEL_SELECTION" in
+    stable|tagged|main) ;;
+    *)
+      fail "Unsupported channel '${CHANNEL_SELECTION}' from ${CHANNEL_SOURCE}. Supported channels: stable, tagged, main"
+      exit 1
+      ;;
+  esac
+fi
 
 if [ -n "$PROVIDER_SELECTION" ]; then
   case ",${PROVIDER_SELECTION}," in
