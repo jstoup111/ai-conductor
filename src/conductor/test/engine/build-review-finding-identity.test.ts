@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-import { BUILD_REVIEW_FINDING_VOCABULARIES } from '../../src/engine/build-review-domain.js';
+import {
+  BUILD_REVIEW_FINDING_VOCABULARIES,
+  normalizeBuildReviewFindingVocabularyMember,
+} from '../../src/engine/build-review-domain.js';
 import {
   canonicalizeBuildReviewFindingIdentity,
   canonicalizeBuildReviewFindingSet,
@@ -121,9 +124,10 @@ describe('build-review finding identity', () => {
   it('keeps every closed finding vocabulary unambiguous after normalization', () => {
     const members = normalizedVocabularyMembers(BUILD_REVIEW_FINDING_VOCABULARIES);
     expect(members.length).toBeGreaterThan(0);
+    expect(normalizeBuildReviewFindingVocabularyMember('OUT_OF_PLAN_TEST_CHANGE')).toBe('out-of-plan-change');
     for (const rubric of Object.values(BUILD_REVIEW_FINDING_VOCABULARIES)) {
       for (const members of [rubric.members, rubric.concernKinds, ...Object.values(rubric.anchorFields)]) {
-        const normalized = members.map((member) => member.toLowerCase().replaceAll('_', '-'));
+        const normalized = members.map(normalizeBuildReviewFindingVocabularyMember);
         expect(new Set(normalized).size).toBe(normalized.length);
       }
     }
