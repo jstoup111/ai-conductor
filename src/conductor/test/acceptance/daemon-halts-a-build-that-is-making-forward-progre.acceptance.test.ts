@@ -79,6 +79,7 @@ import { runDaemon, type BacklogItem, type DaemonDeps } from '../../src/engine/d
 //    breaker', ...)` block — those helpers are file-private there). ────────
 
 const RED_EVIDENCE_JSON = JSON.stringify({
+  outcome: 'specs-generated',
   command: 'bundle exec rspec spec/acceptance',
   targetSpecs: ['spec/acceptance/feature_spec.rb'],
   executed: 1,
