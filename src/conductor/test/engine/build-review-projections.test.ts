@@ -76,7 +76,7 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
         sourceIdentities: { mergeBase: 'base', headSha: 'head' },
         output: { stdout: 'counterfactual stdout', stderr: 'counterfactual stderr' },
         eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
-        scopedRun: { exitCode: 1, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
+        scopedRun: { exitCode: 1, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
       },
     },
     ...overrides,
@@ -444,7 +444,7 @@ describe('build-review rubric projections', () => {
           sourceIdentities: { mergeBase: 'rebased-merge-base', headSha: 'rebased-head' },
           output: { stdout: 'rebased counterfactual stdout', stderr: 'rebased counterfactual stderr' },
           eligibleSelectorRemovals: [{ selector: 'test/retired.test.ts', removals: ['retired'] }],
-          scopedRun: { exitCode: 1, runKind: 'test-failure', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
+          scopedRun: { exitCode: 1, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'], failureExcerpt: 'AssertionError' },
         },
       },
     }));

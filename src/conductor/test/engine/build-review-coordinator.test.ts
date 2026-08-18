@@ -10,6 +10,7 @@ import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
 import type { BuildReviewCacheEntry } from "../../src/engine/build-review-cache.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type { ResolvedBuildReviewConfig } from "../../src/engine/resolved-config.js";
+import type { ConductorEvent } from "../../src/types/events.js";
 
 function config(overrides: Partial<ResolvedBuildReviewConfig> = {}): ResolvedBuildReviewConfig {
   const policy = {
@@ -379,7 +380,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       changedPaths: ["src/a.ts", "test/a.test.ts"], changedTestSelectors: ["test/a.test.ts"],
       revertedProductionManifest: [{ path: "src/a.ts", mergeBaseBlobSha: "e79120aab4682bfe81153595c7d2ec1ad3bd3dd8" }],
       sourceIdentities: { mergeBase: "base", headSha: "head" },
-      scopedRun: { exitCode: 1 as number, runKind: "test-failure" as const, ranSelectors: ["test/a.test.ts"], failureExcerpt: "AssertionError: expected 2 to be 1" },
+      scopedRun: { exitCode: 1 as number, runKind: "nonzero-exit" as const, ranSelectors: ["test/a.test.ts"], failureExcerpt: "AssertionError: expected 2 to be 1" },
     }));
     const cachedScope = {
       version: 1 as const, rubric: "scope" as const, contractVersion: "v1" as const, projectionVersion: "v2" as const,
@@ -427,7 +428,7 @@ describe("build-review coordinator: frozen fan-out", () => {
         eligibleSelectorRemovals: [],
         sourceIdentities: { mergeBase: "base", headSha: "head" },
         scopedRun: {
-          exitCode: 1, runKind: "test-failure" as const, ranSelectors: ["test/a.test.ts"],
+          exitCode: 1, runKind: "nonzero-exit" as const, ranSelectors: ["test/a.test.ts"],
           failureExcerpt: rawRunOutput.slice(0, 64),
         },
       }),
@@ -453,13 +454,19 @@ describe("build-review coordinator: frozen fan-out", () => {
       changedTestSelectors: ["test/a.test.ts"],
       sourceIdentities: { mergeBase: "base", headSha: "head" },
       scopedRun: {
-        exitCode: 1, runKind: "test-failure", ranSelectors: ["test/a.test.ts"],
+        exitCode: 1, runKind: "nonzero-exit", ranSelectors: ["test/a.test.ts"],
         failureExcerpt: rawRunOutput.slice(0, 64),
       },
     });
   });
 
   it("records a preflight infrastructure failure without dispatching Tautology while sibling rubrics settle", async () => {
+    const infrastructureEvents: Array<Extract<ConductorEvent, {
+      type: "build_review_rubric_infrastructure_failure";
+    }>> = [];
+    const emit = vi.fn(async (event: ConductorEvent) => {
+      if (event.type === "build_review_rubric_infrastructure_failure") infrastructureEvents.push(event);
+    });
     const dispatchModel = vi.fn(async (branch, projection) => ({
       kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
       contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
@@ -473,12 +480,21 @@ describe("build-review coordinator: frozen fan-out", () => {
       readCache: async () => undefined, dispatchModel,
       writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
       writeCache: async () => undefined,
+      emit,
     });
 
     if (result.kind !== "ready") throw new Error("expected a settled review lap");
     expect(result.branches[0]).toMatchObject({ rubric: "tautology", kind: "infrastructure-failure" });
     expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("tautology");
     expect(result.branches).toHaveLength(4);
+    expect(infrastructureEvents).toHaveLength(1);
+    expect(infrastructureEvents).toEqual([{
+      type: "build_review_rubric_infrastructure_failure",
+      rubric: "tautology",
+      lapId: "lap-current",
+      reason: "scoped-run-timeout",
+    }]);
+    expect(infrastructureEvents[0]).not.toHaveProperty("excerpt");
   });
 });
 

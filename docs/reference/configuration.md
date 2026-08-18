@@ -836,7 +836,7 @@ is written back (`config.ts:898-927`).
 | `build_review.perTaskFloor` | boolean | `true` | Works |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
-| `build_review.rubrics` | object | `scope`, `rootCause`, `completeness` enabled; `tautology` off | Closed map: `tautology`, `scope`, `rootCause`, `completeness`. `tautology` is opt-in (`rubrics.tautology.enabled: true`): its scoped-run preflight recognizes only Vitest/pytest-shaped test output, and on other frameworks (e.g. RSpec, #1682) every run classifies as an infrastructure failure, so the rubric can never return a verdict |
+| `build_review.rubrics` | object | `scope`, `rootCause`, `completeness` enabled; `tautology` off | Closed map: `tautology`, `scope`, `rootCause`, `completeness`. `tautology` is opt-in (`rubrics.tautology.enabled: true`): a zero exit code is green, every nonzero exit is counterfactual RED, and only launch, timeout, and signal outcomes are scoped-run infrastructure failures |
 
 Normalization contract:
 

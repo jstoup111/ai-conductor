@@ -136,6 +136,13 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `finish` (prose authorship) | a retained PR whose body is still the engine-seeded placeholder — the coordinator dispatches its `author_pr_prose` pass (with the branch diff and the feature's spec artifacts) and accepts it only when re-observation shows the placeholder classification gone. The judgment pass is therefore never handed an unauthored body, and no prose defect commits the shipped record, so a prose halt stays re-dispatchable |
 | `finish` (presentation) | a PR shipping with halt boilerplate or an engine-generated body-floor marker — either classification keeps a bounded prose pass required and prevents the final outcome record. Every completion-gate refusal in this class is classified `missing: 'presentation'`, which routes the loop back into `finish` for a body rewrite rather than into `/remediate` or `build`; that re-dispatch is bounded to one attempt per `pr_url` (recorded in `.pipeline/pr-body-regen-attempt.json`), after which the engine's deterministic body floor runs as a last resort so the feature still converges. A reused halt PR's *presentation* is repaired earlier still — whenever the retained SHIP PR identity is resolved (SHIP-phase adoption, the pre-finish snapshot, or the finish-time restore), so SHIP steps that run before `finish` do not read a `needs-remediation` placeholder; a lighter clear additionally runs once at the start of every dispatch regardless of phase, so a resumed `BUILD` step is not left holding the placeholder either; the draft→ready flip stays finish-only |
 
+Within `build_review`, the Tautology counterfactual is classified solely by the scoped command's exit
+code; the engine does not parse runner-specific output. Exit code zero stays green and every nonzero
+exit is counterfactual RED. Only launch, timeout, and signal are scoped-run infrastructure outcomes.
+When a counterfactual excerpt establishes that no test executed, Tautology judges that as a finding rather
+than an infrastructure result. A scoped-run infrastructure failure carries a bounded output excerpt on the
+existing `.pipeline/events.jsonl` event spine.
+
 Each predicate's exact file, format, and failure text is in [artifacts](../reference/artifacts.md).
 
 ### BUILD-verification round authority

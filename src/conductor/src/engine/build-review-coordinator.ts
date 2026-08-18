@@ -136,6 +136,7 @@ function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTa
         changedPaths: preflight.changedPaths,
         changedTestSelectors: preflight.changedTestSelectors,
         sourceIdentities: preflight.sourceIdentities,
+        ...(preflight.failureExcerpt !== undefined ? { failureExcerpt: preflight.failureExcerpt } : {}),
       },
     };
   }
@@ -242,7 +243,13 @@ export async function coordinateBuildReviewRubrics(
     }
     if (branch.rubric === "tautology" && preflight?.classification === "infrastructure-failure") {
       resolved.set(branch.rubric, infrastructure(branch.rubric, preflight.reason));
-      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: preflight.reason });
+      await input.emit?.({
+        type: "build_review_rubric_infrastructure_failure",
+        rubric: branch.rubric,
+        lapId: input.lapId,
+        reason: preflight.reason,
+        ...(preflight.failureExcerpt !== undefined ? { excerpt: preflight.failureExcerpt } : {}),
+      });
       continue;
     }
     const projection = projections[branch.rubric];

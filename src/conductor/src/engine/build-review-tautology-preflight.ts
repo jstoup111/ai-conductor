@@ -27,13 +27,10 @@ export type RemovalMaintenanceSelectors = readonly string[] & {
 };
 
 export type TautologyScopedRunResult =
+  /** Exit code 0 means the counterfactual stayed green. */
   | { readonly exitCode: 0; readonly stdout: string; readonly stderr: string }
-  /** A changed test executed and an assertion failed under the reverted production bytes. */
-  | { readonly kind: 'test-failure'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
-  /** The selector matched no executable test; it is not counterfactual RED evidence. */
-  | { readonly kind: 'no-tests'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
-  /** Test discovery or collection failed before an assertion could run. */
-  | { readonly kind: 'collection-failure'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
+  /** Any nonzero exit means the counterfactual did not stay green. */
+  | { readonly kind: 'nonzero-exit'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
   | { readonly kind: 'launch-error' | 'timeout'; readonly stdout: string; readonly stderr: string }
   | { readonly kind: 'signal'; readonly signal: string; readonly stdout: string; readonly stderr: string };
 
@@ -87,8 +84,8 @@ export interface RevertedProductionFileReference {
  */
 export interface TautologyScopedRunEvidence {
   readonly exitCode: number;
-  /** Portable across any runner: derived from exit code and closed run kinds. */
-  readonly runKind: 'passed' | 'test-failure' | 'collection-failure';
+  /** Portable across any runner: derived solely from process exit code. */
+  readonly runKind: 'passed' | 'nonzero-exit';
   /** The counterfactual selectors the scoped command actually executed. */
   readonly ranSelectors: readonly string[];
   /**
@@ -118,7 +115,9 @@ export interface TautologyCompletedPreflight {
 
 export type TautologyPreflightResult = TautologyCompletedPreflight | {
       readonly classification: 'infrastructure-failure';
-      readonly reason: 'no-changed-tests' | 'no-production-changes' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'scoped-run-no-tests' | 'scoped-run-collection-failed' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
+      readonly reason: 'no-changed-tests' | 'no-production-changes' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
+      /** Bounded combined output from a scoped-run infrastructure failure. */
+      readonly failureExcerpt?: string;
       readonly changedPaths: readonly string[];
       readonly changedTestSelectors: readonly string[];
       readonly sourceIdentities: { readonly mergeBase: string; readonly headSha: string };
@@ -263,8 +262,12 @@ function failure(
   paths: readonly string[],
   selectors: readonly string[],
   sourceIdentities: { readonly mergeBase: string; readonly headSha: string },
+  failureExcerpt?: string,
 ): TautologyPreflightResult {
-  return { classification: 'infrastructure-failure', reason, changedPaths: paths, changedTestSelectors: selectors, sourceIdentities };
+  return {
+    classification: 'infrastructure-failure', reason, changedPaths: paths, changedTestSelectors: selectors, sourceIdentities,
+    ...(failureExcerpt === undefined ? {} : { failureExcerpt }),
+  };
 }
 
 function cacheKey(deps: TautologyPreflightDependencies, paths: readonly string[]): string {
@@ -282,16 +285,13 @@ function aborted(signal: AbortSignal): boolean {
   return signal.aborted;
 }
 
-function scopedRunFailure(
+export function scopedRunFailure(
   execution: Exclude<TautologyScopedRunResult, { readonly exitCode: 0 }>,
-): Extract<TautologyPreflightResult, { classification: 'infrastructure-failure' }>['reason'] {
+): Extract<TautologyPreflightResult, { classification: 'infrastructure-failure' }>['reason'] | undefined {
   switch (execution.kind) {
     case 'launch-error': return 'scoped-run-launch-failed';
     case 'timeout': return 'scoped-run-timeout';
     case 'signal': return 'scoped-run-signaled';
-    case 'no-tests': return 'scoped-run-no-tests';
-    case 'collection-failure': return 'scoped-run-collection-failed';
-    case 'test-failure': return 'scoped-run-failed';
   }
 }
 
@@ -398,13 +398,19 @@ export async function materializeTautologyPreflight(
     if (!result) {
       try {
         const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
-        // A collection failure on the REVERTED tree is a valid counterfactual,
-        // not infrastructure: the preflight's precondition is a current-HEAD
-        // green proof, so changed tests that cannot even load once the diff's
-        // production is reverted (unresolvable imports of added modules) have
-        // demonstrably failed without the diff. Launch/timeout/signal/no-tests
-        // remain infrastructure — they say nothing about the counterfactual.
-        if ('kind' in execution && execution.kind !== 'test-failure' && execution.kind !== 'collection-failure') result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
+        // Exit code zero stays green and any nonzero exit is counterfactual RED.
+        // Per #1593, a reverted-tree collection failure is evidence that the
+        // changed production matters, not output-derived infrastructure. Only
+        // launch, timeout, and signal outcomes remain infrastructure failures.
+        if ('kind' in execution && execution.kind !== 'nonzero-exit') {
+          result = failure(
+            scopedRunFailure(execution)!,
+            paths,
+            classified.tests,
+            sourceIdentities,
+            boundedHeadTailExcerpt([execution.stdout, execution.stderr].filter((chunk) => chunk.length > 0).join('\n')),
+          );
+        }
         else if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else {
           result = {
@@ -418,7 +424,7 @@ export async function materializeTautologyPreflight(
             sourceIdentities,
             scopedRun: {
               exitCode: execution.exitCode,
-              runKind: 'kind' in execution ? execution.kind : 'passed',
+              runKind: 'kind' in execution ? 'nonzero-exit' : 'passed',
               ranSelectors: counterfactualSelectors,
               failureExcerpt: execution.exitCode === 0
                 ? ''

@@ -183,27 +183,6 @@ function mapProviderLifecycleHalt(
 }
 
 /**
- * A non-zero scoped command is counterfactual RED evidence only when its
- * output shows that a selected test actually ran and failed an assertion.
- * Discovery and collection failures must stop the rubric rather than being
- * mistaken for a test proving the reverted production is wrong.
- */
-export function classifyTautologyScopedFailure(
-  exitCode: number,
-  stdout: string,
-  stderr: string,
-): TautologyScopedRunResult {
-  const output = `${stdout}\n${stderr}`;
-  if (/\b(?:no test files found|no tests? (?:found|collected)|no test suite found|did not match any test files)\b/i.test(output)) {
-    return { kind: 'no-tests', exitCode, stdout, stderr };
-  }
-  if (/\b(?:assertionerror|assertion failed|tests?\s+\d+\s+failed|test files?\s+\d+\s+failed)\b/i.test(output)) {
-    return { kind: 'test-failure', exitCode, stdout, stderr };
-  }
-  return { kind: 'collection-failure', exitCode, stdout, stderr };
-}
-
-/**
  * Extract a complexity tier (S/M/L) from Claude's complexity-assessment output.
  * Looks for the last occurrence of `TIER: <letter>` (case-insensitive). Falls back
  * to the last standalone S/M/L letter if the explicit marker is absent.
@@ -2080,7 +2059,10 @@ export class DefaultStepRunner implements StepRunner {
           const detachedDependencies = join(path, 'src', 'conductor', 'node_modules');
           await access(sourceDependencies);
           await mkdir(join(path, 'src', 'conductor'), { recursive: true });
-          await symlink(sourceDependencies, detachedDependencies, 'dir');
+          await Promise.all([
+            symlink(sourceDependencies, detachedDependencies, 'dir'),
+            symlink(sourceDependencies, join(path, 'node_modules'), 'dir'),
+          ]);
         } catch (error: unknown) {
           // Missing dependencies remain the scoped command's ordinary
           // launch/runtime concern.  Do not make projects without a local
@@ -2128,7 +2110,7 @@ export class DefaultStepRunner implements StepRunner {
       child.once('close', (code, receivedSignal) => {
         if (receivedSignal) finish({ kind: 'signal', signal: receivedSignal, stdout, stderr });
         else if (code === 0) finish({ exitCode: 0, stdout, stderr });
-        else finish(classifyTautologyScopedFailure(code ?? 1, stdout, stderr));
+        else finish({ kind: 'nonzero-exit', exitCode: code ?? 1, stdout, stderr });
       });
       signal.addEventListener('abort', () => {
         child.kill('SIGTERM');
