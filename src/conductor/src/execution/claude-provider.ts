@@ -517,14 +517,14 @@ export class ClaudeProvider implements LLMProvider {
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onSpawn, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, onActivity, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
     }
-    const subprocess = this.subprocessFactory('claude', args, {
+    const subprocess = this.subprocessFactory(selfHost?.executable ?? 'claude', args, {
       ...execaOptions,
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.
@@ -595,6 +595,7 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
+          selfHost: options.selfHost,
           spawnPermit: options.spawnPermit,
         })
         : this.runClaude(args, {
@@ -605,6 +606,7 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
+          selfHost: options.selfHost,
           spawnPermit: options.spawnPermit,
         }),
     );
@@ -651,6 +653,7 @@ export class ClaudeProvider implements LLMProvider {
         diagnosticLog: options.diagnosticLog,
         onActivity: options.onActivity,
         onSpawn: options.onSpawn,
+        selfHost: options.selfHost,
         spawnPermit: options.spawnPermit,
       }),
     );
