@@ -27,13 +27,10 @@ export type RemovalMaintenanceSelectors = readonly string[] & {
 };
 
 export type TautologyScopedRunResult =
+  /** Exit code 0 means the counterfactual stayed green. */
   | { readonly exitCode: 0; readonly stdout: string; readonly stderr: string }
-  /** A changed test executed and an assertion failed under the reverted production bytes. */
-  | { readonly kind: 'test-failure'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
-  /** The selector matched no executable test; it is not counterfactual RED evidence. */
-  | { readonly kind: 'no-tests'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
-  /** Test discovery or collection failed before an assertion could run. */
-  | { readonly kind: 'collection-failure'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
+  /** Any nonzero exit means the counterfactual did not stay green. */
+  | { readonly kind: 'nonzero-exit'; readonly exitCode: number; readonly stdout: string; readonly stderr: string }
   | { readonly kind: 'launch-error' | 'timeout'; readonly stdout: string; readonly stderr: string }
   | { readonly kind: 'signal'; readonly signal: string; readonly stdout: string; readonly stderr: string };
 
@@ -87,8 +84,8 @@ export interface RevertedProductionFileReference {
  */
 export interface TautologyScopedRunEvidence {
   readonly exitCode: number;
-  /** Portable across any runner: derived from exit code and closed run kinds. */
-  readonly runKind: 'passed' | 'test-failure' | 'collection-failure';
+  /** Portable across any runner: derived solely from process exit code. */
+  readonly runKind: 'passed' | 'nonzero-exit';
   /** The counterfactual selectors the scoped command actually executed. */
   readonly ranSelectors: readonly string[];
   /**
@@ -289,9 +286,6 @@ function scopedRunFailure(
     case 'launch-error': return 'scoped-run-launch-failed';
     case 'timeout': return 'scoped-run-timeout';
     case 'signal': return 'scoped-run-signaled';
-    case 'no-tests': return 'scoped-run-no-tests';
-    case 'collection-failure': return 'scoped-run-collection-failed';
-    case 'test-failure': return 'scoped-run-failed';
   }
 }
 
@@ -398,13 +392,10 @@ export async function materializeTautologyPreflight(
     if (!result) {
       try {
         const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
-        // A collection failure on the REVERTED tree is a valid counterfactual,
-        // not infrastructure: the preflight's precondition is a current-HEAD
-        // green proof, so changed tests that cannot even load once the diff's
-        // production is reverted (unresolvable imports of added modules) have
-        // demonstrably failed without the diff. Launch/timeout/signal/no-tests
-        // remain infrastructure — they say nothing about the counterfactual.
-        if ('kind' in execution && execution.kind !== 'test-failure' && execution.kind !== 'collection-failure') result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
+        // The scoped command has only process-level outcomes: exit code zero
+        // stayed green, while any nonzero exit is counterfactual RED. Runner
+        // launch, timeout, and signal outcomes remain infrastructure failures.
+        if ('kind' in execution && execution.kind !== 'nonzero-exit') result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
         else if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else {
           result = {
@@ -418,7 +409,7 @@ export async function materializeTautologyPreflight(
             sourceIdentities,
             scopedRun: {
               exitCode: execution.exitCode,
-              runKind: 'kind' in execution ? execution.kind : 'passed',
+              runKind: 'kind' in execution ? 'nonzero-exit' : 'passed',
               ranSelectors: counterfactualSelectors,
               failureExcerpt: execution.exitCode === 0
                 ? ''
