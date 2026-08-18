@@ -10,6 +10,7 @@ import {
   withDaemonSessionMarker,
 } from '../../src/execution/daemon-session.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import { COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
 
 // Daemon-session boundary enforcement. Engine-dispatched maker sessions have
 // attempted to run conduct-ts themselves (including daemon park/unpark/
@@ -86,6 +87,21 @@ describe('guardDaemonSessionInvocation', () => {
     // The sanctioned set is worker commands only — orchestration verbs stay blocked.
     expect(guardDaemonSessionInvocation(argvFor('task', 'done', 't1'), markedEnv()).allowed).toBe(false);
     expect(guardDaemonSessionInvocation(argvFor('test-suite'), markedEnv()).allowed).toBe(false);
+  });
+
+  it('permits the generated commit-msg hook to invoke scope-check inside a daemon session', () => {
+    // git-hook-assets.ts embeds `conduct-ts scope-check "$COMMIT_MSG_FILE"` in
+    // the commit-msg hook, which runs inside the daemon-managed maker session
+    // (CONDUCT_DAEMON_SESSION=1). Pins that the hook asset carries the
+    // invocation and that the guard's sanctioned set admits it. Authorized by
+    // plan task rem-daemon-scope-check-auth.
+    expect(COMMIT_MSG_HOOK).toContain('conduct-ts scope-check "$COMMIT_MSG_FILE"');
+    expect(
+      guardDaemonSessionInvocation(
+        argvFor('scope-check', '/worktree/.git/COMMIT_EDITMSG'),
+        markedEnv(),
+      ),
+    ).toEqual({ allowed: true });
   });
 
   it('honors the test-only unsafe valve only when exactly "1"', () => {
