@@ -256,6 +256,7 @@ describe('deriveBindSet', () => {
       '--unshare-pid',
       '--proc', '/proc',
       ...readOnlyLiveRoot,
+      '--bind', worktreeRoot, worktreeRoot,
       ...expectedReadWritePaths.flatMap((path) => ['--bind', path, path]),
     ]);
   });

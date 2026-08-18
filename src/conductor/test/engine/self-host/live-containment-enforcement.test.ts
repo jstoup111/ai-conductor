@@ -25,6 +25,7 @@ describe('live containment enforcement', () => {
       const deniedPath = join(liveCheckout, 'must-not-write');
 
       try {
+        await mkdir(worktreeRoot, { recursive: true });
         const result = await execa(
           'bwrap',
           [
@@ -55,6 +56,7 @@ describe('live containment enforcement', () => {
       const deniedPath = join(liveCheckout, 'must-not-write-through-proc');
 
       try {
+        await mkdir(worktreeRoot, { recursive: true });
         const result = await execa(
           'bwrap',
           [
@@ -83,17 +85,19 @@ describe('live containment enforcement', () => {
     'permits writes in the worktree, .git, and .pipeline carve-outs',
     async () => {
       const liveCheckout = await mkdtemp(join(tmpdir(), 'live-containment-enforcement-'));
-      const worktreeRoot = join(liveCheckout, '.worktrees', 'build');
+      const worktreeRoot = await mkdtemp(join(tmpdir(), 'live-containment-enforcement-worktree-'));
       const gitPath = join(liveCheckout, '.git', 'write-allowed');
       const pipelinePath = join(liveCheckout, '.pipeline', 'write-allowed');
       const worktreePath = join(worktreeRoot, 'write-allowed');
 
       try {
         await Promise.all([
-          mkdir(worktreeRoot, { recursive: true }),
           mkdir(join(liveCheckout, '.git'), { recursive: true }),
           mkdir(join(liveCheckout, '.pipeline'), { recursive: true }),
         ]);
+        expect(deriveBindSet(liveCheckout, worktreeRoot)).toEqual(expect.arrayContaining([
+          '--bind', worktreeRoot, worktreeRoot,
+        ]));
         const result = await execa(
           'bwrap',
           [
@@ -112,7 +116,10 @@ describe('live containment enforcement', () => {
 
         expect(result.exitCode).toBe(0);
       } finally {
-        await rm(liveCheckout, { recursive: true, force: true });
+        await Promise.all([
+          rm(liveCheckout, { recursive: true, force: true }),
+          rm(worktreeRoot, { recursive: true, force: true }),
+        ]);
       }
     },
   );

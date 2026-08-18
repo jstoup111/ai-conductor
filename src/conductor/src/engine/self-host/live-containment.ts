@@ -59,13 +59,14 @@ function discoverNodeModules(liveCheckout: string): readonly string[] {
  * Produces bwrap arguments that make the checkout read-only except for the
  * guard's volatile surface and installed dependency trees.
  */
-export function deriveBindSet(liveCheckout: string, _worktreeRoot: string): readonly string[] {
-  const writablePaths = [
+export function deriveBindSet(liveCheckout: string, worktreeRoot: string): readonly string[] {
+  const writablePaths = [...new Set([
+    worktreeRoot,
     ...LIVE_CHECKOUT_VOLATILE
       .map((path) => join(liveCheckout, path))
       .filter((path) => existsSync(path)),
     ...discoverNodeModules(liveCheckout),
-  ];
+  ])];
 
   return [
     '--dev-bind', '/', '/',
