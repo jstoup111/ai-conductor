@@ -9,6 +9,16 @@ import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine
 const execFileAsync = promisify(execFile);
 
 describe('live self-host boundary', () => {
+  it('accepts a non-contained verdict when the live boundary has not changed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-non-contained-clean-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts an operator edit to a tracked live-checkout file during the build', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-tracked-edit-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');

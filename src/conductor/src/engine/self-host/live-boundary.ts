@@ -4,6 +4,7 @@ import { readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
+import { type ContainmentVerdict } from './live-containment.js';
 
 const execFile = promisify(execFileCb);
 
@@ -337,7 +338,10 @@ function describeDiff(diff: { added: string[]; removed: string[]; changed: strin
   return `${counts}: ${shown.join('; ')}${elided > 0 ? `; and ${elided} more` : ''}`;
 }
 
-export async function verifyLiveBoundary(snapshot: LiveBoundarySnapshot): Promise<{ ok: boolean; reason?: string }> {
+export async function verifyLiveBoundary(
+  snapshot: LiveBoundarySnapshot,
+  _containmentVerdict: ContainmentVerdict = { contained: false, reason: 'containment not evaluated' },
+): Promise<{ ok: boolean; reason?: string }> {
   for (const surface of snapshot.surfaces) {
     const current = await manifest(
       surface.root,
