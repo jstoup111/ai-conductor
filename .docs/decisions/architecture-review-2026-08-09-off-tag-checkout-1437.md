@@ -104,6 +104,40 @@ Every surface is reached from an existing production entry point. No new entry p
 scheduled job, or CLI subcommand is introduced, so there is no unwired-rung risk to carry into
 the as-built sweep.
 
+> **Amended 2026-08-17 by #1437:** the table above names the shared resolver and both of
+> `bin/update`'s channels, but never names the **root chain of the `bin/conduct` mirror**, and the
+> omission was read as an unreachability defect (`build_review:wiring`, "the changed `bin/conduct`
+> update implementation is not reachable from any configured production entry point"). The
+> assertion stands, and the missing row is added here rather than restated: **`bin/conduct` is
+> itself a root production entry point, not a leaf reached from the TypeScript conductor.** The
+> mirror therefore **stays inside the changed production scope**; no work is owed to route a
+> TypeScript caller to it, and it must not be moved out of scope.
+>
+> | Surface | Root-to-caller chain (verified 2026-08-17, current source) |
+> | --- | --- |
+> | Tagged decision + identity line, `bin/conduct` mirror | **Root:** `bin/install:1274-1290` symlinks `${LOCAL_BIN}/conduct` → `${HARNESS_DIR}/bin/conduct` on every install and every `bin/install --update` run, so `conduct` is an operator-invocable CLI on PATH. **Caller:** `bin/conduct:2760` (`check_harness_update \|\| true`, unconditional at script top level on every `conduct` invocation) and `bin/conduct:2720` (`conduct --update`). **Dispatch:** `check_harness_update` (`bin/conduct:336-358`) selects `check_harness_update_tagged` at `:356`. **Export:** `check_harness_update_tagged` (`bin/conduct:193-274`) calls `resolve_harness_identity` at `:204-205`, sourced from `bin/lib/harness-common.sh` at `bin/conduct:20`. |
+>
+> **Why no TypeScript caller exists, and why that is correct.** `conduct` (bash) and `conduct-ts`
+> (TypeScript) are two independently installed CLIs — `bin/install:1274-1290` and `:1303-1320`
+> symlink them side by side. The only edge between them runs the opposite way: `bin/conduct:2745-2753`
+> prints a heads-up that `conduct-ts` is available. Requiring `src/conductor/src/index.ts`,
+> `daemon-cli.ts`, `intake-loop-cli.ts`, or `engineer-cli.ts` to reach `bin/conduct:193-274` would
+> invert the deployment boundary, not repair a gap.
+>
+> **The finding is the retired-rubric failure mode, not a design defect.** `wiring.entry_points`
+> no longer exists anywhere in `src/conductor/src` (grep, 2026-08-17); the fixed entry-point list
+> survives only in test fixtures. [ADR: The build_review wiring rubric is
+> retired](adr-2026-08-14-retire-build-review-wiring-rubric.md) (APPROVED) names this exact
+> failure: the rubric "cannot distinguish 'never wired' from 'wired somewhere the entry-point list
+> does not enumerate'". `bin/conduct` is the second case. An engine still emitting a `wiring`
+> rubric verdict contradicts that APPROVED ADR — an operator-facing machinery gap, recorded here
+> and out of this feature's scope.
+>
+> **Consequence for the as-built sweep (§12).** The `bin/conduct` mirror's production caller is
+> `bin/conduct:2760`, cited from the root chain above. It is a genuine root-to-caller-to-export
+> chain, not a same-file composition exception: the root is the installed `conduct` executable and
+> the caller is script top-level, both outside `check_harness_update_tagged`'s own definition.
+
 **Overlap scan.** `bin/update`, `bin/conduct`, `bin/lib/harness-common.sh`, and `bin/install`
 are all touched by the landed-but-unmerged #1400 plan
 (`.docs/plans/update-check-config-single-source-of-truth.md`). This is advisory and does not
@@ -146,6 +180,26 @@ Verdict is APPROVED **with** the following. Each is checkable at code review and
    task whose scope is updating `bin/conduct:345-374`, with a test or check asserting both
    copies produce identical identity output for the same checkout. Leaving the duplicate stale
    reproduces the bug on the `bin/conduct` entry point.
+
+   > **Amended 2026-08-17 by #1437:** the phrase "the `bin/conduct` entry point" is now
+   > load-bearing and is made explicit — `bin/conduct` is a root production entry point in its own
+   > right (`bin/install:1274-1290` → `${LOCAL_BIN}/conduct`; dispatch at `bin/conduct:2760` and
+   > `:2720`), so the mirror remains in the changed production scope and this condition remains
+   > binding. Two clarifications the original wording left implicit:
+   >
+   > - **The condition covers the whole tagged decision, not just the identity block.** Parity
+   >   must hold across the undeterminable, cache-persistence, post-release, up-to-date,
+   >   update-offer, and no-TTY/prompt branches — the mirror reproduces the bug on any branch that
+   >   drifts, not only on the identity line.
+   > - **Its guard must be falsifiable against the pre-diff implementation.** A parity or
+   >   delegation check that also passes against the `git describe` baseline proves nothing; the
+   >   guard must fail on the merge-base form of both callers.
+   >
+   > Owning surfaces for the BUILD kickback: `bin/update` and `bin/conduct` (implementation);
+   > `test/test_harness_integrity.sh` check 24 (`:1459-1499`, static parity + delegation guard),
+   > `test/test_bin_update.sh` (behavioral fixtures), and
+   > `src/conductor/test/acceptance/off-tag-checkout-reports-up-to-date-forever-tagged.acceptance.test.ts`
+   > (cross-caller parity). No production-reachability change is owed by any of them.
 3. **`bin/install` no longer guesses.** `detect_current_version` must not fall back to the
    `VERSION` file for tagged-channel identity. If it retains a `main@«sha»` result for the main
    channel, that path must be explicit and distinguishable from a release identity.

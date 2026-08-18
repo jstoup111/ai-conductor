@@ -1456,6 +1456,60 @@ else
   fi
 fi
 
+# ── 24. Tagged update identity copy parity ──────────────────────────────────
+# bin/update and bin/conduct intentionally retain parallel tagged-update entry
+# points. Keep their checkout-derived identity behavior byte-for-byte aligned,
+# and require both to delegate tag-to-identity resolution to the shared helper.
+echo ""
+echo -e "${BOLD}24. Tagged update identity copy parity${NC}"
+
+tagged_update_decision_block() {
+  awk '
+    /^check_harness_update_tagged\(\)/ { tagged_check=1 }
+    tagged_check && /^  # The checkout is the sole identity authority\./ { capture=1 }
+    capture { print }
+    capture && /^  esac$/ { exit }
+  ' "$1"
+}
+
+update_tagged_decision_block=$(tagged_update_decision_block "${HARNESS_DIR}/bin/update")
+conduct_tagged_decision_block=$(tagged_update_decision_block "${HARNESS_DIR}/bin/conduct")
+
+if [ -z "$update_tagged_decision_block" ]; then
+  echo "    missing tagged update decision block: bin/update"
+  assert "bin/update and bin/conduct share the complete tagged update decision" 1
+elif [ -z "$conduct_tagged_decision_block" ]; then
+  echo "    missing tagged update decision block: bin/conduct"
+  assert "bin/update and bin/conduct share the complete tagged update decision" 1
+elif [ "$update_tagged_decision_block" != "$conduct_tagged_decision_block" ]; then
+  echo "    divergence: bin/update and bin/conduct differ in cache, post-release, up-to-date, offer, or prompt behavior"
+  assert "bin/update and bin/conduct share the complete tagged update decision" 1
+else
+  assert "bin/update and bin/conduct share the complete tagged update decision" 0
+fi
+
+tagged_identity_delegation_violation=0
+for tagged_update_script in "${HARNESS_DIR}/bin/update" "${HARNESS_DIR}/bin/conduct"; do
+  tagged_check=$(awk '
+    /^check_harness_update_tagged\(\)/ { capture=1 }
+    capture { print }
+    capture && /^}$/ { exit }
+  ' "$tagged_update_script")
+
+  resolver_call_count=$(grep -cE 'resolve_harness_identity[[:space:]]+"\$HARNESS_DIR"' <<<"$tagged_check" || true)
+  if [ "$resolver_call_count" -ne 1 ]; then
+    echo "    ${tagged_update_script#"${HARNESS_DIR}/"} must call resolve_harness_identity exactly once (found ${resolver_call_count})"
+    tagged_identity_delegation_violation=1
+  fi
+
+  inline_identity_resolution=$(grep -nE 'git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+(describe|tag([[:space:]]+[^[:space:]]+)*[[:space:]]+--merged|rev-list)' <<<"$tagged_check" || true)
+  if [ -n "$inline_identity_resolution" ]; then
+    echo "    inline checkout identity resolution in ${tagged_update_script#"${HARNESS_DIR}/"}: ${inline_identity_resolution}"
+    tagged_identity_delegation_violation=1
+  fi
+done
+assert "bin/update and bin/conduct delegate all checkout identity resolution to resolve_harness_identity" "$tagged_identity_delegation_violation"
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
