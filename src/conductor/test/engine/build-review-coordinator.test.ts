@@ -461,7 +461,12 @@ describe("build-review coordinator: frozen fan-out", () => {
   });
 
   it("records a preflight infrastructure failure without dispatching Tautology while sibling rubrics settle", async () => {
-    const emit = vi.fn(async () => {});
+    const infrastructureEvents: Array<Extract<ConductorEvent, {
+      type: "build_review_rubric_infrastructure_failure";
+    }>> = [];
+    const emit = vi.fn(async (event: ConductorEvent) => {
+      if (event.type === "build_review_rubric_infrastructure_failure") infrastructureEvents.push(event);
+    });
     const dispatchModel = vi.fn(async (branch, projection) => ({
       kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
       contractVersion: "v1" as never, findings: [], verdict: "PASS" as const,
@@ -482,13 +487,17 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(result.branches[0]).toMatchObject({ rubric: "tautology", kind: "infrastructure-failure" });
     expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("tautology");
     expect(result.branches).toHaveLength(4);
-    expect(emit).toHaveBeenCalledWith({
+    // This is the detached-counterfactual boundary: reverting the coordinator
+    // must still execute this test and fail because the emitted event lacks
+    // the scoped-run excerpt, never while loading its uuid-dependent graph.
+    expect(infrastructureEvents).toHaveLength(1);
+    expect(infrastructureEvents).toEqual([{
       type: "build_review_rubric_infrastructure_failure",
       rubric: "tautology",
       lapId: "lap-current",
       reason: "scoped-run-timeout",
       excerpt: "timed out after 30s",
-    });
+    }]);
 
     const legacyEvent: Extract<ConductorEvent, { type: "build_review_rubric_infrastructure_failure" }> = {
       type: "build_review_rubric_infrastructure_failure", rubric: "tautology", lapId: "lap-current", reason: "scoped-run-timeout",
