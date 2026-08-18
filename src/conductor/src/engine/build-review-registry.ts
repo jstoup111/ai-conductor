@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
-import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
+import {
+  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+} from './build-review-domain.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 
 export type BuildReviewRubricCachePolicy = 'content-addressed';
@@ -9,7 +11,7 @@ export type BuildReviewRubricPrerequisite = 'none';
 
 export interface BuildReviewRubricDescriptor {
   readonly skillName: string;
-  readonly contractVersion: 'v2';
+  readonly contractVersion: typeof CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION;
   readonly projectionVersion: 'v2';
   readonly cachePolicy: BuildReviewRubricCachePolicy;
   readonly prerequisite: BuildReviewRubricPrerequisite;

@@ -45,8 +45,8 @@ export function planContractPointers(
 function fileAnchorFor(anchor: BuildReviewFindingCanonicalPayload['anchor']): string | undefined {
   switch (anchor.rubric) {
     case 'scope': return anchor.path;
-    case 'tautology': return anchor.changedTest;
-    case 'rootCause': return anchor.locus;
+    case 'tautology': return typeof anchor.changedTest === 'string' ? anchor.changedTest : anchor.changedTest.path;
+    case 'rootCause': return typeof anchor.locus === 'string' ? anchor.locus : anchor.locus.path;
     case 'completeness': return undefined;
   }
 }

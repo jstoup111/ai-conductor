@@ -51,10 +51,31 @@ describe('build-review domain', () => {
     }, references)).toBeUndefined();
   });
 
+  it('requires v3 tautology changed-test content regions and excludes their display from matching', () => {
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'tautology', changedFiles: [], changedTestSelectors: ['src/unit/widget.spec.ts'],
+    } as unknown as BuildReviewRubricProjection);
+    const changedTest = {
+      path: 'src/unit/widget.spec.ts',
+      contentHash: 'sha256:f635b6d8e7c57268d63f5a24373a229fd1211ff96bdd05a9f4147741759dd2c9',
+      display: 'widget persists state',
+    };
+    const result = parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      findings: [{ concernKind: 'source-text-mirror', summary: 'x', evidenceLocations: ['src/unit/widget.spec.ts:1'], anchor: { rubric: 'tautology', changedTest, exercisedBehavior: 'x', violationKind: 'source-text-mirror' } }],
+    }, references);
+
+    expect(result).toMatchObject({ findings: [{ anchor: { changedTest } }] });
+    expect(parseBuildReviewJudgedResult({
+      kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      findings: [{ concernKind: 'source-text-mirror', summary: 'x', evidenceLocations: ['src/unit/widget.spec.ts:1'], anchor: { rubric: 'tautology', changedTest: changedTest.path, exercisedBehavior: 'x', violationKind: 'source-text-mirror' } }],
+    }, references)).toBeUndefined();
+  });
+
   it('derives root-cause content-region references from projected hunk content, independent of line shifts', () => {
     const projectedHunk = {
       oldStart: 12, oldCount: 1, newStart: 14, newCount: 1,
-      lines: ['- return staleState;', '+ return persistedState;'],
+      contentHash: 'sha256:67a8c9094cb9d5c2e93d5b5adba5543970592651c73948b9f441433cc017c3e6',
     };
     const shiftedProjectedHunk = {
       ...projectedHunk,
@@ -337,13 +358,13 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
 
   it('renders the exact per-rubric anchor schema', () => {
     expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
-      '"anchor": {"rubric": "tautology", "changedTest": "<canonical projection reference or report string>", "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
+      '"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>"}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
     );
     expect(renderBuildReviewJudgedResultShape('scope')).toContain(
       '"anchor": {"rubric": "scope", "path": "<canonical projection reference or report string>", "relation": "<one of: not-authorized-by-plan>"}',
     );
     expect(renderBuildReviewJudgedResultShape('rootCause')).toContain(
-      '"anchor": {"rubric": "rootCause", "statedDefect": "<canonical projection reference or report string>", "locus": "<canonical projection reference or report string>", "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>"}',
+      '"anchor": {"rubric": "rootCause", "statedDefect": "<canonical projection reference or report string>", "locus": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-hunk-content>", "display": "<human-readable non-coordinate label>"}, "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>"}',
     );
     expect(renderBuildReviewJudgedResultShape('completeness')).toContain(
       '"anchor": {"rubric": "completeness", "planTask": "<canonical projection reference or report string>", "missingSurface": "<canonical projection reference or report string>", "missingOutcome": "<canonical projection reference or report string>", "missingKind": "<one of: missing-deliverable>"}',
@@ -439,7 +460,7 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
       kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: 'lap-other', snapshotDigest: expected.snapshotDigest, findings: [],
     }, 'scope', expected)).toContain('must echo the projection\'s lapId "lap-a237" verbatim');
     expect(describeBuildReviewJudgedResultRejection({
-      kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
       findings: [], verdict: 'FAIL',
     }, 'scope', expected)).toContain('contradicts the findings array');
   });

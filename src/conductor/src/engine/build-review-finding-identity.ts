@@ -7,6 +7,7 @@ import {
   parseBuildReviewFindingConcernKind,
   parseBuildReviewRubricContractVersion,
   type BuildReviewFindingAnchor,
+  type BuildReviewContentRegionReference,
   type BuildReviewRubricContractVersion,
 } from './build-review-domain.js';
 
@@ -18,9 +19,9 @@ export interface BuildReviewFindingIdentityInput {
 }
 
 type BuildReviewFindingCanonicalAnchor =
-  | { readonly rubric: 'tautology'; readonly changedTest: string; readonly violationKind: string }
+  | { readonly rubric: 'tautology'; readonly changedTest: string | Omit<BuildReviewContentRegionReference, 'display'>; readonly violationKind: string }
   | { readonly rubric: 'scope'; readonly path: string; readonly relation: string }
-  | { readonly rubric: 'rootCause'; readonly locus: string; readonly relation: string }
+  | { readonly rubric: 'rootCause'; readonly locus: string | Omit<BuildReviewContentRegionReference, 'display'>; readonly relation: string }
   | { readonly rubric: 'completeness'; readonly planTask: string; readonly missingSurface: string };
 
 /** The complete, version-bound payload persisted alongside a finding hash. */
@@ -54,11 +55,23 @@ function parseRubric(value: unknown): BuildReviewRubricId | undefined {
 function canonicalAnchor(anchor: BuildReviewFindingAnchor): BuildReviewFindingCanonicalAnchor {
   switch (anchor.rubric) {
     case 'tautology':
-      return { rubric: anchor.rubric, changedTest: anchor.changedTest, violationKind: anchor.violationKind };
+      return {
+        rubric: anchor.rubric,
+        changedTest: typeof anchor.changedTest === 'string'
+          ? anchor.changedTest
+          : { path: anchor.changedTest.path, contentHash: anchor.changedTest.contentHash },
+        violationKind: anchor.violationKind,
+      };
     case 'scope':
       return { rubric: anchor.rubric, path: anchor.path, relation: anchor.relation };
     case 'rootCause':
-      return { rubric: anchor.rubric, locus: anchor.locus, relation: anchor.relation };
+      return {
+        rubric: anchor.rubric,
+        locus: typeof anchor.locus === 'string'
+          ? anchor.locus
+          : { path: anchor.locus.path, contentHash: anchor.locus.contentHash },
+        relation: anchor.relation,
+      };
     case 'completeness':
       return { rubric: anchor.rubric, planTask: anchor.planTask, missingSurface: anchor.missingSurface };
   }
@@ -89,7 +102,7 @@ export function canonicalizeBuildReviewFindingIdentity(value: unknown): BuildRev
   if (!source || !rubric || !contractVersion) return undefined;
 
   const concernKind = parseBuildReviewFindingConcernKind(source.concernKind, rubric);
-  const anchor = parseBuildReviewFindingAnchor(source.anchor, undefined, contractVersion === 'v1');
+  const anchor = parseBuildReviewFindingAnchor(source.anchor, undefined, contractVersion);
   if (!concernKind || !anchor || anchor.rubric !== rubric ||
     (anchor.rubric === 'tautology' && concernKind !== anchor.violationKind) ||
     (anchor.rubric === 'rootCause' && concernKind !== anchor.relation) ||

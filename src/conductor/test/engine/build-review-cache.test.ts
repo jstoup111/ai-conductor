@@ -13,7 +13,7 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   return {
     version: 1,
     rubric: "scope",
-    contractVersion: "v2",
+    contractVersion: "v3",
     projectionVersion: "v2",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
@@ -22,7 +22,7 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
       rubric: "scope",
       lapId: "lap-a" as never,
       snapshotDigest,
-      contractVersion: "v2" as never,
+      contractVersion: "v3" as never,
       findings: [],
       verdict: "PASS",
     },
@@ -62,10 +62,10 @@ describe("build-review semantic cache", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v1" })).toBeUndefined();
   });
 
-  it("parses stored v1 contract entries through the read seam, then misses against the current v2 identity", async () => {
+  it("parses stored v1 contract entries through the read seam, then misses against the current v3 identity", async () => {
     const currentLookup = {
       rubric: "scope",
-      contractVersion: "v2",
+      contractVersion: "v3",
       projectionVersion: "v2",
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
@@ -129,7 +129,7 @@ describe("build-review semantic cache", () => {
       path,
       lookup: classifyBuildReviewCacheLookup(foreignCandidate, {
         rubric: "scope",
-        contractVersion: "v2",
+        contractVersion: "v3",
         projectionVersion: "v2",
         projectionDigest: freshEntry.projectionDigest,
         policyFingerprint: freshEntry.policyFingerprint,
@@ -181,7 +181,7 @@ describe("build-review semantic cache", () => {
     };
     const request = {
       rubric: "scope" as const,
-      contractVersion: "v2" as const,
+      contractVersion: "v3" as const,
       projectionVersion: "v2" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
@@ -233,7 +233,7 @@ describe("build-review semantic cache", () => {
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {
     const request = {
       rubric: "scope" as const,
-      contractVersion: "v2" as const,
+      contractVersion: "v3" as const,
       projectionVersion: "v2" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",

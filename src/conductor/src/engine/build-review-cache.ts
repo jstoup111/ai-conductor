@@ -16,7 +16,7 @@ const CACHE_DIRECTORY = ".pipeline/build-review/cache";
 export interface BuildReviewCacheEntry {
   version: typeof CACHE_VERSION;
   rubric: BuildReviewRubricId;
-  contractVersion: "v2";
+  contractVersion: "v3";
   projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
@@ -34,7 +34,7 @@ export interface BuildReviewCacheFilesystem {
 /** The complete identity that must match before a semantic cache entry is reusable. */
 export interface BuildReviewCacheLookup {
   rubric: BuildReviewRubricId;
-  contractVersion: "v2";
+  contractVersion: "v3";
   projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
@@ -125,8 +125,8 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
 /** Strictly parses entries current code may persist or reuse. */
 export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
   const entry = parseBuildReviewCacheEntryCandidate(value);
-  return entry?.contractVersion === "v2" && entry.projectionVersion === "v2"
-    ? { ...entry, contractVersion: "v2", projectionVersion: "v2" }
+  return entry?.contractVersion === "v3" && entry.projectionVersion === "v2"
+    ? { ...entry, contractVersion: "v3", projectionVersion: "v2" }
     : undefined;
 }
 

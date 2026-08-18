@@ -262,6 +262,31 @@ describe('build-review finding identity', () => {
     expect(changedContent?.id).not.toBe(first?.id);
   });
 
+  it('canonicalizes v3 tautology changed-test content regions without their display', () => {
+    const base = {
+      rubric: 'tautology', contractVersion: 'v3', concernKind: 'source-text-mirror',
+      anchor: {
+        rubric: 'tautology', exercisedBehavior: 'persists state', violationKind: 'source-text-mirror',
+        changedTest: {
+          path: 'test/widget.test.ts',
+          contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          display: 'widget persists state',
+        },
+      },
+    };
+    const first = canonicalizeBuildReviewFindingIdentity(base);
+    const reworded = canonicalizeBuildReviewFindingIdentity({
+      ...base, anchor: { ...base.anchor, changedTest: { ...base.anchor.changedTest, display: 'reworded test title' } },
+    });
+    const changedContent = canonicalizeBuildReviewFindingIdentity({
+      ...base, anchor: { ...base.anchor, changedTest: { ...base.anchor.changedTest, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' } },
+    });
+
+    expect(first).toMatchObject({ canonicalPayload: { anchor: { changedTest: { path: 'test/widget.test.ts', contentHash: base.anchor.changedTest.contentHash } } } });
+    expect(reworded).toEqual(first);
+    expect(changedContent?.id).not.toBe(first?.id);
+  });
+
   it('changes identity for a materially different concern or logical anchor', () => {
     const base = {
       rubric: 'rootCause', contractVersion: 'v1', concernKind: 'root-cause-unaddressed',
@@ -330,7 +355,7 @@ describe('build-review finding identity', () => {
       first,
       { rubric: 'scope', contractVersion: 'v1', concernKind: 'unplanned-surface', anchor: { rubric: 'scope', relation: 'outside-plan' } },
     ])).toBeUndefined();
-    expect(canonicalizeBuildReviewFindingSet([{ ...first, contractVersion: 'v3' }])).toBeUndefined();
+    expect(canonicalizeBuildReviewFindingSet([{ ...first, contractVersion: 'v4' }])).toBeUndefined();
     expect(canonicalizeBuildReviewFindingSet([first, first])).toBeUndefined();
     expect(canonicalizeBuildReviewFindingSet([{ ...first, id: firstId }, { ...second, id: firstId }])).toBeUndefined();
   });

@@ -41,6 +41,8 @@ export interface DiffHunkRange {
   readonly oldCount: number;
   readonly newStart: number;
   readonly newCount: number;
+  /** SHA-256 of normalized added and removed lines; raw diff text stays out of projections. */
+  readonly contentHash: string;
 }
 
 /**
@@ -57,7 +59,7 @@ export interface ChangedFileReference {
 
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
-  readonly contractVersion: 'v2';
+  readonly contractVersion: 'v3';
   readonly projectionVersion: 'v2';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
@@ -207,6 +209,16 @@ function canonicalArray(value: readonly BuildReviewProjectionJson[]): readonly B
   return canonicalize([...value]) as readonly BuildReviewProjectionJson[];
 }
 
+function contentHashForHunk(lines: readonly string[]): string {
+  const normalized = lines
+    .filter((line) => line.startsWith('-') || line.startsWith('+'))
+    .map((line) => line.slice(1))
+    .join('\n')
+    .replaceAll(/\s+/g, ' ')
+    .trim();
+  return `sha256:${createHash('sha256').update(normalized).digest('hex')}`;
+}
+
 /**
  * Derive the per-file references from the frozen diff text. Purely mechanical
  * and deterministic: the same diff always yields the same references, and the
@@ -229,13 +241,17 @@ export function deriveChangedFileReferences(diff: string): readonly ChangedFileR
         : renameFrom && renameTo
           ? 'renamed'
           : 'modified';
+    const hunkHeaders = [...chunk.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)];
     const hunks: DiffHunkRange[] = [];
-    for (const match of chunk.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)) {
+    for (const [index, match] of hunkHeaders.entries()) {
+      const nextHeader = hunkHeaders[index + 1];
+      const hunkBody = chunk.slice(match.index! + match[0].length, nextHeader?.index);
       hunks.push({
         oldStart: Number(match[1]),
         oldCount: match[2] === undefined ? 1 : Number(match[2]),
         newStart: Number(match[3]),
         newCount: match[4] === undefined ? 1 : Number(match[4]),
+        contentHash: contentHashForHunk(hunkBody.split('\n')),
       });
     }
     references.push({

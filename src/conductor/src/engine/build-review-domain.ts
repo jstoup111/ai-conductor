@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { BuildReviewRubricId } from '../types/config.js';
 import { parsePlanTaskPaths, TASK_ID_PATTERN } from './plan-task-parse.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
@@ -6,10 +8,10 @@ import type { BuildReviewRubricProjection } from './build-review-projections.js'
 export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' };
 
 /** A validated version of the engine-owned rubric result contract. */
-export type BuildReviewRubricContractVersion = 'v1' | 'v2';
+export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
 
 /** The contract version newly dispatched and emitted by this engine. */
-export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v2' as const;
+export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v3' as const;
 
 /** The only intentional non-judgement outcomes. */
 export type BuildReviewSkipReason = 'disabled';
@@ -26,17 +28,47 @@ export type BuildReviewInfrastructureFailureReason =
   | 'artifact-read-failed';
 
 export type BuildReviewFindingAnchor =
-  | { rubric: 'tautology'; changedTest: string; exercisedBehavior: string; violationKind: string }
+  | { rubric: 'tautology'; changedTest: string | BuildReviewContentRegionReference; exercisedBehavior: string; violationKind: string }
   | { rubric: 'scope'; path: string; relation: string }
-  | { rubric: 'rootCause'; statedDefect: string; locus: string; relation: string }
+  | { rubric: 'rootCause'; statedDefect: string; locus: string | BuildReviewContentRegionReference; relation: string }
   | { rubric: 'completeness'; planTask: string; missingSurface: string; missingOutcome: string; missingKind: string };
 
 /** Immutable projection members that may appear in a finding identity. */
 export interface BuildReviewFindingReferenceContext {
   readonly changedTests: readonly string[];
+  readonly changedTestRegions?: readonly BuildReviewContentRegionReference[];
   readonly changedPaths: readonly string[];
   readonly planTasks: readonly string[];
+  readonly rootCauseLoci?: readonly BuildReviewContentRegionReference[];
   readonly planTaskSurfaces?: Readonly<Record<string, readonly string[]>>;
+}
+
+/** The closed content-addressed reference shared by rubric anchor contracts. */
+export interface BuildReviewContentRegionReference {
+  readonly path: string;
+  readonly contentHash: string;
+  readonly display: string;
+}
+
+export const BUILD_REVIEW_FINDING_REFERENCE_KINDS = Object.freeze(['path', 'plan-task', 'content-region'] as const);
+
+export const BUILD_REVIEW_FINDING_REFERENCE_BINDINGS = Object.freeze({
+  tautology: Object.freeze({ changedTest: 'content-region' }),
+  scope: Object.freeze({ path: 'path' }),
+  rootCause: Object.freeze({ locus: 'content-region' }),
+  completeness: Object.freeze({ planTask: 'plan-task', missingSurface: 'path' }),
+});
+
+function contentRegionReference(path: string, contentHash: string, display: string): BuildReviewContentRegionReference {
+  return Object.freeze({
+    path,
+    contentHash,
+    display,
+  });
+}
+
+function contentHashForText(value: string): string {
+  return `sha256:${createHash('sha256').update(value.replaceAll(/\s+/g, ' ').trim()).digest('hex')}`;
 }
 
 /** Derive the only finding subjects a grader may cite from its frozen projection. */
@@ -46,11 +78,19 @@ export function buildReviewFindingReferenceContext(
   const changedPaths = projection.changedFiles.map((file) => file.path);
   if (projection.rubric !== 'completeness') {
     return Object.freeze({
-      changedTests: projection.rubric === 'tautology'
-        ? Object.freeze([...projection.changedTestSelectors])
-        : [],
+      changedTests: projection.rubric === 'tautology' ? Object.freeze([...projection.changedTestSelectors]) : [],
       changedPaths: Object.freeze(changedPaths),
       planTasks: [],
+      ...(projection.rubric === 'tautology'
+        ? { changedTestRegions: Object.freeze(projection.changedTestSelectors.flatMap((selector) => {
+          const path = parseBuildReviewCanonicalPathReference(selector);
+          return path ? [contentRegionReference(path, contentHashForText(selector), `${path} changed test`)] : [];
+        })) }
+        : {}),
+      ...(projection.rubric === 'rootCause'
+        ? { rootCauseLoci: Object.freeze(projection.changedFiles.flatMap((file) =>
+          file.hunks.map((hunk) => contentRegionReference(file.path, hunk.contentHash, `${file.path} changed region`)))) }
+        : {}),
     });
   }
   const taskPaths = parsePlanTaskPaths(projection.planBody);
@@ -243,32 +283,64 @@ export function parseBuildReviewLapId(value: unknown): BuildReviewLapId | undefi
 }
 
 export function parseBuildReviewRubricContractVersion(value: unknown): BuildReviewRubricContractVersion | undefined {
-  return value === 'v1' || value === 'v2' ? value as BuildReviewRubricContractVersion : undefined;
+  return value === 'v1' || value === 'v2' || value === 'v3' ? value as BuildReviewRubricContractVersion : undefined;
 }
 
-export function parseBuildReviewFindingAnchor(value: unknown, references?: BuildReviewFindingReferenceContext, allowLegacyV1 = false): BuildReviewFindingAnchor | undefined {
+function parseContentRegionReference(value: unknown): BuildReviewContentRegionReference | undefined {
+  const source = record(value);
+  if (!source || Object.keys(source).length !== 3 ||
+    !Object.hasOwn(source, 'path') || !Object.hasOwn(source, 'contentHash') || !Object.hasOwn(source, 'display')) return undefined;
+  const path = parseBuildReviewCanonicalPathReference(source.path);
+  const contentHash = typeof source.contentHash === 'string' && /^sha256:[a-f0-9]{64}$/.test(source.contentHash)
+    ? source.contentHash
+    : undefined;
+  const display = nonEmptyString(source.display) && !/(?:@@\s*-\d|@\d|:\d+(?:[-,:]\d+)?)/.test(source.display)
+    ? source.display
+    : undefined;
+  return path && contentHash && display ? { path, contentHash, display } : undefined;
+}
+
+export function parseBuildReviewFindingAnchor(
+  value: unknown,
+  references?: BuildReviewFindingReferenceContext,
+  contractVersion: BuildReviewRubricContractVersion = 'v2',
+): BuildReviewFindingAnchor | undefined {
   const source = record(value);
   if (!source || !rubricId(source.rubric)) return undefined;
   switch (source.rubric) {
     case 'tautology': {
       const violationKind = parseAnchorClassification(source.violationKind, source.rubric, 'violationKind');
-      const changedTest = verifiedReference(source.changedTest, references?.changedTests, parseBuildReviewCanonicalPathReference);
-      return changedTest && nonEmptyString(source.exercisedBehavior) && violationKind
-        ? { rubric: source.rubric, changedTest, exercisedBehavior: source.exercisedBehavior, violationKind }
+      const changedTest = contractVersion === 'v3'
+        ? parseContentRegionReference(source.changedTest)
+        : verifiedReference(source.changedTest, references?.changedTests, parseBuildReviewCanonicalPathReference);
+      const matchedChangedTest = !changedTest || typeof changedTest === 'string' || !references?.changedTestRegions
+        ? changedTest
+        : references.changedTestRegions.some((candidate) => candidate.path === changedTest.path && candidate.contentHash === changedTest.contentHash)
+          ? changedTest
+          : undefined;
+      return matchedChangedTest && nonEmptyString(source.exercisedBehavior) && violationKind
+        ? { rubric: source.rubric, changedTest: matchedChangedTest, exercisedBehavior: source.exercisedBehavior, violationKind }
         : undefined;
     }
     case 'scope': {
       const relation = parseAnchorClassification(source.relation, source.rubric, 'relation');
       const path = verifiedReference(source.path, references?.changedPaths, parseBuildReviewCanonicalPathReference);
-      return path && relation && (allowLegacyV1 || relation === 'not-authorized-by-plan')
+      return path && relation && (contractVersion === 'v1' || relation === 'not-authorized-by-plan')
         ? { rubric: source.rubric, path, relation }
         : undefined;
     }
     case 'rootCause': {
       const relation = parseAnchorClassification(source.relation, source.rubric, 'relation');
-      const locus = verifiedReference(source.locus, references?.changedPaths, parseBuildReviewCanonicalPathReference);
-      return nonEmptyString(source.statedDefect) && locus && relation
-        ? { rubric: source.rubric, statedDefect: source.statedDefect, locus, relation }
+      const locus = contractVersion === 'v3'
+        ? parseContentRegionReference(source.locus)
+        : verifiedReference(source.locus, references?.changedPaths, parseBuildReviewCanonicalPathReference);
+      const matchedLocus = !locus || typeof locus === 'string' || !references?.rootCauseLoci
+        ? locus
+        : references.rootCauseLoci.some((candidate) => candidate.path === locus.path && candidate.contentHash === locus.contentHash)
+          ? locus
+          : undefined;
+      return nonEmptyString(source.statedDefect) && matchedLocus && relation
+        ? { rubric: source.rubric, statedDefect: source.statedDefect, locus: matchedLocus, relation }
         : undefined;
     }
     case 'completeness': {
@@ -288,12 +360,17 @@ export function parseBuildReviewFindingAnchor(value: unknown, references?: Build
   }
 }
 
-function parseFindings(value: unknown, rubric: BuildReviewRubricId, references?: BuildReviewFindingReferenceContext, allowLegacyV1 = false): readonly BuildReviewFinding[] | undefined {
+function parseFindings(
+  value: unknown,
+  rubric: BuildReviewRubricId,
+  references: BuildReviewFindingReferenceContext | undefined,
+  contractVersion: BuildReviewRubricContractVersion,
+): readonly BuildReviewFinding[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const findings: BuildReviewFinding[] = [];
   for (const candidate of value) {
     const source = record(candidate);
-    const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references, allowLegacyV1);
+    const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references, contractVersion);
     const concernKind = source && parseBuildReviewFindingConcernKind(source.concernKind, rubric);
     if (!source || !concernKind || !nonEmptyString(source.summary) ||
       !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 ||
@@ -317,7 +394,7 @@ export function parseBuildReviewJudgedResult(value: unknown, references?: BuildR
   const lapId = parseBuildReviewLapId(source.lapId);
   const contractVersion = parseBuildReviewRubricContractVersion(source.contractVersion);
   if (!lapId || !contractVersion || !nonEmptyString(source.snapshotDigest)) return undefined;
-  const findings = parseFindings(source.findings, source.rubric, references, contractVersion === 'v1');
+  const findings = parseFindings(source.findings, source.rubric, references, contractVersion);
   const relocationAudit = source.relocationAudit === undefined
     ? undefined
     : parseRelocationAudit(source.relocationAudit, source.rubric);
@@ -386,11 +463,13 @@ function describeFindingVocabularyRejection(members: readonly string[], field: s
 export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId): string {
   const classificationAnchorField = CLASSIFICATION_ANCHOR_FIELDS[rubric];
   const anchorFields = ANCHOR_FIELDS[rubric].map((field) =>
-    `"${field}": "${field === classificationAnchorField
+    (field === 'locus' && rubric === 'rootCause') || (field === 'changedTest' && rubric === 'tautology')
+      ? `"${field}": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-${field === 'locus' ? 'hunk-content' : 'test-title'}>", "display": "<human-readable non-coordinate label>"}`
+      : `"${field}": "${field === classificationAnchorField
       ? renderFindingVocabularyMemberShape((BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields as Record<string, readonly string[]>)[field]!.filter((member) => member !== 'out-of-plan-change'))
       : '<canonical projection reference or report string>'}"`,
   ).join(', ');
-  return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "v2", ' +
+  return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "' + CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION + '", ' +
     '"lapId": "<echo the projection lapId verbatim>", "snapshotDigest": "<echo the projection snapshotDigest verbatim>", ' +
     `"findings": [{"concernKind": "${renderFindingVocabularyMemberShape(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds)}", "summary": "<non-empty actionable string>", ` +
     '"evidenceLocations": ["<path:line or path:line:column>"], ' +
@@ -416,7 +495,7 @@ export function describeBuildReviewJudgedResultRejection(
   if (source.kind !== 'judged') problems.push(`top-level "kind" must be exactly the string "judged" (got ${(JSON.stringify(source.kind) ?? 'no kind field').slice(0, 64)})`);
   if (source.rubric !== rubric) problems.push(`"rubric" must be "${rubric}"`);
   if (source.lapId !== expected.lapId) problems.push(`"lapId" must echo the projection's lapId "${expected.lapId}" verbatim`);
-  if (source.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) problems.push('"contractVersion" must be "v2"');
+  if (source.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) problems.push(`"contractVersion" must be "${CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION}"`);
   if (source.snapshotDigest !== expected.snapshotDigest) problems.push('"snapshotDigest" must echo the projection\'s snapshotDigest verbatim');
   if (!Array.isArray(source.findings)) {
     problems.push('"findings" must be an array (empty when no concern was found)');
