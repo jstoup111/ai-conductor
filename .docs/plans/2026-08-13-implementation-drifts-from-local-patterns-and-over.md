@@ -11,8 +11,10 @@
 Update the existing shared lifecycle skills and BUILD agent prompts so applicable local patterns are
 identified during DECIDE, carried to isolated implementers and reviewers, and re-resolved on current
 HEAD. At the same time, replace file-count and criterion-count test rules with explicit
-lowest-sufficient behavioral coverage. Eleven prose-contract tasks change no parser, engine module,
-artifact type, configuration key, or `build_review` surface.
+lowest-sufficient behavioral coverage. Tasks 1-11 are prose-contract tasks changing no parser,
+engine module, artifact type, configuration key, or `build_review` surface; Tasks 12-14 deliver the
+engine half of amended architecture condition C1 — the `acceptance_specs` outcome-tag evidence
+contract and completion gate ship together with the skill wording.
 
 ## Technical Approach
 
@@ -382,13 +384,80 @@ No `build_review` surface is included. The scan is advisory and changes no task 
 
 - [ ] All 24 happy/negative criteria and the exact-copy amendment map to at least one task.
 - [ ] Every task has an explicit dependency and a single authoritative `**Files:**` set.
-- [ ] No task creates or modifies a parser, engine module, configuration key, artifact type, new
-      skill, project convention system, or `build_review` surface.
+- [ ] No task outside 12-14 creates or modifies a parser, engine module, configuration key,
+      artifact type, new skill, project convention system, or `build_review` surface; Tasks 12-14
+      touch only the `acceptance_specs` evidence validator and completion gate named by amended
+      architecture condition C1.
 - [ ] No task adds an automated assertion of natural-language skill or agent wording.
 - [ ] No task is a terminal whole-feature validation or speculative repair task.
 - [ ] All tasks are scoped to approximately 2–5 minutes and the dependency graph is acyclic.
 ### Task rem-pipeline-coverage-gate-1: skills/pipeline/SKILL.md:388 — replace the evaluator checklist question requiring corresponding tests for every acceptance criterion with the shared lowest-sufficient-layer coverage rule: require concrete sufficient behavioral proof for every happy and negative criterion, permit compatible criteria to share coverage, and do not require one new test per criterion
 ### Task rem-pipeline-coverage-gate-1-e5e414: skills/pipeline/SKILL.md:386-390 — replace the evaluator's corresponding-tests question with a requirement that every happy and negative criterion has a concrete sufficient behavioral coverage disposition at the lowest sufficient layer, preserving mandatory happy/negative coverage and existing evaluator dispatch behavior
-### Task rem-build-review-root-cause-1: src/conductor/src/engine/artifacts.ts:1323-1477 and src/conductor/test/engine/artifacts.acceptance-specs.test.ts:135-373 — replace the RED-only evidence model with a validated tagged union keyed by specs-generated or disposition-only; preserve Outcome A's RED fields and remediation exception, define Outcome B's exhaustive per-criterion closed-set disposition records with verifiable citations, and test rejection of missing, unknown, incomplete, and internally inconsistent shapes
-### Task rem-build-review-completeness-gate-1: src/conductor/src/engine/artifacts.ts:2128-2172 and src/conductor/test/engine/artifacts.acceptance-specs.test.ts:37-373 — branch acceptance_specs completion on the validated outcome tag: preserve spec files, run contract, genuine RED counters, committed-spec requirements, remediation exceptions, and declared-replication refusals for specs-generated; accept disposition-only only with zero spec files, no run contract or RED counters, and a complete citation-bearing record; test both outcomes and every existing fail-closed refusal class
-### Task rem-build-review-completeness-evidence-1: skills/writing-system-tests/SKILL.md:224-229,514-520,633-640,662-681 — require .pipeline/acceptance-specs-red.json to record specs-generated or disposition-only; define disposition-only as exhaustive happy and negative criterion records using exactly existing-sufficient-test with a test citation or planned-lower-layer-test with owning task and layer, and make RED-run, run-contract, failing-spec commit, and verification obligations conditional on the tag while keeping declared replication on specs-generated
+
+---
+
+### Task 12: Validate the tagged acceptance-spec evidence union
+
+**Story:** Story 4 all happy and negative criteria, delivering amended architecture condition C1  
+**Type:** happy-path  
+**Files:** `src/conductor/src/engine/artifacts.ts`, `src/conductor/test/engine/artifacts.acceptance-specs.test.ts`  
+**Dependencies:** Task 8  
+**Test disposition:** New engine tests at the evidence-validator seam.
+
+**Steps:**
+
+1. Replace the RED-only evidence model at `src/conductor/src/engine/artifacts.ts:1323-1477` with a
+   validated tagged union keyed by `specs-generated` or `disposition-only`.
+2. Preserve Outcome A (`specs-generated`) unchanged: RED fields, run contract, and the existing
+   remediation exception.
+3. Define Outcome B (`disposition-only`) as exhaustive per-criterion records drawn from the closed
+   set — `existing-sufficient-test` with a test citation, or `planned-lower-layer-test` with owning
+   task and layer — with verifiable citations.
+4. Write failing tests rejecting missing, unknown-tag, incomplete, and internally inconsistent
+   shapes; verify RED, implement, verify GREEN.
+5. Commit with message `feat(acceptance-specs): validate the tagged evidence union`.
+
+---
+
+### Task 13: Branch the acceptance_specs completion gate on the outcome tag
+
+**Story:** Story 4 all happy and negative criteria, delivering amended architecture condition C1  
+**Type:** happy-path  
+**Files:** `src/conductor/src/engine/artifacts.ts`, `src/conductor/test/engine/artifacts.acceptance-specs.test.ts`  
+**Dependencies:** Task 12  
+**Test disposition:** New engine tests at the completion-gate seam covering both outcomes and every fail-closed refusal class.
+
+**Steps:**
+
+1. Branch `acceptance_specs` completion at `src/conductor/src/engine/artifacts.ts:2128-2172` on the
+   validated outcome tag.
+2. For `specs-generated`, preserve every existing requirement: spec files, run contract, genuine
+   RED counters, committed-spec checks, remediation exceptions, and declared-replication refusals.
+3. Accept `disposition-only` only with zero spec files, no run contract or RED counters, and a
+   complete citation-bearing disposition record; refuse every mixed or partial shape fail-closed.
+4. Write failing tests for both outcomes and each existing refusal class; verify RED, implement,
+   verify GREEN.
+5. Commit with message `feat(acceptance-specs): admit a disposition-only completion outcome`.
+
+---
+
+### Task 14: Record the outcome tag in the skill's evidence contract
+
+**Story:** Story 4 all happy and negative criteria, delivering amended architecture condition C1  
+**Type:** happy-path  
+**Files:** `skills/writing-system-tests/SKILL.md`  
+**Dependencies:** Task 12  
+**Test disposition:** No new automated test; the engine tests of Tasks 12-13 prove the contract.
+
+**Steps:**
+
+1. Require `.pipeline/acceptance-specs-red.json` to record `specs-generated` or `disposition-only`
+   in the skill's evidence sections (§224's zero-spec branch and the §6/§7 evidence and
+   verification checklists).
+2. Define `disposition-only` as exhaustive happy and negative criterion records using exactly
+   `existing-sufficient-test` with a test citation or `planned-lower-layer-test` with owning task
+   and layer.
+3. Make the RED-run, run-contract, failing-spec commit, and verification obligations conditional on
+   the recorded tag, keeping declared replication governed by `specs-generated`.
+4. Run `git diff --check -- skills/writing-system-tests/SKILL.md` and commit with message
+   `docs(writing-system-tests): record the acceptance-spec outcome tag`.
