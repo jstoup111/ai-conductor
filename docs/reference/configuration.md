@@ -729,6 +729,11 @@ self-host-isolation' }` (`src/conductor/src/engine/conductor.ts:2049-2065`).
 without the `bwrap` read-only live-checkout proof, so any live-checkout drift again follows the
 existing fail-closed boundary path and writes a HALT. See the [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only) for recovery.
 
+Likewise, containment is not considered active when `bwrap` is unavailable or its two-sided probe
+fails. Only a successful proof that the live checkout is read-only and the dispatched worktree is
+writable permits live-checkout drift to be attributed to a concurrent operator; every unproven case
+remains fail-closed.
+
 > **Known limitation.** `skill_relink_preflight` is resolved into `skillRelinkPreflight`
 > (`resolved-config.ts:562`) but has no consumer outside `resolved-config.ts`. The relink runs
 > unconditionally inside the self-host bundle (`src/conductor/src/daemon-cli.ts:1295`, called at
