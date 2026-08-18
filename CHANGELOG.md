@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.104.0] - 2026-08-17
+## [0.104.0] - 2026-08-18
 
 ### Changed
 
@@ -20,6 +20,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Fixed
 
 - The FINISH publication retry budget no longer exhausts on verified transitions, and new halt reasons name a stuck PR-state check or an unmoved publication transition. ([implementation PR #1565](https://github.com/jstoup111/ai-conductor/pull/1565)).
+- The tautology rubric's counterfactual checkout now resolves the conductor's dependency installation, so changed suites execute instead of aborting at import. ([implementation PR #1699](https://github.com/jstoup111/ai-conductor/pull/1699)).
 
 ## [0.103.0] - 2026-08-17
 
