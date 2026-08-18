@@ -1169,6 +1169,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.rateLimited
         ? {
             rateLimited: true,
+            ...(result.usageExhausted ? { usageExhausted: true } : {}),
             waitSeconds: result.waitSeconds ?? 300,
             ...(result.deadline !== undefined
               ? { deadline: result.deadline }
@@ -1286,6 +1287,7 @@ export class DefaultStepRunner implements StepRunner {
         success: false,
         output: result.output,
         rateLimited: true,
+        ...(result.usageExhausted ? { usageExhausted: true } : {}),
         waitSeconds,
         deadline: result.deadline,
         ...(result.authentication

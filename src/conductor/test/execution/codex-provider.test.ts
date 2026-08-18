@@ -83,6 +83,47 @@ describe('CodexProvider', () => {
     );
   });
 
+  describe('usage-cap exhaustion vs transient throttle', () => {
+    it.each([
+      {
+        name: 'usage limit exhaustion waits on the hour-scale default',
+        stderr: 'You have hit your usage limit for this billing period.',
+        expected: { rateLimited: true, usageExhausted: true, waitSeconds: 3600 },
+      },
+      {
+        name: 'quota exceeded exhaustion waits on the hour-scale default',
+        stderr: 'Request failed: quota exceeded for the current plan.',
+        expected: { rateLimited: true, usageExhausted: true, waitSeconds: 3600 },
+      },
+      {
+        name: 'exhaustion with an explicit retry-after keeps the parsed wait',
+        stderr: 'usage limit reached; retry after 900 seconds',
+        expected: { rateLimited: true, usageExhausted: true, waitSeconds: 900 },
+      },
+      {
+        name: 'a transient 429 keeps its parsed short wait and is not exhaustion',
+        stderr: 'Error 429: rate limit exceeded; retry after 45 seconds',
+        expected: { rateLimited: true, usageExhausted: undefined, waitSeconds: 45 },
+      },
+      {
+        name: 'a transient throttle without retry-after keeps the 300s default',
+        stderr: 'Too many requests, slow down.',
+        expected: { rateLimited: true, usageExhausted: undefined, waitSeconds: 300 },
+      },
+    ])('$name', async ({ stderr, expected }) => {
+      mockExeca.mockResolvedValue({ stdout: '', stderr, exitCode: 1 } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect({
+        success: result.success,
+        rateLimited: result.rateLimited,
+        usageExhausted: result.usageExhausted,
+        waitSeconds: result.waitSeconds,
+      }).toEqual({ success: false, ...expected });
+    });
+  });
+
   it('declares synchronous spawn-permit lifecycle capability', () => {
     expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
   });
