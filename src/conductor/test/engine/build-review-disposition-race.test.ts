@@ -375,8 +375,11 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
   });
 
   it('re-enters build_review instead of the per-gate unresolved HALT when the effective verdict is PASS', async () => {
-    await expectEffectivePassToReenter({
-      seedPerGateLimit: true,
-    });
+    const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
+    const { buildReviewRuns, projectRoot } = await fixture(resolver, { seedPerGateLimit: true });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(buildReviewRuns()).toBe(2);
+    await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
   });
 });
