@@ -355,6 +355,10 @@ export async function verifyLiveBoundary(
         const paths = [...diff.added, ...diff.removed, ...diff.changed];
         const classifications = await classifyLiveCheckoutDiff(surface.root, paths);
         if (paths.every(path => classifications.get(path) === 'operator-edit')) continue;
+        return {
+          ok: false,
+          reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}. Containment was not in force: ${containmentVerdict.reason}.`,
+        };
       }
       return { ok: false, reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}.` };
     }

@@ -19,6 +19,67 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('names every unproven-containment reason in an unexplained live-checkout halt', async () => {
+    const containmentReasons = [
+      'containment unavailable: bwrap not found',
+      'probe found /live writable',
+      'containment unavailable: probe failed — Operation not permitted',
+      'containment disabled by configuration',
+    ];
+    for (const containmentReason of containmentReasons) {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-unproven-reason-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      await writeFile(join(live, 'escaped.txt'), 'unexplained');
+      try {
+        const result = await verifyLiveBoundary(baseline, { contained: false, reason: containmentReason });
+        expect(result).toMatchObject({ ok: false });
+        expect(result.reason).toContain('live checkout changed during self-host execution');
+        expect(result.reason).toContain('1 added, 0 removed, 0 changed');
+        expect(result.reason).toContain('added escaped.txt');
+        expect(result.reason).toContain(containmentReason);
+      } finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
+  it('preserves tracked live-checkout edit amnesty when containment is unproven', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-unproven-tracked-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'README.md'), 'before');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'README.md'), 'after');
+    try {
+      expect(await verifyLiveBoundary(baseline, {
+        contained: false,
+        reason: 'containment unavailable: bwrap not found',
+      })).toEqual({ ok: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('halts an untracked live-checkout dispatch leak when containment is unproven', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-unproven-leak-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'dispatch-leak.txt'), 'unexplained');
+    try {
+      const result = await verifyLiveBoundary(baseline, {
+        contained: false,
+        reason: 'containment unavailable: bwrap not found',
+      });
+      expect(result).toMatchObject({ ok: false });
+      expect(result.reason).toContain('added dispatch-leak.txt');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts a git-ignored live-checkout change after a contained dispatch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-ignored-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
