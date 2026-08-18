@@ -240,7 +240,7 @@ export class CodexProvider implements LLMProvider {
     }
 
     const authentication = this.authentication;
-    const args = [...this.buildArgs(options, true, true), ...this.selfHostArgs(options)];
+    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, true, true)];
     const prompt = this.composePrompt(options);
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
@@ -324,7 +324,7 @@ export class CodexProvider implements LLMProvider {
 
     const authentication = this.authentication;
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.buildArgs(options, false, !options.interactive), ...this.selfHostArgs(options)], {
+      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.selfHostArgs(options), ...this.buildArgs(options, false, !options.interactive)], {
         reject: false,
         input: this.composePrompt(options),
         stdin: 'pipe',

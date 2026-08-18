@@ -303,6 +303,54 @@ describe('CodexProvider', () => {
     },
   );
 
+  it('places Codex arguments after its contained executable for invoke and invokeInteractive', async () => {
+    const bindSet = ['--dev-bind', '/', '/', '--ro-bind', '/live', '/live'];
+    const codexExecutable = '/isolated/bin/codex';
+    const isolatedHomeArgs = ['--config', 'project_doc_max_bytes=0'];
+    const selfHost = {
+      executable: 'bwrap',
+      env: { CODEX_HOME: '/isolated/codex-home' },
+      args: [...bindSet, '--', codexExecutable, ...isolatedHomeArgs],
+      teardown: async () => {},
+    };
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('contained'), exitCode: 0 } as any);
+
+    await provider.invoke({ ...baseOptions, selfHost });
+    await provider.invokeInteractive({ ...baseOptions, selfHost, interactive: true });
+
+    expect(mockExeca.mock.calls.map(([executable, args]) => ({ executable, args }))).toEqual([
+      {
+        executable: 'bwrap',
+        args: [
+          ...bindSet,
+          '--',
+          codexExecutable,
+          ...isolatedHomeArgs,
+          'exec',
+          '--config', 'sandbox_mode="workspace-write"',
+          '--config', 'approval_policy="on-request"',
+          '--config', 'approvals_reviewer="auto_review"',
+          '--config', 'shell_environment_policy.ignore_default_excludes=false',
+          '--cd', baseOptions.cwd,
+          '--json',
+          '-',
+        ],
+      },
+      {
+        executable: 'bwrap',
+        args: [
+          ...bindSet,
+          '--',
+          codexExecutable,
+          ...isolatedHomeArgs,
+          'exec',
+          '--cd', baseOptions.cwd,
+          '-',
+        ],
+      },
+    ]);
+  });
+
   it.each([
     {
       name: 'operator-interactive completion',
