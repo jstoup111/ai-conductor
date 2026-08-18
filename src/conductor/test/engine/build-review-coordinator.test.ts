@@ -128,7 +128,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => ({
         kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+        contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
       }),
       writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
       writeCache: async () => undefined,
@@ -151,7 +151,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
     const dispatchModel = vi.fn(async (branch, projection) => ({
       kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-      contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
     }));
 
     await coordinateBuildReviewRubrics({
@@ -178,7 +178,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
     const dispatchModel = vi.fn(async (branch, projection) => ({
       kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-      contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
     }));
     const result = await coordinateBuildReviewRubrics({
       config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
@@ -188,11 +188,11 @@ describe("build-review coordinator: frozen fan-out", () => {
         revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
       }),
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
-        version: 1 as const, rubric: "scope" as const, contractVersion: "v2" as const, projectionVersion: "v2" as const,
+        version: 1 as const, rubric: "scope" as const, contractVersion: "v3" as const, projectionVersion: "v2" as const,
         projectionDigest: projection.digest, policyFingerprint,
         result: {
           kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
-          snapshotDigest: "cached-snapshot", contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+          snapshotDigest: "cached-snapshot", contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
         },
       } : undefined,
       dispatchModel, writeArtifact, writeCache,
@@ -214,7 +214,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
     const dispatchModel = vi.fn(async (branch, projection) => ({
       kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-      contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
     }));
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
     let preflightSourceIdentities = { mergeBase: "base", headSha: "head" };
@@ -324,7 +324,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => ({
         kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+        contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
       }),
       writeArtifact: async (artifact) => {
         if (artifact.rubric === "scope") throw new Error("disk full");
@@ -351,7 +351,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       readCache: async () => undefined,
       dispatchModel: async (branch, projection) => ({
         kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+        contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
       }),
       writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
       writeCache: async (entry) => {
@@ -372,7 +372,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       active.count -= 1;
       return {
         kind: "judged", rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: "v2", findings: [], verdict: "PASS",
+        contractVersion: "v3", findings: [], verdict: "PASS",
       };
     });
     const preflight = vi.fn(async () => ({
@@ -383,10 +383,10 @@ describe("build-review coordinator: frozen fan-out", () => {
       scopedRun: { exitCode: 1 as number, runKind: "nonzero-exit" as const, ranSelectors: ["test/a.test.ts"], failureExcerpt: "AssertionError: expected 2 to be 1" },
     }));
     const cachedScope = {
-      version: 1 as const, rubric: "scope" as const, contractVersion: "v2" as const, projectionVersion: "v2" as const,
+      version: 1 as const, rubric: "scope" as const, contractVersion: "v3" as const, projectionVersion: "v2" as const,
       projectionDigest: "", policyFingerprint: "", result: {
         kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
-        snapshotDigest: "old", contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+        snapshotDigest: "old", contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
       },
     };
     const result = await coordinateBuildReviewRubrics({
@@ -469,7 +469,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
     const dispatchModel = vi.fn(async (branch, projection) => ({
       kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-      contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
     }));
     const result = await coordinateBuildReviewRubrics({
       config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
@@ -513,7 +513,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
           ? { kind: "dispatch-failure", detail: "judged-result contract not satisfied after one repair turn: ... Raw output excerpt: I judged the rubric..." }
           : {
               kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-              contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+              contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
             },
       writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
       writeCache: async () => undefined,
@@ -544,7 +544,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       dispatchModel: async (branch, projection) =>
         branch.rubric === "rootCause" ? undefined : {
           kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-          contractVersion: "v2" as never, findings: [], verdict: "PASS" as const,
+          contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
         },
       writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
       writeCache: async () => undefined,
