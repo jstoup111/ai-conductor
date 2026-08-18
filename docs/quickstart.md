@@ -291,6 +291,10 @@ bin/update
 git pull --ff-only origin stable && bin/migrate
 ```
 
+Choose the first-run channel during installation with `bin/install --channel tagged` (or `main` or
+`stable`), or set `AI_CONDUCTOR_CHANNEL` when passing a flag is inconvenient. The flag takes
+precedence over the environment variable; an unattended install with neither uses `stable`.
+
 Choose a different channel explicitly with `bin/update --set-channel tagged` or
 `bin/update --set-channel main`. Changing the configured channel does not move the current checkout.
 To move an existing branch-based installation to `stable` deliberately:

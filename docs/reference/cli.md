@@ -28,6 +28,18 @@ so the engine's exit code is the shim's.
 `bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
 points, not `conduct-ts` subcommands.
 
+## `bin/install`
+
+```bash
+bin/install --channel <stable|tagged|main>
+```
+
+On a first install, `--channel` records the selected update channel without prompting. It takes
+precedence over `AI_CONDUCTOR_CHANNEL`; with neither explicit value, an interactive installer prompts
+and a non-interactive installer falls back to `stable`. Empty environment values are treated as unset;
+an invalid explicit value exits before installation writes global state. The option is first-run only:
+change an existing selection with `bin/update --set-channel`.
+
 ## `bin/update`
 
 ```bash
