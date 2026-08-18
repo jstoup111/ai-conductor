@@ -9,6 +9,7 @@ import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { ConductorEvent } from '../../src/types/events.js';
+import { setupStaleTrackingRefFixture, type StaleTrackingFixture } from '../fixtures/git-repo.js';
 import { Conductor } from '../test-conductor.js';
 
 // Disposition-race guard (2026-08-15 incident): an operator `build-review
@@ -44,10 +45,22 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
       kickbackLedger?: Record<string, unknown>;
       completenessFailure?: boolean;
       remediateRefusal?: boolean;
+      staleMirage?: 'invalidated' | 'halt';
+      seedNoOpEscalation?: boolean;
+      seedPerGateLimit?: boolean;
     },
   ) {
     dir = await mkdtemp(join(tmpdir(), 'build-review-disposition-race-'));
-    const statePath = join(dir, '.pipeline', 'state.json');
+    // Scope-disposition cases use a real local git fixture: its deliberately
+    // stale tracking ref makes the merged-only path a deterministic stale
+    // mirage, without contacting a third party. The other routing seams need
+    // no git boundary, keeping their fixtures narrow.
+    const gitFixture: StaleTrackingFixture | undefined = opts?.staleMirage
+      ? await setupStaleTrackingRefFixture(dir)
+      : undefined;
+    const projectRoot = gitFixture?.repo ?? dir;
+    const treeHash = null;
+    const statePath = join(projectRoot, '.pipeline', 'state.json');
     // Keep the fixture in the same feature session so an explicitly seeded
     // kickback ledger is not cleared at Conductor startup.
     const state: Record<string, unknown> = { complexity_tier: 'M', run_started_at: 1 };
@@ -55,15 +68,42 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
       if (step.name !== 'build_review') state[step.name] = 'done';
     }
     await writeState(statePath, state as ConductState);
-    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     await writeFile(
-      join(dir, '.pipeline', 'task-status.json'),
+      join(projectRoot, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
     );
-    if (opts?.kickbackLedger) {
+    const kickbackLedger = opts?.kickbackLedger ?? (opts?.seedNoOpEscalation
+      ? {
+          version: 1,
+          gates: {
+            build_review: {
+              count: 2, cumulative: 2, treeHash, lastReason: 'same',
+              priorVerdict: false, resolvedBefore: 1,
+            },
+          },
+        }
+      : opts?.seedPerGateLimit
+        ? {
+            version: 1,
+            gates: {
+              build_review: {
+                count: 2, cumulative: 2, treeHash, lastReason: 'prior',
+                priorVerdict: true, resolvedBefore: 1,
+              },
+            },
+          }
+        : undefined);
+    if (kickbackLedger) {
       await writeFile(
-        join(dir, '.pipeline', 'kickback-ledger.json'),
-        JSON.stringify(opts.kickbackLedger),
+        join(projectRoot, '.pipeline', 'kickback-ledger.json'),
+        JSON.stringify(kickbackLedger),
+      );
+    }
+    if (opts?.staleMirage === 'halt') {
+      await writeFile(
+        join(projectRoot, '.pipeline', 'build-review-regrade.json'),
+        JSON.stringify({ count: 1 }),
       );
     }
 
@@ -75,11 +115,13 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
         if (step === 'build_review') {
           buildReviewRuns += 1;
           await writeFile(
-            join(dir!, '.pipeline', 'build-review.json'),
+            join(projectRoot, '.pipeline', 'build-review.json'),
             JSON.stringify(buildReviewRuns === 1
               ? {
                   verdict: 'FAIL',
-                  reasons: [opts?.completenessFailure
+                  reasons: [opts?.staleMirage
+                    ? `diff touches ${gitFixture!.mergedOnlyPath} which is out of scope`
+                    : opts?.completenessFailure
                     ? 'completeness: accepted plan finding'
                     : 'scope: unplanned audit-trail surface'],
                   rubric: {
@@ -94,10 +136,21 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
                   rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
                 }),
           );
+          return {
+            success: true,
+            ...(opts?.staleMirage ? {
+              baseFreshness: {
+                mergeBase: gitFixture!.staleTrackingSha,
+                trackingRefSha: gitFixture!.staleTrackingSha,
+                remoteHeadSha: gitFixture!.freshRemoteSha,
+                fresh: false,
+              },
+            } : {}),
+          };
         }
         if (step === 'remediate' && opts?.remediateRefusal) {
           await writeFile(
-            join(dir!, '.pipeline', 'remediation.json'),
+            join(projectRoot, '.pipeline', 'remediation.json'),
             JSON.stringify({
               dispositions: [{
                 id: 'accepted-completeness-finding',
@@ -116,15 +169,19 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     const events = new ConductorEventEmitter();
     const kickbacks: Array<{ from: string; to: string }> = [];
     const invalidatedDispositions: ConductorEvent[] = [];
+    const staleMirageRegrades: ConductorEvent[] = [];
     events.on('kickback', (event) => {
       if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
     });
     events.on('build_review_disposition_version_invalidated', (event) => {
       invalidatedDispositions.push(event);
     });
+    events.on('build_review_stale_mirage_regrade', (event) => {
+      staleMirageRegrades.push(event);
+    });
 
     const conductor = new Conductor({
-      projectRoot: dir,
+      projectRoot,
       stateFilePath: statePath,
       stepRunner: runner,
       events,
@@ -136,7 +193,11 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     });
 
     await conductor.run();
-    return { dispatched, kickbacks, invalidatedDispositions, buildReviewRuns: () => buildReviewRuns };
+    return {
+      dispatched, kickbacks, invalidatedDispositions, staleMirageRegrades,
+      buildReviewRuns: () => buildReviewRuns,
+      projectRoot, treeHash,
+    };
   }
 
   it('drops the kickback and re-lands build_review when every finding is accepted at routing time', async () => {
@@ -158,7 +219,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
       unresolved: [],
     }));
 
-    const { dispatched, kickbacks, buildReviewRuns } = await fixture(resolver, {
+    const { dispatched, kickbacks, buildReviewRuns, projectRoot } = await fixture(resolver, {
       completenessFailure: true,
       remediateRefusal: true,
     });
@@ -167,7 +228,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
     expect(buildReviewRuns()).toBe(2);
-    await expect(readFile(join(dir!, '.pipeline/HALT'), 'utf-8')).rejects.toThrow();
+    await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8')).rejects.toThrow();
   });
 
   it('lets the raw-FAIL resolver report a non-binding disposition on the event spine', async () => {
@@ -208,7 +269,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
   it('keeps an unresolved finding on the existing cumulative-cap path, preserving its cap reason and HALT class', async () => {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: ['sha256:still-open'] }));
 
-    const { dispatched, kickbacks } = await fixture(resolver, {
+    const { dispatched, kickbacks, projectRoot } = await fixture(resolver, {
       kickbackLedger: {
         version: 1,
         gates: {
@@ -226,44 +287,51 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
     expect(dispatched).toEqual(['build_review']);
     expect(kickbacks).toEqual([]);
-    expect(await readFile(join(dir!, '.pipeline/HALT'), 'utf-8')).toContain(
+    expect(await readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8')).toContain(
       'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): scope: unplanned audit-trail surface',
     );
-    expect(await readFile(join(dir!, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
-    expect(JSON.parse(await readFile(join(dir!, '.pipeline/kickback-ledger.json'), 'utf-8'))).toMatchObject({
+    expect(await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/kickback-ledger.json'), 'utf-8'))).toMatchObject({
       gates: { build_review: { count: 1, cumulative: 6 } },
     });
   });
 
   async function expectEffectivePassToReenter(options?: Parameters<typeof fixture>[1]) {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
-    const { dispatched, kickbacks, buildReviewRuns } = await fixture(resolver, options);
+    const { dispatched, kickbacks, buildReviewRuns, projectRoot, treeHash } = await fixture(resolver, options);
     expect(resolver).toHaveBeenCalled();
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
     expect(buildReviewRuns()).toBe(2);
-    await expect(readFile(join(dir!, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
+    await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
+    return { projectRoot, treeHash };
   }
 
-  it('re-enters build_review instead of scope-FAIL routing when the effective verdict is PASS', async () => {
-    await expectEffectivePassToReenter();
+  it('re-enters build_review instead of the scope-FAIL disposition HALT when an effective PASS overrides a second stale mirage', async () => {
+    await expectEffectivePassToReenter({ staleMirage: 'halt' });
+  });
+
+  it('re-enters build_review instead of invalidating a stale-mirage verdict when the effective verdict is PASS', async () => {
+    const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
+    const { dispatched, kickbacks, buildReviewRuns, staleMirageRegrades } = await fixture(
+      resolver,
+      { staleMirage: 'invalidated' },
+    );
+
+    expect(dispatched).not.toContain('build');
+    expect(kickbacks).toEqual([]);
+    expect(buildReviewRuns()).toBe(2);
+    // The effective-PASS guard must stop the observable regrade transition.
+    // `runScopeFailDisposition` has already consumed its internal bound by
+    // this point, but conductor must not emit a regrade or dispatch one.
+    expect(staleMirageRegrades).toEqual([]);
   });
 
   it('re-enters build_review instead of the kickback-to-build no-op HALT when the effective verdict is PASS', async () => {
+    // The D2 baseline must exactly match the tree and resolved task movement
+    // observed at re-entry; otherwise it is classified as productive work.
     await expectEffectivePassToReenter({
-      kickbackLedger: {
-        version: 1,
-        gates: {
-          build_review: {
-            count: 2,
-            cumulative: 2,
-            treeHash: 'same',
-            lastReason: 'same',
-            priorVerdict: true,
-            resolvedBefore: 0,
-          },
-        },
-      },
+      seedNoOpEscalation: true,
     });
   });
 
@@ -291,19 +359,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
   it('re-enters build_review instead of the per-gate unresolved HALT when the effective verdict is PASS', async () => {
     await expectEffectivePassToReenter({
-      kickbackLedger: {
-        version: 1,
-        gates: {
-          build_review: {
-            count: 2,
-            cumulative: 2,
-            treeHash: 'prior',
-            lastReason: 'prior',
-            priorVerdict: false,
-            resolvedBefore: 0,
-          },
-        },
-      },
+      seedPerGateLimit: true,
     });
   });
 });
