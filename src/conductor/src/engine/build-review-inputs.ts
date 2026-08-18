@@ -222,6 +222,7 @@ function freezeAcceptedWidenings(widenings: readonly AcceptedScopeWidening[]): r
     rationale: widening.rationale,
     taskId: widening.taskId,
     sha: widening.sha,
+    derived: widening.derived,
   })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
 }
 
