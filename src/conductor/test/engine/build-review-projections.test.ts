@@ -30,7 +30,7 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
       planBody: '# Approved plan\n',
       mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
       repairContext: [{ id: 'repair-b', reason: 'command_failed', diagnostic: 'b', observedAt: 2 }, { id: 'repair-a', reason: 'command_failed', diagnostic: 'a', observedAt: 1 }],
-      acceptedWidenings: [{ path: 'src/b.ts', rationale: 'b', taskId: '2', sha: 'b' }, { path: 'src/a.ts', rationale: 'a', taskId: '1', sha: 'a' }],
+      acceptedWidenings: [{ path: 'src/b.ts', rationale: 'b', derived: false, taskId: '2', sha: 'b' }, { path: 'src/a.ts', rationale: 'a', derived: false, taskId: '1', sha: 'a' }],
       entryPoints: ['bin/b', 'bin/a'],
       testSuiteProof: {
         provenanceHeadSha: 'head', outcome: 'PASS',
@@ -49,7 +49,7 @@ function source(overrides: Partial<BuildReviewProjectionSource> = {}): BuildRevi
           id: 'repair-original', gate: 'test_suite', reason: 'command_failed',
           diagnostic: 'fixture repair diagnostic', rebaseInvalidatedAt: 1,
         }],
-        acceptedWidenings: [{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }],
+        acceptedWidenings: [{ path: 'src/a.ts', rationale: 'frozen scope widening', derived: false, taskId: '1', sha: 'a' }],
         removalContext: { deletedFiles: ['old.ts'], removedDeclarations: ['old'], removedMembers: [] },
         verifyOnlyContext: [{
           taskId: '3',
@@ -499,7 +499,7 @@ describe('build-review rubric projections', () => {
         name: 'accepted widenings', affectedRubrics: ['scope'],
         changed: source({ inputs: { ...original.inputs, sourceSnapshot: {
           ...original.inputs.sourceSnapshot,
-          acceptedWidenings: [{ path: 'src/new.ts', rationale: 'new', taskId: '3', sha: 'new' }],
+          acceptedWidenings: [{ path: 'src/new.ts', rationale: 'new', derived: false, taskId: '3', sha: 'new' }],
         } } }),
       },
       {
@@ -682,17 +682,17 @@ describe('build-review rubric projections', () => {
         ...original.inputs,
         // This live input is deliberately stale: it must not be able to alter
         // a projection after input assembly has sealed the source snapshot.
-        acceptedWidenings: [{ path: 'src/live-only.ts', rationale: 'must not leak', taskId: '99', sha: 'live' }],
+        acceptedWidenings: [{ path: 'src/live-only.ts', rationale: 'must not leak', derived: false, taskId: '99', sha: 'live' }],
         sourceSnapshot: {
           ...original.inputs.sourceSnapshot,
-          acceptedWidenings: [{ path: 'src/b.ts', rationale: 'new frozen widening', taskId: '2', sha: 'b' }],
+          acceptedWidenings: [{ path: 'src/b.ts', rationale: 'new frozen widening', derived: false, taskId: '2', sha: 'b' }],
         },
       },
     });
     const second = deriveBuildReviewRubricProjections(changed);
 
-    expect(first.scope.acceptedWidenings).toEqual([{ path: 'src/a.ts', rationale: 'frozen scope widening', taskId: '1', sha: 'a' }]);
-    expect(second.scope.acceptedWidenings).toEqual([{ path: 'src/b.ts', rationale: 'new frozen widening', taskId: '2', sha: 'b' }]);
+    expect(first.scope.acceptedWidenings).toEqual([{ path: 'src/a.ts', rationale: 'frozen scope widening', derived: false, taskId: '1', sha: 'a' }]);
+    expect(second.scope.acceptedWidenings).toEqual([{ path: 'src/b.ts', rationale: 'new frozen widening', derived: false, taskId: '2', sha: 'b' }]);
     expect(second.scope.digest).not.toBe(first.scope.digest);
     expect(second.tautology).toEqual(first.tautology);
     expect(second.rootCause).toEqual(first.rootCause);
