@@ -70,6 +70,18 @@ export function deriveBindSet(liveCheckout: string, _worktreeRoot: string): read
   ];
 }
 
+/** Wraps an invocation command in bubblewrap without changing its environment. */
+export function wrapForContainment<TEnv>(
+  command: { readonly executable: string; readonly args: readonly string[]; readonly env: TEnv },
+  bindSet: readonly string[],
+): { readonly executable: string; readonly args: readonly string[]; readonly env: TEnv } {
+  return {
+    executable: 'bwrap',
+    args: [...bindSet, '--', command.executable, ...command.args],
+    env: command.env,
+  };
+}
+
 const CONTAINMENT_PROBE = [
   'if test -w "$1"; then printf "live-root-writable\\n"; else printf "live-root-not-writable\\n"; fi',
   'if test -w "$2"; then printf "worktree-writable\\n"; else printf "worktree-not-writable\\n"; fi',

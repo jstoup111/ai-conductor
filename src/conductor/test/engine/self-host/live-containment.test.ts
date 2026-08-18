@@ -133,6 +133,28 @@ describe('deriveBindSet', () => {
   });
 });
 
+describe('wrapForContainment', () => {
+  it('wraps the command with the bind set while preserving its environment', () => {
+    const bindSet = ['--dev-bind', '/', '/', '--ro-bind', '/live', '/live'];
+    const candidate: unknown = Reflect.get(liveContainment, 'wrapForContainment');
+    if (typeof candidate !== 'function') throw new Error('wrapForContainment is not available');
+
+    const wrapped = (candidate as (
+      command: { executable: string; args: readonly string[]; env: Record<string, string> },
+      binds: readonly string[],
+    ) => { executable: string; args: readonly string[]; env: Record<string, string> })(
+      { executable: 'claude', args: ['--x'], env: { A: '1' } },
+      bindSet,
+    );
+
+    expect(wrapped).toEqual({
+      executable: 'bwrap',
+      args: [...bindSet, '--', 'claude', '--x'],
+      env: { A: '1' },
+    });
+  });
+});
+
 describe('probeContainment', () => {
   it('proves both the live root is read-only and the worktree is writable in one bwrap probe', async () => {
     const { liveCheckout, worktreeRoot } = await createCheckout();
