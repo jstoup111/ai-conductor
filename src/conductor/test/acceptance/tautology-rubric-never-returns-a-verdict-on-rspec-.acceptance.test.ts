@@ -110,24 +110,6 @@ async function makeFixture(name: string): Promise<Fixture> {
   await git(repository, 'remote', 'add', 'origin', repository);
   await git(repository, 'update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
   await git(repository, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
-  // The detached checkout lives below this repository, so Node finds this
-  // deterministic dependency by ordinary parent-directory resolution. It is
-  // intentionally outside the feature worktree: a reverted production runner
-  // must still execute each selector and fail on the missing verdict/event,
-  // never before the selector loads.
-  await writeRepoFile(repository, 'node_modules/uuid/package.json', [
-    '{',
-    '  "name": "uuid",',
-    '  "type": "module",',
-    '  "exports": "./index.mjs"',
-    '}',
-    '',
-  ].join('\n'));
-  await writeRepoFile(repository, 'node_modules/uuid/index.mjs', [
-    "export function v4() { return 'fixture-uuid'; }",
-    '',
-  ].join('\n'));
-
   const root = join(repository, '.worktrees', name);
   await mkdir(dirname(root), { recursive: true });
   await git(repository, 'worktree', 'add', '-q', '-b', `feature/${name}`, root);
@@ -140,6 +122,25 @@ async function makeFixture(name: string): Promise<Fixture> {
   ].join('\n'));
   await git(root, 'add', FEATURE_PATH, SPEC_PATH);
   await git(root, 'commit', '-q', '-m', 'change behavior and its example');
+
+  // The dependency belongs only to the source worktree. The detached
+  // counterfactual can load it only through DefaultStepRunner's ignored
+  // node_modules materialization; no ancestor installation can mask a
+  // regression. With that materialization removed, these selectors still run
+  // but their excerpt contains ERR_MODULE_NOT_FOUND, making both assertions
+  // below fail before their verdict/event contracts are evaluated.
+  await writeRepoFile(root, 'src/conductor/node_modules/uuid/package.json', [
+    '{',
+    '  "name": "uuid",',
+    '  "type": "module",',
+    '  "exports": "./index.mjs"',
+    '}',
+    '',
+  ].join('\n'));
+  await writeRepoFile(root, 'src/conductor/node_modules/uuid/index.mjs', [
+    "export function v4() { return 'fixture-uuid'; }",
+    '',
+  ].join('\n'));
 
   return {
     root,
