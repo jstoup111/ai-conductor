@@ -175,6 +175,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           "// describe('comment suite', () => it('comment test', () => {}));",
           "const ordinary = \"describe('string suite', () => it('string test', () => {}));\";",
           "const templated = `describe('template suite', () => it('template test', () => {}));`;",
+          "const declarationPattern = /describe('regex suite', () => it('regex test', () => {}));/;",
           "describe('actual suite', () => it('actual test', () => {}));",
         ].join('\n') } },
       ]);
