@@ -466,6 +466,7 @@ describe('engine/cost-rollup', () => {
         costUsd: 3.75,
         inputTokens: 2000,
         outputTokens: 500,
+        cachedInputTokens: 0,
       });
       expect(formatFeatureUsageTotal(totals)).toBe(
         'finish: total usage — 3 dispatches, $3.75, 2k→500 tok, 1 unmetered',

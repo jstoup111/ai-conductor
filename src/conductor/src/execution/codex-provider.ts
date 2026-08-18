@@ -122,10 +122,19 @@ export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: 
         if (typeof input === 'number' && Number.isFinite(input)
           && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
           tokenUsage ??= { input: 0, output: 0, numTurns: 0 };
-          tokenUsage.input += input;
+          const cached = event.usage.cached_input_tokens;
+          // Codex's `input_tokens` INCLUDES `cached_input_tokens` (OpenAI
+          // semantics), while Claude's `input_tokens` excludes its cache
+          // fields (Anthropic semantics). TokenUsage.input is fresh-only, so
+          // subtract the cached share here; `cacheRead` keeps the cached
+          // volume. Without this a cache-heavy agentic run reports its
+          // ~100k context times every internal tool-call round trip as
+          // "input" — a 1.5M figure for a ~117k-fresh remediate dispatch.
+          const cachedShare =
+            typeof cached === 'number' && Number.isFinite(cached) ? Math.min(cached, input) : 0;
+          tokenUsage.input += input - cachedShare;
           tokenUsage.output += outputTokens;
           tokenUsage.numTurns = (tokenUsage.numTurns ?? 0) + 1;
-          const cached = event.usage.cached_input_tokens;
           if (typeof cached === 'number' && Number.isFinite(cached)) {
             tokenUsage.cacheRead = (tokenUsage.cacheRead ?? 0) + cached;
           }

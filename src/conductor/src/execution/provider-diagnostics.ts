@@ -29,6 +29,8 @@ interface EnvelopeSummary {
   durationMs?: number;
   costUsd?: number;
   inputTokens?: number;
+  /** Portion of `inputTokens` served from prompt cache (read + creation). */
+  cachedInputTokens?: number;
   outputTokens?: number;
 }
 
@@ -73,8 +75,11 @@ export interface FeatureUsageTotals {
   /** Dispatches that reported no usage (e.g. an unmetered provider, or a lost record). */
   unmeteredDispatches: number;
   costUsd: number;
+  /** Fresh (non-cached) input tokens — TokenUsage.input semantics. */
   inputTokens: number;
   outputTokens: number;
+  /** Cached prompt volume (cache reads + cache creation), when tracked. */
+  cachedInputTokens?: number;
 }
 
 /**
@@ -94,9 +99,16 @@ export function formatFeatureUsageTotal(totals: FeatureUsageTotals): string {
   ];
   if (totals.meteredDispatches > 0) {
     parts.push(`$${totals.costUsd.toFixed(2)}`);
-    parts.push(
-      `${formatTokens(totals.inputTokens)}→${formatTokens(totals.outputTokens)} tok`,
-    );
+    // Fresh input and cached prompt volume are different quantities (cached
+    // reads are the conversation resubmitted on every internal tool call, at
+    // ~10% price); folding them into one "input" figure made ordinary agentic
+    // builds read as 100M+-token pathologies.
+    const cached = totals.cachedInputTokens ?? 0;
+    const inputPart =
+      cached > 0
+        ? `${formatTokens(totals.inputTokens)} fresh + ${formatTokens(cached)} cached`
+        : formatTokens(totals.inputTokens);
+    parts.push(`${inputPart}→${formatTokens(totals.outputTokens)} tok`);
   }
   if (totals.unmeteredDispatches > 0) parts.push(`${totals.unmeteredDispatches} unmetered`);
   return `finish: total usage — ${parts.join(', ')}`;
@@ -135,6 +147,9 @@ function parseClaudeEnvelope(stdout: string): EnvelopeSummary | undefined {
     freshInput === undefined && cacheRead === undefined && cacheCreation === undefined
       ? undefined
       : (freshInput ?? 0) + (cacheRead ?? 0) + (cacheCreation ?? 0);
+  if (cacheRead !== undefined || cacheCreation !== undefined) {
+    summary.cachedInputTokens = (cacheRead ?? 0) + (cacheCreation ?? 0);
+  }
   summary.outputTokens = num(usage.output_tokens);
   return summary;
 }
@@ -175,7 +190,12 @@ function parseCodexEnvelope(stdout: string): EnvelopeSummary | undefined {
     if (event.type === 'turn.completed') {
       const usage = event.usage as Record<string, unknown> | undefined;
       if (usage) {
+        // Codex's `input_tokens` already includes its cached share, so this
+        // headline figure is total submitted volume — the same semantic the
+        // Claude envelope reconstructs above (#1634). The cached share is
+        // kept alongside so the headline can qualify how much was cache.
         summary.inputTokens = num(usage.input_tokens);
+        summary.cachedInputTokens = num(usage.cached_input_tokens);
         summary.outputTokens = num(usage.output_tokens);
       }
     }
@@ -193,7 +213,17 @@ function formatHeadline(provider: string, summary: EnvelopeSummary): string {
   if (summary.durationMs !== undefined) parts.push(formatDiagnosticDuration(summary.durationMs));
   if (summary.costUsd !== undefined) parts.push(`$${summary.costUsd.toFixed(2)}`);
   if (summary.inputTokens !== undefined && summary.outputTokens !== undefined) {
-    parts.push(`${formatTokens(summary.inputTokens)}→${formatTokens(summary.outputTokens)} tok`);
+    // Qualify cache-heavy dispatches: an agentic run resubmits its whole
+    // conversation every internal tool call, so total input can read ~10x the
+    // fresh context. "1.6M→6.7k tok (93% cached)" keeps the total honest.
+    const cached = summary.cachedInputTokens;
+    const cacheSuffix =
+      cached !== undefined && cached > 0 && summary.inputTokens > 0
+        ? ` (${Math.round((Math.min(cached, summary.inputTokens) / summary.inputTokens) * 100)}% cached)`
+        : '';
+    parts.push(
+      `${formatTokens(summary.inputTokens)}→${formatTokens(summary.outputTokens)} tok${cacheSuffix}`,
+    );
   }
   const outcome = summary.isError ? 'error' : 'done';
   const detail = parts.length > 0 ? ` — ${parts.join(', ')}` : '';

@@ -249,7 +249,7 @@ describe('CodexProvider', () => {
           success: true,
           output: 'No-op complete.',
           exitCode: 0,
-          tokenUsage: { input: 12, cacheRead: 4, output: 7, numTurns: 1 },
+          tokenUsage: { input: 8, cacheRead: 4, output: 7, numTurns: 1 },
           observedIntervals: [{ startedAtMs: 2_000, durationMs: 40 }],
           authentication: {
             provider: 'codex',
@@ -414,7 +414,7 @@ describe('CodexProvider', () => {
     expect(options.input).toBe('You are the conductor.\n\nMake the no-op change');
     expect(options.cwd).toBe('/workspace/project');
     expect(result).toMatchObject({ success: true, output: 'No-op complete.', exitCode: 0 });
-    expect(result.tokenUsage).toEqual({ input: 12, cacheRead: 4, output: 7, numTurns: 1 });
+    expect(result.tokenUsage).toEqual({ input: 8, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
   it('starts a fresh Codex exec and preserves cwd when handed resume: true', async () => {
@@ -515,7 +515,7 @@ describe('CodexProvider', () => {
     // A recognized JSONL machine stream reaches the daemon log as a readable
     // summary; prose stdout and stderr still pass through verbatim so no
     // diagnostic detail is traded away for readability.
-    expect(featureLog).toHaveBeenCalledWith('codex: done — 12→7 tok\none-shot output');
+    expect(featureLog).toHaveBeenCalledWith('codex: done — 12→7 tok (33% cached)\none-shot output');
     expect(featureLog).toHaveBeenCalledWith('one-shot stderr');
     expect(featureLog).toHaveBeenCalledWith('automatic output');
     expect(featureLog).toHaveBeenCalledWith('automatic stderr');
@@ -2031,6 +2031,35 @@ describe('parseCodexJsonl', () => {
       output: 40,
       cacheCreation: 77,
       reasoningOutput: 15,
+      numTurns: 1,
+    });
+  });
+
+  it('excludes the cached share from input — TokenUsage.input is fresh-only', () => {
+    // Codex's input_tokens includes cached_input_tokens; the adapter
+    // normalizes to fresh-only input with the cached volume in cacheRead.
+    const stream = [
+      { type: 'turn.completed', usage: { input_tokens: 1_571_053, cached_input_tokens: 1_454_080, output_tokens: 6_662 } },
+    ].map((event) => JSON.stringify(event)).join('\n');
+
+    expect(parseCodexJsonl(stream).tokenUsage).toEqual({
+      input: 116_973,
+      cacheRead: 1_454_080,
+      output: 6_662,
+      numTurns: 1,
+    });
+  });
+
+  it('clamps a cached share larger than input to zero fresh input, never negative', () => {
+    const stream = JSON.stringify({
+      type: 'turn.completed',
+      usage: { input_tokens: 100, cached_input_tokens: 150, output_tokens: 5 },
+    });
+
+    expect(parseCodexJsonl(stream).tokenUsage).toEqual({
+      input: 0,
+      cacheRead: 150,
+      output: 5,
       numTurns: 1,
     });
   });

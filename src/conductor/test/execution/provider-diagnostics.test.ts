@@ -52,7 +52,7 @@ describe('summarizeProviderDiagnostic: claude result envelope', () => {
   it('replaces the raw JSON blob with a telemetry headline plus the agent prose', () => {
     const summary = summarizeProviderDiagnostic('claude', envelope);
     expect(summary).toBe(
-      'claude: done — 54 turns, 8m7s, $4.96, 12.3k→4.1k tok\n' +
+      'claude: done — 54 turns, 8m7s, $4.96, 12.3k→4.1k tok (97% cached)\n' +
         'RED acceptance specs written, executed, and committed.\n\n**What landed:** …',
     );
   });
@@ -97,6 +97,25 @@ describe('summarizeProviderDiagnostic: codex jsonl stream', () => {
   it('summarizes the stream into a headline plus the final agent message', () => {
     expect(summarizeProviderDiagnostic('codex', jsonl)).toBe(
       'codex: done — 900k→2.5k tok\nImplemented the parser and committed.',
+    );
+  });
+
+  it('qualifies a cache-heavy dispatch with its cached share', () => {
+    // A codex agentic run resubmits its conversation every internal tool
+    // call; the cumulative "input" reads ~10x the fresh context without the
+    // cached qualifier (the 1.57M-input remediate incident).
+    const cacheHeavy = [
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'Wrote remediation.json.' },
+      }),
+      JSON.stringify({
+        type: 'turn.completed',
+        usage: { input_tokens: 1_571_053, cached_input_tokens: 1_454_080, output_tokens: 6_662 },
+      }),
+    ].join('\n');
+    expect(summarizeProviderDiagnostic('codex', cacheHeavy)).toBe(
+      'codex: done — 1.6M→6.7k tok (93% cached)\nWrote remediation.json.',
     );
   });
 
@@ -162,6 +181,23 @@ describe('formatFeatureUsageTotal', () => {
         outputTokens: 120,
       }),
     ).toBe('finish: total usage — 10 dispatches, $3.50, 900→120 tok, 2 unmetered');
+  });
+
+  it('splits fresh from cached input when the build tracked cache volume', () => {
+    // Fresh input and cached resubmission are different quantities (cached is
+    // ~10% price and mostly re-reads); one merged figure made ordinary
+    // agentic builds read as 100M+-token pathologies.
+    expect(
+      formatFeatureUsageTotal({
+        dispatches: 104,
+        meteredDispatches: 104,
+        unmeteredDispatches: 0,
+        costUsd: 32.14,
+        inputTokens: 8_400_000,
+        outputTokens: 639_300,
+        cachedInputTokens: 121_600_000,
+      }),
+    ).toBe('finish: total usage — 104 dispatches, $32.14, 8.4M fresh + 121.6M cached→639.3k tok');
   });
 
   it('omits cost and tokens entirely when no dispatch was ever metered', () => {

@@ -230,8 +230,11 @@ export type ConductorEvent =
       meteredDispatches: number;
       unmeteredDispatches: number;
       costUsd: number;
+      /** Fresh (non-cached) input tokens — TokenUsage.input semantics. */
       inputTokens: number;
       outputTokens: number;
+      /** Cached prompt volume (cache reads + creation), when tracked. */
+      cachedInputTokens?: number;
     }
   | {
       /** A visible transition from an unavailable provider to the next candidate. */

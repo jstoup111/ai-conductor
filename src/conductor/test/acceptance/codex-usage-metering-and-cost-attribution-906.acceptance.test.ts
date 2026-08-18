@@ -247,7 +247,9 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
         codexStream([{ input_tokens: 12, cached_input_tokens: 4, output_tokens: 7 }]),
       );
 
-      expect(parsed.tokenUsage).toMatchObject({ input: 12, output: 7, cacheRead: 4 });
+      // input is fresh-only: Codex's raw input_tokens (12) minus its cached
+      // share (4); the cached volume stays in cacheRead.
+      expect(parsed.tokenUsage).toMatchObject({ input: 8, output: 7, cacheRead: 4 });
 
       await writeEventsLedger([
         {
@@ -258,7 +260,7 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
       expect(await shipRecord()).toBe(0);
 
       const block = await committedCostBlock();
-      expect(block).toMatch(/^input: 12$/m);
+      expect(block).toMatch(/^input: 8$/m);
       expect(block).toMatch(/^output: 7$/m);
       expect(block).toMatch(/^cache_read: 4$/m);
     });
@@ -307,7 +309,7 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
         ]),
       );
 
-      expect(parsed.tokenUsage).toMatchObject({ input: 1000, output: 40, cacheRead: 250 });
+      expect(parsed.tokenUsage).toMatchObject({ input: 750, output: 40, cacheRead: 250 });
       expect(parsed.tokenUsage).toHaveProperty('cacheCreation', 77);
       expect(parsed.tokenUsage).toHaveProperty('reasoningOutput', 15);
 

@@ -1,6 +1,12 @@
 import type { ObservedInterval } from './observed-interval.js';
 
 export interface TokenUsage {
+  /**
+   * Fresh (non-cached) input tokens. Every adapter normalizes to this
+   * semantic: cached prompt volume is carried separately in `cacheRead` /
+   * `cacheCreation`, never folded into `input` (Codex's raw `input_tokens`
+   * includes its cached share and is normalized at the adapter).
+   */
   input: number;
   output: number;
   reasoningOutput?: number;
