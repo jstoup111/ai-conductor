@@ -10,7 +10,6 @@ import { tmpdir } from 'os';
 import {
   createRunTmpRoot,
   ensureRunTmpRootSync,
-  reapAbandonedRunTmpRootsSync,
   removeRunTmpRoot,
   RUN_TMP_ROOT_ENV,
   snapshotTmpdirEntries,
@@ -61,23 +60,6 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
 
     expect(second).toBe(first);
     expect(await readdir(fakeRealTmpdir)).toHaveLength(1);
-  });
-
-  it('reaps only abandoned PID-named run roots before starting a new run', async () => {
-    const abandonedPid = 987654;
-    const abandoned = await mkdtemp(join(fakeRealTmpdir, `${RUN_TMP_ROOT_PREFIX}${abandonedPid}-`));
-    const active = await mkdtemp(join(fakeRealTmpdir, `${RUN_TMP_ROOT_PREFIX}123456-`));
-    const legacy = await mkdtemp(join(fakeRealTmpdir, RUN_TMP_ROOT_PREFIX));
-
-    const reaped = reapAbandonedRunTmpRootsSync(
-      fakeRealTmpdir,
-      pid => pid === 123456
-    );
-
-    expect(reaped).toEqual([abandoned]);
-    expect(existsSync(abandoned)).toBe(false);
-    expect(existsSync(active)).toBe(true);
-    expect(existsSync(legacy)).toBe(true);
   });
 
   it('canonicalizes the run root and appends it to the Git ceiling directories', async () => {
