@@ -4106,8 +4106,9 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain('did not satisfy the judged-result contract');
     expect(repairPrompt).toContain('anchor');
     expect(repairPrompt).toContain(`"lapId": "<echo the projection lapId verbatim>"`);
-    // The bounded excerpt of the model's own previous output rides along.
-    expect(repairPrompt).toContain('assertion-insensitive-to-production');
+    expect(repairPrompt).toContain(
+      'Your previous response (bounded excerpt):\nI read the referenced diff and measured each changed test.',
+    );
   });
 
   it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
@@ -4148,8 +4149,12 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
   });
 
   it.each(['claude', 'codex'] as const)('repairs within the same dispatch on the %s runtime-candidates path', async (providerKey) => {
+    const runtimeIncidentShapedOutput = incidentShapedOutput.replace(
+      'I read the referenced diff and measured each changed test.',
+      'Runtime-candidates repair output marker.',
+    );
     const invoke = vi.fn()
-      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: runtimeIncidentShapedOutput, exitCode: 0 })
       .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
     const policyForKey = providerKey === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
     const runtime = {
@@ -4174,6 +4179,8 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest });
     const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
     expect(repairPrompt).toContain('ONLY one JSON object');
-    expect(repairPrompt).toContain('assertion-insensitive-to-production');
+    expect(repairPrompt).toContain(
+      'Your previous response (bounded excerpt):\nRuntime-candidates repair output marker.',
+    );
   });
 });
