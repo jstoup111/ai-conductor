@@ -108,12 +108,16 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     }
 
     const dispatched: StepName[] = [];
+    let buildReviewMergeBase: string | undefined;
     let buildReviewRuns = 0;
     const runner: StepRunner = {
       run: async (step: StepName): Promise<StepRunResult> => {
         dispatched.push(step);
         if (step === 'build_review') {
           buildReviewRuns += 1;
+          if (opts?.staleMirage && buildReviewRuns === 1) {
+            buildReviewMergeBase = gitFixture!.staleTrackingSha;
+          }
           await writeFile(
             join(projectRoot, '.pipeline', 'build-review.json'),
             JSON.stringify(buildReviewRuns === 1
@@ -196,7 +200,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     return {
       dispatched, kickbacks, invalidatedDispositions, staleMirageRegrades,
       buildReviewRuns: () => buildReviewRuns,
-      projectRoot, treeHash,
+      projectRoot, treeHash, buildReviewMergeBase,
     };
   }
 
@@ -298,22 +302,23 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
   async function expectEffectivePassToReenter(options?: Parameters<typeof fixture>[1]) {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
-    const { dispatched, kickbacks, buildReviewRuns, projectRoot, treeHash } = await fixture(resolver, options);
+    const { dispatched, kickbacks, buildReviewRuns, projectRoot, treeHash, buildReviewMergeBase } = await fixture(resolver, options);
     expect(resolver).toHaveBeenCalled();
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
     expect(buildReviewRuns()).toBe(2);
     await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
-    return { projectRoot, treeHash };
+    return { projectRoot, treeHash, buildReviewMergeBase };
   }
 
   it('re-enters build_review instead of the scope-FAIL disposition HALT when an effective PASS overrides a second stale mirage', async () => {
-    await expectEffectivePassToReenter({ staleMirage: 'halt' });
+    const { buildReviewMergeBase } = await expectEffectivePassToReenter({ staleMirage: 'halt' });
+    expect(buildReviewMergeBase).toBeTruthy();
   });
 
   it('re-enters build_review instead of invalidating a stale-mirage verdict when the effective verdict is PASS', async () => {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
-    const { dispatched, kickbacks, buildReviewRuns, staleMirageRegrades } = await fixture(
+    const { dispatched, kickbacks, buildReviewRuns, staleMirageRegrades, buildReviewMergeBase } = await fixture(
       resolver,
       { staleMirage: 'invalidated' },
     );
@@ -325,6 +330,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     // `runScopeFailDisposition` has already consumed its internal bound by
     // this point, but conductor must not emit a regrade or dispatch one.
     expect(staleMirageRegrades).toEqual([]);
+    expect(buildReviewMergeBase).toBeTruthy();
   });
 
   it('re-enters build_review instead of the kickback-to-build no-op HALT when the effective verdict is PASS', async () => {
