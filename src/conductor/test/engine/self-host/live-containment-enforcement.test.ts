@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -41,6 +41,38 @@ describe('live containment enforcement', () => {
 
         expect(result.exitCode).toBe(0);
         expect(result.stderr).toContain(deniedPath);
+      } finally {
+        await rm(liveCheckout, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(!bubblewrapAvailable)(
+    'denies a live-checkout write through an outside process root in /proc',
+    async () => {
+      const liveCheckout = await mkdtemp(join(tmpdir(), 'live-containment-enforcement-'));
+      const worktreeRoot = join(liveCheckout, '.worktrees', 'build');
+      const deniedPath = join(liveCheckout, 'must-not-write-through-proc');
+
+      try {
+        const result = await execa(
+          'bwrap',
+          [
+            ...deriveBindSet(liveCheckout, worktreeRoot),
+            '--',
+            '/bin/sh',
+            '-c',
+            'if printf denied > "/proc/$1/root$2"; then exit 1; fi; printf "alternate write denied: /proc/%s/root%s\\n" "$1" "$2" >&2',
+            'live-containment-enforcement',
+            String(process.pid),
+            deniedPath,
+          ],
+          { reject: false },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toContain(`/proc/${process.pid}/root${deniedPath}`);
+        await expect(access(deniedPath)).rejects.toThrow();
       } finally {
         await rm(liveCheckout, { recursive: true, force: true });
       }

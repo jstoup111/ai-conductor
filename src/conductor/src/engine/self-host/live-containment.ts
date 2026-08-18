@@ -69,6 +69,8 @@ export function deriveBindSet(liveCheckout: string, _worktreeRoot: string): read
 
   return [
     '--dev-bind', '/', '/',
+    '--unshare-pid',
+    '--proc', '/proc',
     '--ro-bind', liveCheckout, liveCheckout,
     ...writablePaths.flatMap((path) => ['--bind', path, path]),
   ];

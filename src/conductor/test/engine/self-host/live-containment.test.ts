@@ -253,6 +253,8 @@ describe('deriveBindSet', () => {
 
     expect(bindSet).toEqual([
       '--dev-bind', '/', '/',
+      '--unshare-pid',
+      '--proc', '/proc',
       ...readOnlyLiveRoot,
       ...expectedReadWritePaths.flatMap((path) => ['--bind', path, path]),
     ]);
