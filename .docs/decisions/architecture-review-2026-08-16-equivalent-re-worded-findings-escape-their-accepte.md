@@ -63,6 +63,17 @@ text*. Once every identity input is a closed member or a verified reference, "sa
 judgement call — it is equality. The principle warns against mechanizing an irreducibly judgemental
 question; it does not require preserving a free-text substrate in order to keep one judgemental.
 
+> **Amended 2026-08-18 by #1695:** the review left each rubric's anchor *reference schema*
+> undefined ("every rubric needs a carefully designed identity schema" per
+> adr-2026-08-13), and that vacuum was filled lap-by-lap in BUILD by the remediation
+> planner — culminating in an unapproved line-coordinate rootCause hunk locus
+> (`path@a,b:c,d`, commit d8fa79150, operator-rejected and reverted as rebase-fragile).
+> The schema is now ruled class-level by
+> `adr-2026-08-18-content-anchored-finding-reference-schema`: a closed set of three
+> reference kinds (path, plan-task, content-region with sha256 of normalized content),
+> coordinate encodings forbidden, per-rubric bindings pinned by an integrity test, any
+> fourth kind requiring an operator-approved supersession.
+
 ## Conditions
 
 1. **The vocabularies are derived from the corpus, not invented.** Each rubric's initial member set
