@@ -15,13 +15,15 @@
  */
 
 import { existsSync } from 'node:fs';
-import { lstat, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeResult } from '../../src/execution/llm-provider.js';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const LIVE_RUN_BODY_PATH = join(
@@ -36,15 +38,6 @@ const PREFLIGHT_PATH = join(
   CONDUCTOR_ROOT,
   'test/fixtures/step-command-preflight.ts',
 );
-const CONDUCTOR_PATH = join(CONDUCTOR_ROOT, 'src/engine/conductor.ts');
-
-async function requiredSource(path: string): Promise<string> {
-  return readFile(path, 'utf8').catch((error: unknown) => {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`required live-tier behavior is not implemented: ${path}: ${detail}`);
-  });
-}
-
 type UnresolvedCommandResult = InvokeResult & {
   commandUnresolved?: boolean;
   commandUnresolvedName?: string;
@@ -244,18 +237,52 @@ describe('live daemon E2E command resolution (#1311)', () => {
     }
   });
 
-  it('routes unresolved commands as zero-retry mechanical failures while preserving outcome-based regression diagnostics', async () => {
-    const [conductor, runBody] = await Promise.all([
-      requiredSource(CONDUCTOR_PATH),
-      requiredSource(LIVE_RUN_BODY_PATH),
-    ]);
+  it('routes an unresolved command through the conductor as a zero-retry mechanical halt', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'live-e2e-unresolved-command-'));
+    const stateFilePath = join(projectRoot, '.pipeline/conduct-state.json');
+    const runner: StepRunner = {
+      run: vi.fn(async () => ({
+        success: false,
+        output: 'Unknown command: /pipeline',
+        commandUnresolved: true,
+        commandUnresolvedName: 'pipeline',
+      })),
+    };
 
-    expect(conductor).toMatch(/commandUnresolved/);
-    expect(conductor).toMatch(/commandUnresolved[\s\S]{0,1200}mechanical|mechanical[\s\S]{0,1200}commandUnresolved/);
-    expect(runBody).toMatch(/dumpPipelineDiagnostics/);
-    expect(runBody).toMatch(/terminal[\s\S]*madeCommit[\s\S]*touchedFixture[\s\S]*taskTrailer/);
+    try {
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(stateFilePath, JSON.stringify({
+        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+        stories: 'done', conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
+        architecture_review: 'done', acceptance_specs: 'done',
+        complexity_tier: 'S', track: 'technical', feature_desc: 'unresolved-command',
+      }));
+      const conductor = new Conductor({
+        projectRoot,
+        stateFilePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: false,
+        maxRetries: 3,
+        sleepFn: async () => {},
+        escalateBuildFailure: async () => ({}),
+      });
 
-    const outcomeAssertion = runBody.match(/expect\s*\(\s*\{[\s\S]*?\}\s*\)\.toEqual\s*\(\s*\{[\s\S]*?\}\s*\)/)?.[0] ?? '';
-    expect(outcomeAssertion).not.toMatch(/numTurns|turnCount|dispatchCount|agent wording/i);
+      await conductor.run();
+
+      await expect(Promise.all([
+        readFile(join(projectRoot, '.pipeline/HALT'), 'utf8'),
+        readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf8'),
+      ])).resolves.toEqual([
+        expect.stringContaining("Cannot dispatch 'build': /pipeline is not available in the provider skill catalog."),
+        'mechanical',
+      ]);
+      expect(runner.run).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });

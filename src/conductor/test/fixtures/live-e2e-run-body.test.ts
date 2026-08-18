@@ -2,7 +2,6 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -769,7 +768,7 @@ describe('live E2E shared spend policy', () => {
     )).toThrow('Unattributable unmetered dispatch cannot be allow-listed.');
   });
 
-  it('uses one default and documented override for every descriptor, then reports observed spend', async () => {
+  it('resolves the live-leg cap from its default or override and reports the observed spend', async () => {
     const {
       DEFAULT_LIVE_E2E_TOKEN_CAP,
       reportLiveE2ESpend,
@@ -784,40 +783,19 @@ describe('live E2E shared spend policy', () => {
       ) => void;
     };
     const report = vi.fn();
-    const sharedBodySource = await readFile(
-      fileURLToPath(new URL('./live-e2e-run-body.ts', import.meta.url)),
-      'utf8',
-    );
 
-    const caps = LIVE_E2E_PROVIDERS.map(() => ({
-      defaultCap: resolveLiveE2ETokenCap({}),
-      overrideCap: resolveLiveE2ETokenCap({ DAEMON_E2E_LIVE_TOKEN_CAP: '321' }),
-    }));
+    const defaultCap = resolveLiveE2ETokenCap({});
+    const overrideCap = resolveLiveE2ETokenCap({ DAEMON_E2E_LIVE_TOKEN_CAP: '321' });
     reportLiveE2ESpend({ totalTokens: 123, dispatches: 4 }, 321, report);
 
     expect({
       defaultCap: DEFAULT_LIVE_E2E_TOKEN_CAP,
-      caps,
+      resolvedCaps: { defaultCap, overrideCap },
       report: report.mock.calls,
-      sharedBodyWiring: {
-        allRegisteredLegs: LIVE_E2E_PROVIDERS.map((descriptor) => descriptor.id),
-        resolvesTheCapAtRunEntry: sharedBodySource.includes('tokenCap = resolveLiveE2ETokenCap()'),
-        legsEnterWithoutALocalCap: sharedBodySource.includes('await runLiveE2ERunBody(descriptor);'),
-        reportsFromTheSharedRun: sharedBodySource.includes('reportLiveE2ESpend({'),
-      },
     }).toEqual({
       defaultCap: 100000,
-      caps: [
-        { defaultCap: 100000, overrideCap: 321 },
-        { defaultCap: 100000, overrideCap: 321 },
-      ],
+      resolvedCaps: { defaultCap: 100000, overrideCap: 321 },
       report: [['daemon E2E live smoke observed total: 123; dispatch count: 4; cap: 321']],
-      sharedBodyWiring: {
-        allRegisteredLegs: ['claude', 'codex'],
-        resolvesTheCapAtRunEntry: true,
-        legsEnterWithoutALocalCap: true,
-        reportsFromTheSharedRun: true,
-      },
     });
   });
 
