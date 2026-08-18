@@ -100,8 +100,9 @@ async function makeFixture(name: string): Promise<Fixture> {
   await writeRepoFile(repository, FEATURE_PATH, 'export const answer = 1;\n');
   await writeRepoFile(repository, SPEC_PATH, [
     "import { v4 as uuidv4 } from 'uuid';",
+    "import { execa } from 'execa';",
     "import { answer } from '../src/example.mjs';",
-    'if (!uuidv4() || answer !== 1) process.exit(1);',
+    'if (!uuidv4() || !execa || answer !== 1) process.exit(1);',
     '',
   ].join('\n'));
   await git(repository, 'add', '.');
@@ -116,8 +117,9 @@ async function makeFixture(name: string): Promise<Fixture> {
   await writeRepoFile(root, FEATURE_PATH, 'export const answer = 2;\n');
   await writeRepoFile(root, SPEC_PATH, [
     "import { v4 as uuidv4 } from 'uuid';",
+    "import { execa } from 'execa';",
     "import { answer } from '../src/example.mjs';",
-    'if (!uuidv4() || answer !== 2) process.exit(1);',
+    'if (!uuidv4() || !execa || answer !== 2) process.exit(1);',
     '',
   ].join('\n'));
   await git(root, 'add', FEATURE_PATH, SPEC_PATH);
@@ -136,6 +138,18 @@ async function makeFixture(name: string): Promise<Fixture> {
   ].join('\n'));
   await writeRepoFile(root, 'src/conductor/node_modules/uuid/index.mjs', [
     "export function v4() { return 'fixture-uuid'; }",
+    '',
+  ].join('\n'));
+  await writeRepoFile(root, 'src/conductor/node_modules/execa/package.json', [
+    '{',
+    '  "name": "execa",',
+    '  "type": "module",',
+    '  "exports": "./index.mjs"',
+    '}',
+    '',
+  ].join('\n'));
+  await writeRepoFile(root, 'src/conductor/node_modules/execa/index.mjs', [
+    'export function execa() {}',
     '',
   ].join('\n'));
   return {
