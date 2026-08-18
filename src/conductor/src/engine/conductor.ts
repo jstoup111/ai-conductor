@@ -3148,15 +3148,17 @@ export class Conductor {
           selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
         });
         const bindSet = deriveBindSet(liveCheckout, this.projectRoot);
-        const containment = await probeContainment(
-          bindSet,
-          liveCheckout,
-          this.projectRoot,
-          async (executable, args) => {
-            const result = await execa(executable, args, { reject: false });
-            return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
-          },
-        );
+        const containment = sh.liveContainment
+          ? await probeContainment(
+            bindSet,
+            liveCheckout,
+            this.projectRoot,
+            async (executable, args) => {
+              const result = await execa(executable, args, { reject: false });
+              return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
+            },
+          )
+          : { contained: false as const, reason: 'containment disabled by configuration' };
         const prepareInvocation = (invocation: SelfHostInvocation): SelfHostInvocation => {
           if (!containment.contained) return invocation;
           return { ...invocation, ...wrapForContainment(invocation, bindSet) };
@@ -3169,7 +3171,8 @@ export class Conductor {
         // recorded reason is consumed at the next dispatch boundary, which is
         // where the HALT marker is written and the run stops.
         const verify = async () => {
-          const result = await verifyLiveBoundary(boundary).catch(() => ({ ok: false, reason: 'Live boundary could not be verified.' }));
+          const result = await verifyLiveBoundary(boundary, containment)
+            .catch(() => ({ ok: false, reason: 'Live boundary could not be verified.' }));
           if (!result.ok) {
             this.pendingLiveBoundaryHalt =
               result.reason ?? 'Live boundary could not be verified.';

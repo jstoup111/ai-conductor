@@ -100,6 +100,7 @@ describe('resolved-config — resolveSelfHostConfig (TR-11 safe defaults)', () =
       activation: 'auto',
       skillRelinkPreflight: true,
       sandboxBuildEnv: true,
+      liveContainment: true,
       versionApprovalGate: true,
       releaseArtifactGate: true,
       versionFreeze: null,
