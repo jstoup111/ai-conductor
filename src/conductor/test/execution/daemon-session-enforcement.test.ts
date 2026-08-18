@@ -77,6 +77,9 @@ describe('guardDaemonSessionInvocation', () => {
       argvFor('manual-test-record', '--skip', '--reason', 'r'),
       argvFor('closeout-event', 'evaluator', '1', '2'),
       argvFor('derive-feedback', '--sha', 'abc'),
+      // git-hook-assets.ts — commit-msg records containment from the same
+      // daemon-managed maker session that authored the commit.
+      argvFor('scope-check', '/worktree/.git/COMMIT_EDITMSG'),
     ]) {
       expect(guardDaemonSessionInvocation(sanctioned, markedEnv())).toEqual({ allowed: true });
     }
