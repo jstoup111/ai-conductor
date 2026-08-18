@@ -441,6 +441,7 @@ describe('build-review Tautology preflight', () => {
     if (result.classification !== 'red') throw new Error('expected RED evidence');
     expect(result.scopedRun).toMatchObject({ exitCode: 7, runKind: 'nonzero-exit', ranSelectors: ['test/a.test.ts'] });
     const excerpt = result.scopedRun!.failureExcerpt;
+    expect(excerpt).not.toBe('');
     expect(Buffer.byteLength(excerpt, 'utf8')).toBeLessThanOrEqual(TAUTOLOGY_EXCERPT_CAP_BYTES);
     expect(excerpt).toContain('HEAD-of-run');
     expect(excerpt).toContain('tail-of-run');
