@@ -204,18 +204,6 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
     ]);
   });
 
-  it('ignores the Codex runtime scratch file without masking a genuine stray', () => {
-    const diff = diffTmpdirEntries(
-      snap([]),
-      snap(['moshi-codex-rl.json.tmp', 'governor-test-XyZ'])
-    );
-
-    expect(diff).toEqual({
-      ignored: ['moshi-codex-rl.json.tmp'],
-      stray: ['governor-test-XyZ'],
-    });
-  });
-
   it('reports nothing for a clean run that added no entries at all', () => {
     expect(diffTmpdirEntries(snap(['a', 'b']), snap(['a', 'b']))).toEqual({
       stray: [],

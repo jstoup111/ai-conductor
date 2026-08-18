@@ -77,7 +77,6 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
   'self-host-', // live provider homes owned by the running daemon
   'claude-', // active Claude Code session scratchpads
   'cc-daemon-', // daemon tmux session scratch
-  'moshi-codex-rl.json.tmp', // Codex runtime rate-limit scratch file
   'systemd-', // systemd-private-*, systemd-*.service-*
   'snap.',
   'dbus-',
