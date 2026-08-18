@@ -115,7 +115,7 @@ export interface TautologyCompletedPreflight {
 
 export type TautologyPreflightResult = TautologyCompletedPreflight | {
       readonly classification: 'infrastructure-failure';
-      readonly reason: 'no-changed-tests' | 'no-production-changes' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'scoped-run-no-tests' | 'scoped-run-collection-failed' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
+      readonly reason: 'no-changed-tests' | 'no-production-changes' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
       readonly changedPaths: readonly string[];
       readonly changedTestSelectors: readonly string[];
       readonly sourceIdentities: { readonly mergeBase: string; readonly headSha: string };
@@ -279,9 +279,9 @@ function aborted(signal: AbortSignal): boolean {
   return signal.aborted;
 }
 
-function scopedRunFailure(
+export function scopedRunFailure(
   execution: Exclude<TautologyScopedRunResult, { readonly exitCode: 0 }>,
-): Extract<TautologyPreflightResult, { classification: 'infrastructure-failure' }>['reason'] {
+): Extract<TautologyPreflightResult, { classification: 'infrastructure-failure' }>['reason'] | undefined {
   switch (execution.kind) {
     case 'launch-error': return 'scoped-run-launch-failed';
     case 'timeout': return 'scoped-run-timeout';
@@ -392,10 +392,11 @@ export async function materializeTautologyPreflight(
     if (!result) {
       try {
         const execution = await deps.runScoped(checkout, counterfactualSelectors, signal);
-        // The scoped command has only process-level outcomes: exit code zero
-        // stayed green, while any nonzero exit is counterfactual RED. Runner
+        // Exit code zero stays green and any nonzero exit is counterfactual RED.
+        // Per #1593, a reverted-tree collection failure is evidence that the
+        // changed production matters, not output-derived infrastructure. Only
         // launch, timeout, and signal outcomes remain infrastructure failures.
-        if ('kind' in execution && execution.kind !== 'nonzero-exit') result = failure(scopedRunFailure(execution), paths, classified.tests, sourceIdentities);
+        if ('kind' in execution && execution.kind !== 'nonzero-exit') result = failure(scopedRunFailure(execution)!, paths, classified.tests, sourceIdentities);
         else if (aborted(signal)) result = failure('aborted', paths, classified.tests, sourceIdentities);
         else {
           result = {

@@ -5,11 +5,19 @@ import {
   classifyTautologyPaths,
   deriveRemovalMaintenanceSelectors,
   boundedHeadTailExcerpt,
+  scopedRunFailure,
   TAUTOLOGY_EXCERPT_CAP_BYTES,
   type TautologyScopedRunResult,
 } from '../../src/engine/build-review-tautology-preflight.js';
 
 describe('build-review Tautology preflight', () => {
+  it('maps only process-level scoped-run failures to infrastructure reasons', () => {
+    expect(scopedRunFailure({ kind: 'launch-error', stdout: '', stderr: '' })).toBe('scoped-run-launch-failed');
+    expect(scopedRunFailure({ kind: 'timeout', stdout: '', stderr: '' })).toBe('scoped-run-timeout');
+    expect(scopedRunFailure({ kind: 'signal', signal: 'SIGTERM', stdout: '', stderr: '' })).toBe('scoped-run-signaled');
+    expect(scopedRunFailure({ kind: 'nonzero-exit', exitCode: 1, stdout: 'RED', stderr: '' })).toBeUndefined();
+  });
+
   it('accepts a nonzero process exit as counterfactual RED evidence', async () => {
     const nonzeroExit: TautologyScopedRunResult = { kind: 'nonzero-exit', exitCode: 1, stdout: 'RED', stderr: '' };
     expectTypeOf(nonzeroExit).toMatchTypeOf<TautologyScopedRunResult>();
