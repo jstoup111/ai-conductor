@@ -1194,6 +1194,7 @@ const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
 const SELF_HOST_GATE_KEYS = [
   'skill_relink_preflight',
   'sandbox_build_env',
+  'live_containment',
   'version_approval_gate',
   'release_artifact_gate',
 ];

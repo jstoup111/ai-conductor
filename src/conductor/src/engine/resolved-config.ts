@@ -640,8 +640,6 @@ function resolveTokenPath(rawPath: string | undefined): string {
 export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostConfig {
   const block = config?.harness_self_host;
   const buildAuthBlock = block?.build_auth;
-  const liveContainment = (block as { live_containment?: unknown } | undefined)
-    ?.live_containment;
 
   let timeoutMinutes = block?.auth_park_timeout_minutes ?? 60;
   // Negative or non-numeric values fall back to 60
@@ -653,7 +651,7 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
     skillRelinkPreflight: block?.skill_relink_preflight ?? true,
     sandboxBuildEnv: block?.sandbox_build_env ?? true,
-    liveContainment: typeof liveContainment === 'boolean' ? liveContainment : true,
+    liveContainment: block?.live_containment ?? true,
     versionApprovalGate: block?.version_approval_gate ?? true,
     releaseArtifactGate: block?.release_artifact_gate ?? true,
     // Blank/whitespace normalizes to null so a freeze can never "match" an

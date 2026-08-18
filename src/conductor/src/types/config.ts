@@ -365,6 +365,8 @@ export interface HarnessSelfHostConfig {
   skill_relink_preflight?: boolean;
   /** Run the self-build under a throwaway CLAUDE_CONFIG_DIR (TR-5/6). Omitted → true. */
   sandbox_build_env?: boolean;
+  /** Contain the dispatch from the live checkout with bubblewrap. Omitted → true. */
+  live_containment?: boolean;
   /** HALT for operator VERSION-bump approval at finish (TR-7). Omitted → true. */
   version_approval_gate?: boolean;
   /** HALT on integrity/CHANGELOG/migration gate failure (TR-8/9/10). Omitted → true. */

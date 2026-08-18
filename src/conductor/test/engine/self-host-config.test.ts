@@ -25,6 +25,16 @@ describe('config — harness_self_host validation (TR-11)', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('accepts the live containment opt-out and preserves it during resolution', () => {
+    const result = validateConfig({
+      harness_self_host: { live_containment: false },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(resolveSelfHostConfig(result.config).liveContainment).toBe(false);
+  });
+
   it('accepts each activation value (auto / force_on / force_off)', () => {
     for (const activation of ['auto', 'force_on', 'force_off'] as const) {
       const result = validateConfig({ harness_self_host: { activation } });
