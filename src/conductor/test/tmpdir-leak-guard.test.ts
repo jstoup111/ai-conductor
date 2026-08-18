@@ -3,13 +3,14 @@
 // No vitest wiring involved: each seam is exercised directly, the same split
 // used by signals-leak-guard.test.ts and global-setup-engineer-signals.test.ts.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, realpath, readdir, rm, symlink, writeFile } from 'fs/promises';
+import { chmod, mkdtemp, mkdir, realpath, readdir, rm, symlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
   createRunTmpRoot,
   ensureRunTmpRootSync,
+  reapAbandonedRunTmpRootsSync,
   removeRunTmpRoot,
   RUN_TMP_ROOT_ENV,
   snapshotTmpdirEntries,
@@ -60,6 +61,23 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
 
     expect(second).toBe(first);
     expect(await readdir(fakeRealTmpdir)).toHaveLength(1);
+  });
+
+  it('reaps only abandoned PID-named run roots before starting a new run', async () => {
+    const abandonedPid = 987654;
+    const abandoned = await mkdtemp(join(fakeRealTmpdir, `${RUN_TMP_ROOT_PREFIX}${abandonedPid}-`));
+    const active = await mkdtemp(join(fakeRealTmpdir, `${RUN_TMP_ROOT_PREFIX}123456-`));
+    const legacy = await mkdtemp(join(fakeRealTmpdir, RUN_TMP_ROOT_PREFIX));
+
+    const reaped = reapAbandonedRunTmpRootsSync(
+      fakeRealTmpdir,
+      pid => pid === 123456
+    );
+
+    expect(reaped).toEqual([abandoned]);
+    expect(existsSync(abandoned)).toBe(false);
+    expect(existsSync(active)).toBe(true);
+    expect(existsSync(legacy)).toBe(true);
   });
 
   it('canonicalizes the run root and appends it to the Git ceiling directories', async () => {
@@ -141,6 +159,18 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
     expect(existsSync(runRoot)).toBe(false);
     // The real tmpdir itself survives — only the run root is reclaimed.
     expect(await readdir(fakeRealTmpdir)).toEqual([]);
+  });
+
+  it('removes a run root containing a read-only fixture directory', async () => {
+    const runRoot = await createRunTmpRoot(fakeRealTmpdir);
+    const protectedDir = join(runRoot, 'fixture', '.pipeline');
+    await mkdir(protectedDir, { recursive: true });
+    await writeFile(join(protectedDir, 'task-status.json'), '{}\n', 'utf-8');
+    await chmod(protectedDir, 0o555);
+
+    await removeRunTmpRoot(runRoot);
+
+    expect(existsSync(runRoot)).toBe(false);
   });
 
   it('treats an already-absent run root as success (interrupted run, manual cleanup)', async () => {

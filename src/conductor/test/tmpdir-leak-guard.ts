@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync } from 'fs';
+import { chmodSync, lstatSync, mkdtempSync, readdirSync, realpathSync, rmSync } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
 import { join } from 'path';
 
@@ -40,6 +40,80 @@ export const RUN_TMP_ROOT_PREFIX = 'ai-conductor-vitest-run-';
  * worker-side test prove propagation by comparing `os.tmpdir()` to it.
  */
 export const RUN_TMP_ROOT_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT';
+
+/**
+ * A PID-bearing run-root name lets the next test invocation reclaim roots
+ * whose process died before Vitest could run its global teardown. Legacy
+ * random-only names are deliberately left untouched: they cannot be proven
+ * abandoned without risking a concurrent test run.
+ */
+const PID_NAMED_RUN_ROOT = new RegExp(`^${RUN_TMP_ROOT_PREFIX}(\\d+)-`);
+
+type IsPidAlive = (pid: number) => boolean;
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error && typeof error === 'object' && 'code' in error && error.code === 'ESRCH');
+  }
+}
+
+/** Make nested directories removable without following symlinks. */
+function makeDirectoriesWritableSync(path: string): void {
+  let stat: ReturnType<typeof lstatSync>;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return;
+    throw error;
+  }
+  if (!stat.isDirectory()) return;
+
+  for (const entry of readdirSync(path)) {
+    makeDirectoriesWritableSync(join(path, entry));
+  }
+  chmodSync(path, 0o700);
+}
+
+/**
+ * Reclaim only run roots that encode a PID no longer present on this host.
+ *
+ * This is the SIGKILL backstop for the normal and signal teardown paths. It
+ * is intentionally synchronous because the Vitest config needs the space
+ * before it constructs its own temporary directory.
+ */
+export function reapAbandonedRunTmpRootsSync(
+  realTmpdir: string,
+  pidIsAlive: IsPidAlive = isPidAlive
+): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(realTmpdir);
+  } catch {
+    return [];
+  }
+
+  const reaped: string[] = [];
+  for (const entry of entries) {
+    const match = PID_NAMED_RUN_ROOT.exec(entry);
+    if (!match) continue;
+
+    const path = join(realTmpdir, entry);
+    try {
+      if (!lstatSync(path).isDirectory() || pidIsAlive(Number(match[1]))) continue;
+      makeDirectoriesWritableSync(path);
+      rmSync(path, { recursive: true, force: true });
+      reaped.push(path);
+    } catch {
+      // A concurrent process may remove or create entries during this sweep.
+      // Leave an indeterminate root for a later run rather than risking an
+      // unrelated path.
+    }
+  }
+  return reaped;
+}
 
 /**
  * Top-level real-tmpdir entry prefixes that are NOT test leaks.
@@ -127,7 +201,8 @@ export function ensureRunTmpRootSync(
   env: NodeJS.ProcessEnv = process.env
 ): string {
   const existing = env[RUN_TMP_ROOT_ENV];
-  const createdRunRoot = existing ?? mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
+  if (!existing) reapAbandonedRunTmpRootsSync(realTmpdir);
+  const createdRunRoot = existing ?? mkdtempSync(join(realTmpdir, `${RUN_TMP_ROOT_PREFIX}${process.pid}-`));
   let runRoot: string;
 
   try {
@@ -168,6 +243,7 @@ export function ensureRunTmpRootSync(
  * @param runRoot Absolute path returned by `createRunTmpRoot`
  */
 export async function removeRunTmpRoot(runRoot: string): Promise<void> {
+  makeDirectoriesWritableSync(runRoot);
   await rm(runRoot, { recursive: true, force: true });
 }
 
