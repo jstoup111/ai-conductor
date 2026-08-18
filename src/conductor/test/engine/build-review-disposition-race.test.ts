@@ -336,9 +336,20 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
   it('re-enters build_review instead of the kickback-to-build no-op HALT when the effective verdict is PASS', async () => {
     // The D2 baseline must exactly match the tree and resolved task movement
     // observed at re-entry; otherwise it is classified as productive work.
-    await expectEffectivePassToReenter({
-      seedNoOpEscalation: true,
+    const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
+    const { buildReviewRuns, projectRoot } = await fixture(resolver, { seedNoOpEscalation: true });
+
+    expect(buildReviewRuns()).toBe(2);
+    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'))).toMatchObject({
+      gates: {
+        build_review: {
+          treeHash: null,
+          resolvedBefore: 1,
+          priorVerdict: true,
+        },
+      },
     });
+    await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
   });
 
   it('re-enters build_review instead of the cumulative-cap HALT when the effective verdict is PASS', async () => {
