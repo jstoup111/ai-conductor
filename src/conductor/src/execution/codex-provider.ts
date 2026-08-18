@@ -838,8 +838,8 @@ export class CodexProvider implements LLMProvider {
 
   private selfHostArgs(options: InvokeOptions): readonly string[] {
     const args = options.selfHost?.args ?? [];
-    if (args.length > 16 || args.some((arg) => arg.length > 512)) {
-      throw new Error('Codex self-host arguments exceed the bounded provider contract.');
+    if (args.some((arg) => arg.length > 512)) {
+      throw new Error('Codex self-host arguments exceed the 512-character per-argument provider contract.');
     }
     return args;
   }

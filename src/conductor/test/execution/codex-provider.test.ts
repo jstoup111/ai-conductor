@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import {
   CodexProvider,
   parseCodexJsonl,
@@ -13,6 +15,12 @@ import type {
 } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
+import {
+  deriveBindSet,
+  wrapForContainment,
+} from '../../src/engine/self-host/live-containment.js';
+
+const execFileAsync = promisify(execFile);
 
 // This is a fake Codex CLI boundary: no test invokes a locally installed Codex.
 //
@@ -349,6 +357,53 @@ describe('CodexProvider', () => {
         ],
       },
     ]);
+  });
+
+  it('passes an engine-derived containment launcher with more than sixteen arguments to Codex', async () => {
+    const liveCheckout = await mkdtemp(join(tmpdir(), 'codex-containment-checkout-'));
+    const worktreeRoot = join(liveCheckout, '.worktrees', 'build');
+    try {
+      await execFileAsync('git', ['init', '--initial-branch=main', liveCheckout]);
+      await Promise.all([
+        mkdir(worktreeRoot, { recursive: true }),
+        mkdir(join(liveCheckout, '.pipeline'), { recursive: true }),
+      ]);
+      const contained = wrapForContainment({
+        executable: '/isolated/bin/codex',
+        args: ['--config', 'project_doc_max_bytes=0'],
+        env: { CODEX_HOME: '/isolated/codex-home' },
+      }, deriveBindSet(liveCheckout, worktreeRoot));
+      mockExeca.mockResolvedValue({ stdout: jsonlMessage('contained'), exitCode: 0 } as any);
+
+      await provider.invoke({
+        ...baseOptions,
+        selfHost: { ...contained, teardown: async () => {} },
+      });
+
+      expect({
+        containmentArgCount: contained.args.length,
+        spawn: mockExeca.mock.calls[0].slice(0, 2),
+      }).toEqual({
+        containmentArgCount: expect.any(Number),
+        spawn: [
+          'bwrap',
+          [
+            ...contained.args,
+            'exec',
+            '--config', 'sandbox_mode="workspace-write"',
+            '--config', 'approval_policy="on-request"',
+            '--config', 'approvals_reviewer="auto_review"',
+            '--config', 'shell_environment_policy.ignore_default_excludes=false',
+            '--cd', baseOptions.cwd,
+            '--json',
+            '-',
+          ],
+        ],
+      });
+      expect(contained.args.length).toBeGreaterThan(16);
+    } finally {
+      await rm(liveCheckout, { recursive: true, force: true });
+    }
   });
 
   it.each([
