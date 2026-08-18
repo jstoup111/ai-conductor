@@ -25,7 +25,7 @@ Use only the supplied projection version `v2`. Its closed input contains:
   its path and merge-base git blob sha. File content is never embedded — recover any file's
   reverted (merge-base) form with `git show <mergeBase>:<path>`; and
 - typed preflight evidence, including source identities, its result classification, and the
-  scoped-run verdict (exit code, run kind, the selectors actually executed) with a bounded
+  scoped-run verdict (exit code, run kind (`passed` or `nonzero-exit`), the selectors actually executed) with a bounded
   head+tail failure excerpt (explicit `[...truncated N bytes...]` marker) when the reverted-tree
   run failed. Raw runner output is never embedded wholesale.
 - engine-recorded rebase-repair context, when a changed test repairs stale base-state expectations.
@@ -43,6 +43,7 @@ Interpret the preflight classification precisely:
 
 - `red` is expected evidence that the changed tests detect the reverted production behavior; it is
   not itself a finding.
+- When a `red` scoped run's excerpt clearly shows no test executed, return a blocking finding for the affected obligation. This finding never overrides the four closed exceptions, and never manufactures a finding from an ambiguous excerpt.
 - `stayed-green` requires a blocking finding for each independent changed-test/behavior obligation
   that remained insensitive to the reverted production behavior only when none of the four closed
   exceptions qualifies for that obligation.
