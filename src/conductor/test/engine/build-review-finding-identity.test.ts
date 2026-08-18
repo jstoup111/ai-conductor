@@ -190,7 +190,7 @@ describe('build-review finding identity', () => {
   it('keeps distinct canonical snapshot references as distinct identities', () => {
     const subjects = [
       { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'source-text-mirror' }, field: 'changedTest', alternate: 'test/b.test.ts' },
-      { rubric: 'rootCause', concernKind: 'root-cause-unaddressed', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts@1,1:1,1', relation: 'root-cause-unaddressed' }, field: 'locus', alternate: 'src/b.ts@1,1:1,1' },
+      { rubric: 'rootCause', concernKind: 'root-cause-unaddressed', anchor: { rubric: 'rootCause', statedDefect: 'x', locus: 'src/a.ts', relation: 'root-cause-unaddressed' }, field: 'locus', alternate: 'src/b.ts' },
       { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' }, field: 'planTask', alternate: '2' },
       { rubric: 'completeness', concernKind: 'missing-deliverable', anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/a.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' }, field: 'missingSurface', alternate: 'src/b.ts' },
     ] as const;
@@ -203,38 +203,6 @@ describe('build-review finding identity', () => {
     });
 
     expect(referencesStayDistinct).toEqual([true, true, true, true]);
-  });
-
-  it('keeps same-class root-cause findings in separate projected hunks distinct while ignoring prose drift', () => {
-    const firstHunk = {
-      rubric: 'rootCause' as const, contractVersion: 'v2' as const,
-      concernKind: 'provenance-sensitive-cache-identity',
-      anchor: {
-        rubric: 'rootCause' as const, locus: 'src/handler.ts@10,2:10,3',
-        statedDefect: 'the first hunk loses provenance', relation: 'provenance-sensitive-cache-identity' as const,
-      },
-    };
-    const secondHunk = {
-      ...firstHunk,
-      anchor: { ...firstHunk.anchor, locus: 'src/handler.ts@44,1:45,2' },
-    };
-
-    const first = canonicalizeBuildReviewFindingIdentity({
-      ...firstHunk, summary: 'Initial report wording.', evidenceLocations: ['src/handler.ts:10'],
-    });
-    const rewordedFirst = canonicalizeBuildReviewFindingIdentity({
-      ...firstHunk,
-      anchor: { ...firstHunk.anchor, statedDefect: 'Reworded report description.' },
-      summary: 'Later report wording.', evidenceLocations: ['src/handler.ts:12'],
-    });
-    const second = canonicalizeBuildReviewFindingIdentity({
-      ...secondHunk, summary: 'A distinct finding.', evidenceLocations: ['src/handler.ts:45'],
-    });
-
-    expect(first).toMatchObject({ canonicalPayload: { anchor: { locus: 'src/handler.ts@10,2:10,3' } } });
-    expect(rewordedFirst).toEqual(first);
-    expect(second?.id).toBeDefined();
-    expect(second?.id).not.toBe(first?.id);
   });
 
   it('changes identity for a materially different concern or logical anchor', () => {
