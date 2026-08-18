@@ -212,6 +212,25 @@ describe('CodexProvider', () => {
     expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
   });
 
+  it('rejects an overlong self-host argument before creating a provider subprocess', async () => {
+    const subprocessFactory = vi.fn(() =>
+      Promise.resolve({ stdout: jsonlMessage('unexpected child'), exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()), 'codex', undefined, subprocessFactory);
+
+    await expect(provider.invoke({
+      ...baseOptions,
+      selfHost: {
+        executable: '/isolated/bin/codex',
+        env: {},
+        args: ['x'.repeat(513)],
+        teardown: async () => {},
+      },
+    })).rejects.toThrow('Codex self-host arguments exceed the 512-character per-argument provider contract.');
+
+    expect(subprocessFactory).not.toHaveBeenCalled();
+  });
+
   it('models every Codex readiness outcome as an exhaustive discriminated contract', () => {
     const readinessOutcomes = [
       { provider: 'codex', source: 'cached-login', state: 'ready' },
