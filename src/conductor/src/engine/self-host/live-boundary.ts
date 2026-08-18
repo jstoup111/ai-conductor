@@ -346,6 +346,7 @@ export async function verifyLiveBoundary(
   reason?: string;
   containedDrift?: { evidence: string; summary: string };
 }> {
+  let containedDrift: { evidence: string; summary: string } | undefined;
   for (const surface of snapshot.surfaces) {
     const current = await manifest(
       surface.root,
@@ -356,13 +357,11 @@ export async function verifyLiveBoundary(
       const diff = diffManifests(surface.manifest, current);
       if (surface.label === 'live checkout') {
         if (containmentVerdict.contained) {
-          return {
-            ok: true,
-            containedDrift: {
-              evidence: containmentVerdict.evidence,
-              summary: describeDiff(diff),
-            },
+          containedDrift = {
+            evidence: containmentVerdict.evidence,
+            summary: describeDiff(diff),
           };
+          continue;
         }
         const paths = [...diff.added, ...diff.removed, ...diff.changed];
         const classifications = await classifyLiveCheckoutDiff(surface.root, paths);
@@ -375,5 +374,5 @@ export async function verifyLiveBoundary(
       return { ok: false, reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}.` };
     }
   }
-  return { ok: true };
+  return containedDrift ? { ok: true, containedDrift } : { ok: true };
 }

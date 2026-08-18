@@ -53,6 +53,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  contained_live_checkout_drift: 'not-audited-by-design',
+  self_host_containment_verdict: 'not-audited-by-design',
   build_review_rubric_started: 'not-audited-by-design',
   build_review_rubric_prompt: 'not-audited-by-design',
   build_review_rubric_result: 'not-audited-by-design',

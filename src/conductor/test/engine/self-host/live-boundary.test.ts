@@ -134,6 +134,24 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('does not let contained live-checkout drift mask later provider-state drift', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-both-surfaces-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'settings.json'), 'before');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await Promise.all([
+      writeFile(join(live, 'operator-edit.txt'), 'concurrent operator'),
+      writeFile(join(provider, 'settings.json'), 'after'),
+    ]);
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('provider state changed'),
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts an operator edit to a tracked live-checkout file during the build', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-tracked-edit-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
