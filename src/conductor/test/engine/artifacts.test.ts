@@ -733,6 +733,7 @@ describe('engine/artifacts', () => {
       await createFile(
         '.pipeline/acceptance-specs-red.json',
         JSON.stringify({
+          outcome: 'specs-generated',
           command: 'bundle exec rspec api/spec && npm --prefix frontend test',
           targetSpecs: ['api/spec/integration/household_invite_spec.rb'],
           executed: 3,
@@ -801,6 +802,7 @@ describe('engine/artifacts', () => {
     // daemon-built PR whose own acceptance specs then failed in CI).
     const EV = '.pipeline/acceptance-specs-red.json';
     const validEvidence = {
+      outcome: 'specs-generated',
       command: 'pytest spec/integration/test_x.py',
       targetSpecs: ['spec/integration/test_x.py'],
       executed: 3,
@@ -4644,6 +4646,7 @@ Task 1 → Task 2
         await createFile(
           '.pipeline/acceptance-specs-red.json',
           JSON.stringify({
+            outcome: 'specs-generated',
             command: 'bundle exec rspec spec',
             targetSpecs: ['spec/some_feature_spec.rb'],
             executed: 1,

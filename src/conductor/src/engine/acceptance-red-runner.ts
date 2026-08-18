@@ -383,6 +383,7 @@ export async function selfHealAcceptanceRed(
       : {};
   const { exception: _execException, ...observedRun } = execMarker;
   const markerContent = {
+    outcome: "specs-generated",
     ...observedRun,
     command: contract.command,
     targetSpecs: contract.targetSpecs,

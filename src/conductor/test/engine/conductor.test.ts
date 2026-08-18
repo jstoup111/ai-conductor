@@ -99,6 +99,7 @@ function createMockStepRunner(result: StepRunResult = { success: true }): StepRu
 // specs ran and failed (not skipped/errored). Fixtures that pre-satisfy
 // acceptance_specs to reach a later step must seed this alongside the spec file.
 const RED_EVIDENCE_JSON = JSON.stringify({
+  outcome: 'specs-generated',
   command: 'bundle exec rspec spec/acceptance',
   targetSpecs: ['spec/acceptance/feature_spec.rb'],
   executed: 1,

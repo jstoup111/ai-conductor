@@ -553,6 +553,7 @@ describe('integration/gate-loop', () => {
       await writeFile(
         join(dir, '.pipeline/acceptance-specs-red.json'),
         JSON.stringify({
+          outcome: 'specs-generated',
           command: 'vitest run test/acceptance',
           targetSpecs: ['test/acceptance/foo.test.ts'],
           executed: 1,
@@ -1310,6 +1311,7 @@ describe('integration/gate-loop', () => {
             await writeFile(
               join(dir, '.pipeline/acceptance-specs-red.json'),
               JSON.stringify({
+                outcome: 'specs-generated',
                 command: 'vitest run test/acceptance',
                 targetSpecs: ['test/acceptance/foo.test.ts'],
                 executed: 1,

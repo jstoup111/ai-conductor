@@ -255,6 +255,7 @@ describe('#993 TS-993-4 — repository/run scope and custom predicates keep thei
   let dir: string;
 
   const RED_EVIDENCE = JSON.stringify({
+    outcome: 'specs-generated',
     command: 'npx vitest run test/acceptance',
     targetSpecs: ['test/acceptance/unrelated-name.acceptance.test.ts'],
     executed: 3,

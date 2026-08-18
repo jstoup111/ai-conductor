@@ -129,6 +129,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
       await writeFile(
         join(worktree, '.pipeline', 'acceptance-specs-red.json'),
         JSON.stringify({
+          outcome: 'specs-generated',
           command: 'npm test',
           targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
           executed: 1,
@@ -171,6 +172,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
       await writeFile(
         join(worktree, '.pipeline', 'acceptance-specs-red.json'),
         JSON.stringify({
+          outcome: 'specs-generated',
           command: 'npm test',
           targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
           executed: 1,
@@ -209,6 +211,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     await writeFile(
       join(dir, '.pipeline', 'acceptance-specs-red.json'),
       JSON.stringify({
+        outcome: 'specs-generated',
         command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
         targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
         executed: 1,
@@ -225,6 +228,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
       await writeFile(
         join(worktree, '.pipeline', 'acceptance-specs-red.json'),
         JSON.stringify({
+          outcome: 'specs-generated',
           command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
           targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
           executed: 1,
@@ -257,6 +261,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     await writeFile(
       join(dir, '.pipeline', 'acceptance-specs-red.json'),
       JSON.stringify({
+        outcome: 'specs-generated',
         command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
         targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
         executed: 1,
@@ -284,6 +289,7 @@ describe('Conductor.run acceptance_specs self-heal call site (Task 9)', () => {
     await writeFile(
       join(dir, '.pipeline', 'acceptance-specs-red.json'),
       JSON.stringify({
+        outcome: 'specs-generated',
         command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
         targetSpecs: ['test/acceptance/feature.acceptance.test.ts'],
         executed: 1,

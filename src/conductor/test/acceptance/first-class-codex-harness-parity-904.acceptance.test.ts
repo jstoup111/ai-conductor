@@ -225,6 +225,7 @@ describe('ST-904-9/ST-904-10 — daemon-selected Codex lifecycle dispatch', () =
     await writeFile(
       join(pipelineDirectory, 'acceptance-specs-red.json'),
       JSON.stringify({
+        outcome: 'specs-generated',
         command,
         targetSpecs: [targetSpec],
         executed: 1,
