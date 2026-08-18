@@ -140,3 +140,18 @@ dispositions (content change ⇒ new identity), while staying inside
 > re-authors as RED/GREEN tasks bound to `content-region` above. Until those replacement
 > tasks exist, no distinct-hunk implementation is authorized: the earlier absence of this
 > ruling is what let a remediation lap invent an unapproved grammar in the first place.
+
+> **Amended 2026-08-18 (operator, resolving stall:changed-test-title):** the authoritative
+> source of tautology `changedTest` title content is the changed test's **full declared
+> title chain** — the concatenated `describe`/`it` (or framework-equivalent) titles as
+> written in the test source at the graded head — extracted at **snapshot time** and
+> carried in the frozen build-review projection as a `changedTestTitles` entry
+> `{ selector, titleText }` alongside the existing `changedTestSelectors`. The
+> content-region reference for `changedTest` is then
+> `{ path: selector, contentHash: sha256(whitespace-normalized titleText), display: titleText }`.
+> Graders never re-derive titles from the working tree; the projection is the only source,
+> preserving snapshot immutability. A changed test whose titles cannot be statically
+> extracted falls back to hashing the selector path and is flagged in the projection so
+> the grader may treat identity as coarse for that entry (fail-open on identity precision,
+> never on execution).
+
