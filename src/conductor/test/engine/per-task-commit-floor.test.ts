@@ -349,7 +349,6 @@ describe('per-task-commit-floor', () => {
 
   it.each([
     ['a test sibling', 'src/engine/config.test.ts'],
-    ['a same-directory neighbor', 'src/engine/neighbor.ts'],
     ['a documentation path', 'docs/containment.md'],
     ['the generated changelog', 'CHANGELOG.md'],
   ])('does not record a redundant Scope trailer for %s in the effective floor', async (_name, path) => {
@@ -363,6 +362,28 @@ describe('per-task-commit-floor', () => {
     const report = await runContainmentFloor({ projectRoot: dir, planPath });
 
     expect(report.acceptedWidenings).toEqual([]);
+  });
+
+  it('admits a same-directory neighbor even when the declared plan file is absent from disk', async () => {
+    // The declared path never exists on disk; the floor's directory grant
+    // must come from the declaration itself, not from disk existence.
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** src/engine/not-on-disk.ts\n');
+    await mkdir(join(dir, 'src/engine'), { recursive: true });
+    await writeFile(join(dir, 'src/engine/neighbor.ts'), 'x');
+    await execa('git', ['add', 'src/engine/neighbor.ts'], { cwd: dir });
+    await execa('git', [
+      'commit',
+      '-m',
+      'neighbor of an absent declaration\n\nTask: 3\nScope: src/engine/neighbor.ts — redundant declaration',
+    ], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({
+      satisfied: true,
+      violations: [],
+      acceptedWidenings: [],
+    });
   });
 
   it('retains a Scope trailer for a genuinely out-of-floor path', async () => {

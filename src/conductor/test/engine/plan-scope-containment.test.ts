@@ -134,13 +134,6 @@ describe('evaluateScopeContainment', () => {
     });
   });
 
-  it('allows a same-directory neighbor of a declared path absent from disk', () => {
-    expect(() => expect(evaluateScopeContainment({
-      stagedPaths: ['src/conductor/src/engine/neighbor.ts'],
-      task: { id: '3', status: 'in_progress', files: ['src/conductor/src/engine/not-on-disk.ts'] },
-    })).toEqual({ allowed: true })).not.toThrow();
-  });
-
   it('allows the exact machinery path but not a longer filename sharing its prefix', () => {
     expect(
       evaluateScopeContainment({
