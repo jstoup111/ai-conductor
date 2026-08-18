@@ -13,9 +13,14 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [0.104.0] - 2026-08-18
 
+### Added
+
+- Task-attributed commits are checked against the active task's declared files at commit time, with violations and accepted scope widenings carried into build_review evidence. ([implementation PR #1534](https://github.com/jstoup111/ai-conductor/pull/1534)).
+
 ### Changed
 
 - Story artifacts under `.docs/stories/` are now corrected in place during DECIDE instead of accumulating additive amendment blocks; all other accepted DECIDE artifacts keep the additive-amendment rule. ([implementation PR #1539](https://github.com/jstoup111/ai-conductor/pull/1539)).
+- Acceptance-spec authoring is disposition-driven — criteria proven at a lower layer complete the acceptance_specs gate with grounded disposition records instead of fabricated specs, and BUILD prefers applicable local patterns. ([implementation PR #1678](https://github.com/jstoup111/ai-conductor/pull/1678)).
 
 ### Fixed
 
