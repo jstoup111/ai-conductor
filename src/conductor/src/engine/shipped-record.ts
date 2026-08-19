@@ -226,6 +226,10 @@ export function appendTimingSection(
     'activeMs' in timing && timing.activeMs !== undefined
       ? `active_ms: ${Math.round(timing.activeMs)}\n`
       : '';
+  const reasonLine =
+    timing.state === 'partial' && timing.reason !== undefined
+      ? `reason: ${timing.reason}\n`
+      : '';
   const measuredLines =
     timing.state === 'measured'
       ? `provider_active_ms: ${Math.round(timing.providerActiveMs)}\n` +
@@ -238,6 +242,7 @@ export function appendTimingSection(
     `## Time\n` +
     `state: ${timing.state}\n` +
     activeLine +
+    reasonLine +
     measuredLines
   );
 }
