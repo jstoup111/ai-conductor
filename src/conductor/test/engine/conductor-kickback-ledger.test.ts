@@ -16,6 +16,10 @@ import { HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent } from '../../src/types/events.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
+import type { RebaseOutcome } from '../../src/engine/rebase.js';
 
 describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
   let dir: string;
@@ -479,6 +483,148 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(
       MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW + 1,
     );
+  });
+
+  describe('Task 5: rebase credit is limited to an actually-invalidated build_review', () => {
+    const buildReviewEntry = (cumulative: number) => ({
+      count: 1,
+      cumulative,
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      lastReason: 'prior review finding',
+      priorVerdict: false,
+      resolvedBefore: 2,
+    });
+
+    async function advanceChangedRebase(
+      outcome: RebaseOutcome,
+      invalidated: readonly StepName[],
+      gates: Record<string, ReturnType<typeof buildReviewEntry>>,
+    ): Promise<void> {
+      const state = Object.fromEntries(
+        ALL_STEPS.map((step) => [step.name, 'done']),
+      ) as ConductState;
+      state.complexity_tier = 'S';
+      await writeState(statePath, state);
+      await writeKickbackLedger(dir, { version: 1, gates });
+
+      for (const target of invalidated) {
+        await writeVerdict(dir, target, {
+          satisfied: false,
+          checkedAt: 1,
+          kickback: {
+            from: 'rebase',
+            evidence: 'file-changing rebase invalidated this gate',
+          },
+        });
+      }
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: { run: async () => ({ success: true }) },
+        events: new ConductorEventEmitter(),
+        verifyArtifacts: true,
+        config: { build_review: { enabled: true } },
+      } as never);
+      (conductor as unknown as { lastRebaseOutcome: RebaseOutcome }).lastRebaseOutcome = outcome;
+
+      await (conductor as unknown as {
+        advanceTail: (
+          step: typeof ALL_STEPS[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+        ) => Promise<number | null | 'halt'>;
+      }).advanceTail(
+        ALL_STEPS.find((step) => step.name === 'rebase')!,
+        state,
+        new Map(),
+        ALL_STEPS,
+        (name) => ALL_STEPS.findIndex((step) => step.name === name),
+      );
+    }
+
+    it('credits build_review before re-opening it after a changed rebase invalidates its judged surface', async () => {
+      await advanceChangedRebase(
+        {
+          kind: 'changed',
+          changedCodePaths: ['src/feature.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+        ['build_review'],
+        { build_review: buildReviewEntry(4) },
+      );
+
+      expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(0);
+    });
+
+    it('does not credit a build_review that classifyGateInvalidation preserves for a surface miss', async () => {
+      await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
+      await advanceChangedRebase(
+        {
+          kind: 'changed',
+          changedCodePaths: ['src/foreign.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+        [],
+        { build_review: buildReviewEntry(4) },
+      );
+
+      expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(4);
+    });
+
+    it('credits only build_review when the same rebase invalidates several gates', async () => {
+      await advanceChangedRebase(
+        {
+          kind: 'changed',
+          changedCodePaths: ['src/feature.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+        ['build_review', 'manual_test', 'prd_audit'],
+        {
+          build_review: buildReviewEntry(4),
+          manual_test: buildReviewEntry(7),
+          prd_audit: buildReviewEntry(9),
+        },
+      );
+
+      const gates = (await readKickbackLedger(dir)).gates;
+      expect({
+        build_review: gates.build_review?.cumulative,
+        manual_test: gates.manual_test?.cumulative,
+        prd_audit: gates.prd_audit?.cumulative,
+      }).toEqual({ build_review: 0, manual_test: 7, prd_audit: 9 });
+    });
+
+    it('does not issue a second credit when the subsequent consumed rebase kickback is recorded', async () => {
+      await advanceChangedRebase(
+        {
+          kind: 'changed',
+          changedCodePaths: ['src/feature.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+        ['build_review'],
+        { build_review: buildReviewEntry(4) },
+      );
+      await bumpKickbackGateInLedger(dir, 'build_review', {
+        treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+        resolvedCount: 3,
+        reason: 'a later build_review failure consumed one new lap',
+      });
+
+      expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(1);
+    });
+
+    it('credits build_review on the fail-closed rebase fallback when its surface is uncomputable', async () => {
+      await advanceChangedRebase(
+        { kind: 'changed', changedCodePaths: ['src/a.ts'] },
+        ['build_review', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
+        { build_review: buildReviewEntry(4) },
+      );
+
+      expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(0);
+    });
   });
 
   it('keeps count\'s existing per-tree budget behavior across a PASS and later consumed kickback', async () => {
