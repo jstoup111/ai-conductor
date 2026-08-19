@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.104.0] - 2026-08-18
+## [0.104.0] - 2026-08-19
 
 ### Added
 
@@ -33,6 +33,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Provider token telemetry now reports fresh input consistently across Claude and Codex, with cached prompt volume shown separately in daemon logs and feature usage totals. ([implementation PR #1689](https://github.com/jstoup111/ai-conductor/pull/1689)).
 - Codex usage-cap exhaustion is now reported as usage exhaustion with an hour-scale wait instead of a misleading 300-second rate-limit retry loop. ([implementation PR #1704](https://github.com/jstoup111/ai-conductor/pull/1704)).
 - build_review finding identities are content-anchored, so re-worded findings can no longer escape their accepted dispositions across review laps. ([implementation PR #1696](https://github.com/jstoup111/ai-conductor/pull/1696)).
+- Self-host containment refuses itself on hosts where the wrap would deny a provider its own nested sandbox, instead of wrapping a dispatch that cannot write any file. ([implementation PR #1719](https://github.com/jstoup111/ai-conductor/pull/1719)).
 
 ## [0.103.0] - 2026-08-17
 
