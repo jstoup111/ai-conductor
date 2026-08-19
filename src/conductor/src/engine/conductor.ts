@@ -3913,6 +3913,7 @@ export class Conductor {
     // Exit codes follow Unix convention: 128 + signal number
     const signalHandlerBase = async (signal: NodeJS.Signals) => {
       signalExitRequested = true;
+      await this.closeOpenExecutions();
       await this.persistSignalCompletionsBestEffort(state, signal, inFlightGroupCompletions);
       const exitCodes: Record<string, number> = {
         SIGINT: 130,   // 128 + 2
@@ -3944,6 +3945,7 @@ export class Conductor {
       if (currentWaitController) {
         currentWaitController.abort();
       }
+      await this.closeOpenExecutions();
       await this.persistSignalCompletionsBestEffort(state, 'SIGTERM', inFlightGroupCompletions);
       process.exit(1);
     };
