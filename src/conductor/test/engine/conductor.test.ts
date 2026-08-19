@@ -1753,6 +1753,53 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('suppresses a late normal terminal after daemon SIGTERM closed the execution', async () => {
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+    const timestamps = [1_000, 1_025];
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events, {
+      nowMs: () => timestamps.shift()!,
+    });
+    persister.start();
+
+    try {
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+      await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });
+      await conductor.closeOpenExecutionsForShutdown();
+
+      // The daemon drains instead of cancelling an already-running step, so
+      // its runner can resolve after SIGTERM has emitted the shutdown terminal.
+      await executionEvents.emitExecutionEvent({ type: 'step_completed', step: 'build', status: 'done' });
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const terminals = records.filter((record) =>
+        record.type === 'step_completed' || record.type === 'step_failed',
+      );
+      expect(terminals).toEqual([
+        expect.objectContaining({
+          type: 'step_failed',
+          step: 'build',
+          activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+        }),
+      ]);
+      await expect(computeTimingRollup(dir)).resolves.toMatchObject({
+        state: 'measured',
+        activeMs: 25,
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
   it('closes an open execution when a deferred live-boundary halt is consumed', async () => {
     const conductor = new Conductor({
       projectRoot: dir,
