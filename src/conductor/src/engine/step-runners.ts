@@ -1828,13 +1828,6 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `build_review refused: ${coordination.reason}` };
     }
 
-    const writeFailure = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
-      branch.kind === 'infrastructure-failure' && /(?:artifact|cache)-write-failed/.test(branch.reason),
-    );
-    if (writeFailure) {
-      return { success: false, output: `build_review evidence write failed for ${writeFailure.rubric}: ${writeFailure.reason}` };
-    }
-
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
         const artifact = await this.buildReviewArtifactReader(

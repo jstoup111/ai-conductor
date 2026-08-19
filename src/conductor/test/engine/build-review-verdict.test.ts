@@ -13,7 +13,11 @@ import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-agg
 import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
-import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import {
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  readKickbackLedger,
+  writeKickbackLedger,
+} from '../../src/engine/kickback-ledger.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import type { BuildReviewFrozenInputs } from '../../src/engine/build-review-inputs.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
@@ -359,4 +363,83 @@ describe('engine/build-review verdict wiring contract', () => {
     await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(1);
   });
+
+  it.each(['artifact-write-failed', 'cache-write-failed'] as const)(
+    'consumes the mechanical allowance when the coordinator reports %s',
+    async (reason) => {
+      const dir = await mkdtemp(join(tmpdir(), `build-review-${reason}-`));
+      dirs.push(dir);
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 0, cumulative: 0, mechanicalFaults: 0, treeHash: null,
+            lastReason: '', priorVerdict: true, resolvedBefore: 0,
+          },
+        },
+      });
+      vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+        kind: 'ready',
+        branches: [
+          { kind: 'infrastructure-failure', rubric: 'scope', reason, detail: 'disk became unavailable' },
+          ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+        ],
+      });
+      const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+      const runner = new DefaultStepRunner(provider, 'mechanical-write-failure', dir, {
+        pipelineDir: join(dir, '.pipeline'),
+      });
+      const inputs = {
+        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },
+      } as BuildReviewFrozenInputs;
+
+      const result = await (runner as unknown as {
+        runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; output: string }>;
+      }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+      expect(result).toMatchObject({ success: false, output: expect.stringContaining(reason) });
+      expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(1);
+      await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
+
+  it.each(['artifact-write-failed', 'cache-write-failed'] as const)(
+    'publishes the terminal aggregate after %s exhausts the mechanical allowance',
+    async (reason) => {
+      const dir = await mkdtemp(join(tmpdir(), `build-review-exhausted-${reason}-`));
+      dirs.push(dir);
+      await writeKickbackLedger(dir, {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 0, cumulative: 0, mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW - 1, treeHash: null,
+            lastReason: '', priorVerdict: true, resolvedBefore: 0,
+          },
+        },
+      });
+      vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+        kind: 'ready',
+        branches: [
+          { kind: 'infrastructure-failure', rubric: 'scope', reason, detail: 'disk became unavailable' },
+          ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+        ],
+      });
+      const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+      const runner = new DefaultStepRunner(provider, 'mechanical-write-failure', dir, {
+        pipelineDir: join(dir, '.pipeline'),
+      });
+      const inputs = {
+        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },
+      } as BuildReviewFrozenInputs;
+
+      await (runner as unknown as {
+        runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; output: string }>;
+      }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+      expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(MAX_MECHANICAL_FAULTS_BUILD_REVIEW);
+      expect(JSON.parse(await readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8'))).toMatchObject({
+        results: { scope: { kind: 'infrastructure-failure', reason: 'artifact-write-failed' } },
+      });
+    },
+  );
 });
