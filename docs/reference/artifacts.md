@@ -587,10 +587,14 @@ never blocks either section. `state` is one of `measured`, `partial`, or `unavai
 carries `active_ms` (the union of all active step/group execution intervals), `provider_active_ms` (the
 portion of active time actually spent inside a provider process), and `no_provider_active_ms`
 (`active_ms - provider_active_ms`, engine/code time). `partial` carries `active_ms` only when active
-time itself was trustworthy but provider or completeness evidence was not; `unavailable` carries no
-fields. Timing is derived from `.pipeline/events.jsonl` at ship time and is never a fabricated zero —
-missing or incomplete evidence downgrades the state instead. Records written before this section
-existed simply have no `## Time` block, and `conduct-ts kpi` reports those as `time=unavailable`.
+time itself was trustworthy but provider or completeness evidence was not. When the rollup identifies
+the downgrade route, `partial` also carries `reason`: `empty-active-union`,
+`active-evidence-incomplete`, `open-executions:<ids>`, `provider-outside-active-union`, or
+`provider-evidence-incomplete`; records shipped before the reason field existed simply omit that
+line. `unavailable` carries no fields. Timing is derived from `.pipeline/events.jsonl` at ship time
+and is never a fabricated zero — missing or incomplete evidence downgrades the state instead. Records
+written before this section existed simply have no `## Time` block, and `conduct-ts kpi` reports those
+as `time=unavailable`.
 
 `conduct-ts shipped-record --slug <plan-stem> --pr <pr-url-or-local>` writes it; both flags are
 required and re-running with identical content is a no-op. Its exit code cannot be used to detect
@@ -792,8 +796,9 @@ parsed with its input, output, cache, cost, dispatch, and `cost_unmetered` field
 
 **Parsed timing fields** (`KpiTimeFields`, mirrors `TimingRollup`): `state` (`measured`, `partial`, or
 `unavailable`), plus `activeMs`, `providerActiveMs`, and `noProviderActiveMs` when present. Parsing is
-independent of Cost — a missing, malformed, or absent `## Time` block never affects Cost output and is
-reported as `state: unavailable`.
+independent of Cost. A `partial` block also parses its optional `reason` downgrade route; records
+shipped before the reason field existed simply omit it. A missing, malformed, or absent `## Time`
+block never affects Cost output and is reported as `state: unavailable`.
 
 **Output:** a plain-text report on stdout. No file, no JSON. Per feature it prints `input`, `output`,
 `tokens` (their sum), cache fields, dispatch fields, `duration_ms`, and `cost_usd`, suffixed
@@ -810,8 +815,9 @@ aggregate cost is `unavailable`. An empty or missing directory prints `No shippe
 
 Each feature row also appends a `time=` suffix: `time=measured active_ms=<n> provider_active_ms=<n>
 no_provider_active_ms=<n>` when measured, `time=partial` (with `active_ms=<n>` when active time alone
-was trustworthy), or `time=unavailable`. The aggregate line adds `timing measured=<n> partial=<n>
-unavailable=<n>` counts, plus `avg_active_ms`, `avg_provider_active_ms`, and
+was trustworthy and `reason=<route>` when the downgrade route is known), or `time=unavailable`.
+The aggregate line adds `timing measured=<n> partial=<n> unavailable=<n>` counts, plus
+`avg_active_ms`, `avg_provider_active_ms`, and
 `avg_no_provider_active_ms` averaged only over `measured` features — partial and unavailable rows
 never contribute to or fabricate an average.
 
