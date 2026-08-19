@@ -12,6 +12,7 @@ import { rename } from 'node:fs/promises';
 import {
   bumpKickbackGate,
   bumpKickbackGateInLedger,
+  creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
   resetKickbackGateCumulativeInLedger,
@@ -259,6 +260,85 @@ describe('kickback-ledger', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  describe('creditKickbackGateLaps', () => {
+    it('credits an entry carrying only the cumulative lap count', () => {
+      const entry: KickbackGateEntry = {
+        count: 2,
+        cumulative: 4,
+        treeHash: '0123456789abcdef0123456789abcdef01234567',
+        lastReason: 'repeated semantic failure',
+        priorVerdict: false,
+        resolvedBefore: 7,
+      };
+
+      expect(creditKickbackGateLaps(entry)).toEqual({ ...entry, cumulative: 0 });
+    });
+
+    it('credits the cumulative count and a per-rubric tally together', () => {
+      const entry = {
+        count: 2,
+        cumulative: 4,
+        rubricFailures: { tautology: 3, completeness: 1 },
+        treeHash: '0123456789abcdef0123456789abcdef01234567',
+        lastReason: 'repeated semantic failure',
+        priorVerdict: false,
+        resolvedBefore: 7,
+      } satisfies KickbackGateEntry & { rubricFailures: Record<string, number> };
+
+      expect(creditKickbackGateLaps(entry)).toEqual({
+        ...entry,
+        cumulative: 0,
+        rubricFailures: {},
+      });
+    });
+
+    it('credits an additional future lap-counting field', () => {
+      const entry = {
+        count: 2,
+        cumulative: 4,
+        mechanicalFaultAllowance: 3,
+        treeHash: '0123456789abcdef0123456789abcdef01234567',
+        lastReason: 'repeated semantic failure',
+        priorVerdict: false,
+        resolvedBefore: 7,
+      } satisfies KickbackGateEntry & { mechanicalFaultAllowance: number };
+
+      expect(creditKickbackGateLaps(entry)).toEqual({
+        ...entry,
+        cumulative: 0,
+        mechanicalFaultAllowance: 0,
+      });
+    });
+
+    it('preserves the per-tree budget and non-lap state', () => {
+      const entry = {
+        count: 2,
+        cumulative: 4,
+        rubricFailures: { tautology: 3 },
+        treeHash: '0123456789abcdef0123456789abcdef01234567',
+        lastReason: 'repeated semantic failure',
+        priorVerdict: false,
+        resolvedBefore: 7,
+      } satisfies KickbackGateEntry & { rubricFailures: Record<string, number> };
+
+      const credited = creditKickbackGateLaps(entry);
+
+      expect({
+        count: credited.count,
+        treeHash: credited.treeHash,
+        lastReason: credited.lastReason,
+        priorVerdict: credited.priorVerdict,
+        resolvedBefore: credited.resolvedBefore,
+      }).toEqual({
+        count: entry.count,
+        treeHash: entry.treeHash,
+        lastReason: entry.lastReason,
+        priorVerdict: entry.priorVerdict,
+        resolvedBefore: entry.resolvedBefore,
+      });
+    });
   });
 
   describe('bumpKickbackGate', () => {
