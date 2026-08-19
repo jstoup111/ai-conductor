@@ -1316,6 +1316,26 @@ export class Conductor {
       }
     }
   }
+
+  /**
+   * Terminal serial-window exit: close the conductor-owned execution ledger
+   * before making the HALT durable or announcing the halted loop.
+   */
+  private async haltSerialExecution(input: {
+    reason: string;
+    haltClass: Parameters<typeof writeHaltMarker>[2];
+    persistState?: () => Promise<void>;
+    surfaceRemediation?: boolean;
+    loopHaltReason?: string;
+  }): Promise<void> {
+    await this.closeOpenExecutions();
+    await this.writeHaltMarker(input.reason + '\n', input.haltClass);
+    await input.persistState?.();
+    const prUrl = input.surfaceRemediation
+      ? await this.surfaceRemediationPr(input.reason)
+      : undefined;
+    await this.emitLoopHalt(input.loopHaltReason ?? input.reason, prUrl);
+  }
   private featureSlug?: string;
   private operatorParkBoundary?: () => Promise<boolean>;
   private resume: boolean;
@@ -6438,10 +6458,12 @@ export class Conductor {
               '.\n' +
               'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
               (detail ? `\nProvider detail: ${detail}` : '');
-            await this.writeHaltMarker(haltReason + '\n', 'needs-human');
-            await this.persistPendingStateChanges(state, 'persist conductor transition');
-            const prUrl = await this.surfaceRemediationPr(haltReason);
-            await this.emitLoopHalt(haltReason, prUrl);
+            await this.haltSerialExecution({
+              reason: haltReason,
+              haltClass: 'needs-human',
+              persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+              surfaceRemediation: true,
+            });
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -6469,9 +6491,11 @@ export class Conductor {
                   `${publicationProgressAttempts} transition(s); last transition: ` +
                   `${lastPublicationTransition}. Human review required.`;
                 await this.saveConductorStepStatus(state, 'finish', 'failed');
-                await this.writeHaltMarker(reason + '\n', 'needs-human');
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                await this.emitLoopHalt(reason);
+                await this.haltSerialExecution({
+                  reason,
+                  haltClass: 'needs-human',
+                  persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+                });
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -6498,9 +6522,11 @@ export class Conductor {
                   'retry budget was deliberately NOT spent. Resolve the cited condition, then clear ' +
                   'this HALT to let FINISH resume.';
                 await this.saveConductorStepStatus(state, 'finish', 'failed');
-                await this.writeHaltMarker(reason + '\n', 'needs-human');
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                await this.emitLoopHalt(reason);
+                await this.haltSerialExecution({
+                  reason,
+                  haltClass: 'needs-human',
+                  persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+                });
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
                 return;
@@ -6518,9 +6544,11 @@ export class Conductor {
               }
               const reason = `FINISH publication retry exhausted: ${route.reason}`;
               await this.saveConductorStepStatus(state, 'finish', 'failed');
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
-              await this.persistPendingStateChanges(state, 'persist conductor transition');
-              await this.emitLoopHalt(reason);
+              await this.haltSerialExecution({
+                reason,
+                haltClass: 'needs-human',
+                persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+              });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6562,9 +6590,11 @@ export class Conductor {
                 `FINISH implementation evidence remains invalid after ${kickback.entry.count} ` +
                 `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${route.evidence}`;
               await this.saveConductorStepStatus(state, 'finish', 'failed');
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
-              await this.persistPendingStateChanges(state, 'persist conductor transition');
-              await this.emitLoopHalt(reason);
+              await this.haltSerialExecution({
+                reason,
+                haltClass: 'needs-human',
+                persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+              });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6572,9 +6602,11 @@ export class Conductor {
             if (route.kind === 'halt') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'human_required' });
               await this.saveConductorStepStatus(state, 'finish', 'failed');
-              await this.writeHaltMarker(route.reason + '\n', 'needs-human');
-              await this.persistPendingStateChanges(state, 'persist conductor transition');
-              await this.emitLoopHalt(route.reason);
+              await this.haltSerialExecution({
+                reason: route.reason,
+                haltClass: 'needs-human',
+                persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+              });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -6976,10 +7008,12 @@ export class Conductor {
                     await freshEvidence.write();
                   }
                   const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
                   state[step.name] = 'failed';
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  await this.emitLoopHalt(reason);
+                  await this.haltSerialExecution({
+                    reason,
+                    haltClass: 'needs-human',
+                    persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+                  });
                   process.off('SIGINT', sigintHandler);
                   return;
                 }
@@ -7059,10 +7093,12 @@ export class Conductor {
                     const reason =
                       `auto-parked: empty/missing plan` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
-                    await this.writeHaltMarker(reason + '\n', 'needs-human');
                     state[step.name] = 'failed';
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    await this.emitLoopHalt(reason);
+                    await this.haltSerialExecution({
+                      reason,
+                      haltClass: 'needs-human',
+                      persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+                    });
                     process.off('SIGINT', sigintHandler);
                     return;
                   }
@@ -7132,10 +7168,13 @@ export class Conductor {
                       const haltContent =
                         effectiveQuestion +
                         '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
-                      await this.writeHaltMarker(haltContent + '\n', 'mechanical');
-                      await this.persistPendingStateChanges(state, 'persist conductor transition');
-                      const prUrl = await this.surfaceRemediationPr(haltContent);
-                      await this.emitLoopHalt(effectiveQuestion, prUrl);
+                      await this.haltSerialExecution({
+                        reason: haltContent,
+                        haltClass: 'mechanical',
+                        persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+                        surfaceRemediation: true,
+                        loopHaltReason: effectiveQuestion,
+                      });
                       process.off('SIGINT', sigintHandler);
                       process.off('SIGTERM', sigterm);
                       return;
