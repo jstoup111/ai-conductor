@@ -468,6 +468,15 @@ describe('build-review domain', () => {
       'artifact-write-failed': 'artifact-write-failed',
     });
   });
+
+  it('surfaces an unmapped coordinator reason as a contract defect without reading diagnostic detail', () => {
+    const branch = {
+      reason: 'unmapped-coordinator-reason',
+      get detail(): never { throw new Error('detail must not contribute to the closed cause'); },
+    };
+
+    expect(() => buildReviewDomain.deriveBuildReviewInfrastructureFailureReason(branch)).toThrow(/contract defect/i);
+  });
 });
 
 describe('build-review judged-result contract rendering and rejection diagnosis', () => {

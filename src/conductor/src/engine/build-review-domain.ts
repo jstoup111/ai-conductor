@@ -72,6 +72,19 @@ export const mapBuildReviewCoordinatorFailureReason: Readonly<Record<
   'missing-settlement': 'missing-artifact',
 });
 
+/**
+ * Derive a persisted infrastructure cause from the coordinator's closed
+ * reason. Diagnostics deliberately do not participate in this identity.
+ */
+export function deriveBuildReviewInfrastructureFailureReason(
+  branch: { readonly reason: string },
+): BuildReviewInfrastructureFailureReason {
+  if (Object.hasOwn(mapBuildReviewCoordinatorFailureReason, branch.reason)) {
+    return mapBuildReviewCoordinatorFailureReason[branch.reason as BuildReviewCoordinatorFailureReason];
+  }
+  throw new Error(`Build review coordinator contract defect: unmapped failure reason ${branch.reason}`);
+}
+
 export type BuildReviewFindingAnchor =
   | { rubric: 'tautology'; changedTest: string | BuildReviewContentRegionReference; exercisedBehavior: string; violationKind: string }
   | { rubric: 'scope'; path: string; relation: string }
