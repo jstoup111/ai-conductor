@@ -62,9 +62,11 @@ import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
+  mapBuildReviewCoordinatorFailureReason,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   renderBuildReviewJudgedResultShape,
+  type BuildReviewCoordinatorFailureReason,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
@@ -1872,7 +1874,9 @@ export class DefaultStepRunner implements StepRunner {
         : {
             kind: 'infrastructure-failure' as const,
             rubric: branch.rubric,
-            reason: 'provider-error' as const,
+            reason: mapBuildReviewCoordinatorFailureReason[
+              branch.reason as BuildReviewCoordinatorFailureReason
+            ],
             detail: branch.detail === undefined ? branch.reason : `${branch.reason}: ${branch.detail}`,
           }];
     }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;

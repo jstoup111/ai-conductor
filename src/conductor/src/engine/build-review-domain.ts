@@ -25,7 +25,52 @@ export type BuildReviewInfrastructureFailureReason =
   | 'stale-artifact'
   | 'identity-mismatch'
   | 'preflight-failed'
-  | 'artifact-read-failed';
+  | 'artifact-read-failed'
+  | 'artifact-write-failed';
+
+/** Every infrastructure-reason token emitted by the build-review coordinator. */
+export type BuildReviewCoordinatorFailureReason =
+  | 'no-changed-tests'
+  | 'no-production-changes'
+  | 'missing-scoped-configuration'
+  | 'materialization-failed'
+  | 'missing-merge-base-file'
+  | 'scoped-run-failed'
+  | 'scoped-run-launch-failed'
+  | 'scoped-run-timeout'
+  | 'scoped-run-signaled'
+  | 'aborted'
+  | 'cleanup-failed'
+  | 'cache-read-failed'
+  | 'cache-write-failed'
+  | 'artifact-write-failed'
+  | 'invalid-provider-result'
+  | 'provider-error'
+  | 'missing-settlement';
+
+/** Closed translation from coordinator diagnostics to persisted infrastructure identity. */
+export const mapBuildReviewCoordinatorFailureReason: Readonly<Record<
+  BuildReviewCoordinatorFailureReason,
+  BuildReviewInfrastructureFailureReason
+>> = Object.freeze({
+  'no-changed-tests': 'preflight-failed',
+  'no-production-changes': 'preflight-failed',
+  'missing-scoped-configuration': 'preflight-failed',
+  'materialization-failed': 'preflight-failed',
+  'missing-merge-base-file': 'preflight-failed',
+  'scoped-run-failed': 'preflight-failed',
+  'scoped-run-launch-failed': 'preflight-failed',
+  'scoped-run-timeout': 'preflight-failed',
+  'scoped-run-signaled': 'preflight-failed',
+  aborted: 'preflight-failed',
+  'cleanup-failed': 'preflight-failed',
+  'cache-read-failed': 'artifact-read-failed',
+  'cache-write-failed': 'artifact-write-failed',
+  'artifact-write-failed': 'artifact-write-failed',
+  'invalid-provider-result': 'malformed-artifact',
+  'provider-error': 'provider-error',
+  'missing-settlement': 'missing-artifact',
+});
 
 export type BuildReviewFindingAnchor =
   | { rubric: 'tautology'; changedTest: string | BuildReviewContentRegionReference; exercisedBehavior: string; violationKind: string }
@@ -179,7 +224,7 @@ export type BuildReviewRubricResult =
 
 const RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness']);
 const INFRASTRUCTURE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
-  'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed',
+  'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed',
 ]);
 const LAP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 

@@ -461,6 +461,13 @@ describe('build-review domain', () => {
       kind: 'infrastructure-failure', rubric: 'tautology', reason: 'ignored', detail: 'provider unavailable',
     })).toBeUndefined();
   });
+
+  it('maps coordinator failure reasons into the closed infrastructure failure vocabulary', () => {
+    expect(buildReviewDomain.mapBuildReviewCoordinatorFailureReason).toMatchObject({
+      'missing-merge-base-file': 'preflight-failed',
+      'artifact-write-failed': 'artifact-write-failed',
+    });
+  });
 });
 
 describe('build-review judged-result contract rendering and rejection diagnosis', () => {
