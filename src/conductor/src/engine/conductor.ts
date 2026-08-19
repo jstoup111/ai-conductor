@@ -1266,7 +1266,6 @@ export class Conductor {
     body: string,
     haltClass: Parameters<typeof writeHaltMarker>[2],
   ) {
-    await this.closeOpenExecutions();
     return writeHaltMarker(this.projectRoot, body, haltClass, this.events);
   }
 
@@ -5104,6 +5103,7 @@ export class Conductor {
               const mechanical = exhausted.member.name === 'test_suite' &&
                 fullSuiteFailure?.status === 'FAILED';
               if (mechanical) state.test_suite = 'failed';
+              await this.closeOpenExecutions();
               await this.writeHaltMarker(
                 reason + '\n',
                 mechanical ? 'mechanical' : 'needs-human',
@@ -6351,6 +6351,7 @@ export class Conductor {
                 `Codex cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
                 'Refresh the Codex login, then re-queue this feature.';
               await stampNoVerdict();
+              await this.closeOpenExecutions();
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
@@ -6363,6 +6364,7 @@ export class Conductor {
             if (park.disposition === 'halt') {
               // Task 14: Auth-park timeout → credentials-specific HALT.
               await stampNoVerdict();
+              await this.closeOpenExecutions();
               await this.writeHaltMarker(park.haltReason + '\n', 'needs-human');
               // Durable signals (HALT marker + state) are written BEFORE escalation
               // so the daemon can classify the outcome even if escalation throws (C1).
@@ -6396,6 +6398,7 @@ export class Conductor {
             const haltReason =
               `Cannot dispatch '${step.name}': ${command} is not available in the provider skill catalog.\n` +
               'Re-provision the provider home with the required skill, then re-queue this feature.';
+            await this.closeOpenExecutions();
             await this.writeHaltMarker(haltReason + '\n', 'mechanical');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
             await this.emitLoopHalt(haltReason);

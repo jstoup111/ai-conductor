@@ -431,6 +431,65 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('keeps a retryable halt marker from closing an execution before its real terminal', async () => {
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events, {
+      nowMs: (() => {
+        const timestamps = [1_000, 1_025];
+        return () => timestamps.shift()!;
+      })(),
+    });
+    persister.start();
+
+    try {
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+        writeHaltMarker(body: string, haltClass: 'protected-artifact'): Promise<void>;
+      };
+      await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });
+      await executionEvents.writeHaltMarker('protected artifact changed\n', 'protected-artifact');
+      await executionEvents.emitExecutionEvent({
+        type: 'step_failed',
+        step: 'build',
+        error: 'protected artifact changed',
+        retryCount: 2,
+      });
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const starts = records.filter((record) => record.type === 'step_started');
+      const terminals = records.filter(
+        (record) => record.type === 'step_completed' || record.type === 'step_failed',
+      );
+
+      expect({
+        starts: starts.length,
+        terminals: terminals.length,
+        interval: terminals[0]?.activeInterval,
+        timing: await computeTimingRollup(dir),
+      }).toEqual({
+        starts: 1,
+        terminals: 1,
+        interval: { startedAtMs: 1_000, durationMs: 25 },
+        timing: {
+          state: 'measured',
+          activeMs: 25,
+          providerActiveMs: 0,
+          noProviderActiveMs: 25,
+        },
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
   it('stamps valid state and breadcrumb steps while omitting the invalid silent-exit fallback', async () => {
     const halts: Array<Extract<ConductorEvent, { type: 'loop_halt' }>> = [];
     events.on('loop_halt', (event) => {
