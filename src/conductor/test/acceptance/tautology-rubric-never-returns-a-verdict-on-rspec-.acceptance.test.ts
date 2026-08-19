@@ -51,6 +51,7 @@ interface Fixture {
 
 interface TautologyProjection {
   rubric: 'tautology';
+  contractVersion: string;
   lapId: string;
   snapshotDigest: string;
   preflightEvidence: {
