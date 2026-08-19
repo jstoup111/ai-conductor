@@ -343,7 +343,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     expect(kickbacks[0]).toMatchObject({ count: 1, cumulativeCount: 3 });
   });
 
-  it('clears build_review cumulative failures only after a PASS', async () => {
+  it('retains build_review cumulative failures after a PASS while a FAIL consumes another lap', async () => {
     const initialEntry = {
       count: 2,
       cumulative: 4,
@@ -398,7 +398,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const failEntry = await runVerdict('FAIL');
 
     expect([passEntry, failEntry]).toEqual([
-      { ...initialEntry, cumulative: 0 },
+      initialEntry,
       expect.objectContaining({ cumulative: initialEntry.cumulative + 1 }),
     ]);
   });
