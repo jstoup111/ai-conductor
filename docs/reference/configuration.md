@@ -972,7 +972,10 @@ every lap can re-earn a full budget indefinitely. The cumulative counter is incr
 progress branch and is therefore tree-movement-proof: after
 `MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW` laps (`kickback-ledger.ts:35`), `build_review` terminates in
 an operator-visible `needs-human` halt naming the cumulative count instead of looping. A passing
-`build_review` resets the counter.
+`build_review` does not reset the counter. A rebase credits the convergence laps back only when it
+actually invalidates `build_review`, and does so once for that invalidation; a rebase that preserves
+the gate leaves the accumulated count intact. See
+`adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence.md`.
 
 Consumed at `src/conductor/src/engine/conductor.ts:3703` (`?? true`). Setting `enabled: false`
 disables only the terminal halt; the counter is still maintained and still reported on the
