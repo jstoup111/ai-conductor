@@ -14,6 +14,7 @@ import {
   makeIsProcessed,
   appendTimingSection,
 } from '../../src/engine/shipped-record.js';
+import { parseCostBlock } from '../../src/engine/kpi-report.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
@@ -388,6 +389,23 @@ describe('appendTimingSection', () => {
     expect(rendered.endsWith(
       '\n## Time\nstate: partial\nactive_ms: 100\nreason: open-executions:parallel:manual_test,step:build_review\n',
     )).toBe(true);
+  });
+
+  it('keeps every field recognized by earlier readers when adding a partial reason', () => {
+    const before = renderShippedRecordWithCost(fields, rollup);
+    const after = appendTimingSection(before, {
+      state: 'partial',
+      activeMs: 100,
+      reason: 'provider-evidence-incomplete',
+    });
+
+    expect({
+      shippedRecord: parseShippedRecord(after),
+      cost: parseCostBlock(after),
+    }).toEqual({
+      shippedRecord: parseShippedRecord(before),
+      cost: parseCostBlock(before),
+    });
   });
 
   it('leaves frontmatter and Cost/provider-duration content byte-stable', () => {
