@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parseCostBlock, renderKpi } from '../../src/engine/kpi-report.js';
+import { parseCostBlock, parseTimeBlock, renderKpi } from '../../src/engine/kpi-report.js';
 
 let root: string;
 
@@ -103,6 +103,22 @@ describe('parseCostBlock', () => {
     ].join('\n'));
 
     expect(Object.hasOwn(parsed?.providers ?? {}, '__proto__')).toBe(true);
+  });
+});
+
+describe('parseTimeBlock', () => {
+  it('returns the reason carried by a partial Time block', () => {
+    expect(parseTimeBlock([
+      '## Time',
+      'state: partial',
+      'active_ms: 80',
+      'reason: provider-evidence-incomplete',
+      '',
+    ].join('\n'))).toEqual({
+      state: 'partial',
+      activeMs: 80,
+      reason: 'provider-evidence-incomplete',
+    });
   });
 });
 
