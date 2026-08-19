@@ -35,6 +35,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review finding identities are content-anchored, so re-worded findings can no longer escape their accepted dispositions across review laps. ([implementation PR #1696](https://github.com/jstoup111/ai-conductor/pull/1696)).
 - Self-host containment refuses itself on hosts where the wrap would deny a provider its own nested sandbox, instead of wrapping a dispatch that cannot write any file. ([implementation PR #1719](https://github.com/jstoup111/ai-conductor/pull/1719)).
 - A concurrent provider process's plugin lock markers no longer halt a self-host build. ([implementation PR #1722](https://github.com/jstoup111/ai-conductor/pull/1722)).
+- Shipped-record timing now reaches the `measured` state instead of getting stuck at `partial`/`unavailable`, and a `partial` state's `## Time` block now names its downgrade reason. ([implementation PR #1727](https://github.com/jstoup111/ai-conductor/pull/1727)).
 
 ## [0.103.0] - 2026-08-17
 
