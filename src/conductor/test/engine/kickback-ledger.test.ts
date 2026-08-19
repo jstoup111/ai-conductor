@@ -254,7 +254,7 @@ describe('kickback-ledger', () => {
       });
     });
 
-    it('preserves the per-tree budget and non-lap state', () => {
+    it('leaves the per-tree count untouched while preserving non-lap state', () => {
       const entry = {
         count: 2,
         cumulative: 4,
@@ -267,6 +267,7 @@ describe('kickback-ledger', () => {
 
       const credited = creditKickbackGateLaps(entry);
 
+      expect(credited.count).toBe(entry.count);
       expect({
         count: credited.count,
         treeHash: credited.treeHash,

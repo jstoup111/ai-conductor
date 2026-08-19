@@ -408,24 +408,39 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     ]);
   });
 
-  it('retains a nonzero cumulative count after build_review PASS completes', async () => {
+  it('leaves every lap-counting entry field intact after build_review PASS completes', async () => {
+    const initialEntry = {
+      count: 2,
+      cumulative: 4,
+      rubricFailures: { tautology: 3, completeness: 1 },
+      mechanicalFaultAllowance: 2,
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      lastReason: 'repeated semantic failure',
+      priorVerdict: true,
+      resolvedBefore: 1,
+    };
+    const lapCounts = Object.fromEntries(
+      Object.entries(initialEntry).filter(([field, value]) => (
+        field !== 'count' &&
+        field !== 'resolvedBefore' &&
+        (typeof value === 'number' ||
+          (typeof value === 'object' && value !== null && Object.values(value).every((item) => typeof item === 'number')))
+      )),
+    );
+
     await writeKickbackLedger(dir, {
       version: 1,
       gates: {
-        build_review: {
-          count: 2,
-          cumulative: 4,
-          treeHash: '0123456789abcdef0123456789abcdef01234567',
-          lastReason: 'repeated semantic failure',
-          priorVerdict: true,
-          resolvedBefore: 1,
-        },
+        build_review: initialEntry,
       },
     });
 
     await settleBuildReview('PASS');
 
-    expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(4);
+    const afterPass = (await readKickbackLedger(dir)).gates.build_review ?? {};
+    expect(Object.fromEntries(
+      Object.entries(afterPass).filter(([field]) => field in lapCounts),
+    )).toEqual(lapCounts);
   });
 
   it('increments a later consumed kickback from the cumulative count retained through PASS', async () => {
