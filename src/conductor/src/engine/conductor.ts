@@ -1270,15 +1270,19 @@ export class Conductor {
 
   /** Emit through the existing spine while retaining the conductor's open execution state. */
   private async emitExecutionEvent(event: ConductorEvent): Promise<void> {
+    // A terminal event closes the execution before listeners run. A signal
+    // handler invoked by one of those listeners must see only executions that
+    // remain open, rather than manufacture a second terminal event.
+    if (event.type === 'step_completed' || event.type === 'step_failed') {
+      this.openExecutions.delete(`step:${event.step}`);
+    } else if (event.type === 'parallel_completed' || event.type === 'parallel_failure') {
+      this.openExecutions.delete(`parallel:${event.step}`);
+    }
     await this.events.emit(event);
     if (event.type === 'step_started') {
       this.openExecutions.set(`step:${event.step}`, { kind: 'step', step: event.step });
     } else if (event.type === 'parallel_started') {
       this.openExecutions.set(`parallel:${event.step}`, { kind: 'parallel', step: event.step });
-    } else if (event.type === 'step_completed' || event.type === 'step_failed') {
-      this.openExecutions.delete(`step:${event.step}`);
-    } else if (event.type === 'parallel_completed' || event.type === 'parallel_failure') {
-      this.openExecutions.delete(`parallel:${event.step}`);
     }
   }
 

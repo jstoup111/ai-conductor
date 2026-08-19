@@ -8326,6 +8326,67 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('does not close an execution twice when SIGINT follows its normal completion', async () => {
+    let sigintHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGINT') sigintHandler = handler as () => void;
+      return process;
+    }) as typeof process.on);
+    let exitHandled: (() => void) | undefined;
+    const exited = new Promise<void>((resolve) => {
+      exitHandled = resolve;
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      exitHandled!();
+      return undefined;
+    }) as never);
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+    persister.start();
+
+    try {
+      const state: ConductState = { complexity_tier: 'M' };
+      for (const step of ALL_STEPS) {
+        if (step.name === 'prd') break;
+        state[step.name] = 'done';
+      }
+      await writeState(statePath, state);
+      events.on('step_completed', (event) => {
+        if (event.type === 'step_completed' && event.step === 'prd') {
+          sigintHandler!();
+        }
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        events,
+        fromStep: 'prd',
+        stepRunner: createMockStepRunner(),
+      });
+      const run = conductor.run();
+      await exited;
+      await run;
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const prdTerminals = records.filter(
+        (record) =>
+          record.step === 'prd' &&
+          (record.type === 'step_completed' || record.type === 'step_failed'),
+      );
+      expect(prdTerminals).toEqual([expect.objectContaining({ type: 'step_completed' })]);
+    } finally {
+      persister.stop();
+      processOnSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it('saves state on SIGTERM before exit', async () => {
     let sigtermHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
