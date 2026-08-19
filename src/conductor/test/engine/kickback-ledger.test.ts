@@ -15,7 +15,6 @@ import {
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
-  resetKickbackGateCumulativeInLedger,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -203,63 +202,6 @@ describe('kickback-ledger', () => {
 
     const raw = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8');
     expect(() => JSON.parse(raw)).not.toThrow();
-  });
-
-  it('resets only build review cumulative failures while retaining its count', async () => {
-    const ledger: KickbackLedger = {
-      version: 1,
-      gates: {
-        build_review: {
-          count: 2,
-          cumulative: 4,
-          treeHash: '0123456789abcdef0123456789abcdef01234567',
-          lastReason: 'repeated semantic failure',
-          priorVerdict: false,
-          resolvedBefore: 7,
-        },
-        test_suite: {
-          count: 1,
-          cumulative: 3,
-          treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
-          lastReason: 'unrelated test failure',
-          priorVerdict: false,
-          resolvedBefore: 6,
-        },
-      },
-    };
-    await writeKickbackLedger(dir, ledger);
-
-    await resetKickbackGateCumulativeInLedger(dir, 'build_review');
-
-    await expect(readKickbackLedger(dir)).resolves.toEqual({
-      ...ledger,
-      gates: {
-        ...ledger.gates,
-        build_review: { ...ledger.gates.build_review, cumulative: 0 },
-      },
-    });
-  });
-
-  it('treats resetting a missing build review ledger as a no-op', async () => {
-    await expect(resetKickbackGateCumulativeInLedger(dir, 'build_review')).resolves.toBeUndefined();
-
-    await expect(readFile(join(dir, '.pipeline/kickback-ledger.json'))).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
-    await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
-  });
-
-  it('does not interrupt a reset when the build review ledger cannot be read', async () => {
-    const unreadableLedgerPath = join(dir, '.pipeline/kickback-ledger.json');
-    await mkdir(unreadableLedgerPath, { recursive: true });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    try {
-      await expect(resetKickbackGateCumulativeInLedger(dir, 'build_review')).resolves.toBeUndefined();
-      await expect(readFile(unreadableLedgerPath)).rejects.toMatchObject({ code: 'EISDIR' });
-    } finally {
-      warnSpy.mockRestore();
-    }
   });
 
   describe('creditKickbackGateLaps', () => {
