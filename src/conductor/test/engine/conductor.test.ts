@@ -8254,6 +8254,78 @@ describe('engine/conductor', () => {
     exitSpy.mockRestore();
   });
 
+  it('closes an open execution in the ledger on graceful SIGINT shutdown', async () => {
+    let sigintHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGINT') sigintHandler = handler as () => void;
+      return process;
+    }) as typeof process.on);
+    let exitHandled: (() => void) | undefined;
+    const exited = new Promise<void>((resolve) => {
+      exitHandled = resolve;
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      exitHandled!();
+      return undefined;
+    }) as never);
+    const timestamps = [1_000, 1_025];
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events, {
+      nowMs: () => timestamps.shift()!,
+    });
+    persister.start();
+
+    try {
+      const state: ConductState = { complexity_tier: 'M' };
+      for (const step of ALL_STEPS) {
+        if (step.name === 'prd') break;
+        state[step.name] = 'done';
+      }
+      await writeState(statePath, state);
+      let stepCount = 0;
+      let releaseRun: (() => void) | undefined;
+      const blockedRun = new Promise<void>((resolve) => {
+        releaseRun = resolve;
+      });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        events,
+        fromStep: 'prd',
+        stepRunner: {
+          run: async () => {
+            if (++stepCount === 1) {
+              sigintHandler!();
+              await blockedRun;
+            }
+            return { success: true };
+          },
+        },
+      });
+
+      const run = conductor.run();
+      await exited;
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(records).toContainEqual(expect.objectContaining({
+        type: 'step_failed',
+        step: 'prd',
+        activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+      }));
+      releaseRun!();
+      await run;
+    } finally {
+      persister.stop();
+      processOnSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it('saves state on SIGTERM before exit', async () => {
     let sigtermHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
