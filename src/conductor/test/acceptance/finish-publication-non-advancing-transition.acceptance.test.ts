@@ -396,8 +396,11 @@ async function finishRetryEventsFor(
   roots.push(root);
   const pipeline = join(root, '.pipeline');
   await mkdir(pipeline, { recursive: true });
+  // Small/technical, matching every other FINISH-only coordinator fixture: a
+  // Medium feature's SHIP validators are legitimately skipped here, and the
+  // publication fence (#1673) reroutes such a run before it reaches FINISH.
   const state: Record<string, unknown> = {
-    complexity_tier: 'M',
+    complexity_tier: 'S',
     feature_desc: 'finish-publication-halt-counter',
     track: 'technical',
   };
