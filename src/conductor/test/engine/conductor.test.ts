@@ -377,6 +377,58 @@ describe('engine/conductor', () => {
     });
   });
 
+  it('closes an open execution before writing the halt marker', async () => {
+    const state: ConductState = { complexity_tier: 'M' };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build') break;
+      state[step.name] = 'done';
+    }
+    await writeState(statePath, state);
+
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+    persister.start();
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: {
+        run: async () => ({
+          success: false,
+          output: 'the build command is unavailable',
+          commandUnresolved: true,
+        }),
+      },
+      events,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 1,
+      verifyArtifacts: false,
+    });
+
+    try {
+      await conductor.run();
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const starts = records.filter((record) => record.type === 'step_started');
+      const terminals = records.filter(
+        (record) => record.type === 'step_completed' || record.type === 'step_failed',
+      );
+      const terminalIndex = records.findIndex((record) => record.type === 'step_failed');
+      const haltIndex = records.findIndex((record) => record.type === 'loop_halt');
+
+      expect({ starts: starts.length, terminals: terminals.length, terminalBeforeHalt: terminalIndex < haltIndex }).toEqual({
+        starts: 1,
+        terminals: 1,
+        terminalBeforeHalt: true,
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
   it('stamps valid state and breadcrumb steps while omitting the invalid silent-exit fallback', async () => {
     const halts: Array<Extract<ConductorEvent, { type: 'loop_halt' }>> = [];
     events.on('loop_halt', (event) => {
