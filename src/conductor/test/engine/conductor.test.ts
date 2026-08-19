@@ -8387,6 +8387,83 @@ describe('engine/conductor', () => {
     }
   });
 
+
+  it('emits no terminal when the interrupt arrives before any execution started', async () => {
+    let sigintHandler: (() => Promise<void>) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGINT') sigintHandler = handler as () => Promise<void>;
+      return process;
+    }) as typeof process.on);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const ledgerPath = join(dir, '.pipeline/events.jsonl');
+    const persister = new EventPersister(ledgerPath, events);
+    persister.start();
+    const readLedger = async (): Promise<string> => {
+      try {
+        return await readFile(ledgerPath, 'utf-8');
+      } catch {
+        return '';
+      }
+    };
+
+    try {
+      const state: ConductState = { complexity_tier: 'M' };
+      for (const step of ALL_STEPS) {
+        if (step.name === 'memory') break;
+        state[step.name] = 'done';
+      }
+      await writeState(statePath, state);
+
+      let beforeInterrupt: string | undefined;
+      let afterInterrupt: string | undefined;
+      const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: { run },
+        events,
+        fromStep: 'memory',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: false,
+        featureSlug: 'orphan-terminal-guard',
+        // The park boundary runs before the first unit is dispatched, so the
+        // conductor holds no open execution when the signal arrives here.
+        operatorParkBoundary: async () => {
+          beforeInterrupt = await readLedger();
+          await sigintHandler!();
+          afterInterrupt = await readLedger();
+          return true;
+        },
+      });
+
+      await conductor.run();
+
+      // closeOpenExecutions() must be a no-op on an empty open set: an
+      // interrupt before any start may not manufacture a terminal for a step
+      // that never ran, and the ledger must gain no record at all.
+      expect({
+        interruptObserved: sigintHandler !== undefined,
+        ledgerGrew: afterInterrupt !== beforeInterrupt,
+        orphanTerminals: (afterInterrupt ?? '')
+          .split('\n')
+          .filter((line) => line.includes('execution interrupted before a terminal event')),
+        runnerCalls: run.mock.calls,
+      }).toEqual({
+        interruptObserved: true,
+        ledgerGrew: false,
+        orphanTerminals: [],
+        runnerCalls: [],
+      });
+    } finally {
+      persister.stop();
+      processOnSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
   it('saves state on SIGTERM before exit', async () => {
     let sigtermHandler: (() => void) | undefined;
     const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
