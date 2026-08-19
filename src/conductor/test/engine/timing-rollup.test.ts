@@ -139,6 +139,18 @@ describe('intersectIntervalUnions', () => {
 });
 
 describe('computeTimingRollup', () => {
+  it('names the empty active union route when active evidence is incomplete', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'step_completed', step: 'plan' },
+    ]);
+    await writeFile(join(directory, '.pipeline', 'pipeline-events.jsonl'), '', 'utf8');
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      reason: 'empty-active-union',
+    });
+  });
+
   it('consumes provider intervals from the merged feature-event stream', async () => {
     const directory = await writeFeatureEvents([
       { type: 'step_completed', step: 'build', activeInterval: { startedAtMs: 0, durationMs: 100 } },
@@ -287,7 +299,7 @@ describe('computeTimingRollup', () => {
     {
       name: 'an unmatched step start',
       events: [{ type: 'step_started', step: 'plan' }],
-      expected: { state: 'partial' },
+      expected: { state: 'partial', reason: 'empty-active-union' },
     },
     {
       name: 'an unmatched parallel failure',
@@ -299,7 +311,7 @@ describe('computeTimingRollup', () => {
           error: 'manual test failed',
         },
       ],
-      expected: { state: 'partial' },
+      expected: { state: 'partial', reason: 'empty-active-union' },
     },
     {
       name: 'a parallel lifecycle whose terminal is missing active evidence',
@@ -316,7 +328,7 @@ describe('computeTimingRollup', () => {
           error: 'manual test failed',
         },
       ],
-      expected: { state: 'partial' },
+      expected: { state: 'partial', reason: 'empty-active-union' },
     },
     {
       name: 'provider evidence outside known active execution',
