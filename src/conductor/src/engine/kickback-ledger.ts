@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 export interface KickbackGateEntry {
   count: number;
   cumulative: number;
+  mechanicalFaults?: number;
   treeHash: string | null;
   lastReason: string;
   priorVerdict: boolean;
@@ -17,8 +18,9 @@ export interface KickbackLedger {
   gates: Record<string, KickbackGateEntry>;
 }
 
-type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative'> & {
+type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative' | 'mechanicalFaults'> & {
   cumulative?: number;
+  mechanicalFaults?: number;
 };
 
 interface PersistedKickbackLedger {
@@ -85,6 +87,11 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
   return (
     typeof entry.count === 'number' &&
     (entry.cumulative === undefined || typeof entry.cumulative === 'number') &&
+    (entry.mechanicalFaults === undefined || (
+      typeof entry.mechanicalFaults === 'number' &&
+      Number.isInteger(entry.mechanicalFaults) &&
+      entry.mechanicalFaults >= 0
+    )) &&
     (typeof entry.treeHash === 'string' || entry.treeHash === null) &&
     typeof entry.lastReason === 'string' &&
     typeof entry.priorVerdict === 'boolean' &&
@@ -109,7 +116,7 @@ function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedge
     gates: Object.fromEntries(
       Object.entries(ledger.gates).map(([gate, entry]) => [
         gate,
-        { ...entry, cumulative: entry.cumulative ?? 0 },
+        { ...entry, cumulative: entry.cumulative ?? 0, mechanicalFaults: entry.mechanicalFaults ?? 0 },
       ]),
     ),
   };
@@ -224,4 +231,26 @@ export async function bumpKickbackGateInLedger(
   });
 
   return result;
+}
+/** Purely consume one build-review mechanical-fault allowance. */
+export function bumpMechanicalFaults(entry: KickbackGateEntry): KickbackGateEntry {
+  return { ...entry, mechanicalFaults: (entry.mechanicalFaults ?? 0) + 1 };
+}
+
+/** Load, update, and atomically persist one gate's mechanical-fault allowance. */
+export async function bumpMechanicalFaultsInLedger(
+  projectRoot: string,
+  gate: string,
+): Promise<KickbackGateEntry | undefined> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const entry = ledger.gates[gate];
+  if (!entry) return undefined;
+
+  const nextEntry = bumpMechanicalFaults(entry);
+  await writeKickbackLedger(projectRoot, {
+    ...ledger,
+    gates: { ...ledger.gates, [gate]: nextEntry },
+  });
+
+  return nextEntry;
 }

@@ -83,7 +83,7 @@ describe('kickback-ledger', () => {
 
     await expect(readKickbackLedger(dir)).resolves.toEqual({
       ...ledger,
-      gates: { wiring_check: { ...ledger.gates.wiring_check, cumulative: 0 } },
+      gates: { wiring_check: { ...ledger.gates.wiring_check, cumulative: 0, mechanicalFaults: 0 } },
     });
   });
 
@@ -110,9 +110,67 @@ describe('kickback-ledger', () => {
         build_review: {
           ...legacyLedger.gates.build_review,
           cumulative: 0,
+          mechanicalFaults: 0,
         },
       },
     });
+  });
+
+  it('defaults a legacy build review entry without mechanical faults to zero', async () => {
+    const legacyLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 1,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'provider was unavailable',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(legacyLedger));
+
+    await expect(readKickbackLedger(dir)).resolves.toEqual({
+      ...legacyLedger,
+      gates: {
+        build_review: {
+          ...legacyLedger.gates.build_review,
+          mechanicalFaults: 0,
+        },
+      },
+    });
+  });
+
+  it.each(['3', null, -1, 1.5])('rejects a malformed mechanical-fault count of %j', async (mechanicalFaults) => {
+    const malformedLedger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 1,
+          mechanicalFaults,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'provider was unavailable',
+          priorVerdict: false,
+          resolvedBefore: 7,
+        },
+      },
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify(malformedLedger));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('corrupt ledger'));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it.each(['3', null])('rejects a malformed cumulative value of %j', async (cumulative) => {
@@ -164,6 +222,7 @@ describe('kickback-ledger', () => {
         wiring_check: {
           count: 2,
           cumulative: 1,
+          mechanicalFaults: 0,
           treeHash: '0000000000000000000000000000000000000001',
           lastReason: 'current writer',
           priorVerdict: false,
@@ -189,7 +248,11 @@ describe('kickback-ledger', () => {
       expect(observedDuringWrite).toEqual({
         ...legacyWinner,
         gates: {
-          wiring_check: { ...legacyWinner.gates.wiring_check, cumulative: 0 },
+          wiring_check: {
+            ...legacyWinner.gates.wiring_check,
+            cumulative: 0,
+            mechanicalFaults: 0,
+          },
         },
       });
 
@@ -288,6 +351,7 @@ describe('kickback-ledger', () => {
     const existingEntry: KickbackGateEntry = {
       count: 1,
       cumulative: 0,
+      mechanicalFaults: 0,
       treeHash: '0123456789abcdef0123456789abcdef01234567',
       lastReason: 'first failure',
       priorVerdict: false,
