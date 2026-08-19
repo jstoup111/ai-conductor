@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import {
+  bumpKickbackGateInLedger,
   KICKBACK_LEDGER_PATH,
+  MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
   writeKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
@@ -37,6 +39,52 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         throw new Error('stop after fresh-session initialization');
       },
     };
+  }
+
+  async function settleBuildReview(verdict: 'PASS' | 'FAIL'): Promise<void> {
+    await rm(join(dir, '.pipeline/build-review.json'), { force: true });
+    await writeState(statePath, {
+      run_started_at: 1,
+      complexity_tier: 'S',
+      track: 'technical',
+      worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
+      conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
+      architecture_review: 'skipped', acceptance_specs: 'skipped', build: 'done',
+      wiring_check: 'skipped', test_suite: 'done',
+    });
+
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build_review') {
+          await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
+            verdict,
+            rubric: verdict === 'PASS'
+              ? { tautology: false, scope: false, rootCause: false, completeness: false }
+              : { tautology: true, scope: false, rootCause: false, completeness: false },
+            findings: verdict === 'FAIL' ? { tautology: ['semantic failure remains'] } : {},
+          }));
+          return { success: true };
+        }
+        if (step === 'build') {
+          await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+            tasks: [{ id: 't1', status: 'completed' }],
+          }));
+          return { success: true };
+        }
+        throw new Error('stop after build_review ledger transition');
+      },
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(),
+      projectRoot: dir, verifyArtifacts: true, mode: 'auto', daemon: true,
+      fromStep: 'build_review', maxRetries: 1,
+      config: { build_review: { enabled: true }, kickback_escalation: { enabled: false } },
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
+    } as never).run().catch(() => {});
   }
 
   async function runCapHalt(
@@ -353,6 +401,107 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       { ...initialEntry, cumulative: 0 },
       expect.objectContaining({ cumulative: initialEntry.cumulative + 1 }),
     ]);
+  });
+
+  it('retains a nonzero cumulative count after build_review PASS completes', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 4,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'repeated semantic failure',
+          priorVerdict: true,
+          resolvedBefore: 1,
+        },
+      },
+    });
+
+    await settleBuildReview('PASS');
+
+    expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(4);
+  });
+
+  it('increments a later consumed kickback from the cumulative count retained through PASS', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 4,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'repeated semantic failure',
+          priorVerdict: true,
+          resolvedBefore: 1,
+        },
+      },
+    });
+
+    await settleBuildReview('PASS');
+    await bumpKickbackGateInLedger(dir, 'build_review', {
+      treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+      resolvedCount: 1,
+      reason: 'semantic failure remains',
+    });
+
+    expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(5);
+  });
+
+  it('reaches the cumulative cap when PASSes are interleaved with consumed build_review kickbacks', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW - 1,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'repeated semantic failure',
+          priorVerdict: true,
+          resolvedBefore: 1,
+        },
+      },
+    });
+
+    await settleBuildReview('PASS');
+    await bumpKickbackGateInLedger(dir, 'build_review', {
+      treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+      resolvedCount: 1,
+      reason: 'semantic failure remains',
+    });
+    await settleBuildReview('PASS');
+    await bumpKickbackGateInLedger(dir, 'build_review', {
+      treeHash: 'abcdefabcdefabcdefabcdefabcdefabcdefabcd',
+      resolvedCount: 2,
+      reason: 'another semantic failure remains',
+    });
+
+    expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(
+      MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW + 1,
+    );
+  });
+
+  it('keeps count\'s existing per-tree budget behavior across a PASS and later consumed kickback', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 2,
+          cumulative: 0,
+          treeHash: '0123456789abcdef0123456789abcdef01234567',
+          lastReason: 'repeated semantic failure',
+          priorVerdict: true,
+          resolvedBefore: 1,
+        },
+      },
+    });
+
+    await settleBuildReview('PASS');
+    const afterPass = (await readKickbackLedger(dir)).gates.build_review;
+    await settleBuildReview('FAIL');
+    const afterKickback = (await readKickbackLedger(dir)).gates.build_review;
+
+    expect([afterPass?.count, afterKickback?.count]).toEqual([2, 2]);
   });
 
   it('records eight build_review laps cumulatively while preserving per-tree counts', async () => {
