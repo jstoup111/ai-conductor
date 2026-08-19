@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { parseCostBlock, parseTimeBlock, renderKpi } from '../../src/engine/kpi-report.js';
 
 let root: string;
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'kpi-report-'));
@@ -119,6 +121,32 @@ describe('parseTimeBlock', () => {
       activeMs: 80,
       reason: 'provider-evidence-incomplete',
     });
+  });
+
+  it('preserves the parse states of committed reason-free partial and pre-Time records', async () => {
+    const [reasonFreePartial, noTime] = await Promise.all([
+      readFile(join(repoRoot, '.docs/shipped/codex-readiness-distinguishes-unavailable-doctor-p.md'), 'utf8'),
+      readFile(join(repoRoot, '.docs/shipped/2026-04-12-phase-1-story-catalog.md'), 'utf8'),
+    ]);
+
+    expect({
+      reasonFreePartial: parseTimeBlock(reasonFreePartial),
+      noTime: parseTimeBlock(noTime),
+    }).toEqual({
+      reasonFreePartial: { state: 'partial' },
+      noTime: { state: 'unavailable' },
+    });
+  });
+
+  it('degrades a hand-edited Time block to partial instead of throwing', () => {
+    expect(parseTimeBlock([
+      '## Time',
+      'state: measured',
+      'active_ms: not-a-number',
+      'provider_active_ms: 17',
+      'no_provider_active_ms: 13',
+      '',
+    ].join('\n'))).toEqual({ state: 'partial' });
   });
 });
 
