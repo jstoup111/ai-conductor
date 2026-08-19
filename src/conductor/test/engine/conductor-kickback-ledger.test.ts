@@ -15,6 +15,7 @@ import {
 import { HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -499,7 +500,10 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       outcome: RebaseOutcome,
       invalidated: readonly StepName[],
       gates: Record<string, ReturnType<typeof buildReviewEntry>>,
-    ): Promise<void> {
+    ): Promise<{
+      kickbacks: Array<Extract<ConductorEvent, { type: 'kickback' }>>;
+      persistedKickbacks: Array<Record<string, unknown>>;
+    }> {
       const state = Object.fromEntries(
         ALL_STEPS.map((step) => [step.name, 'done']),
       ) as ConductState;
@@ -518,11 +522,18 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         });
       }
 
+      const events = new ConductorEventEmitter();
+      const kickbacks: Array<Extract<ConductorEvent, { type: 'kickback' }>> = [];
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kickbacks.push(event);
+      });
+      const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+      persister.start();
       const conductor = new Conductor({
         projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: { run: async () => ({ success: true }) },
-        events: new ConductorEventEmitter(),
+        events,
         verifyArtifacts: true,
         config: { build_review: { enabled: true } },
       } as never);
@@ -543,6 +554,15 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         ALL_STEPS,
         (name) => ALL_STEPS.findIndex((step) => step.name === name),
       );
+      persister.stop();
+      const eventsPath = join(dir, '.pipeline', 'events.jsonl');
+      const persistedKickbacks = (existsSync(eventsPath) ? await readFile(eventsPath, 'utf-8') : '')
+        .trim()
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((event) => event.type === 'kickback');
+      return { kickbacks, persistedKickbacks };
     }
 
     it('credits build_review before re-opening it after a changed rebase invalidates its judged surface', async () => {
@@ -559,9 +579,34 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(0);
     });
 
+    it('emits and persists a build_review convergence credit with its target gate', async () => {
+      const { kickbacks, persistedKickbacks } = await advanceChangedRebase(
+        {
+          kind: 'changed',
+          changedCodePaths: ['src/feature.ts'],
+          featureSurface: ['src/feature.ts'],
+        },
+        ['build_review'],
+        { build_review: buildReviewEntry(4) },
+      );
+
+      expect(kickbacks).toContainEqual(expect.objectContaining({
+        type: 'kickback',
+        from: 'rebase',
+        to: 'build_review',
+        convergenceCredit: { gate: 'build_review' },
+      }));
+      expect(persistedKickbacks).toContainEqual(expect.objectContaining({
+        type: 'kickback',
+        from: 'rebase',
+        to: 'build_review',
+        convergenceCredit: { gate: 'build_review' },
+      }));
+    });
+
     it('does not credit a build_review that classifyGateInvalidation preserves for a surface miss', async () => {
       await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
-      await advanceChangedRebase(
+      const { kickbacks, persistedKickbacks } = await advanceChangedRebase(
         {
           kind: 'changed',
           changedCodePaths: ['src/foreign.ts'],
@@ -572,6 +617,14 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       );
 
       expect((await readKickbackLedger(dir)).gates.build_review?.cumulative).toBe(4);
+      expect(kickbacks).not.toContainEqual(expect.objectContaining({
+        to: 'build_review',
+        convergenceCredit: expect.anything(),
+      }));
+      expect(persistedKickbacks).not.toContainEqual(expect.objectContaining({
+        to: 'build_review',
+        convergenceCredit: expect.anything(),
+      }));
     });
 
     it('credits only build_review when the same rebase invalidates several gates', async () => {
