@@ -232,4 +232,111 @@ describe('build_review input isolation', () => {
       output: 'build_review scope rubric rejected after repair: invalid-provider-result: the rubric worker lost its response payload',
     });
   });
+
+  it('keeps a judged finding with environment-sounding prose in the blocking finding lane', async () => {
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: (['tautology', 'scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
+        kind: 'dispatched' as const, rubric, result: {} as never,
+      })),
+    });
+    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
+      gitRunner: realGit(), planPath,
+      config: { build_review: { enabled: true } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
+      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: {
+          kind: 'judged', rubric, lapId, snapshotDigest,
+          contractVersion: 'v3' as never,
+          findings: rubric === 'scope' ? [{
+            concernKind: 'out-of-plan-change',
+            summary: 'The environment cannot load this change safely.',
+            evidenceLocations: ['feature.txt:1'],
+            anchor: { rubric: 'scope', path: 'feature.txt', relation: 'not-authorized-by-plan' },
+          }] : [],
+          verdict: rubric === 'scope' ? 'FAIL' : 'PASS',
+        },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+
+    const result = await runner.run('build_review', {} as never);
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.output).toContain('The environment cannot load this change safely.');
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
+      'The environment cannot load this change safely.',
+    );
+  });
+
+  it('keeps skipped rubrics out of the mechanical lane', async () => {
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        { kind: 'skipped', rubric: 'tautology', reason: 'disabled' },
+        ...(['scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
+          kind: 'dispatched' as const, rubric, result: {} as never,
+        })),
+      ],
+    });
+    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
+      gitRunner: realGit(), planPath,
+      config: { build_review: { enabled: true } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
+      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: {
+          kind: 'judged', rubric, lapId, snapshotDigest,
+          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
+        },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+
+    await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({ success: false });
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
+      '"kind": "skipped"',
+    );
+  });
+
+  it('rejects an unparseable recorded result as malformed instead of routing it mechanically', async () => {
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: (['tautology', 'scope', 'rootCause', 'completeness'] as const).map((rubric) => ({
+        kind: 'dispatched' as const, rubric, result: {} as never,
+      })),
+    });
+    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
+      gitRunner: realGit(), planPath,
+      config: { build_review: { enabled: true } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
+      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: rubric === 'scope' ? { kind: 'not-a-rubric-result' } as never : {
+          kind: 'judged', rubric, lapId, snapshotDigest,
+          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
+        },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+
+    await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
+      success: false,
+      output: 'build_review scope rubric result is malformed',
+    });
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+  });
 });

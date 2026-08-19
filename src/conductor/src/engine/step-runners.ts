@@ -65,6 +65,7 @@ import {
   deriveBuildReviewInfrastructureFailureReason,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
+  parseBuildReviewRubricResult,
   renderBuildReviewJudgedResultShape,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
@@ -1842,6 +1843,9 @@ export class DefaultStepRunner implements StepRunner {
             rename,
           },
         );
+        if (artifact && !parseBuildReviewRubricResult(artifact.result)) {
+          return [branch.rubric, { kind: 'malformed' as const, rubric: branch.rubric }];
+        }
         return [branch.rubric, artifact?.result ?? {
           kind: 'infrastructure-failure' as const,
           rubric: branch.rubric,
@@ -1857,13 +1861,27 @@ export class DefaultStepRunner implements StepRunner {
             reason: deriveBuildReviewInfrastructureFailureReason({ reason: branch.reason }),
             detail: branch.detail === undefined ? branch.reason : `${branch.reason}: ${branch.detail}`,
           }];
-    }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+    }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult | {
+      readonly kind: 'malformed';
+      readonly rubric: BuildReviewRubricResult['rubric'];
+    }>;
+
+    const malformedResult = Object.values(results).find((result): result is Extract<typeof result, { kind: 'malformed' }> =>
+      result.kind === 'malformed',
+    );
+    if (malformedResult) {
+      return {
+        success: false,
+        output: `build_review ${malformedResult.rubric} rubric result is malformed`,
+      };
+    }
+    const validResults = results as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
 
     // An infrastructure result is not a reviewer decision about the diff.
     // Do not publish it as a fresh FAIL aggregate: completion deliberately
     // classifies a missing verdict as `absent`, which re-dispatches this
     // rubric without consuming the build_review kickback budget.
-    const infrastructureFailure = Object.values(results).find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
+    const infrastructureFailure = Object.values(validResults).find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
       result.kind === 'infrastructure-failure',
     );
     if (infrastructureFailure) {
@@ -1876,7 +1894,7 @@ export class DefaultStepRunner implements StepRunner {
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,
-      results,
+      results: validResults,
     });
     const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     const aggregatePath = join(effectivePipelineDir, 'build-review.json');
