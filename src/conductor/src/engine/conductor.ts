@@ -1293,6 +1293,10 @@ export class Conductor {
     if (terminalKey) {
       const inFlight = this.closingExecutions.get(terminalKey);
       if (inFlight) return inFlight;
+      // Daemon SIGTERM closes the lifecycle before draining a runner that may
+      // still resolve. Its ordinary terminal is then an orphan: EventPersister
+      // cannot recover an interval after the shutdown terminal consumed it.
+      if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
     }
     const deliver = async () => {
       this.activeExecutionEventDeliveries += 1;
