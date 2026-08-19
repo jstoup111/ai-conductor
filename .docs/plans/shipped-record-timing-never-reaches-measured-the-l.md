@@ -310,3 +310,4 @@ proceed in parallel and meet at T17.
    described, including that a `partial` now names its route.
 3. State in both that records shipped before the reason field simply omit the line.
 4. Verify no other page documents these fields, and run `test/test_harness_integrity.sh`.
+### Task rem-adr-001: src/conductor/src/engine/conductor.ts:1269,1300,3051,3931,3963,5107,6089,6354,6366,6399 — remove closeOpenExecutions() from the generic writeHaltMarker wrapper and invoke it only on genuine run-exit halt, signal, and deferred live-boundary paths, leaving the retryable protected-artifact halt at :6089 to reach its own real terminal; test/engine/conductor.test.ts:382 — add a halt-marker-before-real-terminal regression asserting one start, exactly one interval-bearing terminal, and a measured timing rollup
