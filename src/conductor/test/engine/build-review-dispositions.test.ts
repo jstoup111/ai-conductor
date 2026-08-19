@@ -8,6 +8,7 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import {
   BuildReviewDispositionStore,
   matchesBuildReviewDisposition,
+  type BuildReviewReducedCoverageDispositionRecord,
   type BuildReviewDispositionFilesystem,
   type BuildReviewDispositionRecord,
 } from '../../src/engine/build-review-dispositions.js';
@@ -91,6 +92,45 @@ describe('build-review dispositions', () => {
     await expect(store.list(feature)).resolves.toEqual({
       ok: true,
       records: [expect.objectContaining({ finding, summary: 'stored before contract v2' })],
+    });
+  });
+
+  it('durably stores a reduced-coverage decision by its closed rubric-and-cause identity independent of the aggregate', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, clock: () => Date.parse('2026-08-19T12:00:00.000Z'),
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    const appended = await store.appendReducedCoverage({
+      feature, rubric: 'tautology', reason: 'preflight-failed',
+      rationale: 'The merge-base fixture is unavailable in this worktree.', operator: 'james',
+    });
+
+    expect(appended).toEqual({
+      ok: true,
+      record: expect.objectContaining({
+        kind: 'reduced-coverage', version: 'v1', feature,
+        identity: { rubric: 'tautology', reason: 'preflight-failed' },
+        rationale: 'The merge-base fixture is unavailable in this worktree.',
+        operator: 'james', acceptedAt: '2026-08-19T12:00:00.000Z',
+      }),
+    });
+    expect((appended as { record: BuildReviewReducedCoverageDispositionRecord }).record.identity)
+      .toEqual({ rubric: 'tautology', reason: 'preflight-failed' });
+
+    filesystem.files.set('/repo/.pipeline/build-review.json', '{"stale":true}');
+    filesystem.files.delete('/repo/.pipeline/build-review.json');
+    const freshProcessStore = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(freshProcessStore.listReducedCoverage(feature)).resolves.toEqual({
+      ok: true,
+      records: [expect.objectContaining({
+        kind: 'reduced-coverage', identity: { rubric: 'tautology', reason: 'preflight-failed' },
+      })],
     });
   });
 
