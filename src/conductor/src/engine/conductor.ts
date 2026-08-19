@@ -1260,7 +1260,7 @@ export class Conductor {
   /** Starts observed by this conductor that have not yet emitted a terminal event. */
   private openExecutions = new Map<string, { kind: 'step' | 'parallel'; step: StepName }>();
   /** Terminals being emitted; remain open until their event has been delivered. */
-  private closingExecutions = new Set<string>();
+  private closingExecutions = new Map<string, Promise<void>>();
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
@@ -1283,22 +1283,34 @@ export class Conductor {
         : undefined;
 
     // Register a start before listeners can observe it. A terminal remains
-    // open until its event returns, while `closingExecutions` prevents a
-    // signal listener from emitting a duplicate terminal mid-delivery.
+    // open until its event returns, while `closingExecutions` lets a signal
+    // listener join its in-flight delivery instead of emitting a duplicate.
     if (start) this.openExecutions.set(start.key, start.execution);
-    if (terminalKey) this.closingExecutions.add(terminalKey);
+    let resolveTerminalDelivery: (() => void) | undefined;
+    if (terminalKey) {
+      this.closingExecutions.set(terminalKey, new Promise<void>((resolve) => {
+        resolveTerminalDelivery = resolve;
+      }));
+    }
     try {
       await this.events.emit(event);
       if (terminalKey) this.openExecutions.delete(terminalKey);
     } finally {
-      if (terminalKey) this.closingExecutions.delete(terminalKey);
+      if (terminalKey) {
+        resolveTerminalDelivery!();
+        this.closingExecutions.delete(terminalKey);
+      }
     }
   }
 
   /** Close every execution this conductor observed, without exposing step selection to callers. */
   private async closeOpenExecutions(): Promise<void> {
     for (const [key, execution] of this.openExecutions) {
-      if (this.closingExecutions.has(key)) continue;
+      const terminalDelivery = this.closingExecutions.get(key);
+      if (terminalDelivery) {
+        await terminalDelivery;
+        continue;
+      }
       if (execution.kind === 'step') {
         await this.emitExecutionEvent({
           type: 'step_failed',

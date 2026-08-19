@@ -8604,6 +8604,76 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('waits for an in-flight terminal emission before exiting on SIGINT', async () => {
+    let sigintHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGINT') sigintHandler = handler as () => void;
+      return process;
+    }) as typeof process.on);
+    let exitHandled: (() => void) | undefined;
+    const exited = new Promise<void>((resolve) => {
+      exitHandled = resolve;
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      exitHandled!();
+      return undefined;
+    }) as never);
+    let terminalEmissionStarted: (() => void) | undefined;
+    const terminalEmission = new Promise<void>((resolve) => {
+      terminalEmissionStarted = resolve;
+    });
+    let releaseTerminalEmission: (() => void) | undefined;
+    const terminalDelivery = new Promise<void>((resolve) => {
+      releaseTerminalEmission = resolve;
+    });
+    let run: Promise<unknown> | undefined;
+
+    try {
+      const state: ConductState = { complexity_tier: 'M' };
+      for (const step of ALL_STEPS) {
+        if (step.name === 'prd') break;
+        state[step.name] = 'done';
+      }
+      await writeState(statePath, state);
+      events.on('step_completed', async (event) => {
+        if (event.type === 'step_completed' && event.step === 'prd') {
+          terminalEmissionStarted!();
+          sigintHandler!();
+          await terminalDelivery;
+        }
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        events,
+        fromStep: 'prd',
+        stepRunner: createMockStepRunner(),
+      });
+      run = conductor.run();
+
+      await terminalEmission;
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(exitSpy).not.toHaveBeenCalled();
+
+      releaseTerminalEmission!();
+      await exited;
+      await run;
+      expect(exitSpy).toHaveBeenCalledWith(130);
+    } finally {
+      releaseTerminalEmission?.();
+      await run;
+      processOnSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
 
   it('emits no terminal when the interrupt arrives before any execution started', async () => {
     let sigintHandler: (() => Promise<void>) | undefined;
