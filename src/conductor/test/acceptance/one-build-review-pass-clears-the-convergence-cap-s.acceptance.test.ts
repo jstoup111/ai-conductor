@@ -236,7 +236,7 @@ describe('acceptance: a build_review PASS does not clear convergence (#1694 Stor
       },
     });
     await expect(readFile(join(pipelineDir, 'HALT'), 'utf-8')).resolves.toContain(
-      'cumulative build_review kickback cap exceeded',
+      'build_review cumulative kickback cap exceeded',
     );
   }, 60_000);
 });
