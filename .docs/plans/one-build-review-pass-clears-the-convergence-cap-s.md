@@ -324,3 +324,4 @@ Task 1 (re-derive the ratio)
   states the reset rule those counters inherit; it does not build them.
 - Editing another feature's spec artifacts. #1724's plan task-6 amendment is recorded as a
   precondition in the conflict artifact, not performed here.
+### Task rem-build-review-scope-1: src/conductor/test/acceptance/one-build-review-pass-clears-the-convergence-cap-s.red-runner.mjs:1 — remove the committed RED runner and retain Task 2 RED verification through the authorized acceptance test without adding a replacement helper
