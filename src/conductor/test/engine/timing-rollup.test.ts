@@ -185,6 +185,72 @@ describe('computeTimingRollup', () => {
     });
   });
 
+
+  it('does not close a stale start when the same execution key starts again', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'step_started', step: 'build' },
+      { type: 'step_started', step: 'build' },
+      {
+        type: 'step_completed',
+        step: 'build',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      reason: 'open-executions:step:build',
+    });
+  });
+
+  it('keeps an execution open while its starts outnumber its terminals', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'step_started', step: 'build' },
+      { type: 'step_started', step: 'build' },
+      { type: 'step_started', step: 'build' },
+      {
+        type: 'step_completed',
+        step: 'build',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+      {
+        type: 'step_completed',
+        step: 'build',
+        activeInterval: { startedAtMs: 200, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 210, durationMs: 20 }],
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      reason: 'open-executions:step:build',
+    });
+  });
+
+  it('never promotes a non-empty open set to measured on complete provider evidence', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'step_started', step: 'build' },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        invoked: true,
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      reason: 'open-executions:step:build',
+    });
+  });
   it('names provider intervals that fall outside the active union', async () => {
     const directory = await writeFeatureEvents([
       {
