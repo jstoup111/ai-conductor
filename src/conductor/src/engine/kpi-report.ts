@@ -242,7 +242,10 @@ function formatFeatureTiming(time: TimingRollup): string {
     );
   }
   if (time.state === 'partial') {
-    return ` time=partial${time.activeMs === undefined ? '' : ` active_ms=${time.activeMs}`}`;
+    return (
+      ` time=partial${time.activeMs === undefined ? '' : ` active_ms=${time.activeMs}`}` +
+      `${time.reason === undefined ? '' : ` reason=${time.reason}`}`
+    );
   }
   return ' time=unavailable';
 }

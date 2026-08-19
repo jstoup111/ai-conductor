@@ -194,6 +194,19 @@ describe('renderKpi', () => {
     });
   });
 
+  it('renders a partial timing reason on the feature row while preserving active time', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/partial.md'),
+      record('partial', COST_LINES) +
+        '\n## Time\nstate: partial\nactive_ms: 80\nreason: provider-evidence-incomplete\n',
+    );
+
+    const report = await renderKpi(root);
+
+    expect(report).toContain('time=partial active_ms=80 reason=provider-evidence-incomplete');
+  });
+
   it('reports measured timing partitions and measured-only aggregate averages', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     await writeFile(
