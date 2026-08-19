@@ -19,6 +19,37 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('ignores a plugin lock marker a concurrent provider process drops into its home', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-in-use-marker-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const plugin = join(provider, 'plugins', 'cache', 'claude-plugins-official', 'skill-creator', 'unknown');
+    await Promise.all([mkdir(live), mkdir(plugin, { recursive: true })]);
+    await writeFile(join(plugin, 'SKILL.md'), 'installed plugin content\n');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await mkdir(join(plugin, '.in_use'));
+    await writeFile(join(plugin, '.in_use', '1001617'), 'claude-plugins-official/skill-creator\n');
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('still halts when installed plugin content beside the lock markers changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-plugin-content-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const plugin = join(provider, 'plugins', 'cache', 'claude-plugins-official', 'skill-creator', 'unknown');
+    await Promise.all([mkdir(live), mkdir(join(plugin, '.in_use'), { recursive: true })]);
+    await writeFile(join(plugin, 'SKILL.md'), 'installed plugin content\n');
+    await writeFile(join(plugin, '.in_use', '1001617'), 'claude-plugins-official/skill-creator\n');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(plugin, 'SKILL.md'), 'rewritten by the self-host process\n');
+    try {
+      const result = await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' });
+      expect(result).toMatchObject({ ok: false });
+      expect(result.reason).toContain('provider state changed during self-host execution');
+      expect(result.reason).toContain('SKILL.md');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('names every unproven-containment reason in an unexplained live-checkout halt', async () => {
     const containmentReasons = [
       'containment unavailable: bwrap not found',

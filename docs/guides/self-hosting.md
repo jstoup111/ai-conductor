@@ -284,7 +284,10 @@ power. The list is explicit and provider-specific, selected by the provider the 
 | `claude` | `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`, `shell-snapshots`, `backups`, `sessions`, `session-env`, `projects`, `tasks`, `.last-update-result.json`, `stats-cache.json`, `mcp-needs-auth-cache.json`, `cache`, `file-history`, `paste-cache` | the selected auth file, `.credentials.json` |
 | `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `thread-writer-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, and any root-level `*.sqlite`, `*.sqlite-shm`, `*.sqlite-wal`, `*.sqlite-journal` | the selected auth file, `auth.json` |
 
-Three entries carry extra caveats:
+Both providers additionally exclude any directory whose basename is `.in_use`, at any depth — the
+only basename-matched entry on this surface.
+
+Four entries carry extra caveats:
 
 - **`file-history` (Claude).** The CLI snapshots every file it edits into
   `file-history/<session-uuid>/`, so *any* concurrent interactive session editing a file used to trip
@@ -297,6 +300,15 @@ Three entries carry extra caveats:
   until the list was patched. The `*` matches a **root-level basename only**: a nested lookalike such
   as `skills/state_9.sqlite-wal` still trips the guard, and the live-checkout surface declares no
   patterns at all, so a `*.sqlite-wal` in the harness checkout is still fingerprinted.
+- **`.in_use` (a basename, at any depth).** The provider CLI writes one marker file per live process
+  under `plugins/cache/<marketplace>/<plugin>/<version>/.in_use/<pid>`, so a concurrent session
+  starting or ending a plugin trips the guard with "1 added, 0 removed, 0 changed" naming a pid that
+  no longer exists — verified 2026-08-18 behind exactly such a halt. It is matched by basename
+  because the path matcher is deliberately root-level only and these markers sit five levels deep.
+  Deliberately narrow: Codex excludes all of `plugins/cache`, but on Claude every byte of installed
+  plugin content stays fingerprinted, because a self-host process rewriting a plugin's skills or
+  hooks in the operator home is exactly what this surface exists to catch. Of 348 files under a live
+  `plugins/cache`, the markers were the only paths that changed in the preceding day.
 - **Codex `thread-writer-locks` (churn that appears, not changes).** Codex writes one zero-byte lock
   per *open* thread and deletes it when the thread closes, so this subtree trips the guard by paths
   **appearing and vanishing** rather than by content changing — a halt reason of the form
