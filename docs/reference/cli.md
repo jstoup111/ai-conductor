@@ -694,8 +694,10 @@ the staged content actually changed. Identical already-committed content produce
 
 It also appends a `## Time` block computed independently from `.pipeline/events.jsonl`, reporting
 `state: measured|partial|unavailable` with `active_ms`, `provider_active_ms`, and
-`no_provider_active_ms` when measured. A missing or corrupt event ledger, or any timing-computation
-failure, never blocks the Cost block or the commit — the record ships with `state: unavailable` instead.
+`no_provider_active_ms` when measured. A `partial` block adds `reason: <route>` when the rollup
+identifies its downgrade route; records shipped before this field existed simply omit the line. A
+missing or corrupt event ledger, or any timing-computation failure, never blocks the Cost block or the
+commit — the record ships with `state: unavailable` instead.
 
 The frontmatter also carries `engine_version`: the engine build id that shipped the feature — the same
 value `conduct-ts daemon status` prints as `version:<id>`. It is resolved from the running engine's own
@@ -739,11 +741,15 @@ cost, cost-unmetered dispatches, and dispatch counts by provider.
 Each row also reports engine-observed execution time, parsed from the record's `## Time` block
 independently of Cost: `time=measured active_ms=<n> provider_active_ms=<n> no_provider_active_ms=<n>`
 splits durable feature wall-clock time into time spent inside a provider process versus engine/code
-time; `time=partial` (optionally with `active_ms`) or `time=unavailable` mark evidence that could not
-be trusted, and a record with no `## Time` block — including every record shipped before this
-section existed — reports `time=unavailable`. The aggregate line adds `timing measured=<n>
-partial=<n> unavailable=<n>` counts and `avg_active_ms`/`avg_provider_active_ms`/
-`avg_no_provider_active_ms`, averaged only over measured features.
+time; `time=partial` (optionally with `active_ms`) adds `reason=<route>` when the rollup identifies
+the downgrade route: `empty-active-union`, `active-evidence-incomplete`,
+`open-executions:<ids>`, `provider-outside-active-union`, or `provider-evidence-incomplete`.
+Records shipped before the reason field existed simply omit it and report `time=partial` without a
+route. `time=unavailable` marks evidence that could not be trusted, and a record with no `## Time`
+block — including every record shipped before this section existed — reports `time=unavailable`.
+The aggregate line adds `timing measured=<n> partial=<n> unavailable=<n>` counts and
+`avg_active_ms`/`avg_provider_active_ms`/`avg_no_provider_active_ms`, averaged only over measured
+features.
 
 ## `conduct-ts memory setup`
 
