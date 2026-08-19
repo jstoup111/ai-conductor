@@ -64,7 +64,8 @@ function collectExecutionEvidence(
   const terminalKind =
     event.type === 'step_completed' || event.type === 'step_failed'
       ? 'step'
-      : event.type === 'parallel_completed' || event.type === 'parallel_failure'
+      : event.type === 'parallel_completed'
+        || (event.type === 'parallel_failure' && event.terminal !== false)
         ? 'parallel'
         : undefined;
 

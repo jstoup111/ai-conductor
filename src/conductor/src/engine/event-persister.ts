@@ -86,7 +86,7 @@ export class EventPersister {
       );
       const closesGroup = (
         event.type === 'parallel_completed'
-        || event.type === 'parallel_failure'
+        || (event.type === 'parallel_failure' && event.terminal !== false)
       );
       const openIntervals = closesGroup ? this.openGroups : this.openSteps;
       const startedAtMs = step !== undefined && (closesStep || closesGroup)
