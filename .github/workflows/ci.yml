@@ -36,7 +36,27 @@ jobs:
       - uses: actions/checkout@v4
       # Installed explicitly so integrity checks 1b and 9d enforce here rather
       # than degrading to their "tool absent" paths on a runner image change.
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck ripgrep
+      # A stalled Ubuntu mirror must not consume the workflow's six-hour ceiling.
+      # Bound each external call and retry so a transient runner-network failure
+      # does not prevent the repository checks from running.
+      - name: Install integrity tooling
+        run: |
+          install_apt_packages() {
+            timeout --foreground --kill-after=10s 60s sudo apt-get \
+              -o Acquire::Retries=0 \
+              -o Acquire::http::Timeout=20 \
+              -o Acquire::https::Timeout=20 \
+              "$@"
+          }
+          for attempt in 1 2 3; do
+            if install_apt_packages update \
+              && install_apt_packages install --yes shellcheck ripgrep; then
+              exit 0
+            fi
+            echo "apt attempt $attempt/3 failed; retrying" >&2
+            sleep 5
+          done
+          exit 1
       - run: bash test/test_harness_integrity.sh
 
   shellcheck:
@@ -45,7 +65,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      # Keep this independent gate resilient to the same transient mirror stalls.
+      - name: Install ShellCheck
+        run: |
+          install_apt_packages() {
+            timeout --foreground --kill-after=10s 60s sudo apt-get \
+              -o Acquire::Retries=0 \
+              -o Acquire::http::Timeout=20 \
+              -o Acquire::https::Timeout=20 \
+              "$@"
+          }
+          for attempt in 1 2 3; do
+            if install_apt_packages update \
+              && install_apt_packages install --yes shellcheck; then
+              exit 0
+            fi
+            echo "apt attempt $attempt/3 failed; retrying" >&2
+            sleep 5
+          done
+          exit 1
       # Same script integrity check 1b calls, so the two can never enforce
       # different file sets or severities.
       - run: bash test/lint_shell.sh
