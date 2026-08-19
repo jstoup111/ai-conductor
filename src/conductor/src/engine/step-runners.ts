@@ -62,6 +62,12 @@ import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
+  bumpMechanicalFaults,
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  readKickbackLedger,
+  writeKickbackLedger,
+} from './kickback-ledger.js';
+import {
   deriveBuildReviewInfrastructureFailureReason,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
@@ -1885,10 +1891,26 @@ export class DefaultStepRunner implements StepRunner {
       result.kind === 'infrastructure-failure',
     );
     if (infrastructureFailure) {
-      return {
-        success: false,
-        output: `build_review ${infrastructureFailure.rubric} rubric rejected after repair: ${infrastructureFailure.detail}`,
-      };
+      const ledger = await readKickbackLedger(this.projectDir);
+      const mechanicalFaults = bumpMechanicalFaults(ledger.gates.build_review ?? {
+        count: 0,
+        cumulative: 0,
+        mechanicalFaults: 0,
+        treeHash: null,
+        lastReason: '',
+        priorVerdict: true,
+        resolvedBefore: 0,
+      });
+      await writeKickbackLedger(this.projectDir, {
+        ...ledger,
+        gates: { ...ledger.gates, build_review: mechanicalFaults },
+      });
+      if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+        return {
+          success: false,
+          output: `build_review ${infrastructureFailure.rubric} rubric rejected after repair: ${infrastructureFailure.detail}`,
+        };
+      }
     }
 
     const aggregate = joinBuildReviewRubricOutcomes({
