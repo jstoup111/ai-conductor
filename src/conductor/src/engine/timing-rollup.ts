@@ -9,9 +9,16 @@ export interface MeasuredTimingRollup {
   noProviderActiveMs: number;
 }
 
+type PartialTimingReason =
+  | 'empty-active-union'
+  | 'active-evidence-incomplete'
+  | `open-executions:${string}`
+  | 'provider-outside-active-union'
+  | 'provider-evidence-incomplete';
+
 export type TimingRollup =
   | MeasuredTimingRollup
-  | { state: 'partial'; activeMs?: number; reason?: 'empty-active-union' }
+  | { state: 'partial'; activeMs?: number; reason?: PartialTimingReason }
   | { state: 'unavailable' };
 
 function parseLedger(raw: string): Record<string, unknown>[] | null {
@@ -162,12 +169,17 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
     (total, interval) => total + interval.durationMs,
     0,
   );
-  if (
-    evidence.activeEvidenceIncomplete ||
-    evidence.openExecutions.size > 0 ||
-    providerDurationMs !== providerWithinActiveDurationMs
-  ) {
-    return { state: 'partial' };
+  if (evidence.activeEvidenceIncomplete) {
+    return { state: 'partial', reason: 'active-evidence-incomplete' };
+  }
+  if (evidence.openExecutions.size > 0) {
+    return {
+      state: 'partial',
+      reason: `open-executions:${[...evidence.openExecutions.keys()].sort().join(',')}`,
+    };
+  }
+  if (providerDurationMs !== providerWithinActiveDurationMs) {
+    return { state: 'partial', reason: 'provider-outside-active-union' };
   }
 
   const activeMs = Math.round(
@@ -176,7 +188,9 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
       0,
     ),
   );
-  if (evidence.providerEvidenceIncomplete) return { state: 'partial', activeMs };
+  if (evidence.providerEvidenceIncomplete) {
+    return { state: 'partial', activeMs, reason: 'provider-evidence-incomplete' };
+  }
 
   const providerActiveMs = Math.round(providerWithinActiveDurationMs);
 

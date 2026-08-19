@@ -151,6 +151,78 @@ describe('computeTimingRollup', () => {
     });
   });
 
+  it('names incomplete active evidence when active intervals remain measurable', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'step_completed', step: 'explore' },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      reason: 'active-evidence-incomplete',
+    });
+  });
+
+  it('names the executions left open when all other timing evidence is complete', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'step_started', step: 'build' },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      reason: 'open-executions:step:build',
+    });
+  });
+
+  it('names provider intervals that fall outside the active union', async () => {
+    const directory = await writeFeatureEvents([
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        invoked: true,
+        observedIntervals: [{ startedAtMs: 200, durationMs: 20 }],
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      reason: 'provider-outside-active-union',
+    });
+  });
+
+  it('names incomplete provider evidence while retaining measurable active time', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'provider_attempt', step: 'plan', invoked: true },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      activeMs: 100,
+      reason: 'provider-evidence-incomplete',
+    });
+  });
+
   it('consumes provider intervals from the merged feature-event stream', async () => {
     const directory = await writeFeatureEvents([
       { type: 'step_completed', step: 'build', activeInterval: { startedAtMs: 0, durationMs: 100 } },
@@ -277,7 +349,7 @@ describe('computeTimingRollup', () => {
           activeInterval: { startedAtMs: 0, durationMs: 100 },
         },
       ],
-      expected: { state: 'partial', activeMs: 100 },
+      expected: { state: 'partial', activeMs: 100, reason: 'provider-evidence-incomplete' },
     },
     {
       name: 'a malformed provider interval beside trustworthy active evidence',
@@ -294,7 +366,7 @@ describe('computeTimingRollup', () => {
           activeInterval: { startedAtMs: 0, durationMs: 100 },
         },
       ],
-      expected: { state: 'partial', activeMs: 100 },
+      expected: { state: 'partial', activeMs: 100, reason: 'provider-evidence-incomplete' },
     },
     {
       name: 'an unmatched step start',
@@ -345,7 +417,7 @@ describe('computeTimingRollup', () => {
           activeInterval: { startedAtMs: 0, durationMs: 100 },
         },
       ],
-      expected: { state: 'partial' },
+      expected: { state: 'partial', reason: 'provider-outside-active-union' },
     },
     {
       name: 'provider-only evidence',
@@ -375,7 +447,7 @@ describe('computeTimingRollup', () => {
           observedIntervals: [{ startedAtMs: 110, durationMs: 20 }],
         },
       ],
-      expected: { state: 'partial' },
+      expected: { state: 'partial', reason: 'active-evidence-incomplete' },
     },
   ])('classifies $name without fabricating components', async ({ events, expected }) => {
     const directory = await writeFeatureEvents(events);
