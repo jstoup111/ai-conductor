@@ -199,6 +199,27 @@ describe('report-renderer', () => {
     expect(kickbacks[0].kickbackOutcome).toBeUndefined();
   });
 
+  it('reads legacy kickback records without convergenceCredit unchanged', () => {
+    const legacyKickback = {
+      type: 'kickback',
+      from: 'conflict_check',
+      to: 'architecture_review',
+      evidence: 'missing seam',
+      count: 1,
+    };
+
+    const kickbacks = aggregateKickbacks(parseEvents(makeLines([
+      { event: legacyKickback, ts: '2026-01-01T00:00:00.000Z' },
+    ])));
+
+    expect(kickbacks).toEqual([{
+      from: 'conflict_check',
+      to: 'architecture_review',
+      evidence: 'missing seam',
+      count: 1,
+    }]);
+  });
+
   it('sorts Step Durations table descending by duration', async () => {
     const content = makeLines([
       { event: { type: 'step_started', step: 'stories', index: 1 }, ts: '2026-01-01T00:00:00.000Z' },

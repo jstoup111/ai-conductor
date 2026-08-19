@@ -55,6 +55,104 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'acceptance_red',
 ] satisfies Array<ConductorEvent['type']>;
 
+// The convergence credit extends the existing `kickback` record. Keep this
+// complete set pinned so promoting it to another event member also requires an
+// intentional event-spine and sink-registry change.
+const EVENT_TYPES_BEFORE_CONVERGENCE_CREDIT = [
+  'contained_live_checkout_drift',
+  'self_host_containment_verdict',
+  'build_review_rubric_started',
+  'build_review_rubric_prompt',
+  'build_review_rubric_result',
+  'build_review_rubric_skipped',
+  'build_review_cache_hit',
+  'build_review_rubric_infrastructure_failure',
+  'build_review_disposition_accepted',
+  'build_review_disposition_refused',
+  'build_review_disposition_version_invalidated',
+  'build_review_outer_verdict',
+  'step_started',
+  'containment_check_unresolved',
+  'deprecated_step',
+  'step_completed',
+  'step_failed',
+  'provider_attempt',
+  'scratch_cleanup_reclaimed',
+  'scratch_cleanup_retained',
+  'scratch_cleanup_failed',
+  'feature_usage_total',
+  'provider_fallback',
+  'session_policy',
+  'step_retry',
+  'retry_decision',
+  'checkpoint_reached',
+  'recovery_needed',
+  'gate_blocked',
+  'tier_skip',
+  'config_skip',
+  'navigation_back',
+  'rate_limit',
+  'session_reset',
+  'credentials_park',
+  'operator_park_boundary',
+  'credentials_park_progress',
+  'finish_publication_transition',
+  'finish_publication_blocked',
+  'finish_publication_disposition',
+  'feature_complete',
+  'dashboard_refresh',
+  'protected_artifact_rebaseline',
+  'protected_artifact_rebaseline_refused',
+  'protected_artifact_reseal',
+  'protected_artifact_reseal_refused',
+  'auto_heal',
+  'remediation_sealed_artifact_redirect',
+  'verdict_freshness',
+  'build_review_base',
+  'build_review_stale_mirage_regrade',
+  'build_review_repair_context',
+  'mode_skip',
+  'build_stall',
+  'build_progress',
+  'build_no_progress',
+  'pipeline_closeout',
+  'renderer_error',
+  'when_skip',
+  'parallel_started',
+  'parallel_completed',
+  'parallel_failure',
+  'group_member_step',
+  'gate_verdict',
+  'test_suite_verification',
+  'build_member_evidence_reused',
+  'build_member_evidence_recomputed',
+  'kickback',
+  'loop_halt',
+  'halt_marker_write_failed',
+  'loop_converged',
+  'rebase_noop',
+  'rebase_mergeable_skip',
+  'rebase_changed',
+  'rebase_gate_reverified',
+  'rebase_gate_preserved',
+  'rebase_gate_invalidated',
+  'rebase_conflict_halt',
+  'rebase_citation_residue',
+  'rebase_resolution_attempt',
+  'rebase_resolution_succeeded',
+  'rebase_resolution_failed',
+  'rebase_resolution_exhausted',
+  'auto_park',
+  'auto_park_contradiction',
+  'zero_work_product',
+  'unattributed_dispatch',
+  'unattributed_progress',
+  'halt_cleared',
+  'ci_failed',
+  'attribution_divergence',
+  'acceptance_red',
+] satisfies Array<ConductorEvent['type']>;
+
 const BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES = [
   'build_member_evidence_reused',
   'build_member_evidence_recomputed',
@@ -464,10 +562,11 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  // There is deliberately no total-count assertion here. EVENT_SINKS is typed
-  // Record<ConductorEvent['type'], SinkDeclaration>, so tsc already rejects a
-  // missing or unknown key — the @ts-expect-error probe above proves it. A runtime
-  // count only duplicates the compiler and breaks on every added event variant.
+  it('keeps the convergence credit within the existing event and sink set', () => {
+    expect(new Set(Object.keys(EVENT_SINKS))).toEqual(
+      new Set(EVENT_TYPES_BEFORE_CONVERGENCE_CREDIT),
+    );
+  });
 
   it('routes verdict_freshness to every sink', () => {
     expect(EVENT_SINKS.verdict_freshness).toEqual({
