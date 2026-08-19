@@ -11,7 +11,7 @@ export interface MeasuredTimingRollup {
 
 export type TimingRollup =
   | MeasuredTimingRollup
-  | { state: 'partial'; activeMs?: number }
+  | { state: 'partial'; activeMs?: number; reason?: 'empty-active-union' }
   | { state: 'unavailable' };
 
 function parseLedger(raw: string): Record<string, unknown>[] | null {
@@ -150,7 +150,7 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
 
   if (activeUnion.intervals.length === 0) {
     return evidence.activeEvidenceIncomplete || evidence.openExecutions.size > 0
-      ? { state: 'partial' }
+      ? { state: 'partial', reason: 'empty-active-union' }
       : { state: 'unavailable' };
   }
 
