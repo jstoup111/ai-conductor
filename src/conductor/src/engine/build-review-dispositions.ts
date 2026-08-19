@@ -256,6 +256,24 @@ export function matchesBuildReviewDisposition(
   });
 }
 
+/**
+ * A reduced-coverage decision is confined to the feature and complete closed
+ * identity it was recorded for. It cannot weaken another rubric or cause.
+ */
+export function matchesBuildReviewReducedCoverageDisposition(
+  feature: BuildReviewFeatureIdentity,
+  identity: BuildReviewReducedCoverageIdentity,
+  dispositions: readonly BuildReviewReducedCoverageDispositionRecord[],
+): boolean {
+  const canonicalIdentity = parseReducedCoverageIdentity(identity);
+  if (!canonicalIdentity) return false;
+  return dispositions.some((disposition) =>
+    sameFeature(disposition.feature, feature) &&
+    disposition.identity.rubric === canonicalIdentity.rubric &&
+    disposition.identity.reason === canonicalIdentity.reason,
+  );
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
