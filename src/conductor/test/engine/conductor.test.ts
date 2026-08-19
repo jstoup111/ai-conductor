@@ -68,6 +68,8 @@ import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.j
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
+import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -1647,6 +1649,47 @@ describe('engine/conductor', () => {
       const terminal = records.find((record) => record.type === 'step_failed');
       expect(terminal).toMatchObject({ type: 'step_failed', step: 'build' });
       expect(terminal.activeInterval).toEqual({ startedAtMs: 1_000, durationMs: 25 });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('registers a start before an interrupt listener can close its execution', async () => {
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+    const timestamps = [1_000, 1_025];
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events, {
+      nowMs: () => timestamps.shift()!,
+    });
+    persister.start();
+
+    try {
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+        closeOpenExecutions(): Promise<void>;
+      };
+      events.on('step_started', async (event) => {
+        if (event.type === 'step_started') await executionEvents.closeOpenExecutions();
+      });
+
+      await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(records).toEqual([
+        expect.objectContaining({ type: 'step_started', step: 'build' }),
+        expect.objectContaining({
+          type: 'step_failed',
+          step: 'build',
+          activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+        }),
+      ]);
     } finally {
       persister.stop();
     }
@@ -8324,6 +8367,121 @@ describe('engine/conductor', () => {
       processOnSpy.mockRestore();
       exitSpy.mockRestore();
     }
+  });
+
+  it('reaches measured after a SIGINT-interrupted conductor resumes on its persisted ledger', async () => {
+    let sigintHandler: (() => void) | undefined;
+    const processOnSpy = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGINT') sigintHandler = handler as () => void;
+      return process;
+    }) as typeof process.on);
+    let exitHandled: (() => void) | undefined;
+    const exited = new Promise<void>((resolve) => {
+      exitHandled = resolve;
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      exitHandled!();
+      return undefined;
+    }) as never);
+    const eventsPath = join(dir, '.pipeline/events.jsonl');
+    const interruptedEvents = new ConductorEventEmitter();
+    const interruptedPersister = new EventPersister(eventsPath, interruptedEvents, {
+      nowMs: (() => {
+        const timestamps = [1_000, 1_040];
+        return () => timestamps.shift()!;
+      })(),
+    });
+    interruptedPersister.start();
+    let interruptedLedger: string;
+
+    try {
+      const state: ConductState = { complexity_tier: 'M' };
+      for (const step of ALL_STEPS) {
+        if (step.name === 'prd') break;
+        state[step.name] = 'done';
+      }
+      await writeState(statePath, state);
+      let releaseStep: (() => void) | undefined;
+      const stepBlocked = new Promise<void>((resolve) => {
+        releaseStep = resolve;
+      });
+      const interrupted = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        events: interruptedEvents,
+        fromStep: 'prd',
+        verifyArtifacts: false,
+        stepRunner: {
+          run: async () => {
+            sigintHandler!();
+            await stepBlocked;
+            return { success: true };
+          },
+        },
+      });
+
+      const interruptedRun = interrupted.run();
+      await exited;
+      // `process.exit` is stubbed in this test worker, so snapshot the ledger
+      // at the same point the real process would have terminated.
+      interruptedLedger = await readFile(eventsPath, 'utf-8');
+      interruptedPersister.stop();
+      releaseStep!();
+      await interruptedRun;
+    } finally {
+      interruptedPersister.stop();
+      processOnSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+
+    await writeFile(eventsPath, interruptedLedger!);
+
+    const resumedEvents = new ConductorEventEmitter();
+    const resumedPersister = new EventPersister(eventsPath, resumedEvents, {
+      nowMs: (() => {
+        const timestamps = [2_000, 2_100];
+        return () => timestamps.shift()!;
+      })(),
+    });
+    resumedPersister.start();
+    try {
+      const resumed = new Conductor({
+        projectRoot: dir,
+        stateFilePath: join(dir, 'resumed-conduct-state.json'),
+        events: resumedEvents,
+        stepRunner: createMockStepRunner(),
+      }) as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+      await resumed.emitExecutionEvent({ type: 'step_started', step: 'plan', index: 1 });
+      await resumedEvents.emit({
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'success',
+        invoked: true,
+        observedIntervals: [{ startedAtMs: 2_020, durationMs: 50 }],
+      });
+      await resumed.emitExecutionEvent({ type: 'step_completed', step: 'plan', status: 'done' });
+    } finally {
+      resumedPersister.stop();
+    }
+
+    const timing = await computeTimingRollup(dir);
+    const rendered = appendTimingSection(renderShippedRecord({ slug: 'resumed-feature', specHash: 'abc123' }), timing);
+    expect({ timing, timeBlock: rendered.slice(rendered.indexOf('## Time')) }).toEqual({
+      timing: {
+        state: 'measured',
+        activeMs: 140,
+        providerActiveMs: 50,
+        noProviderActiveMs: 90,
+      },
+      timeBlock:
+        '## Time\nstate: measured\nactive_ms: 140\nprovider_active_ms: 50\nno_provider_active_ms: 90\n',
+    });
   });
 
   it('does not close an execution twice when SIGINT follows its normal completion', async () => {
