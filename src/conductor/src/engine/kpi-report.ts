@@ -80,7 +80,7 @@ function parseBuildReviewBlock(content: string): BuildReviewMetrics | undefined 
  * Parse the independently rendered `## Time` section. Cost fields are never
  * consulted, so timing remains reportable when cost evidence is absent.
  */
-function parseTimeBlock(content: string): KpiTimeFields {
+export function parseTimeBlock(content: string): KpiTimeFields {
   const match = /^## Time\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/m.exec(content);
   if (!match) return { state: 'unavailable' };
 
@@ -93,6 +93,7 @@ function parseTimeBlock(content: string): KpiTimeFields {
   const activeMs = num('active_ms');
   const providerActiveMs = num('provider_active_ms');
   const noProviderActiveMs = num('no_provider_active_ms');
+  const reason = /^reason:\s*(.+?)\s*$/m.exec(body)?.[1];
 
   if (/^state:\s*unavailable\s*$/m.test(body)) {
     return { state: 'unavailable' };
@@ -107,7 +108,11 @@ function parseTimeBlock(content: string): KpiTimeFields {
     return { state: 'measured', activeMs, providerActiveMs, noProviderActiveMs };
   }
 
-  return activeMs === undefined ? { state: 'partial' } : { state: 'partial', activeMs };
+  return {
+    state: 'partial',
+    ...(activeMs === undefined ? {} : { activeMs }),
+    ...(reason === undefined ? {} : { reason: reason as Extract<TimingRollup, { state: 'partial' }>['reason'] }),
+  };
 }
 
 /**
