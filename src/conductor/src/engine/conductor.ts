@@ -40,7 +40,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
-import type { ConductState, FinishPublicationEvent } from '../types/index.js';
+import type { ConductState, ConductorEvent, FinishPublicationEvent } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
@@ -1257,12 +1257,49 @@ export class Conductor {
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  /** Starts observed by this conductor that have not yet emitted a terminal event. */
+  private openExecutions = new Map<string, { kind: 'step' | 'parallel'; step: StepName }>();
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
     haltClass: Parameters<typeof writeHaltMarker>[2],
   ) {
     return writeHaltMarker(this.projectRoot, body, haltClass, this.events);
+  }
+
+  /** Emit through the existing spine while retaining the conductor's open execution state. */
+  private async emitExecutionEvent(event: ConductorEvent): Promise<void> {
+    await this.events.emit(event);
+    if (event.type === 'step_started') {
+      this.openExecutions.set(`step:${event.step}`, { kind: 'step', step: event.step });
+    } else if (event.type === 'parallel_started') {
+      this.openExecutions.set(`parallel:${event.step}`, { kind: 'parallel', step: event.step });
+    } else if (event.type === 'step_completed' || event.type === 'step_failed') {
+      this.openExecutions.delete(`step:${event.step}`);
+    } else if (event.type === 'parallel_completed' || event.type === 'parallel_failure') {
+      this.openExecutions.delete(`parallel:${event.step}`);
+    }
+  }
+
+  /** Close every execution this conductor observed, without exposing step selection to callers. */
+  private async closeOpenExecutions(): Promise<void> {
+    for (const execution of [...this.openExecutions.values()]) {
+      if (execution.kind === 'step') {
+        await this.emitExecutionEvent({
+          type: 'step_failed',
+          step: execution.step,
+          error: 'execution interrupted before a terminal event was emitted',
+          retryCount: 0,
+        });
+      } else {
+        await this.emitExecutionEvent({
+          type: 'parallel_failure',
+          step: execution.step,
+          branch: 'conductor',
+          error: 'execution interrupted before a terminal event was emitted',
+        });
+      }
+    }
   }
   private featureSlug?: string;
   private operatorParkBoundary?: () => Promise<boolean>;
@@ -4173,7 +4210,7 @@ export class Conductor {
     const breadcrumb = this._breadcrumb;
     const emitTracked = (ev: Parameters<typeof this.events.emit>[0]) => {
       breadcrumb.lastEventType = ev.type;
-      return this.events.emit(ev);
+      return this.emitExecutionEvent(ev);
     };
     // Acceptance RED telemetry records gate lifecycle but must not alter the
     // gate's authority: a failing sink leaves every later lifecycle event
@@ -9278,7 +9315,7 @@ export class Conductor {
     state: ConductState,
   ): Promise<void> {
     const branchNames = branches.map((b) => b.name);
-    await this.events.emit({ type: 'parallel_started', step: groupName, branches: branchNames });
+    await this.emitExecutionEvent({ type: 'parallel_started', step: groupName, branches: branchNames });
 
     const members: GroupMember[] = branches.map((branch) => ({
       name: branch.name,
@@ -9313,7 +9350,7 @@ export class Conductor {
       changes[syntheticKey] = 'failed';
       const error =
         outcome?.kind === 'no-verdict' ? outcome.reason : `branch ${branch.name} failed`;
-      await this.events.emit({
+      await this.emitExecutionEvent({
         type: 'parallel_failure',
         step: groupName,
         branch: branch.name,
@@ -9328,7 +9365,7 @@ export class Conductor {
     await this.commitStateChanges(state, `join ${groupName} parallel group`, changes);
 
     if (!groupFailed) {
-      await this.events.emit({
+      await this.emitExecutionEvent({
         type: 'parallel_completed',
         step: groupName,
         branches: branchNames,

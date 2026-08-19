@@ -1559,6 +1559,47 @@ describe('engine/conductor', () => {
     expect(emitted[lastIdx + 1]).toEqual({ type: 'step_completed', step: 'finish' });
   });
 
+  it('closes conductor-owned open executions through the existing event ledger', async () => {
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+    const timestamps = [1_000, 1_025];
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events, {
+      nowMs: () => timestamps.shift()!,
+    });
+    persister.start();
+
+    try {
+      const executionEvents = conductor as unknown as {
+        openExecutions: Map<string, { kind: 'step'; step: StepName }>;
+        closeOpenExecutions(): Promise<void>;
+      };
+      await events.emit({
+        type: 'step_started',
+        step: 'build',
+        index: 0,
+      });
+      executionEvents.openExecutions = new Map([
+        ['step:build', { kind: 'step', step: 'build' }],
+      ]);
+
+      await executionEvents.closeOpenExecutions();
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const terminal = records.find((record) => record.type === 'step_failed');
+      expect(terminal).toMatchObject({ type: 'step_failed', step: 'build' });
+      expect(terminal.activeInterval).toEqual({ startedAtMs: 1_000, durationMs: 25 });
+    } finally {
+      persister.stop();
+    }
+  });
+
   describe('ConductorOptions.runGh injection (Task 3: merged-PR guard plumbing)', () => {
     it('accepts an injected runGh option for the merged-PR guard', async () => {
       const runner = createMockStepRunner();
