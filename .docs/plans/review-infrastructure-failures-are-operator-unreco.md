@@ -348,7 +348,11 @@ advance and ceiling only — never add a PASS reset.
 2. Verify tests fail (RED).
 3. Implement as a new action in the existing pre-boot `build-review` command family, reusing the
    TTY-plus-operator-identity gate that finding acceptance already applies — checked before any
-   artifact or store access.
+   artifact or store access. The action's callable interface is fixed by ADR D6 (amended
+   2026-08-19) and is exactly:
+   `conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>`
+   — `--lap` carries `accept`'s exact-current-lap semantics and makes D6's stale-review refusal
+   reachable; the closed reason is derived per D7, never an argument.
 4. Verify tests pass (GREEN).
 5. Commit: "feat(build-review): operator-only reduced-coverage action".
 
@@ -356,6 +360,7 @@ advance and ceiling only — never add a PASS reset.
 - `src/conductor/src/engine/build-review-cli.ts` — the action and its gate
 - `src/conductor/src/engine/cli-builtins.ts` — command registration
 - `src/conductor/test/engine/build-review-cli.test.ts` — authority tests
+- `docs/reference/cli.md` — document the action under `conduct-ts build-review`
 
 **Dependencies:** Task 12
 

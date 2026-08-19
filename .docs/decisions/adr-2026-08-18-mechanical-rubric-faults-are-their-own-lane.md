@@ -169,6 +169,29 @@ Refusals (each leaving the store unchanged, each observable per §5): non-intera
 operator; a rubric that is not currently in an **exhausted** mechanical-fault state — it judged, it
 was skipped, or allowance remains; a stale review; and a duplicate decision for the same rubric.
 
+**The action's callable interface (amended 2026-08-19, before implementation, on operator decision).**
+The action is named and invoked exactly as:
+
+```bash
+conduct-ts build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
+```
+
+`record-reduced-coverage`, not `accept-reduced-coverage`: this decision's own rule is that the store
+is shared and the verb is not, so the action does not lead with `accept` and cannot read as a variant
+of finding acceptance.
+
+Argument shape follows its sibling `build-review accept --feature <slug> --lap <lap> --finding <id>
+--rationale <text>`, with `--rubric` replacing `--finding` as the selector. `--lap` is required and
+carries the same exact-current-lap semantics `accept` applies — it is what makes this decision's
+**stale review** refusal above reachable, and without it this would be the only state-changing
+`build-review` action with no freshness pin. The closed reason is **not** an argument: D7 derives it
+from engine-supplied state, so the operator names only the rubric.
+
+This paragraph exists because `writing-system-tests` HALTed on 2026-08-19 rather than invent a
+public CLI contract for the Story 10 acceptance spec — the story, plan, and this ADR all required a
+distinct operator action but none named it. The grammar above is that stable callable interface;
+Task 14 implements it and `docs/reference/cli.md` documents it.
+
 ### D7 — Identity is `{rubric, closed reason}` — the coarsest key that cannot evaporate (OQ-1)
 
 The decision's identity is derived from the rubric enum and the closed result reason, both engine-
