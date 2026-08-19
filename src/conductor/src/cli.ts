@@ -151,6 +151,14 @@ export type BuildReviewAcceptDispatch = {
   readonly rationale: string;
 };
 
+export type BuildReviewRecordReducedCoverageDispatch = {
+  readonly kind: 'record-reduced-coverage';
+  readonly feature: string;
+  readonly lapId: string;
+  readonly rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness';
+  readonly rationale: string;
+};
+
 /** Detect the read-only `build-review findings --feature <slug> [--json]` command. */
 export function detectBuildReviewFindingsCommand(argv: string[]): BuildReviewFindingsDispatch | null {
   if (argv[2] !== 'build-review' || argv[3] !== 'findings') return null;
@@ -178,6 +186,24 @@ export function detectBuildReviewAcceptCommand(argv: string[]): BuildReviewAccep
   if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !findingId || !rationale ||
     !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
   return { kind: 'accept', feature, lapId, findingId, rationale };
+}
+
+/** Detect only the fully bound, operator-only reduced-coverage grammar. */
+export function detectBuildReviewRecordReducedCoverageCommand(argv: string[]): BuildReviewRecordReducedCoverageDispatch | null {
+  if (argv[2] !== 'build-review' || argv[3] !== 'record-reduced-coverage') return null;
+  const args = argv.slice(4);
+  const read = (flag: string): string | undefined => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+  const feature = read('--feature');
+  const lapId = read('--lap');
+  const rubric = read('--rubric');
+  const rationale = read('--rationale');
+  const expected = ['--feature', feature, '--lap', lapId, '--rubric', rubric, '--rationale', rationale];
+  if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !rationale ||
+    !/^[a-z0-9][a-z0-9-]*$/.test(feature) || !['tautology', 'scope', 'rootCause', 'completeness'].includes(rubric ?? '')) return null;
+  return { kind: 'record-reduced-coverage', feature, lapId, rubric: rubric as BuildReviewRecordReducedCoverageDispatch['rubric'], rationale };
 }
 
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
@@ -594,6 +620,13 @@ export function createProgram(): Command {
     .requiredOption('--feature <slug>', 'Feature worktree slug')
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--finding <id>', 'Exact canonical finding identifier')
+    .requiredOption('--rationale <text>', 'Non-empty operator rationale');
+  buildReview
+    .command('record-reduced-coverage')
+    .description('Record an operator reduced-coverage decision from an interactive terminal')
+    .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .requiredOption('--lap <lap>', 'Current inspected lap identity')
+    .requiredOption('--rubric <rubric>', 'Mechanically failed rubric')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
 
   // Halt-issues subcommand (halt-monitor filed issues sweep). NON-INTERACTIVE:

@@ -3,12 +3,13 @@ import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate } from './build-review-aggregate.js';
-import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { parseBuildReviewLapId } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
+import type { BuildReviewRubricId } from '../types/config.js';
 
 export interface BuildReviewFindingsCommand {
   readonly kind: 'findings';
@@ -33,10 +34,22 @@ export interface BuildReviewAcceptCommand {
   readonly rationale: string;
 }
 
+export interface BuildReviewRecordReducedCoverageCommand {
+  readonly kind: 'record-reduced-coverage';
+  readonly feature: string;
+  readonly lapId: string;
+  readonly rubric: BuildReviewRubricId;
+  readonly rationale: string;
+}
+
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
   append(input: Parameters<BuildReviewDispositionStore['append']>[0]): Promise<BuildReviewDispositionAppendResult>;
   appendIfCurrent?: BuildReviewDispositionStore['appendIfCurrent'];
+};
+
+type ReducedCoverageDispositionStore = {
+  appendReducedCoverage(input: Parameters<BuildReviewDispositionStore['appendReducedCoverage']>[0]): Promise<BuildReviewReducedCoverageAppendResult>;
 };
 
 export interface BuildReviewAcceptDeps extends BuildReviewFindingsDeps {
@@ -46,6 +59,13 @@ export interface BuildReviewAcceptDeps extends BuildReviewFindingsDeps {
   readonly createStore?: (worktree: string) => DispositionStore;
   /** Same-schema external-process event writer (exceptions A/B of the event spine). */
   readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_disposition_accepted' | 'build_review_disposition_refused' }>) => void;
+}
+
+export interface BuildReviewRecordReducedCoverageDeps extends Omit<BuildReviewFindingsDeps, 'createStore'> {
+  readonly isInteractive?: boolean;
+  readonly resolveOperator?: () => string | undefined;
+  readonly createStore?: (worktree: string) => ReducedCoverageDispositionStore;
+  readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_disposition_refused' }>) => void;
 }
 
 type AcceptedDisposition = {
@@ -242,5 +262,71 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     return 0;
   } catch (error) {
     return refuse('disposition-store-unavailable', `build-review accept: refused for '${command.feature}'; the disposition store could not be reached: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Records an operator's reduced-coverage decision. Authority is checked
+ * before reading the review aggregate or opening the disposition store.
+ */
+export async function dispatchBuildReviewRecordReducedCoverage(
+  command: BuildReviewRecordReducedCoverageCommand,
+  deps: BuildReviewRecordReducedCoverageDeps = {},
+): Promise<number> {
+  const print = deps.print ?? console.log;
+  let worktree: string | undefined;
+  let feature: BuildReviewFeatureIdentity | undefined;
+  try {
+    const resolved = await resolveCliFeature(command, deps);
+    if (!resolved) throw new Error('feature identity is unavailable');
+    worktree = resolved.worktree;
+    feature = resolved.feature;
+    const refuse = (reason: string, message: string): number => {
+      try {
+        (deps.appendEvent ?? appendCloseoutEvent)(worktree!, {
+          type: 'build_review_disposition_refused', feature: command.feature, reason, ts: new Date().toISOString(),
+        });
+      } catch {
+        // The refusal remains authoritative when best-effort telemetry cannot append.
+      }
+      print(message);
+      return 1;
+    };
+    const operator = (deps.resolveOperator ?? (() => userInfo().username))();
+    if (!(deps.isInteractive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true)) || !operator?.trim()) {
+      return refuse('non-interactive-or-unidentified-operator', 'build-review record-reduced-coverage: requires an interactive terminal and a verified local operator identity.');
+    }
+    const requestedLap = parseBuildReviewLapId(command.lapId);
+    if (!requestedLap || !command.rationale.trim()) {
+      return refuse('invalid-lap-or-blank-rationale', 'build-review record-reduced-coverage: requires an exact current lap and non-empty rationale.');
+    }
+    const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
+    const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
+    if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');
+    const result = aggregate.results[command.rubric];
+    if (result.kind !== 'infrastructure-failure') throw new Error('rubric has no infrastructure failure');
+    if (!feature) throw new Error('feature identity is unavailable');
+    const appended = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).appendReducedCoverage({
+      feature,
+      rubric: command.rubric,
+      reason: result.reason,
+      rationale: command.rationale.trim(),
+      operator: operator.trim(),
+    });
+    if (!appended.ok) throw new Error(appended.message);
+    print(`build-review record-reduced-coverage: recorded ${command.rubric} for lap ${requestedLap}.`);
+    return 0;
+  } catch {
+    if (worktree) {
+      try {
+        (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
+          type: 'build_review_disposition_refused', feature: command.feature, reason: 'current-rubric-lap-or-state-invalid', ts: new Date().toISOString(),
+        });
+      } catch {
+        // The refusal remains authoritative when best-effort telemetry cannot append.
+      }
+    }
+    print(`build-review record-reduced-coverage: refused for '${command.feature}'; the current rubric, lap, or state could not be verified.`);
+    return 1;
   }
 }

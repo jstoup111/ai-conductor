@@ -1,5 +1,5 @@
 export * from './types/index.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
 export { runReleasePrAction } from './engine/release-pr-action.js';
@@ -57,6 +57,7 @@ import {
   detectInline,
   detectBuildReviewFindingsCommand,
   detectBuildReviewAcceptCommand,
+  detectBuildReviewRecordReducedCoverageCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
   detectPlanProtectedTargetsCommand,
@@ -70,7 +71,7 @@ import {
   userConfigSetCommand,
   type CLIOptions,
 } from './cli.js';
-import { dispatchBuildReviewAccept, dispatchBuildReviewFindings } from './engine/build-review-cli.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
 import type { ConductState, StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
@@ -475,6 +476,12 @@ async function main(): Promise<void> {
   const buildReviewAcceptCmd = detectBuildReviewAcceptCommand(process.argv);
   if (buildReviewAcceptCmd) {
     process.exitCode = await dispatchBuildReviewAccept(buildReviewAcceptCmd);
+    return;
+  }
+
+  const buildReviewRecordReducedCoverageCmd = detectBuildReviewRecordReducedCoverageCommand(process.argv);
+  if (buildReviewRecordReducedCoverageCmd) {
+    process.exitCode = await dispatchBuildReviewRecordReducedCoverage(buildReviewRecordReducedCoverageCmd);
     return;
   }
 
