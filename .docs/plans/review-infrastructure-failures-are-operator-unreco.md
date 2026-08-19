@@ -3,7 +3,7 @@
 **Date:** 2026-08-18
 **Design:** [PRD](../specs/2026-08-18-review-infrastructure-failures-are-operator-unreco.md)
 **Stories:** .docs/stories/review-infrastructure-failures-are-operator-unreco.md
-**Conflict check:** Clean as of 2026-08-18 — `.docs/conflicts/2026-08-18-review-infrastructure-failures.md`
+**Conflict check:** Clean as of 2026-08-18 — `.docs/conflicts/2026-08-18-review-infrastructure-failures-are-operator-unreco.md`
 **ADR:** [mechanical rubric faults are their own lane](../decisions/adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane.md) (APPROVED)
 
 ## Summary
