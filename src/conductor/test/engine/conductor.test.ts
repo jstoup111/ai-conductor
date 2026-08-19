@@ -26,6 +26,13 @@ vi.mock('../../src/engine/rebase.js', async () => {
     }),
   };
 });
+vi.mock('../../src/engine/kickback-ledger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/kickback-ledger.js')>();
+  return {
+    ...actual,
+    creditKickbackGateLaps: vi.fn(actual.creditKickbackGateLaps),
+  };
+});
 import { execa } from 'execa';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
@@ -66,7 +73,11 @@ import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
-import { writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import {
+  creditKickbackGateLaps,
+  readKickbackLedger,
+  writeKickbackLedger,
+} from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
@@ -128,10 +139,133 @@ describe('engine/conductor', () => {
     dir = await mkdtemp(join(tmpdir(), 'conductor-test-'));
     statePath = join(dir, 'conduct-state.json');
     events = new ConductorEventEmitter();
+    vi.mocked(creditKickbackGateLaps).mockClear();
   });
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('credits lap counts once immediately before reopening an invalidated build_review after rebase', async () => {
+    const state: ConductState = { build_review: 'done' };
+    await writeState(statePath, state);
+    const rebaseKickback: GateVerdict['kickback'] = {
+      from: 'rebase',
+      evidence: 'rebase changed a reviewed path',
+    };
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: rebaseKickback,
+    });
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 1,
+          cumulative: 4,
+          mechanicalFaults: 3,
+          treeHash: 'before-rebase',
+          lastReason: 'prior mechanical lap',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      verifyArtifacts: true,
+    });
+    (conductor as unknown as { lastRebaseOutcome: { kind: 'changed' } }).lastRebaseOutcome = {
+      kind: 'changed',
+    };
+    const advanceTail = (conductor as unknown as {
+      advanceTail: (
+        step: (typeof ALL_STEPS)[number],
+        state: ConductState,
+        stuckGate: Map<StepName, number>,
+        steps: typeof ALL_STEPS,
+        indexOf: (name: StepName) => number,
+      ) => Promise<number | null | 'halt'>;
+    }).advanceTail.bind(conductor);
+
+    await advanceTail(
+      ALL_STEPS.find((step) => step.name === 'rebase')!,
+      state,
+      new Map(),
+      ALL_STEPS,
+      (name) => ALL_STEPS.findIndex((step) => step.name === name),
+    );
+
+    expect(creditKickbackGateLaps).toHaveBeenCalledTimes(1);
+    expect(creditKickbackGateLaps).toHaveBeenCalledWith(expect.objectContaining({
+      cumulative: 4,
+      mechanicalFaults: 3,
+    }));
+    expect((await readKickbackLedger(dir)).gates.build_review).toEqual(expect.objectContaining({
+      cumulative: 0,
+      mechanicalFaults: 0,
+    }));
+    expect(state.build_review).toBe('pending');
+  });
+
+  it('does not credit build_review lap counts when a changed rebase reopens another gate', async () => {
+    const state: ConductState = { manual_test: 'done' };
+    await writeState(statePath, state);
+    await writeVerdict(dir, 'manual_test', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'rebase changed test evidence' },
+    });
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 1,
+          cumulative: 4,
+          mechanicalFaults: 3,
+          treeHash: 'before-rebase',
+          lastReason: 'prior mechanical lap',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
+      },
+    });
+
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      verifyArtifacts: true,
+    });
+    (conductor as unknown as { lastRebaseOutcome: { kind: 'changed' } }).lastRebaseOutcome = {
+      kind: 'changed',
+    };
+    const advanceTail = (conductor as unknown as {
+      advanceTail: (
+        step: (typeof ALL_STEPS)[number],
+        state: ConductState,
+        stuckGate: Map<StepName, number>,
+        steps: typeof ALL_STEPS,
+        indexOf: (name: StepName) => number,
+      ) => Promise<number | null | 'halt'>;
+    }).advanceTail.bind(conductor);
+
+    await advanceTail(
+      ALL_STEPS.find((step) => step.name === 'rebase')!,
+      state,
+      new Map(),
+      ALL_STEPS,
+      (name) => ALL_STEPS.findIndex((step) => step.name === name),
+    );
+
+    expect(creditKickbackGateLaps).not.toHaveBeenCalled();
+    expect(state.manual_test).toBe('pending');
   });
 
   it('halts build_review for a human when consuming the sixth cumulative kickback', async () => {
