@@ -1794,6 +1794,12 @@ export class DefaultStepRunner implements StepRunner {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
 
+    // A prior lap's aggregate cannot represent this lap. Invalidate it before
+    // dispatch so a mechanical early return leaves no stale semantic FAIL for
+    // the conductor to route back to build.
+    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    await rm(join(effectivePipelineDir, 'build-review.json'), { force: true });
+
     const coordination = await coordinateBuildReviewRubrics({
       config,
       inputs,
@@ -1901,7 +1907,7 @@ export class DefaultStepRunner implements StepRunner {
       if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         return {
           success: false,
-          output: `build_review ${infrastructureFailure.rubric} rubric rejected after repair: ${infrastructureFailure.detail}`,
+          output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
         };
       }
     }
@@ -1911,7 +1917,6 @@ export class DefaultStepRunner implements StepRunner {
       snapshotDigest: inputs.sourceSnapshot.digest,
       results: validResults,
     });
-    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     const aggregatePath = join(effectivePipelineDir, 'build-review.json');
     const publication = await new BuildReviewDispositionStore(this.projectDir).withLease(async () => {
       await mkdir(effectivePipelineDir, { recursive: true });

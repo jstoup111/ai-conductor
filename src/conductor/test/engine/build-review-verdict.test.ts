@@ -364,6 +364,67 @@ describe('engine/build-review verdict wiring contract', () => {
     expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(1);
   });
 
+  it('clears a prior-lap aggregate instead of using it as a mechanical lap rework hint', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-mechanical-stale-aggregate-'));
+    dirs.push(dir);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, mechanicalFaults: 0, treeHash: null,
+          lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+    const previousLap = parseBuildReviewLapId('lap-previous')!;
+    const previousAggregate = joinBuildReviewRubricOutcomes({
+      lapId: previousLap,
+      snapshotDigest: 'sha256:previous',
+      results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId: previousLap, snapshotDigest: 'sha256:previous', contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId: previousLap, snapshotDigest: 'sha256:previous', contractVersion: 'v3' as never, findings: [{ concernKind: 'out-of-plan-change', summary: 'Prior-lap finding', evidenceLocations: ['src/old.ts:1'], anchor: { rubric: 'scope', path: 'src/old.ts', relation: 'not-authorized-by-plan' } }], verdict: 'FAIL' },
+        rootCause: { kind: 'judged', rubric: 'rootCause', lapId: previousLap, snapshotDigest: 'sha256:previous', contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId: previousLap, snapshotDigest: 'sha256:previous', contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+      },
+    });
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, BUILD_REVIEW_VERDICT), JSON.stringify(previousAggregate));
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        { kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
+        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+      ],
+    });
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const runner = new DefaultStepRunner(provider, 'mechanical-stale-aggregate', dir, {
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({
+        version: 1, rubric, lapId, snapshotDigest,
+        result: { kind: 'judged', rubric, lapId, snapshotDigest, contractVersion: 'v3' as never, findings: [], verdict: 'PASS' },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+    const inputs = {
+      sourceSnapshot: { headSha: 'mechanical-stale-aggregate', digest: 'sha256:mechanical-stale-aggregate', mergeBase: 'base' },
+    } as BuildReviewFrozenInputs;
+
+    const result = await (runner as unknown as {
+      runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; output: string }>;
+    }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+    expect({
+      result,
+      staleAggregate: await readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8').catch(() => null),
+    }).toEqual({
+      result: {
+        success: false,
+        output: 'build_review mechanical fault in scope (malformed-artifact): invalid-provider-result: worker response unavailable',
+      },
+      staleAggregate: null,
+    });
+  });
+
   it.each(['artifact-write-failed', 'cache-write-failed'] as const)(
     'consumes the mechanical allowance when the coordinator reports %s',
     async (reason) => {
