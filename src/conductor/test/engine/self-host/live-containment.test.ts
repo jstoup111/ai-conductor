@@ -211,7 +211,7 @@ describe('ContainmentVerdict', () => {
     const { liveCheckout, worktreeRoot } = await createCheckout();
     const bindSet = deriveBindSet(liveCheckout, worktreeRoot);
     const contained = await probeContainment(bindSet, liveCheckout, worktreeRoot, async () => ({
-      stdout: 'live-root-not-writable\nworktree-writable\n',
+      stdout: 'live-root-not-writable\nworktree-writable\nnested-sandbox-available\n',
       stderr: '',
       exitCode: 0,
     }));
@@ -221,7 +221,7 @@ describe('ContainmentVerdict', () => {
 
     expect(contained).toEqual({
       contained: true,
-      evidence: 'probe confirmed live-root-not-writable and worktree-writable',
+      evidence: 'probe confirmed live-root-not-writable, worktree-writable, and nested-sandbox-available',
     });
     expect(unavailable).toEqual({
       contained: false,
@@ -346,7 +346,11 @@ describe('probeContainment', () => {
     const calls: Array<{ executable: string; args: readonly string[] }> = [];
     const runner: ProbeRunner = async (executable, args) => {
       calls.push({ executable, args });
-      return { stdout: 'live-root-not-writable\nworktree-writable\n', stderr: '', exitCode: 0 };
+      return {
+        stdout: 'live-root-not-writable\nworktree-writable\nnested-sandbox-available\n',
+        stderr: '',
+        exitCode: 0,
+      };
     };
 
     const verdict = await probeContainment(bindSet, liveCheckout, worktreeRoot, runner);
@@ -431,7 +435,7 @@ describe('probeContainment', () => {
   it('collapses a non-zero probe result to an unavailable verdict carrying stderr', async () => {
     const { liveCheckout, worktreeRoot } = await createCheckout();
     const runner: ProbeRunner = async () => ({
-      stdout: 'live-root-not-writable\nworktree-writable\n',
+      stdout: 'live-root-not-writable\nworktree-writable\nnested-sandbox-available\n',
       stderr: 'bwrap: Creating new namespace failed: Operation not permitted',
       exitCode: 1,
     });
@@ -460,7 +464,7 @@ describe('probeContainment', () => {
   it('never promotes unparseable probe output to contained', async () => {
     const { liveCheckout, worktreeRoot } = await createCheckout();
     const runner: ProbeRunner = async () => ({
-      stdout: 'live-root-not-writable\nworktree-writable\nunexpected-output\n',
+      stdout: 'live-root-not-writable\nworktree-writable\nnested-sandbox-available\nunexpected-output\n',
       stderr: '',
       exitCode: 0,
     });
@@ -471,5 +475,55 @@ describe('probeContainment', () => {
       contained: false,
       reason: expect.stringMatching(/unparseable/i),
     });
+  });
+
+  it('refuses containment when the wrap denies the provider its own nested sandbox', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const runner: ProbeRunner = async () => ({
+      stdout: 'live-root-not-writable\nworktree-writable\nnested-sandbox-denied\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringMatching(/nested sandbox namespace/i),
+    });
+  });
+
+  it('refuses containment when the probe is silent about nesting', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    const runner: ProbeRunner = async () => ({
+      stdout: 'live-root-not-writable\nworktree-writable\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    const verdict = await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(verdict).toEqual({
+      contained: false,
+      reason: expect.stringMatching(/nested provider sandbox/i),
+    });
+  });
+
+  it('probes nesting by running bwrap inside the wrap', async () => {
+    const { liveCheckout, worktreeRoot } = await createCheckout();
+    let script = '';
+    const runner: ProbeRunner = async (_executable, args) => {
+      script = String(args[args.indexOf('-c') + 1]);
+      return {
+        stdout: 'live-root-not-writable\nworktree-writable\nnested-sandbox-available\n',
+        stderr: '',
+        exitCode: 0,
+      };
+    };
+
+    await probeContainment([], liveCheckout, worktreeRoot, runner);
+
+    expect(script).toContain('bwrap --dev-bind / / -- true');
+    expect(script).toContain('nested-sandbox-denied');
   });
 });

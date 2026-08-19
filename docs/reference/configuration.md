@@ -729,10 +729,19 @@ self-host-isolation' }` (`src/conductor/src/engine/conductor.ts:2049-2065`).
 without the `bwrap` read-only live-checkout proof, so any live-checkout drift again follows the
 existing fail-closed boundary path and writes a HALT. See the [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only) for recovery.
 
-Likewise, containment is not considered active when `bwrap` is unavailable or its two-sided probe
-fails. Only a successful proof that the live checkout is read-only and the dispatched worktree is
-writable permits live-checkout drift to be attributed to a concurrent operator; every unproven case
-remains fail-closed.
+Likewise, containment is not considered active when `bwrap` is unavailable or its probe fails. The
+probe proves three things: the live checkout is read-only, the dispatched worktree is writable, and
+the wrap still lets the provider create its own nested sandbox namespace. Only a full pass permits
+live-checkout drift to be attributed to a concurrent operator; every unproven case remains
+fail-closed.
+
+The nesting assertion exists because providers sandbox themselves inside the wrap — codex's
+`apply_patch` helper and Claude Code's sandboxed bash both spawn `bwrap`. On a host that refuses an
+unprivileged user namespace to an already-namespaced process (for example Ubuntu with
+`kernel.apparmor_restrict_unprivileged_userns=1`), that nested sandbox fails and the provider cannot
+write a single file, so the dispatch burns its whole budget making no progress. Containment refuses
+itself on such hosts with `containment unavailable: the wrap denies the provider its own nested
+sandbox namespace` rather than wrapping a dispatch that cannot work.
 
 > **Known limitation.** `skill_relink_preflight` is resolved into `skillRelinkPreflight`
 > (`resolved-config.ts:562`) but has no consumer outside `resolved-config.ts`. The relink runs

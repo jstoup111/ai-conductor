@@ -196,7 +196,7 @@ function judgedProvider(observed: TautologyProjection[]): LLMProvider {
           rubric: projection.rubric,
           lapId: projection.lapId,
           snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v1',
+          contractVersion: projection.contractVersion,
           findings: [],
         }),
         exitCode: 0,

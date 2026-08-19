@@ -92,6 +92,14 @@ export function wrapForContainment<TEnv>(
 const CONTAINMENT_PROBE = [
   'if test -w "$1"; then printf "live-root-writable\\n"; else printf "live-root-not-writable\\n"; fi',
   'if test -w "$2"; then printf "worktree-writable\\n"; else printf "worktree-not-writable\\n"; fi',
+  // Providers run their own filesystem sandbox inside this wrap (codex's
+  // apply_patch helper, Claude Code's sandboxed bash). On hosts that deny an
+  // unprivileged user namespace to an already-namespaced process, that nested
+  // sandbox fails and the provider cannot write a single file — a contained
+  // dispatch that makes zero progress. Prove nesting works before claiming
+  // containment.
+  'if bwrap --dev-bind / / -- true >/dev/null 2>&1;'
+  + ' then printf "nested-sandbox-available\\n"; else printf "nested-sandbox-denied\\n"; fi',
 ].join('; ');
 
 function unavailableProbeFailure(error: unknown): ContainmentVerdict {
@@ -154,6 +162,8 @@ export async function probeContainment(
     'live-root-not-writable',
     'worktree-writable',
     'worktree-not-writable',
+    'nested-sandbox-available',
+    'nested-sandbox-denied',
   ]);
   if (observations.some((observation) => !recognizedObservations.has(observation))) {
     return { contained: false, reason: 'containment unavailable: probe produced unparseable output' };
@@ -172,12 +182,24 @@ export async function probeContainment(
   if (!proven.has('worktree-writable')) {
     return { contained: false, reason: `probe did not prove ${worktreeRoot} is writable` };
   }
-  if (observations.length !== 2 || proven.size !== 2) {
+  if (proven.has('nested-sandbox-denied')) {
+    return {
+      contained: false,
+      reason: 'containment unavailable: the wrap denies the provider its own nested sandbox namespace',
+    };
+  }
+  if (!proven.has('nested-sandbox-available')) {
+    return {
+      contained: false,
+      reason: 'containment unavailable: probe did not prove a nested provider sandbox is available',
+    };
+  }
+  if (observations.length !== 3 || proven.size !== 3) {
     return { contained: false, reason: 'containment unavailable: probe produced unparseable output' };
   }
 
   return {
     contained: true,
-    evidence: 'probe confirmed live-root-not-writable and worktree-writable',
+    evidence: 'probe confirmed live-root-not-writable, worktree-writable, and nested-sandbox-available',
   };
 }
