@@ -12,6 +12,7 @@ import {
   type BuildReviewDispositionListResult,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
+  type BuildReviewReducedCoverageListResult,
 } from './build-review-dispositions.js';
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { resolveMainRepoRoot } from './park-marker.js';
@@ -19,6 +20,7 @@ import type { ConductorEvent } from '../types/events.js';
 
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
+  listReducedCoverage(feature: unknown): Promise<BuildReviewReducedCoverageListResult>;
 };
 
 export interface BuildReviewEffectiveResolverDeps {
@@ -75,12 +77,16 @@ export async function resolveEffectiveBuildReviewVerdict(
   const feature = await resolveBuildReviewFeatureIdentity(projectRoot, deps);
   if (!feature) return { ok: false, reason: 'build-review feature identity is unavailable' };
   let listed: BuildReviewDispositionListResult;
+  let reducedCoverage: BuildReviewReducedCoverageListResult;
   try {
-    listed = await (deps.createStore ?? ((root: string) => new BuildReviewDispositionStore(root)))(projectRoot).list(feature);
+    const store = (deps.createStore ?? ((root: string) => new BuildReviewDispositionStore(root)))(projectRoot);
+    listed = await store.list(feature);
+    reducedCoverage = await store.listReducedCoverage(feature);
   } catch {
     return { ok: false, reason: 'build-review disposition state is unavailable' };
   }
   if (!listed.ok) return { ok: false, reason: `build-review disposition state is unavailable: ${listed.message}` };
+  if (!reducedCoverage.ok) return { ok: false, reason: `build-review disposition state is unavailable: ${reducedCoverage.message}` };
   if (listed.records.some((record) => !sameFeature(record.feature, feature))) {
     return { ok: false, reason: 'build-review disposition state returned a foreign feature record' };
   }
@@ -95,7 +101,7 @@ export async function resolveEffectiveBuildReviewVerdict(
       });
     }
   }
-  const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records);
+  const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, reducedCoverage.records);
   return effective
     ? { ok: true, feature, effective }
     : { ok: false, reason: 'build-review disposition state cannot resolve current findings' };

@@ -10,14 +10,17 @@ const root = '/repo';
 const worktree = '/repo/.worktrees/feature';
 const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
 
-function aggregate() {
+function aggregate(infrastructureFailure?: { readonly rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness'; readonly reason: 'provider-error' }) {
   const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
   const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness', findings = rubric === 'scope' ? [finding] : []) => ({
     kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never,
     findings, verdict: findings.length ? 'FAIL' as const : 'PASS' as const,
   });
   return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
-    tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'), completeness: judged('completeness'),
+    tautology: judged('tautology'), scope: judged('scope'), rootCause: judged('rootCause'),
+    completeness: infrastructureFailure?.rubric === 'completeness'
+      ? { kind: 'infrastructure-failure' as const, rubric: 'completeness' as const, reason: infrastructureFailure.reason, detail: 'provider unavailable' }
+      : judged('completeness'),
   } });
 }
 
@@ -34,10 +37,27 @@ describe('live build-review effective resolver', () => {
     const accepted = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v2', concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' } })!;
     const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
       ...identityDeps,
-      createStore: () => ({ list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: accepted, sourceLapId: lapId, summary: 'old prose', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }) }),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: accepted, sourceLapId: lapId, summary: 'old prose', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
     });
     expect(result).toMatchObject({ ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [accepted.id], unresolvedFindingIds: [] } });
     expect(raw.verdict).toBe('FAIL');
+  });
+
+  it('passes from current reduced-coverage state when it covers the infrastructure branch', async () => {
+    const raw = aggregate({ rubric: 'completeness', reason: 'provider-error' });
+    const accepted = canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v2', concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' } })!;
+    const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: () => ({
+        list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: accepted, sourceLapId: lapId, summary: 'old prose', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }),
+        listReducedCoverage: async () => ({ ok: true as const, records: [{ kind: 'reduced-coverage' as const, version: 'v1' as const, feature, identity: { rubric: 'completeness' as const, reason: 'provider-error' as const }, rationale: 'mechanical fault is covered', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, effective: {
+      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [accepted.id], unresolvedFindingIds: [],
+      infrastructureFailureRubrics: ['completeness'],
+    } });
   });
 
   it('reports a stored superseded-contract disposition without letting it bind again', async () => {
@@ -46,7 +66,7 @@ describe('live build-review effective resolver', () => {
     const emitted: unknown[] = [];
     const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
       ...identityDeps,
-      createStore: () => ({ list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: superseded, sourceLapId: lapId, summary: 'old prose', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }) }),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature, finding: superseded, sourceLapId: lapId, summary: 'old prose', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' }] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
       emit: async (event) => { emitted.push(event); },
     });
 
@@ -60,7 +80,7 @@ describe('live build-review effective resolver', () => {
   it('fails closed for an invalid aggregate, unavailable identity, unreadable state, or foreign state', async () => {
     await expect(resolveEffectiveBuildReviewVerdict(worktree, { verdict: 'PASS' }, identityDeps)).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('aggregate') });
     await expect(resolveEffectiveBuildReviewVerdict(worktree, aggregate(), { ...identityDeps, resolveMainRoot: async () => '/elsewhere' })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('identity') });
-    await expect(resolveEffectiveBuildReviewVerdict(worktree, aggregate(), { ...identityDeps, createStore: () => ({ list: async () => ({ ok: false as const, kind: 'unreadable' as const, message: 'broken' }) }) })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('unavailable') });
-    await expect(resolveEffectiveBuildReviewVerdict(worktree, aggregate(), { ...identityDeps, createStore: () => ({ list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature: { ...feature, feature: 'other' }, finding: canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'x', relation: 'out-of-plan-change' } })!, sourceLapId: lapId, summary: 'x', rationale: 'x', operator: 'x', acceptedAt: '2026-08-14T00:00:00.000Z' }] }) }) })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('foreign') });
+    await expect(resolveEffectiveBuildReviewVerdict(worktree, aggregate(), { ...identityDeps, createStore: () => ({ list: async () => ({ ok: false as const, kind: 'unreadable' as const, message: 'broken' }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }) })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('unavailable') });
+    await expect(resolveEffectiveBuildReviewVerdict(worktree, aggregate(), { ...identityDeps, createStore: () => ({ list: async () => ({ ok: true as const, records: [{ version: 'v1' as const, feature: { ...feature, feature: 'other' }, finding: canonicalizeBuildReviewFindingIdentity({ rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope', path: 'x', relation: 'out-of-plan-change' } })!, sourceLapId: lapId, summary: 'x', rationale: 'x', operator: 'x', acceptedAt: '2026-08-14T00:00:00.000Z' }] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }) })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('foreign') });
   });
 });

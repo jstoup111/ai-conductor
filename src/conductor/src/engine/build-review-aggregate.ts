@@ -9,6 +9,7 @@ import {
   matchesBuildReviewDisposition,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
+  type BuildReviewReducedCoverageDispositionRecord,
 } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
@@ -209,6 +210,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
 export function deriveEffectiveBuildReviewVerdict(
   value: unknown,
   acceptedFindingIds: ReadonlySet<string> = new Set(),
+  reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -216,6 +218,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const unresolved: string[] = [];
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
+  let uncoveredInfrastructureCount = 0;
   let judgedCount = 0;
   for (const rubric of RUBRICS) {
     const result = aggregate.results[rubric];
@@ -225,6 +228,9 @@ export function deriveEffectiveBuildReviewVerdict(
     }
     if (result.kind === 'infrastructure-failure') {
       infrastructure.push(rubric);
+      if (!reducedCoverage.some((decision) =>
+        decision.identity.rubric === rubric && decision.identity.reason === result.reason,
+      )) uncoveredInfrastructureCount += 1;
       continue;
     }
     judgedCount += 1;
@@ -238,7 +244,7 @@ export function deriveEffectiveBuildReviewVerdict(
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
-    verdict: judgedCount > 0 && unresolved.length === 0 && infrastructure.length === 0 ? 'PASS' : 'FAIL',
+    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructureCount === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
   });
@@ -253,6 +259,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   value: unknown,
   feature: BuildReviewFeatureIdentity,
   dispositions: readonly BuildReviewDispositionRecord[],
+  reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -268,5 +275,10 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
       if (matchesBuildReviewDisposition(feature, identity, dispositions)) acceptedIds.add(identity.id);
     }
   }
-  return deriveEffectiveBuildReviewVerdict(aggregate, acceptedIds);
+  return deriveEffectiveBuildReviewVerdict(
+    aggregate,
+    acceptedIds,
+    reducedCoverage.filter((decision) => decision.feature.version === feature.version &&
+      decision.feature.repository === feature.repository && decision.feature.feature === feature.feature),
+  );
 }
