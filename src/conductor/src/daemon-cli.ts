@@ -740,6 +740,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // Conductors running in daemon mode (daemon:true) will register their
   // AbortControllers here instead of installing per-conductor handlers.
   const allWaitSignals = new Set<AbortController>();
+  const activeConductors = new Set<Conductor>();
+  let shutdownRequested = false;
 
   // Task 22 / #561: Install ONE process-level SIGTERM handler (not N
   // per-conductor). When SIGTERM fires, abort all in-flight waits so they
@@ -749,11 +751,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // releases the lock. No direct process.exit here: the only force-exit
   // path is the teardown's bounded onForceRelease backstop above.
   const daemonSigtermHandler = async () => {
+    shutdownRequested = true;
     // Abort all in-flight rate-limit waits across all conductors
     for (const controller of allWaitSignals) {
       controller.abort();
     }
-    // Note: State saves are handled by individual conductors' exit handlers.
+    // Daemon conductors intentionally have no per-conductor SIGTERM listener.
+    // Close their real lifecycle ledgers before the scheduler drain can release
+    // this process; each closure joins an in-flight terminal if one exists.
+    await Promise.all(
+      [...activeConductors].map((conductor) => conductor.closeOpenExecutionsForShutdown()),
+    );
     // Request the drain — runDaemon observes shouldStop() at its next loop
     // boundary and stops with stoppedReason 'signal_teardown'; the normal
     // completion path below then releases the lock and exits.
@@ -1065,6 +1073,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       registerAbortController: (controller) => allWaitSignals.add(controller),
     });
 
+    activeConductors.add(conductor);
+    try {
+
     // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate
     // the advanced base FIRST — run 9.0's rebase-onto-latest BEFORE the conductor
     // resumes the pending gate, so a gate halt (e.g. prd-audit) re-verifies on the
@@ -1111,6 +1122,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     }
 
+    if (shutdownRequested) return;
     const conductorTermination = await conductor.run();
     if (conductorTermination) {
       return conductorTermination;
@@ -1131,6 +1143,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       slug: item.slug,
       log: featureLog,
     });
+    } finally {
+      activeConductors.delete(conductor);
+    }
 
   };
 

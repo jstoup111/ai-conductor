@@ -1713,7 +1713,7 @@ describe('engine/conductor', () => {
     }
   });
 
-  it('registers a start before an interrupt listener can close its execution', async () => {
+  it('registers a start before a daemon shutdown can close its execution', async () => {
     const conductor = new Conductor({
       projectRoot: dir,
       stateFilePath: statePath,
@@ -1729,10 +1729,9 @@ describe('engine/conductor', () => {
     try {
       const executionEvents = conductor as unknown as {
         emitExecutionEvent(event: ConductorEvent): Promise<void>;
-        closeOpenExecutions(): Promise<void>;
       };
       events.on('step_started', async (event) => {
-        if (event.type === 'step_started') await executionEvents.closeOpenExecutions();
+        if (event.type === 'step_started') await conductor.closeOpenExecutionsForShutdown();
       });
 
       await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });

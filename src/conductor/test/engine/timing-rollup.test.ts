@@ -437,7 +437,7 @@ describe('computeTimingRollup', () => {
     {
       name: 'an unmatched step start',
       events: [{ type: 'step_started', step: 'plan' }],
-      expected: { state: 'partial', reason: 'empty-active-union' },
+      expected: { state: 'partial', reason: 'open-executions:step:plan' },
     },
     {
       name: 'an unmatched parallel failure',
