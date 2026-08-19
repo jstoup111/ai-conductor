@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,15 @@ import {
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { HarnessConfig } from '../../src/types/config.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+
+vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
+  coordinateBuildReviewRubrics: vi.fn(),
+}));
 
 // ── Structural input-isolation test (build_review) ───────────────────────
 //
@@ -180,5 +189,47 @@ describe('build_review input isolation', () => {
       expect(harness).toContain(trigger);
       expect(pipeline).toContain(trigger);
     }
+  });
+
+  it('routes an infrastructure result with arbitrary detail through the mechanical lane', async () => {
+    const provider: LLMProvider = {
+      invoke: vi.fn(),
+      invokeInteractive: vi.fn(),
+    };
+    const coordinate = vi.mocked(coordinateBuildReviewRubrics);
+    coordinate.mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        {
+          kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result',
+          detail: 'the rubric worker lost its response payload',
+        },
+        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({
+          kind: 'dispatched' as const, rubric,
+          result: {} as never,
+        })),
+      ],
+    });
+    const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
+      gitRunner: realGit(), planPath,
+      config: { build_review: { enabled: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+      buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
+      buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: {
+          kind: 'judged', rubric, lapId, snapshotDigest,
+          contractVersion: 'v3' as never, findings: [], verdict: 'PASS',
+        },
+        provenance: { kind: 'fresh' },
+      }),
+    });
+
+    await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
+      success: false,
+      output: 'build_review scope rubric rejected after repair: invalid-provider-result: the rubric worker lost its response payload',
+    });
   });
 });

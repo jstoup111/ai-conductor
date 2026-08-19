@@ -1828,25 +1828,6 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `build_review evidence write failed for ${writeFailure.rubric}: ${writeFailure.reason}` };
     }
 
-    // A result that still violates the judged contract after its one repair
-    // turn — including a byte-identical repair that cannot converge — is not
-    // a reviewer decision about the diff. Do not publish it as a fresh FAIL
-    // aggregate: completion deliberately classifies a missing verdict as
-    // `absent`, which re-dispatches this rubric without consuming the
-    // build_review kickback budget.
-    const rejectedAfterRepair = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
-      branch.kind === 'infrastructure-failure' &&
-      branch.reason === 'invalid-provider-result' &&
-      (branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true ||
-        branch.detail?.startsWith('judged-result repair was byte-identical to the rejected output;') === true),
-    );
-    if (rejectedAfterRepair) {
-      return {
-        success: false,
-        output: `build_review ${rejectedAfterRepair.rubric} rubric rejected after repair: ${rejectedAfterRepair.detail}`,
-      };
-    }
-
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
         const artifact = await this.buildReviewArtifactReader(
@@ -1877,6 +1858,21 @@ export class DefaultStepRunner implements StepRunner {
             detail: branch.detail === undefined ? branch.reason : `${branch.reason}: ${branch.detail}`,
           }];
     }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+
+    // An infrastructure result is not a reviewer decision about the diff.
+    // Do not publish it as a fresh FAIL aggregate: completion deliberately
+    // classifies a missing verdict as `absent`, which re-dispatches this
+    // rubric without consuming the build_review kickback budget.
+    const infrastructureFailure = Object.values(results).find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
+      result.kind === 'infrastructure-failure',
+    );
+    if (infrastructureFailure) {
+      return {
+        success: false,
+        output: `build_review ${infrastructureFailure.rubric} rubric rejected after repair: ${infrastructureFailure.detail}`,
+      };
+    }
+
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
       snapshotDigest: inputs.sourceSnapshot.digest,
@@ -2583,4 +2579,3 @@ export class DefaultStepRunner implements StepRunner {
     }
   }
 }
-  type BuildReviewCoordinatorFailureReason,
