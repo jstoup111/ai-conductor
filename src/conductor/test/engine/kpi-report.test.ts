@@ -235,6 +235,46 @@ describe('renderKpi', () => {
     expect(report).toContain('time=partial active_ms=80 reason=provider-evidence-incomplete');
   });
 
+  it('reports zero measured timing records without emitting timing averages', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/partial.md'),
+      record('partial', COST_LINES) + '\n## Time\nstate: partial\nactive_ms: 80\n',
+    );
+    await writeFile(
+      join(root, '.docs/shipped/unavailable.md'),
+      record('unavailable', COST_LINES) + '\n## Time\nstate: unavailable\n',
+    );
+
+    const aggregate = (await renderKpi(root)).split('\n').find((line) => line.startsWith('Aggregate')) ?? '';
+
+    expect(aggregate).toBe(
+      'Aggregate / trend across 2 feature(s): total tokens=2400 ' +
+        '(input=2000, output=400), total cost_usd=0.2; timing measured=0 partial=1 unavailable=1',
+    );
+  });
+
+  it('averages only measured timing records while retaining partial records in the aggregate count', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/measured.md'),
+      record('measured', COST_LINES) +
+        '\n## Time\nstate: measured\nactive_ms: 120\nprovider_active_ms: 90\nno_provider_active_ms: 30\n',
+    );
+    await writeFile(
+      join(root, '.docs/shipped/partial.md'),
+      record('partial', COST_LINES) + '\n## Time\nstate: partial\nactive_ms: 80\n',
+    );
+
+    const aggregate = (await renderKpi(root)).split('\n').find((line) => line.startsWith('Aggregate')) ?? '';
+
+    expect(aggregate).toBe(
+      'Aggregate / trend across 2 feature(s): total tokens=2400 ' +
+        '(input=2000, output=400), total cost_usd=0.2; timing measured=1 partial=1 unavailable=0 ' +
+        'avg_active_ms=120 avg_provider_active_ms=90 avg_no_provider_active_ms=30',
+    );
+  });
+
   it('reports measured timing partitions and measured-only aggregate averages', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     await writeFile(
