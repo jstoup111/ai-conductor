@@ -541,6 +541,8 @@ export type ConductorEvent =
       step: StepName;
       branch: string;
       error: string;
+      /** False when an advisory branch failed but the group remains open. */
+      terminal?: boolean;
     }
   | {
       /**

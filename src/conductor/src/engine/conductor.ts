@@ -1282,7 +1282,8 @@ export class Conductor {
         : undefined;
     const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
       ? `step:${event.step}`
-      : event.type === 'parallel_completed' || event.type === 'parallel_failure'
+      : event.type === 'parallel_completed'
+        || (event.type === 'parallel_failure' && event.terminal !== false)
         ? `parallel:${event.step}`
         : undefined;
 
@@ -1294,8 +1295,8 @@ export class Conductor {
       const inFlight = this.closingExecutions.get(terminalKey);
       if (inFlight) return inFlight;
       // Daemon SIGTERM closes the lifecycle before draining a runner that may
-      // still resolve. Its ordinary terminal is then an orphan: EventPersister
-      // cannot recover an interval after the shutdown terminal consumed it.
+      // still resolve. Its ordinary terminal is then an orphan: the ledger
+      // listener cannot recover an interval after the shutdown terminal consumed it.
       if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
     }
     const deliver = async () => {
@@ -9453,6 +9454,7 @@ export class Conductor {
         step: groupName,
         branch: branch.name,
         error,
+        ...(branch.advisory ? { terminal: false } : {}),
       });
       if (!branch.advisory) {
         groupFailed = true;
