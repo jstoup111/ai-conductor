@@ -1259,6 +1259,8 @@ export class Conductor {
   private events: ConductorEventEmitter;
   /** Starts observed by this conductor that have not yet emitted a terminal event. */
   private openExecutions = new Map<string, { kind: 'step' | 'parallel'; step: StepName }>();
+  /** Terminals being emitted; remain open until their event has been delivered. */
+  private closingExecutions = new Set<string>();
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
@@ -1270,25 +1272,34 @@ export class Conductor {
 
   /** Emit through the existing spine while retaining the conductor's open execution state. */
   private async emitExecutionEvent(event: ConductorEvent): Promise<void> {
-    // A terminal event closes the execution before listeners run. A signal
-    // handler invoked by one of those listeners must see only executions that
-    // remain open, rather than manufacture a second terminal event.
-    if (event.type === 'step_completed' || event.type === 'step_failed') {
-      this.openExecutions.delete(`step:${event.step}`);
-    } else if (event.type === 'parallel_completed' || event.type === 'parallel_failure') {
-      this.openExecutions.delete(`parallel:${event.step}`);
-    }
-    await this.events.emit(event);
-    if (event.type === 'step_started') {
-      this.openExecutions.set(`step:${event.step}`, { kind: 'step', step: event.step });
-    } else if (event.type === 'parallel_started') {
-      this.openExecutions.set(`parallel:${event.step}`, { kind: 'parallel', step: event.step });
+    const start = event.type === 'step_started'
+      ? { key: `step:${event.step}`, execution: { kind: 'step' as const, step: event.step } }
+      : event.type === 'parallel_started'
+        ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
+        : undefined;
+    const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
+      ? `step:${event.step}`
+      : event.type === 'parallel_completed' || event.type === 'parallel_failure'
+        ? `parallel:${event.step}`
+        : undefined;
+
+    // Register a start before listeners can observe it. A terminal remains
+    // open until its event returns, while `closingExecutions` prevents a
+    // signal listener from emitting a duplicate terminal mid-delivery.
+    if (start) this.openExecutions.set(start.key, start.execution);
+    if (terminalKey) this.closingExecutions.add(terminalKey);
+    try {
+      await this.events.emit(event);
+      if (terminalKey) this.openExecutions.delete(terminalKey);
+    } finally {
+      if (terminalKey) this.closingExecutions.delete(terminalKey);
     }
   }
 
   /** Close every execution this conductor observed, without exposing step selection to callers. */
   private async closeOpenExecutions(): Promise<void> {
-    for (const execution of [...this.openExecutions.values()]) {
+    for (const [key, execution] of this.openExecutions) {
+      if (this.closingExecutions.has(key)) continue;
       if (execution.kind === 'step') {
         await this.emitExecutionEvent({
           type: 'step_failed',
