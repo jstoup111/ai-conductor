@@ -144,7 +144,7 @@ broken environment terminates instead of retrying forever or spending unbounded 
   the rubric, the fault class, the bounded diagnostic, how much allowance was consumed, and both
   resumption steps in order: record a reduced-coverage decision, then clear the terminal state by the
   documented recovery. Recording the decision does not itself clear the terminal state.
-- Given a review that passes, when the mechanical allowance is later inspected, then it has been reset.
+- Given a rebase that invalidated `build_review`, when the mechanical allowance is later inspected, then it has been credited back; a `build_review` PASS alone does not clear it.
 
 #### Negative Paths
 - Given a mechanical fault that recurs, when the run terminates on the exhausted allowance, then the
@@ -161,7 +161,7 @@ broken environment terminates instead of retrying forever or spending unbounded 
 - [ ] The terminating state is of a class the autonomous loop does not auto-clear
 - [ ] The terminating text names rubric, fault class, diagnostic, allowance consumed, and both
       resumption steps in order
-- [ ] The allowance resets on a passing review
+- [ ] The allowance is credited by an invalidating rebase, and is not cleared by a PASS alone
 
 ## Story 6: The operator can see exactly which rubric could not run, and why
 

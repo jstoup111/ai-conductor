@@ -31,7 +31,7 @@ plausible id. Fifty-two rows: 3 outcome, 15 fr, 13 story, 20 task, 1 adr. No `ga
 | story | story-2 | task-1, task-2 | covered | Cites fr-1 and fr-4. task-1 is the total mapping; task-2 the defect surface and the no-free-text assertion. Both scenarios are delivered, not merely cited. |
 | story | story-3 | task-9 | covered | Cites fr-2. task-9 asserts byte-identical durable state across mechanical laps and that a mixed lap IS charged — both directions of the story. |
 | story | story-4 | task-7, task-8 | covered | Cites fr-2 and fr-3. task-7 is the no-publish and re-run; task-8 the no-rework and no-stale-authority negatives. |
-| story | story-5 | task-6, task-10, task-11 | covered | Cites fr-3 and fr-4. task-6 the advance and PASS reset, task-10 the terminal state, task-11 the rendered cause and both resumption steps. |
+| story | story-5 | task-6, task-10, task-11 | covered | Cites fr-3 and fr-4. task-6 the advance, the ceiling, and the rebase-credited reset rule, task-10 the terminal state, task-11 the rendered cause and both resumption steps. |
 | story | story-6 | task-18 | covered | Cites fr-4. task-18 covers the report's happy and negative scenarios including the "FAIL with nothing unresolved" case the intake reported. |
 | story | story-7 | task-12, task-13, task-20 | covered | Cites fr-5 and fr-7. task-12 the record and identity, task-13 the refusals and isolation, task-20 the emitted occurrence. |
 | story | story-8 | task-14, task-20 | covered | Cites fr-6. task-14 the action and its authority gate; task-20 makes the refusal observable. The story also carries the PRD's no-unattended-weakening non-functional requirement, asserted in task-14. |
@@ -45,7 +45,7 @@ plausible id. Fifty-two rows: 3 outcome, 15 fr, 13 story, 20 task, 1 adr. No `ga
 | task | task-3 | story-1 | covered | Kind-based classification replacing the detail-prefix match. |
 | task | task-4 | story-1 | covered | Judged, skipped and malformed results excluded from the lane. |
 | task | task-5 | story-13 | covered | Ledger field with legacy tolerance. Its first step re-reads the current entry shape, per the conflict report's concurrent-work obligation. |
-| task | task-6 | story-5 | covered | Advance, ceiling, and PASS reset. |
+| task | task-6 | story-5 | covered | Advance, ceiling, and the reset rule: no PASS clear, credited by an invalidating rebase per `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence` D6. |
 | task | task-7 | story-4 | covered | No-publish with allowance remaining; the absent-verdict re-run. |
 | task | task-8 | story-4 | covered | No rework dispatched; no stale verdict reused. |
 | task | task-9 | story-3 | covered | Semantic budget invariance, and the mixed-lap exception. |

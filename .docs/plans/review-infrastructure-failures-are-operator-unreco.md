@@ -174,23 +174,33 @@ the new recovery path is owned by this repository's documentation-maintenance st
 
 **Dependencies:** Task 3
 
-### Task 6: Allowance advances on a mechanical lap and resets on a passing review
+### Task 6: Allowance advances on a mechanical lap and is credited by an invalidating rebase
 **Story:** 5
 **Type:** happy-path
 
 **Steps:**
 1. Write failing tests: the allowance advances once per mechanical lap and reaches its declared
-   ceiling; a `build_review` PASS resets it, matching how `cumulative` resets.
+   ceiling; a `build_review` PASS does NOT clear it; a rebase that invalidated `build_review`
+   credits it back, per `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence` D6.
 2. Verify tests fail (RED).
-3. Implement the advance, the declared ceiling constant, and the PASS reset beside the existing
-   cumulative reset.
+3. Implement the advance and the declared ceiling constant. Do NOT add a PASS reset: that ADR
+   removes the cumulative reset this task previously sat beside, and states the no-PASS-reset rule
+   over every lap-counting field on the entry. The credit helper it adds is generic over those
+   fields, so the allowance is credited by it without a further call site here — verify that rather
+   than re-implementing it.
 4. Verify tests pass (GREEN).
-5. Commit: "feat(build-review): bound mechanical re-attempts and reset the allowance on PASS".
+5. Commit: "feat(build-review): bound mechanical re-attempts with a rebase-credited allowance".
 
 **Files:**
-- `src/conductor/src/engine/kickback-ledger.ts` — ceiling and reset
-- `src/conductor/src/engine/conductor.ts` — reset at the passing-step boundary
-- `src/conductor/test/engine/kickback-ledger.test.ts` — advance and reset tests
+- `src/conductor/src/engine/kickback-ledger.ts` — ceiling, and the allowance's participation in the
+  generic credit
+- `src/conductor/test/engine/kickback-ledger.test.ts` — advance, no-PASS-clear, credited-by-rebase
+
+**Note (amended 2026-08-18):** this task previously instructed adding a PASS reset "beside the
+existing cumulative reset". That reset is deleted by `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence`
+(#1694), whose D6 settles the reset rule for the whole ledger entry on operator decision. If that
+feature has not landed when this task runs, read `kickback-ledger.ts` as current and implement the
+advance and ceiling only — never add a PASS reset.
 
 **Dependencies:** Task 5
 
