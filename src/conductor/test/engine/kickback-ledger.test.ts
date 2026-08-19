@@ -10,10 +10,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 import { rename } from 'node:fs/promises';
 import {
+  bumpMechanicalFaults,
   bumpKickbackGate,
   bumpKickbackGateInLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readKickbackLedger,
   writeKickbackLedger,
   type KickbackGateEntry,
@@ -495,6 +497,37 @@ describe('kickback-ledger', () => {
         atCap: atCap.cumulativeExhausted,
         beyondCap: beyondCap.cumulativeExhausted,
       }).toEqual({ cap: 5, atCap: false, beyondCap: true });
+    });
+  });
+
+  describe('mechanical-fault allowance', () => {
+    const entry: KickbackGateEntry = {
+      count: 1,
+      cumulative: 2,
+      mechanicalFaults: 0,
+      treeHash: '0123456789abcdef0123456789abcdef01234567',
+      lastReason: 'mechanical fault',
+      priorVerdict: true,
+      resolvedBefore: 4,
+    };
+
+    it('advances once per mechanical lap to its declared ceiling', () => {
+      const laps = Array.from({ length: MAX_MECHANICAL_FAULTS_BUILD_REVIEW + 1 }).reduce<KickbackGateEntry>(
+        (current) => bumpMechanicalFaults(current),
+        entry,
+      );
+
+      expect(laps.mechanicalFaults).toBe(MAX_MECHANICAL_FAULTS_BUILD_REVIEW);
+    });
+
+    it('does not clear the allowance on PASS and credits it with the other rebase-invalidated lap counts', () => {
+      const afterPass = { ...entry, mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW };
+
+      expect(creditKickbackGateLaps(afterPass)).toEqual({
+        ...afterPass,
+        cumulative: 0,
+        mechanicalFaults: 0,
+      });
     });
   });
 });

@@ -36,6 +36,9 @@ export const MAX_KICKBACKS_PER_GATE = 2;
 /** Cumulative build-review failures allowed before human intervention is required. */
 export const MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW = 5;
 
+/** Mechanical build-review faults allowed before human intervention is required. */
+export const MAX_MECHANICAL_FAULTS_BUILD_REVIEW = 3;
+
 export interface BumpKickbackGateInput {
   treeHash: string | null;
   resolvedCount: number;
@@ -234,7 +237,13 @@ export async function bumpKickbackGateInLedger(
 }
 /** Purely consume one build-review mechanical-fault allowance. */
 export function bumpMechanicalFaults(entry: KickbackGateEntry): KickbackGateEntry {
-  return { ...entry, mechanicalFaults: (entry.mechanicalFaults ?? 0) + 1 };
+  return {
+    ...entry,
+    mechanicalFaults: Math.min(
+      (entry.mechanicalFaults ?? 0) + 1,
+      MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+    ),
+  };
 }
 
 /** Load, update, and atomically persist one gate's mechanical-fault allowance. */
