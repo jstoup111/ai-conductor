@@ -618,6 +618,10 @@ export type ConductorEvent =
       count: number;
       /** Total build-review laps across progress resets; absent for other kickback sources. */
       cumulativeCount?: number;
+      /** A rebase invalidation credited this gate's convergence laps. */
+      convergenceCredit?: {
+        gate: 'build_review';
+      };
       /**
        * #647 D3 (adr-2026-07-13-kickback-build-no-op-escalation): audit
        * discriminator distinguishing a kickback that produced real build

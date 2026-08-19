@@ -8996,6 +8996,7 @@ export class Conductor {
         ] as StepName[]) {
           const v = verdicts[target];
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
+            let convergenceCredit: { gate: 'build_review' } | undefined;
             if (target === 'build_review') {
               const ledger = await readKickbackLedger(this.projectRoot);
               const entry = ledger.gates.build_review;
@@ -9007,6 +9008,7 @@ export class Conductor {
                     build_review: creditKickbackGateLaps(entry),
                   },
                 });
+                convergenceCredit = { gate: target };
               }
             }
             await this.events.emit({
@@ -9015,6 +9017,7 @@ export class Conductor {
               to: target,
               evidence: v.kickback.evidence,
               count: 1,
+              ...(convergenceCredit === undefined ? {} : { convergenceCredit }),
             });
             // Re-open the staled gate so the selector re-runs it, without
             // sweeping any preserved judged gate stale in the process.
