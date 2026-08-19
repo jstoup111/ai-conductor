@@ -375,6 +375,21 @@ describe('appendTimingSection', () => {
     expect(rendered.endsWith(`\n${expected}`)).toBe(true);
   });
 
+  it('renders a partial reason on one parseable line beside active time', () => {
+    const rendered = appendTimingSection(
+      renderShippedRecordWithCost(fields, rollup),
+      {
+        state: 'partial',
+        activeMs: 100,
+        reason: 'open-executions:parallel:manual_test,step:build_review',
+      },
+    );
+
+    expect(rendered.endsWith(
+      '\n## Time\nstate: partial\nactive_ms: 100\nreason: open-executions:parallel:manual_test,step:build_review\n',
+    )).toBe(true);
+  });
+
   it('leaves frontmatter and Cost/provider-duration content byte-stable', () => {
     const before = renderShippedRecordWithCost(fields, rollup);
     const after = appendTimingSection(before, {
