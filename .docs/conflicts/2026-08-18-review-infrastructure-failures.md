@@ -148,7 +148,8 @@ behavior, entity, field or gate:
 - `adr-2026-08-16-closed-build-review-finding-vocabularies` — identity and `absent` reclassification
 - `adr-2026-08-18-content-anchored-finding-reference-schema` — finding reference schema; no overlap
   with a non-finding record kind
-- `adr-2026-08-12-cumulative-build-review-convergence-bound` — the semantic cap and its PASS reset
+- `adr-2026-08-12-cumulative-build-review-convergence-bound` — the semantic cap (its PASS reset is
+  superseded by `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence`)
 - `adr-2026-07-26-cross-dispatch-kickback-livelock-bound` — the ledger, per-tree reset, reason-text
   instability
 - `adr-2026-08-06-bounded-progress-allowance-for-finish-publication` — the non-charging allowance shape

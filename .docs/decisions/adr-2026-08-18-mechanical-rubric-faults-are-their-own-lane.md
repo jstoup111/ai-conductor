@@ -25,7 +25,7 @@ and `adr-2026-08-09-operator-only-scoped-artifact-reseal` (the operator-only aut
 **Does not change:** any rubric's PASS/FAIL judgement; finding identity or the finding-acceptance
 rules of `adr-2026-08-13` §2/§4 (an infrastructure failure remains un-acceptable *as a finding*, and
 `accept` keeps refusing it); `MAX_KICKBACKS_PER_GATE`; `MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW`'s value
-or its PASS reset; `adr-2026-08-17`'s `rubricFailures` tally, whose D3 already excludes mechanical
+or its cap value; `adr-2026-08-17`'s `rubricFailures` tally, whose D3 already excludes mechanical
 faults; the `skipped` branch's existing non-blocking treatment.
 
 ## Context
@@ -127,9 +127,16 @@ decision, following `adr-2026-08-06`'s holding that "the allowance alone dischar
 obligation" and that a second counter is a diagnostic refinement, not a correctness requirement.
 
 The counter is feature-scoped and durable across dispatches — the same lifetime as the ledger it sits
-beside — and resets on a `build_review` PASS, matching `cumulative` and `rubricFailures`
-(`adr-2026-08-12` D2, `adr-2026-08-17` D5): a feature that legitimately passes and is later
-invalidated must not carry stale mechanical laps toward a halt it did not earn.
+beside — and is **not cleared by a `build_review` PASS**. It is credited back by a rebase that
+invalidated the gate, under `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence` D6, which
+states that rule over every lap-counting field on `KickbackGateEntry` and supersedes
+`adr-2026-08-12` D2's PASS reset. The property being protected is unchanged — a feature whose
+passing verdict is later invalidated must not carry stale mechanical laps toward a halt it did not
+earn — but it is keyed on the invalidation that justifies it rather than on the PASS, because a PASS
+also fires for every downstream kickback that re-opens `build_review`, which is why the counters it
+cleared were unreachable.
+
+Amended 2026-08-18, before implementation, on operator decision recorded in that ADR's D6.
 
 ### D5 — Exhaustion is a `needs-human` HALT, not a park (OQ-4)
 
@@ -244,7 +251,7 @@ already exists and is reused; additive fields follow `adr-2026-07-26-event-sink-
 - **Preserved invariants.** `adr-2026-08-13`'s finding rules, narrowness rule, authority gate and
   refusal list are untouched; `accept` still refuses infrastructure failures. `adr-2026-08-17` D3's
   assumption that mechanical faults do not tick `rubricFailures` is honored by construction.
-  `adr-2026-08-12`'s cap value and PASS reset stand. No LLM enters any decision path this ADR adds.
+  `adr-2026-08-12`'s cap value stands; its PASS reset is superseded by `adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence`. No LLM enters any decision path this ADR adds.
 - **Negative / watch.** The allowance of 3 is inferred, not measured (D4) — the first feature to hit a
   genuinely transient fault four times will halt where a larger allowance would have passed; the halt
   names the cause, and the constant is one line to revisit with evidence. A reduced-coverage decision
