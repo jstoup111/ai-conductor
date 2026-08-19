@@ -1264,6 +1264,7 @@ export class Conductor {
     body: string,
     haltClass: Parameters<typeof writeHaltMarker>[2],
   ) {
+    await this.closeOpenExecutions();
     return writeHaltMarker(this.projectRoot, body, haltClass, this.events);
   }
 
@@ -3878,11 +3879,9 @@ export class Conductor {
             evidence: verdicts[clampedStep.name]?.reason,
           });
           if (disposition.kind === 'halt') {
-            await writeHaltMarker(
-              this.projectRoot,
+            await this.writeHaltMarker(
               renderDecideEntryHalt(disposition.halt) + '\n',
               'needs-human',
-              this.events,
             );
             return;
           }
@@ -5087,11 +5086,9 @@ export class Conductor {
               const mechanical = exhausted.member.name === 'test_suite' &&
                 fullSuiteFailure?.status === 'FAILED';
               if (mechanical) state.test_suite = 'failed';
-              await writeHaltMarker(
-                this.projectRoot,
+              await this.writeHaltMarker(
                 reason + '\n',
                 mechanical ? 'mechanical' : 'needs-human',
-                this.events,
               );
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -6071,11 +6068,9 @@ export class Conductor {
             // here. Retryable per existing step-retry semantics, not a
             // bypass of them.
             if (attempt >= 2) {
-              await writeHaltMarker(
-                this.projectRoot,
+              await this.writeHaltMarker(
                 dispatchIssue,
                 PROTECTED_ARTIFACT_HALT_CLASS,
-                this.events,
               );
             }
             // T7 invariant: EVERY build-step exit path records
