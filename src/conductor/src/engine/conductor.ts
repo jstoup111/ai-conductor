@@ -194,6 +194,7 @@ import {
 import {
   bumpKickbackGateInLedger,
   clearKickbackLedger,
+  creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
   writeKickbackLedger,
@@ -9131,6 +9132,19 @@ export class Conductor {
         ] as StepName[]) {
           const v = verdicts[target];
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
+            if (target === 'build_review') {
+              const ledger = await readKickbackLedger(this.projectRoot);
+              const entry = ledger.gates.build_review;
+              if (entry) {
+                await writeKickbackLedger(this.projectRoot, {
+                  ...ledger,
+                  gates: {
+                    ...ledger.gates,
+                    build_review: creditKickbackGateLaps(entry),
+                  },
+                });
+              }
+            }
             await this.events.emit({
               type: 'kickback',
               from: 'rebase',
