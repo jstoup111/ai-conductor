@@ -156,7 +156,13 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
   evidence.providerEvidenceIncomplete ||= providerUnion.invalidIntervals.length > 0;
 
   if (activeUnion.intervals.length === 0) {
-    return evidence.activeEvidenceIncomplete || evidence.openExecutions.size > 0
+    if (evidence.openExecutions.size > 0) {
+      return {
+        state: 'partial',
+        reason: `open-executions:${[...evidence.openExecutions.keys()].sort().join(',')}`,
+      };
+    }
+    return evidence.activeEvidenceIncomplete
       ? { state: 'partial', reason: 'empty-active-union' }
       : { state: 'unavailable' };
   }

@@ -1261,6 +1261,10 @@ export class Conductor {
   private openExecutions = new Map<string, { kind: 'step' | 'parallel'; step: StepName }>();
   /** Terminals being emitted; remain open until their event has been delivered. */
   private closingExecutions = new Map<string, Promise<void>>();
+  /** Serializes lifecycle delivery so an interrupt terminal cannot precede its start. */
+  private executionEventTail: Promise<void> = Promise.resolve();
+  /** A lifecycle listener may synchronously request shutdown while its start is delivered. */
+  private activeExecutionEventDeliveries = 0;
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
@@ -1270,7 +1274,7 @@ export class Conductor {
   }
 
   /** Emit through the existing spine while retaining the conductor's open execution state. */
-  private async emitExecutionEvent(event: ConductorEvent): Promise<void> {
+  private emitExecutionEvent(event: ConductorEvent): Promise<void> {
     const start = event.type === 'step_started'
       ? { key: `step:${event.step}`, execution: { kind: 'step' as const, step: event.step } }
       : event.type === 'parallel_started'
@@ -1286,21 +1290,36 @@ export class Conductor {
     // open until its event returns, while `closingExecutions` lets a signal
     // listener join its in-flight delivery instead of emitting a duplicate.
     if (start) this.openExecutions.set(start.key, start.execution);
-    let resolveTerminalDelivery: (() => void) | undefined;
     if (terminalKey) {
-      this.closingExecutions.set(terminalKey, new Promise<void>((resolve) => {
-        resolveTerminalDelivery = resolve;
-      }));
+      const inFlight = this.closingExecutions.get(terminalKey);
+      if (inFlight) return inFlight;
     }
-    try {
-      await this.events.emit(event);
-      if (terminalKey) this.openExecutions.delete(terminalKey);
-    } finally {
-      if (terminalKey) {
-        resolveTerminalDelivery!();
-        this.closingExecutions.delete(terminalKey);
+    const deliver = async () => {
+      this.activeExecutionEventDeliveries += 1;
+      try {
+        await this.events.emit(event);
+      } finally {
+        this.activeExecutionEventDeliveries -= 1;
       }
-    }
+    };
+    // A listener can synchronously request shutdown from a start event. Its
+    // terminal is safe to deliver now (the start is already being delivered),
+    // and queuing it behind that listener would make the listener await itself.
+    const delivery = terminalKey && this.activeExecutionEventDeliveries > 0
+      ? deliver()
+      : this.executionEventTail.then(deliver);
+    // A failed event must reach its caller, but must not poison later terminal
+    // delivery (which is the only chance a signal has to close another key).
+    this.executionEventTail = delivery.catch(() => {});
+    if (!terminalKey) return delivery;
+
+    const terminalDelivery = delivery.then(() => {
+      this.openExecutions.delete(terminalKey);
+    }).finally(() => {
+      this.closingExecutions.delete(terminalKey);
+    });
+    this.closingExecutions.set(terminalKey, terminalDelivery);
+    return terminalDelivery;
   }
 
   /** Close every execution this conductor observed, without exposing step selection to callers. */
@@ -1327,6 +1346,14 @@ export class Conductor {
         });
       }
     }
+  }
+
+  /**
+   * Daemon ownership boundary: SIGTERM is process-scoped there, so its
+   * coordinator invokes this rather than relying on a per-conductor listener.
+   */
+  async closeOpenExecutionsForShutdown(): Promise<void> {
+    await this.closeOpenExecutions();
   }
 
   /**
