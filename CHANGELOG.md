@@ -36,6 +36,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Self-host containment refuses itself on hosts where the wrap would deny a provider its own nested sandbox, instead of wrapping a dispatch that cannot write any file. ([implementation PR #1719](https://github.com/jstoup111/ai-conductor/pull/1719)).
 - A concurrent provider process's plugin lock markers no longer halt a self-host build. ([implementation PR #1722](https://github.com/jstoup111/ai-conductor/pull/1722)).
 - Shipped-record timing now reaches the `measured` state instead of getting stuck at `partial`/`unavailable`, and a `partial` state's `## Time` block now names its downgrade reason. ([implementation PR #1727](https://github.com/jstoup111/ai-conductor/pull/1727)).
+- A build_review pass no longer resets the cumulative kickback convergence cap by itself; the cap is credited back only when a rebase actually invalidates a judged build_review, closing a loophole that let build_review cycle indefinitely across passes. ([implementation PR #1728](https://github.com/jstoup111/ai-conductor/pull/1728)).
 
 ## [0.103.0] - 2026-08-17
 
