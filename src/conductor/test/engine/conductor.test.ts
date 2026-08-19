@@ -1652,6 +1652,54 @@ describe('engine/conductor', () => {
     }
   });
 
+  it('closes an open execution when a deferred live-boundary halt is consumed', async () => {
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+    const timestamps = [1_000, 1_025];
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events, {
+      nowMs: () => timestamps.shift()!,
+    });
+    persister.start();
+
+    try {
+      const liveBoundary = conductor as unknown as {
+        pendingLiveBoundaryHalt?: string;
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+        consumePendingLiveBoundaryHalt(): Promise<string | undefined>;
+      };
+      await liveBoundary.emitExecutionEvent({
+        type: 'step_started',
+        step: 'build',
+        index: 0,
+      });
+      liveBoundary.pendingLiveBoundaryHalt = 'live checkout changed during self-host execution';
+
+      await expect(liveBoundary.consumePendingLiveBoundaryHalt()).resolves.toBe(
+        'live checkout changed during self-host execution',
+      );
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(records).toContainEqual(expect.objectContaining({
+        type: 'step_failed',
+        step: 'build',
+        activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+      }));
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toBe(
+        'live checkout changed during self-host execution\n',
+      );
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).resolves.toBe('mechanical');
+    } finally {
+      persister.stop();
+    }
+  });
+
   describe('ConductorOptions.runGh injection (Task 3: merged-PR guard plumbing)', () => {
     it('accepts an injected runGh option for the merged-PR guard', async () => {
       const runner = createMockStepRunner();

@@ -3033,7 +3033,8 @@ export class Conductor {
     const reason = this.pendingLiveBoundaryHalt;
     if (reason === undefined) return undefined;
     this.pendingLiveBoundaryHalt = undefined;
-    await this.writeHaltMarker(`${reason}\n`, 'mechanical').catch(() => {});
+    await this.closeOpenExecutions();
+    await writeHaltMarker(this.projectRoot, `${reason}\n`, 'mechanical', this.events).catch(() => {});
     return reason;
   }
 
