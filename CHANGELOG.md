@@ -37,6 +37,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A concurrent provider process's plugin lock markers no longer halt a self-host build. ([implementation PR #1722](https://github.com/jstoup111/ai-conductor/pull/1722)).
 - Shipped-record timing now reaches the `measured` state instead of getting stuck at `partial`/`unavailable`, and a `partial` state's `## Time` block now names its downgrade reason. ([implementation PR #1727](https://github.com/jstoup111/ai-conductor/pull/1727)).
 - A build_review pass no longer resets the cumulative kickback convergence cap by itself; the cap is credited back only when a rebase actually invalidates a judged build_review, closing a loophole that let build_review cycle indefinitely across passes. ([implementation PR #1728](https://github.com/jstoup111/ai-conductor/pull/1728)).
+- build_review findings anchored to dot-leading repository paths such as `.docs/plans/` are accepted, so a scope violation in a plan file can be reported instead of looping until retries are exhausted. ([implementation PR #1756](https://github.com/jstoup111/ai-conductor/pull/1756)).
 
 ## [0.103.0] - 2026-08-17
 
