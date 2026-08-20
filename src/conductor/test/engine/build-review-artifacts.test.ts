@@ -31,6 +31,41 @@ function judged(contractVersion: 'v1' | 'v2' = 'v1') {
   };
 }
 
+const persistedScopeArtifacts = {
+  v1: {
+    version: 1,
+    rubric: 'scope',
+    lapId,
+    snapshotDigest: 'sha256:snapshot',
+    result: {
+      kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1',
+      findings: [{
+        concernKind: 'out-of-plan-change', summary: 'A change is outside the approved plan.',
+        evidenceLocations: ['src/conductor/src/engine/build-review-artifacts.ts:1'],
+        anchor: { rubric: 'scope', path: 'src/conductor/src/engine/build-review-artifacts.ts', relation: 'out-of-plan-change' },
+      }],
+      verdict: 'FAIL',
+    },
+    provenance: { kind: 'fresh' },
+  },
+  v2: {
+    version: 1,
+    rubric: 'scope',
+    lapId,
+    snapshotDigest: 'sha256:snapshot',
+    result: {
+      kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2',
+      findings: [{
+        concernKind: 'out-of-plan-change', summary: 'A change is outside the approved plan.',
+        evidenceLocations: ['src/conductor/src/engine/build-review-artifacts.ts:1'],
+        anchor: { rubric: 'scope', path: 'src/conductor/src/engine/build-review-artifacts.ts', relation: 'not-authorized-by-plan' },
+      }],
+      verdict: 'FAIL',
+    },
+    provenance: { kind: 'fresh' },
+  },
+} as const;
+
 describe('build-review current-lap branch artifacts', () => {
   it('uses a write-disjoint path for every rubric and lap', () => {
     expect([
@@ -55,17 +90,20 @@ describe('build-review current-lap branch artifacts', () => {
     expect(await readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
   });
 
-  it.each(['v1', 'v2'] as const)('parses a persisted %s record under the version it declares', (contractVersion) => {
-    const artifact = {
-      version: 1,
-      rubric: 'scope',
-      lapId,
-      snapshotDigest: 'sha256:snapshot',
-      result: judged(contractVersion),
-      provenance: { kind: 'fresh' },
-    } as const;
+  it.each(Object.entries(persistedScopeArtifacts) as Array<['v1' | 'v2', typeof persistedScopeArtifacts.v1 | typeof persistedScopeArtifacts.v2]>)('parses an at-rest %s record under the version it declares', async (contractVersion, artifact) => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
+    const fs = filesystem({ [path]: JSON.stringify(artifact) });
 
-    expect(parseBuildReviewBranchArtifact(artifact)).toEqual(artifact);
+    expect(parseBuildReviewBranchArtifact(JSON.parse(fs.files[path]!))).toEqual(artifact);
+    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toEqual(artifact);
+    expect(artifact.result.contractVersion).toBe(contractVersion);
+  });
+
+  it('rejects the persisted v1 record if interpreted under the v2 contract', () => {
+    const v1 = persistedScopeArtifacts.v1;
+    const relabeledAsV2 = { ...v1, result: { ...v1.result, contractVersion: 'v2' as const } };
+
+    expect(parseBuildReviewBranchArtifact(relabeledAsV2)).toBeUndefined();
   });
 
   it.each([
