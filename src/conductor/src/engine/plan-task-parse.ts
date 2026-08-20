@@ -13,6 +13,13 @@ import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-art
 // grammar instead of re-deriving a narrower ad hoc regex.)
 export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
+// Shared task-header grammar for parsers that identify task blocks without
+// requiring a title. Keep every consumer on this expression so a supported
+// heading form cannot silently drift between Files, Preserves, and
+// Verify-only metadata.
+export const TASK_HEADER_PATTERN =
+  /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
+
 const PATH_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yml|yaml|sh|rb|py|go|rs|html|css|scss|vue|toml)$/i;
 const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 
@@ -37,6 +44,7 @@ export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
 // shorthand to inherit an earlier task's set. Matches `**Files:**`,
 // `**Files**:`, and `**Files likely touched:**`, with an optional list bullet.
 const FILES_LINE = /^\s*(?:[-*]\s+)?\*\*Files(?:\s+[^*]*?)?\s*:?\s*\*\*\s*:?\s*(.*)$/i;
+const PRESERVES_LINE = /^\s*(?:[-*]\s+)?\*\*Preserves\s*:?\s*\*\*\s*:?\s*(.*)$/i;
 
 // Retired **Wired-into:** metadata must remain excluded from legacy fallback
 // paths in historical plans. This preserves only the old line grammar (case,
@@ -75,6 +83,39 @@ function expandTaskIds(raw: string): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Parses the preserved behavior declared by each plan task.
+ *
+ * This intentionally uses the same task-header grammar as
+ * `parsePlanTaskVerifyOnly`; malformed or empty clauses produce no entry.
+ */
+export function parsePlanTaskPreserves(text: string): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  let currentIds: string[] = [];
+
+  for (const line of text.split('\n')) {
+    const headerMatch = line.match(TASK_HEADER_PATTERN);
+    if (headerMatch) {
+      currentIds = expandTaskIds(
+        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
+      );
+      continue;
+    }
+    if (currentIds.length === 0) continue;
+
+    const preservesMatch = line.match(PRESERVES_LINE);
+    const behavior = preservesMatch?.[1].trim();
+    if (!behavior) continue;
+    for (const id of currentIds) {
+      const behaviors = result.get(id);
+      if (behaviors) behaviors.push(behavior);
+      else result.set(id, [behavior]);
+    }
+  }
+
+  return result;
 }
 
 export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTaskPaths {
@@ -124,12 +165,10 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
   // (#636 — #615 stripped the `T`, orphaning all of that as the #417
   // id-grammar-drift class). Cross-grammar matching (`Task: 0` ↔ `T0`) is
   // handled at the comparison seams via canonicalTaskId, not by mangling here.
-  const taskHeader =
-    /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
   const sameShorthand = new RegExp(`^same(?:\\s+as\\s+task\\s+(${TASK_ID_PATTERN}))?\\b`, 'i');
 
   for (const line of text.split('\n')) {
-    const headerMatch = line.match(taskHeader);
+    const headerMatch = line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       current = {
         ids: expandTaskIds(

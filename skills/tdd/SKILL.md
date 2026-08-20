@@ -35,7 +35,7 @@ RED → DOMAIN → GREEN → DOMAIN → COMMIT
  │       │        │        │        │
  │       │        │        │        └─ Scoped affected-test union green, clean tree, commit
  │       │        │        └─ Review implementation for domain integrity
- │       │        └─ Implement minimally (scope check: ~20 lines, 1 file, 1 function)
+ │       │        └─ Implement the smallest behavior-complete change within scope
  │       └─ Review test for primitive obsession, invalid states
  └─ Write ONE failing test, watch it fail
 ```
@@ -57,6 +57,30 @@ For a delta task, a first test that passes immediately does not permit implement
 whether the test only restates copied behavior or is otherwise wrong;
 then write a failing test for the task's uncovered behavior. Only a separate proof that the copy
 satisfies the whole task may use the existing `Evidence: satisfied-by` closure.
+
+### No Legitimate RED for Already-Existing Behavior
+
+This boundary applies only when there is no behavior left to add, change, or fix. It never applies
+to a task that adds, changes, or fixes behavior; those tasks run the full RED → DOMAIN → GREEN →
+DOMAIN → COMMIT cycle.
+
+For a plan-declared verify-only/verification task, author at most the documenting test explicitly
+asked for by the plan. Do not invent unrelated assertions to manufacture a RED result.
+
+If investigation discovers that the behavior already exists but the sealed plan did not declare the
+task verify-only/verification, do not author a test that cannot fail. Delete any redundant test
+authored during this lap, do not amend the sealed plan, and close the task with the existing
+`Evidence: skipped <reason>` empty-commit form in **Commit-less Completions: Evidence Trailers**.
+
+### Removal Boundary
+
+Deleting code is not new behavior and starts no RED cycle. When a task's subject is a removal —
+a file, a seam, a flag, a code path going away — do not author a test whose subject is the code
+being deleted, and do not restate coverage the deleted code used to carry. The deletion itself,
+plus the survival of the existing suite, is the evidence. Removal-anchored review treatment is
+defined by `adr-2026-08-12-removal-anchored-tautology-exemption.md`; maintenance edits that keep
+existing tests compiling after a removal (updating imports, dropping dead selectors) are ordinary
+edits, not new coverage, and need no RED of their own.
 
 ### Phase 1: RED
 
@@ -113,7 +137,8 @@ production call site of any security/correctness derivation, with real adversari
 
 **Agent:** Generator (source-files-only context) — use
 `steps.build.tdd.green.model` when configured (see RED's advisory model selection rule).
-**Goal:** Write the simplest code that makes the failing test pass.
+**Goal:** Write the smallest behavior-complete code change that makes the failing test pass and
+conforms to the applicable recorded basis.
 
 1. **Scope check BEFORE writing code:**
    - Will this change touch ~20 lines or fewer? → Proceed
@@ -121,9 +146,12 @@ production call site of any security/correctness derivation, with real adversari
    - Will it touch more than 1 function? → Consider drill-down
    - If scope check fails → Write a unit test for the smaller piece and run a nested TDD cycle
 
-2. Write the minimum code to pass the test
-3. Run the test — **watch it pass**
-4. The agent derives the selectors for the affected/scoped test set (the task's own tests + the files this change touches) and runs `conduct-ts scoped-run <selectors...>`. The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
+2. When an applicable recorded basis is present, conform to its relevant semantic traits. A
+   verified no-fit or operator-authorized bounded departure follows its documented approach;
+   when no applicable basis exists, no pattern conformance is required.
+3. Write the smallest behavior-complete code change to pass the test
+4. Run the test — **watch it pass**
+5. The agent derives the selectors for the affected/scoped test set (the task's own tests + the files this change touches) and runs `conduct-ts scoped-run <selectors...>`. The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
 
 A known failure in that scoped set blocks the current GREEN phase; fix it here
 rather than deferring it to a later gate. If one of the repository's documented
@@ -132,9 +160,12 @@ the exact trigger and invoke the configured aggregate verifier. Never call a
 raw project aggregate command directly.
 
 **Rules:**
-- Simplest code that passes. Not the "best" code — that's for refactoring.
+- The smallest behavior-complete change must conform to an applicable recorded basis; a passing
+  change that materially departs from that basis without its recorded no-fit or authorized
+  departure is incomplete. This does not authorize behavior beyond the failing test.
 - Don't implement behavior not required by a failing test.
 - Don't fix other things you notice. Note them for a future task.
+- Do not refactor during GREEN; refactoring remains a separate batch-boundary activity.
 - If tech-context loaded: follow stack conventions (e.g., Rails model/controller patterns)
 
 **When GREEN won't go green — escalate to debugging, do not thrash.**
@@ -175,10 +206,19 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 3. Type-check passes (if tech-context specifies a type-checker — e.g., `tsc --noEmit` /
    `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.
 4. Working tree is clean (no uncommitted changes outside this task)
-5. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
+5. **Pre-diff sensitivity check** — for every NEW or CHANGED test in this task that claims to
+   cover new or changed behavior: verify it FAILS against the pre-diff implementation (stash or
+   revert the production diff, run the test, restore). A test that still passes proves nothing
+   and will fail the tautology review rubric one expensive lap later. A value computed by the
+   test but never asserted on is an automatic fail of this check. Exempt: tasks under the
+   **No Legitimate RED for Already-Existing Behavior** and **Removal Boundary** sections, and
+   plan-declared `**Verify-only:** yes` tasks — their evidence forms replace this check.
+   (Engine-owned enforcement of this check is tracked by #1619; until it lands, this step is
+   the only guard.)
+6. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
    interruptions lose uncommitted work. Commit as soon as GREEN passes and linter is clean.
-6. Commit with descriptive message referencing the behavior added
-7. **Commit includes Task trailer** — All commits (feature, refactor, fixups) in this TDD
+7. Commit with descriptive message referencing the behavior added
+8. **Commit includes Task trailer** — All commits (feature, refactor, fixups) in this TDD
    cycle must include `Task: <id>` as a trailer in the commit body. This anchors commits
    to their implementation task and enables task-status tracking.
 
@@ -359,14 +399,17 @@ Between TDD phases, the orchestrator outputs ONLY:
 
 No narration, no explanation of what just happened, no preview of what comes next.
 
-### Spec Coverage Rule: Every File Gets a Spec
+### Test Coverage Rule: Behavior and Failure Boundaries
 
-**Every file in `app/` (or `src/`) must have a corresponding spec file.** Hard gate.
+Coverage follows the behavior or failure boundary being added, changed, or fixed — never a
+one-to-one correspondence with production files. Choose the lowest sufficient test layer that
+proves the criterion. Use acceptance/system coverage only for a distinct multi-step externally
+observable flow that cannot be proven sufficiently below it; do not duplicate lower-layer negative
+variants or existing sufficient proof.
 
-- Models/services/jobs → unit specs (`spec/models/`, `spec/services/`, `spec/jobs/`)
-- Controllers → request specs (`spec/requests/`)
-- Both layers required. During RED: if the task creates/modifies a file in `app/`, verify the
-  corresponding spec exists. If not, create it as part of this TDD cycle.
+New behavior and bug fixes still begin with RED. A production-file change alone does not require a
+mirror test, and ordinary natural-language guidance does not create behavior to test. A declared
+exact replication still follows its full delta cycle and required scoped verification.
 
 ## Verification
 
@@ -383,5 +426,5 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Type-check passes before commit (typed stacks — run as the Phase 4 pre-check; skipped for stacks with no compile step)
 - [ ] Working tree clean at commit
 - [ ] One behavior per cycle (not multiple changes lumped together)
-- [ ] Every `app/` file has a corresponding spec file (unit + request where applicable)
+- [ ] Coverage proves each changed behavior or failure boundary at the lowest sufficient layer
 - [ ] Non-obvious gotchas or new patterns persisted to `.memory/` (if encountered this cycle)

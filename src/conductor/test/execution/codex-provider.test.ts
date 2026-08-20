@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import {
   CodexProvider,
   parseCodexJsonl,
@@ -13,6 +15,12 @@ import type {
 } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
+import {
+  deriveBindSet,
+  wrapForContainment,
+} from '../../src/engine/self-host/live-containment.js';
+
+const execFileAsync = promisify(execFile);
 
 // This is a fake Codex CLI boundary: no test invokes a locally installed Codex.
 //
@@ -81,6 +89,47 @@ describe('CodexProvider', () => {
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
     );
+  });
+
+  describe('usage-cap exhaustion vs transient throttle', () => {
+    it.each([
+      {
+        name: 'usage limit exhaustion waits on the hour-scale default',
+        stderr: 'You have hit your usage limit for this billing period.',
+        expected: { rateLimited: true, usageExhausted: true, waitSeconds: 3600 },
+      },
+      {
+        name: 'quota exceeded exhaustion waits on the hour-scale default',
+        stderr: 'Request failed: quota exceeded for the current plan.',
+        expected: { rateLimited: true, usageExhausted: true, waitSeconds: 3600 },
+      },
+      {
+        name: 'exhaustion with an explicit retry-after keeps the parsed wait',
+        stderr: 'usage limit reached; retry after 900 seconds',
+        expected: { rateLimited: true, usageExhausted: true, waitSeconds: 900 },
+      },
+      {
+        name: 'a transient 429 keeps its parsed short wait and is not exhaustion',
+        stderr: 'Error 429: rate limit exceeded; retry after 45 seconds',
+        expected: { rateLimited: true, usageExhausted: undefined, waitSeconds: 45 },
+      },
+      {
+        name: 'a transient throttle without retry-after keeps the 300s default',
+        stderr: 'Too many requests, slow down.',
+        expected: { rateLimited: true, usageExhausted: undefined, waitSeconds: 300 },
+      },
+    ])('$name', async ({ stderr, expected }) => {
+      mockExeca.mockResolvedValue({ stdout: '', stderr, exitCode: 1 } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect({
+        success: result.success,
+        rateLimited: result.rateLimited,
+        usageExhausted: result.usageExhausted,
+        waitSeconds: result.waitSeconds,
+      }).toEqual({ success: false, ...expected });
+    });
   });
 
   it('declares synchronous spawn-permit lifecycle capability', () => {
@@ -161,6 +210,25 @@ describe('CodexProvider', () => {
     await provider.invokeInteractive({ ...baseOptions, interactive: false, spawnPermit });
 
     expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
+  });
+
+  it('rejects an overlong self-host argument before creating a provider subprocess', async () => {
+    const subprocessFactory = vi.fn(() =>
+      Promise.resolve({ stdout: jsonlMessage('unexpected child'), exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()), 'codex', undefined, subprocessFactory);
+
+    await expect(provider.invoke({
+      ...baseOptions,
+      selfHost: {
+        executable: '/isolated/bin/codex',
+        env: {},
+        args: ['x'.repeat(513)],
+        teardown: async () => {},
+      },
+    })).rejects.toThrow('Codex self-host arguments exceed the 512-character per-argument provider contract.');
+
+    expect(subprocessFactory).not.toHaveBeenCalled();
   });
 
   it('models every Codex readiness outcome as an exhaustive discriminated contract', () => {
@@ -249,7 +317,7 @@ describe('CodexProvider', () => {
           success: true,
           output: 'No-op complete.',
           exitCode: 0,
-          tokenUsage: { input: 12, cacheRead: 4, output: 7, numTurns: 1 },
+          tokenUsage: { input: 8, cacheRead: 4, output: 7, numTurns: 1 },
           observedIntervals: [{ startedAtMs: 2_000, durationMs: 40 }],
           authentication: {
             provider: 'codex',
@@ -261,6 +329,101 @@ describe('CodexProvider', () => {
       });
     },
   );
+
+  it('places Codex arguments after its contained executable for invoke and invokeInteractive', async () => {
+    const bindSet = ['--dev-bind', '/', '/', '--ro-bind', '/live', '/live'];
+    const codexExecutable = '/isolated/bin/codex';
+    const isolatedHomeArgs = ['--config', 'project_doc_max_bytes=0'];
+    const selfHost = {
+      executable: 'bwrap',
+      env: { CODEX_HOME: '/isolated/codex-home' },
+      args: [...bindSet, '--', codexExecutable, ...isolatedHomeArgs],
+      teardown: async () => {},
+    };
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('contained'), exitCode: 0 } as any);
+
+    await provider.invoke({ ...baseOptions, selfHost });
+    await provider.invokeInteractive({ ...baseOptions, selfHost, interactive: true });
+
+    expect(mockExeca.mock.calls.map(([executable, args]) => ({ executable, args }))).toEqual([
+      {
+        executable: 'bwrap',
+        args: [
+          ...bindSet,
+          '--',
+          codexExecutable,
+          ...isolatedHomeArgs,
+          'exec',
+          '--config', 'sandbox_mode="workspace-write"',
+          '--config', 'approval_policy="on-request"',
+          '--config', 'approvals_reviewer="auto_review"',
+          '--config', 'shell_environment_policy.ignore_default_excludes=false',
+          '--cd', baseOptions.cwd,
+          '--json',
+          '-',
+        ],
+      },
+      {
+        executable: 'bwrap',
+        args: [
+          ...bindSet,
+          '--',
+          codexExecutable,
+          ...isolatedHomeArgs,
+          'exec',
+          '--cd', baseOptions.cwd,
+          '-',
+        ],
+      },
+    ]);
+  });
+
+  it('passes an engine-derived containment launcher with more than sixteen arguments to Codex', async () => {
+    const liveCheckout = await mkdtemp(join(tmpdir(), 'codex-containment-checkout-'));
+    const worktreeRoot = join(liveCheckout, '.worktrees', 'build');
+    try {
+      await execFileAsync('git', ['init', '--initial-branch=main', liveCheckout]);
+      await Promise.all([
+        mkdir(worktreeRoot, { recursive: true }),
+        mkdir(join(liveCheckout, '.pipeline'), { recursive: true }),
+      ]);
+      const contained = wrapForContainment({
+        executable: '/isolated/bin/codex',
+        args: ['--config', 'project_doc_max_bytes=0'],
+        env: { CODEX_HOME: '/isolated/codex-home' },
+      }, deriveBindSet(liveCheckout, worktreeRoot));
+      mockExeca.mockResolvedValue({ stdout: jsonlMessage('contained'), exitCode: 0 } as any);
+
+      await provider.invoke({
+        ...baseOptions,
+        selfHost: { ...contained, teardown: async () => {} },
+      });
+
+      expect({
+        containmentArgCount: contained.args.length,
+        spawn: mockExeca.mock.calls[0].slice(0, 2),
+      }).toEqual({
+        containmentArgCount: expect.any(Number),
+        spawn: [
+          'bwrap',
+          [
+            ...contained.args,
+            'exec',
+            '--config', 'sandbox_mode="workspace-write"',
+            '--config', 'approval_policy="on-request"',
+            '--config', 'approvals_reviewer="auto_review"',
+            '--config', 'shell_environment_policy.ignore_default_excludes=false',
+            '--cd', baseOptions.cwd,
+            '--json',
+            '-',
+          ],
+        ],
+      });
+      expect(contained.args.length).toBeGreaterThan(16);
+    } finally {
+      await rm(liveCheckout, { recursive: true, force: true });
+    }
+  });
 
   it.each([
     {
@@ -376,7 +539,7 @@ describe('CodexProvider', () => {
       const [command, args, options] = mockExeca.mock.calls[0];
       expect(command).toBe('/resolved/codex');
       expect(args).toEqual(expect.arrayContaining(['--config', 'project_doc_max_bytes=0']));
-      expect(options.env).toEqual({ CODEX_HOME: isolatedHome });
+      expect(options.env).toEqual({ CODEX_HOME: isolatedHome, CONDUCT_DAEMON_SESSION: '1' });
     } finally {
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
       else process.env.CODEX_API_KEY = priorKey;
@@ -414,7 +577,7 @@ describe('CodexProvider', () => {
     expect(options.input).toBe('You are the conductor.\n\nMake the no-op change');
     expect(options.cwd).toBe('/workspace/project');
     expect(result).toMatchObject({ success: true, output: 'No-op complete.', exitCode: 0 });
-    expect(result.tokenUsage).toEqual({ input: 12, cacheRead: 4, output: 7, numTurns: 1 });
+    expect(result.tokenUsage).toEqual({ input: 8, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
   it('starts a fresh Codex exec and preserves cwd when handed resume: true', async () => {
@@ -470,7 +633,7 @@ describe('CodexProvider', () => {
         'shell_environment_policy.ignore_default_excludes=false',
       ]));
       expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
-      expect(options.env).toEqual({ CODEX_API_KEY: key });
+      expect(options.env).toEqual({ CODEX_API_KEY: key, CONDUCT_DAEMON_SESSION: '1' });
       expect(args).not.toContain(key);
     } finally {
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
@@ -515,7 +678,7 @@ describe('CodexProvider', () => {
     // A recognized JSONL machine stream reaches the daemon log as a readable
     // summary; prose stdout and stderr still pass through verbatim so no
     // diagnostic detail is traded away for readability.
-    expect(featureLog).toHaveBeenCalledWith('codex: done — 12→7 tok\none-shot output');
+    expect(featureLog).toHaveBeenCalledWith('codex: done — 12→7 tok (33% cached)\none-shot output');
     expect(featureLog).toHaveBeenCalledWith('one-shot stderr');
     expect(featureLog).toHaveBeenCalledWith('automatic output');
     expect(featureLog).toHaveBeenCalledWith('automatic stderr');
@@ -1357,8 +1520,8 @@ describe('CodexProvider', () => {
       await boundProvider.invoke({ ...baseOptions, resume: true });
 
       expect(mockExeca.mock.calls.map(([, , options]) => options.env)).toEqual([
-        { CODEX_API_KEY: key },
-        { CODEX_API_KEY: key },
+        { CODEX_API_KEY: key, CONDUCT_DAEMON_SESSION: '1' },
+        { CODEX_API_KEY: key, CONDUCT_DAEMON_SESSION: '1' },
       ]);
     } finally {
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
@@ -2031,6 +2194,35 @@ describe('parseCodexJsonl', () => {
       output: 40,
       cacheCreation: 77,
       reasoningOutput: 15,
+      numTurns: 1,
+    });
+  });
+
+  it('excludes the cached share from input — TokenUsage.input is fresh-only', () => {
+    // Codex's input_tokens includes cached_input_tokens; the adapter
+    // normalizes to fresh-only input with the cached volume in cacheRead.
+    const stream = [
+      { type: 'turn.completed', usage: { input_tokens: 1_571_053, cached_input_tokens: 1_454_080, output_tokens: 6_662 } },
+    ].map((event) => JSON.stringify(event)).join('\n');
+
+    expect(parseCodexJsonl(stream).tokenUsage).toEqual({
+      input: 116_973,
+      cacheRead: 1_454_080,
+      output: 6_662,
+      numTurns: 1,
+    });
+  });
+
+  it('clamps a cached share larger than input to zero fresh input, never negative', () => {
+    const stream = JSON.stringify({
+      type: 'turn.completed',
+      usage: { input_tokens: 100, cached_input_tokens: 150, output_tokens: 5 },
+    });
+
+    expect(parseCodexJsonl(stream).tokenUsage).toEqual({
+      input: 0,
+      cacheRead: 150,
+      output: 5,
       numTurns: 1,
     });
   });

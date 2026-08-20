@@ -14,6 +14,11 @@ The pipeline dispatcher will provide you with focused context:
   (extracted from stories, not the full story files)
 - **Test output summary** — pass/fail counts and any failure snippets
 - **Tech-context review checklist** if loaded in session
+- **Focused current-HEAD pattern basis, when applicable** — current-checkout paths for the
+  relevant target and exemplar, stable symbol or role hints, and the semantic traits the batch
+  must preserve or change. Read the named files at current HEAD. If an exemplar has moved, locate
+  and verify its semantic equivalent; if no equivalent can be verified and that would materially
+  change the review, return `NEEDS_CONTEXT` rather than guessing or broadening the review.
 - **Prior known issues** (if batch 2+) — findings from previous batch reviews. Do NOT
   re-raise these unless new evidence changes their severity. If a prior finding is now
   resolved, note it as resolved.
@@ -60,9 +65,12 @@ Execute in order. Failures in earlier stages block later stages.
 
 ### Stage 1: Spec Compliance
 - Read the story acceptance criteria (happy AND negative paths)
-- For each criterion: is there a test? Does the test actually verify it?
+- For every criterion, including every happy and negative path: is there sufficient behavioral
+  coverage at the lowest suitable layer, and does the cited test actually verify the behavior?
+  Compatible criteria may share focused coverage; do not require one test per criterion or
+  duplicate lower-layer proof at a higher layer.
 - Is anything implemented that wasn't asked for? (Flag as OVER-BUILT)
-- Are there criteria with no corresponding test?
+- Are there criteria with no sufficient behavioral proof?
 - **Verdict:** PASS | FAIL | OVER-BUILT with specific findings
 - **OVER-BUILT** is a distinct problem — extra code means extra tests, extra maintenance,
   extra surface for bugs. If it wasn't in the story, it shouldn't be in the code.
@@ -73,6 +81,10 @@ Execute in order. Failures in earlier stages block later stages.
 - Is there unnecessary complexity?
 - Are there duplicated patterns?
 - Is error handling consistent?
+- When a focused local pattern basis applies, does the implementation preserve its required
+  material structure and behavior (or make the stated change)? Allowed variation and harmless
+  local differences are not findings. A smaller implementation that passes its tests but
+  materially fails the supplied traits is incomplete, not a style preference.
 - Stack-specific checks (if tech-context review checklist provided):
   - Rails: N+1 queries, mass assignment, missing validations
   - Security: SQL injection, XSS, CSRF, auth bypass

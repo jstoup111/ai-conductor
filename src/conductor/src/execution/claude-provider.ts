@@ -1,5 +1,12 @@
 import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
-import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
+import type {
+  LLMProvider,
+  InvokeOptions,
+  InvokeResult,
+  SelfHostAuthContext,
+  SelfHostAuthPreparation,
+  TokenUsage,
+} from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
   observeInterval,
@@ -7,6 +14,8 @@ import {
   type ObservedInterval,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import { enforceFreshSessionOptions } from './fresh-session.js';
+import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
@@ -486,22 +495,36 @@ type ClaudeSubprocessFactory = (
 export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
+  private readonly oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
   constructor(
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: ClaudeSubprocessFactory = execa,
   ) {}
 
+  /** Safe selected-auth state for live fixture assertions; never exposes the token. */
+  authenticationSource(): 'oauth-token' | 'missing' {
+    return this.oauthToken ? 'oauth-token' : 'missing';
+  }
+
+  /** Restore the construction-time Claude credential in an isolated child home. */
+  async prepareSelfHostAuth(_context: SelfHostAuthContext): Promise<SelfHostAuthPreparation> {
+    return {
+      ...(this.oauthToken ? { env: { CLAUDE_CODE_OAUTH_TOKEN: this.oauthToken } } : {}),
+      args: [],
+    };
+  }
+
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onSpawn, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, onActivity, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
     }
-    const subprocess = this.subprocessFactory('claude', args, {
+    const subprocess = this.subprocessFactory(selfHost?.executable ?? 'claude', args, {
       ...execaOptions,
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.
@@ -538,6 +561,11 @@ export class ClaudeProvider implements LLMProvider {
    * Used only for truly non-interactive one-shot queries.
    */
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
+    // Boundary enforcement: session reuse was removed by design — a fresh
+    // session per invocation, regardless of what the caller supplied. See
+    // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
+    // deterministically prevents.
+    options = enforceFreshSessionOptions(options, 'claude');
     const args = this.buildArgs(options);
 
     // Deliver the prompt on STDIN, never as a `-p <prompt>` command-line
@@ -567,6 +595,7 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
+          selfHost: options.selfHost,
           spawnPermit: options.spawnPermit,
         })
         : this.runClaude(args, {
@@ -577,6 +606,7 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
+          selfHost: options.selfHost,
           spawnPermit: options.spawnPermit,
         }),
     );
@@ -598,6 +628,8 @@ export class ClaudeProvider implements LLMProvider {
    * the user can debug with Claude manually.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
+    // Boundary enforcement: fresh session per invocation (see invoke()).
+    options = enforceFreshSessionOptions(options, 'claude');
     const args = this.buildArgs(options);
 
     if (options.prompt) {
@@ -621,6 +653,7 @@ export class ClaudeProvider implements LLMProvider {
         diagnosticLog: options.diagnosticLog,
         onActivity: options.onActivity,
         onSpawn: options.onSpawn,
+        selfHost: options.selfHost,
         spawnPermit: options.spawnPermit,
       }),
     );
@@ -749,15 +782,18 @@ export class ClaudeProvider implements LLMProvider {
    * frontmatter, and (b) it cascades to subagents spawned inside the session
    * (so e.g. assess's CTO subagents inherit the parent step's effort).
    *
-   * Returns undefined when no override is needed so execa uses the default
-   * inherited environment.
+   * Every session env additionally carries the daemon-session marker
+   * (CONDUCT_DAEMON_SESSION=1): any Claude session spawned through this
+   * adapter is engine-managed, and the conduct-ts entry guard uses the
+   * marker to refuse recursive conductor invocations from inside it (see
+   * daemon-session.ts). Boundary enforcement, same pattern as
+   * enforceFreshSessionOptions — no config off-switch.
    */
-  private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv | undefined {
-    if (!options.effort && !options.selfHost?.env) return undefined;
-    return {
+  private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv {
+    return withDaemonSessionMarker({
       ...process.env,
       ...options.selfHost?.env,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
-    };
+    });
   }
 }

@@ -1,19 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, access, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { execa } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
+  extractJudgedResultCandidate,
   DefaultStepRunner,
   parseTierFromOutput,
   parseSignalCountsFromOutput,
   scoreComplexityFromCounts,
+  RUBRIC_FAILURE_DETAIL_CAP_BYTES,
 } from '../../src/engine/step-runners.js';
 import {
   CLAUDE_MODEL_POLICY as CLAUDE_POLICY,
@@ -23,8 +25,11 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
-import type { ExecuteProviderCandidatesInput } from '../../src/engine/provider-execution.js';
+import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
+import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
+import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
+import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -66,7 +71,82 @@ function interactiveRuntime(
 
 const emptyState: ConductState = {};
 
+// Session reuse was removed by design: every provider invocation mints its
+// own fresh UUID (never a store-derived id) and never resumes. Tests assert
+// uniqueness + UUID shape instead of pinning store-supplied session names.
+const FRESH_SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefined>): void {
+  expect(sessionIds.length).toBeGreaterThan(0);
+  expect(new Set(sessionIds).size).toBe(sessionIds.length);
+  for (const id of sessionIds) expect(id).toMatch(FRESH_SESSION_ID_RE);
+}
+
 describe('DefaultStepRunner', () => {
+  async function exhaustLifecycle(projectDir: string) {
+    let now = 0;
+    const episodeStore: ProviderLifecycleEpisodeStore = {
+      readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
+      writeProviderLifecycleEpisode: vi.fn(),
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+      configuredProviders: ['codex'],
+      providerLifecycleTimer: {
+        now: () => now,
+        schedule: (callback) => {
+          queueMicrotask(() => { now += 1; callback(); });
+          return {};
+        },
+        cancel: () => undefined,
+      },
+      providerLifecycleEpisodeStore: episodeStore,
+    });
+    const dispatch = (runner as unknown as {
+      dispatchProviderWithLifecycleSupervision: (
+        step: StepName,
+        options: ExecuteProviderCandidatesInput['options'],
+        run: () => Promise<never>,
+      ) => Promise<ProviderExecutionResult>;
+    }).dispatchProviderWithLifecycleSupervision.bind(runner);
+    return dispatch('build', { prompt: 'prepare provider', cwd: projectDir }, () => new Promise<never>(() => undefined));
+  }
+
+  it('preserves a failed lifecycle halt-marker write for the provider caller', async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), 'lifecycle-halt-failure-'));
+    const projectFile = join(temporaryDirectory, 'not-a-directory');
+    await writeFile(projectFile, 'not a directory');
+    try {
+      const result = await exhaustLifecycle(projectFile);
+      const expectedMarkerPath = join(projectFile, '.pipeline/HALT');
+      const expectedReason = /ENOTDIR|not a directory/i;
+      expect(result).toMatchObject({
+        success: false,
+        haltMarkerWrite: {
+          status: 'failed',
+          path: expectedMarkerPath,
+          reason: expect.stringMatching(expectedReason),
+        },
+      });
+      expect(result.output).toContain(`Halt marker write failed at ${expectedMarkerPath}:`);
+      expect(result.output).toMatch(expectedReason);
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the successful lifecycle halt-marker message unchanged', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'lifecycle-halt-success-'));
+    try {
+      expect(await exhaustLifecycle(projectDir)).toMatchObject({
+        output: 'Provider preparation timed out twice. See .pipeline/HALT.',
+        haltMarkerWrite: { status: 'written' },
+      });
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       name: 'autonomous scalar conversion',
@@ -760,6 +840,10 @@ describe('DefaultStepRunner', () => {
     const claudeSkillPrompts = claudeSkillInvoke.mock.calls.map(
       ([options]) => options.prompt,
     );
+    const codexSessionIds = codexInvoke.mock.calls.map(
+      ([options]) => options.sessionId,
+    );
+    expectUniqueFreshSessionIds(codexSessionIds);
 
     expect({
       capturedCalls: {
@@ -811,7 +895,7 @@ describe('DefaultStepRunner', () => {
       codexCalls: [
         {
           prompt: '$conduct complexity',
-          sessionId: 'complexity-codex-session',
+          sessionId: codexSessionIds[0],
           resume: false,
           cwd: '/tmp/project',
           model: 'gpt-5.6-terra',
@@ -819,7 +903,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: '$remediate',
-          sessionId: 'remediate-codex-session',
+          sessionId: codexSessionIds[1],
           resume: false,
           cwd: '/tmp/project',
           model: 'gpt-5.6-terra',
@@ -827,7 +911,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: '$rebase',
-          sessionId: 'rebase-codex-session',
+          sessionId: codexSessionIds[2],
           resume: false,
           cwd: '/wt/rebase',
           model: 'gpt-5.6-terra',
@@ -835,7 +919,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: expect.stringContaining('install failed'),
-          sessionId: 'setup-codex-session',
+          sessionId: codexSessionIds[3],
           resume: false,
           cwd: '/wt/setup',
           model: 'gpt-5.6-luna',
@@ -843,7 +927,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: expect.stringContaining('typecheck failed'),
-          sessionId: 'ci-codex-session',
+          sessionId: codexSessionIds[4],
           resume: false,
           cwd: '/wt/ci',
           model: 'gpt-5.6-terra',
@@ -851,7 +935,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: 'Judge attribution exactly as supplied.\nTask: runtime-07',
-          sessionId: 'attribution-codex-session',
+          sessionId: codexSessionIds[5],
           resume: false,
           cwd: '/wt/attribution',
           model: 'gpt-5.6-sol',
@@ -859,7 +943,7 @@ describe('DefaultStepRunner', () => {
         },
         {
           prompt: 'Grade this assembled plan and diff exactly as supplied.',
-          sessionId: 'build-review-codex-session',
+          sessionId: codexSessionIds[6],
           resume: false,
           cwd: '/wt/build-review',
           model: 'gpt-5.6-sol',
@@ -1013,6 +1097,17 @@ describe('DefaultStepRunner', () => {
     await runner.resetSession('explore');
     const explore = await runner.run('explore', emptyState);
 
+    // Each dispatch mints its own fresh session id; the store's ids are never
+    // consulted and the step scope records nothing. The zero-arg mock typing
+    // hides the real (options) call shape, so recover it explicitly.
+    const buildSessionId = (
+      codexInvoke.mock.calls as unknown as Array<[InvokeOptions]>
+    )[0]?.[0]?.sessionId;
+    const exploreSessionId = (
+      claudeInteractive.mock.calls as unknown as Array<[InvokeOptions]>
+    )[0]?.[0]?.sessionId;
+    expectUniqueFreshSessionIds([buildSessionId, exploreSessionId]);
+
     expect({
       legacyCalls: {
         invoke: legacyInvoke.mock.calls,
@@ -1033,7 +1128,7 @@ describe('DefaultStepRunner', () => {
           expect.objectContaining({
             cwd: '/tmp/project',
             dangerouslySkipPermissions: true,
-            sessionId: 'build-codex-session',
+            sessionId: buildSessionId,
             resume: false,
             model: 'gpt-5.6-terra',
             effort: 'medium',
@@ -1045,7 +1140,7 @@ describe('DefaultStepRunner', () => {
           expect.objectContaining({
             cwd: '/tmp/project',
             dangerouslySkipPermissions: false,
-            sessionId: 'explore-claude-session',
+            sessionId: exploreSessionId,
             resume: false,
             interactive: true,
             model: 'opus',
@@ -1053,8 +1148,8 @@ describe('DefaultStepRunner', () => {
           }),
         ],
       ],
-      buildSession: { id: 'build-codex-session' },
-      exploreSession: { id: 'explore-claude-session' },
+      buildSession: undefined,
+      exploreSession: undefined,
       build: {
         success: true,
         output: 'codex built',
@@ -1155,7 +1250,8 @@ describe('DefaultStepRunner', () => {
         fallbackReason: 'codex executable missing',
         invoked: false,
       },
-      cachedSession: { id: 'cached-3' },
+      // The store is never consulted: no session is recorded for the scope.
+      cachedSession: undefined,
     });
   });
 
@@ -1197,25 +1293,24 @@ describe('DefaultStepRunner', () => {
     expect({
       failed,
       afterFailure,
-      retryInvocations: throwingInteractive.mock.calls.map(
-        ([options]) => ({
-          sessionId: options.sessionId,
-          resume: options.resume,
-        }),
-      ),
       retriedActualProvider: retried.actualProvider,
     }).toEqual({
       failed: {
         success: false,
         output: 'Session for explore exited with error: interactive process rejected',
       },
-      afterFailure: { id: 'retry-claude-session' },
-      retryInvocations: [
-        { sessionId: 'retry-claude-session', resume: false },
-        { sessionId: 'retry-claude-session', resume: false },
-      ],
+      // The store is never consulted: no session is recorded for the scope.
+      afterFailure: undefined,
       retriedActualProvider: 'claude',
     });
+    // The retry cold-starts with its OWN fresh session id — never the store's
+    // 'retry-claude-session' and never the first attempt's id.
+    const retryInvocations = throwingInteractive.mock.calls.map(([options]) => ({
+      sessionId: options.sessionId,
+      resume: options.resume,
+    }));
+    expect(retryInvocations.map(({ resume }) => resume)).toEqual([false, false]);
+    expectUniqueFreshSessionIds(retryInvocations.map(({ sessionId }) => sessionId));
   });
 
   it('routes interactive recovery through the selected provider candidates', async () => {
@@ -1273,6 +1368,13 @@ describe('DefaultStepRunner', () => {
       ) => Promise<void>
     )('explore', { step: 'explore', reason: failureReason });
 
+    // Each recovery candidate mints its own fresh session id; the store's
+    // 'recovery-N' ids never reach a provider.
+    const recoverySessionIds = [
+      ...unavailableCodex.mock.calls,
+      ...claudeFallback.mock.calls,
+    ].map(([options]) => options.sessionId);
+    expectUniqueFreshSessionIds(recoverySessionIds);
     expect({
       capturedCalls: capturedInteractive.mock.calls,
       codexCalls: unavailableCodex.mock.calls.map(([options]) => ({
@@ -1295,7 +1397,7 @@ describe('DefaultStepRunner', () => {
       codexCalls: [
         {
           prompt: expect.stringContaining(failureReason),
-          sessionId: 'recovery-1',
+          sessionId: recoverySessionIds[0],
           resume: false,
           interactive: true,
         },
@@ -1303,7 +1405,7 @@ describe('DefaultStepRunner', () => {
       claudeCalls: [
         {
           prompt: expect.stringContaining(failureReason),
-          sessionId: 'recovery-2',
+          sessionId: recoverySessionIds[1],
           resume: false,
           interactive: true,
         },
@@ -3128,38 +3230,246 @@ TIER: M`,
       expect(provider.invokeInteractive).not.toHaveBeenCalled();
     });
 
+    it('retains one public build_review step while delegating fan-out orchestration without a legacy provider call', async () => {
+      const provider = createMockProvider();
+      const coordinate = vi.fn(async () => ({ success: true, output: 'five rubric branches settled' }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath,
+        buildReviewCoordinator: coordinate,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true, output: 'five rubric branches settled',
+      });
+      expect(coordinate).toHaveBeenCalledOnce();
+      expect(provider.invoke).not.toHaveBeenCalled();
+    });
+
+    it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
+      const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
+      const featureRoot = join(repository, '.worktrees', 'feature');
+      const selector = 'src/conductor/spec/example_spec.mjs';
+      const sourceDependencies = join(featureRoot, 'src/conductor/node_modules');
+      const selectorMarker = join(repository, 'counterfactual-selector-ran');
+      const selectorMarkerEnv = 'BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER';
+      const priorSelectorMarker = process.env[selectorMarkerEnv];
+      let checkoutRoot: string | undefined;
+      const observedProjections: Array<{ preflightEvidence: { scopedRun?: { failureExcerpt?: string } } }> = [];
+      try {
+        await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
+        await execa('git', ['config', 'user.name', 'Test'], { cwd: repository });
+        await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: repository });
+        await writeFile(join(repository, '.gitignore'), '.pipeline/\nnode_modules/\n');
+        await mkdir(join(repository, 'src/conductor/src'), { recursive: true });
+        await mkdir(join(repository, 'src/conductor/spec'), { recursive: true });
+        await mkdir(join(repository, '.docs/plans'), { recursive: true });
+        await writeFile(join(repository, '.docs/plans/feature.md'), `### Task 1: distinguish the selector\n- Update ${selector}.\n`);
+        await writeFile(join(repository, 'src/conductor/src/example.mjs'), 'export const answer = 1;\n');
+        await writeFile(join(repository, selector), "import { v4 as uuidv4 } from 'uuid';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || answer !== 1) process.exit(1);\n");
+        await execa('git', ['add', '.'], { cwd: repository });
+        await execa('git', ['commit', '-q', '-m', 'base behavior'], { cwd: repository });
+        await execa('git', ['remote', 'add', 'origin', repository], { cwd: repository });
+        await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: repository });
+        await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: repository });
+        await mkdir(join(repository, '.worktrees'), { recursive: true });
+        await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
+        await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
+        await writeFile(join(featureRoot, selector), "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { await writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies'); process.exit(1); }\n");
+        await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
+        await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
+        await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
+        await writeFile(join(sourceDependencies, 'uuid/package.json'), '{"name":"uuid","type":"module","exports":"./index.mjs"}\n');
+        await writeFile(join(sourceDependencies, 'uuid/index.mjs'), "export function v4() { return 'fixture-uuid'; }\n");
+        await mkdir(join(sourceDependencies, 'execa'), { recursive: true });
+        await writeFile(join(sourceDependencies, 'execa/package.json'), '{"name":"execa","type":"module","exports":"./index.mjs"}\n');
+        await writeFile(join(sourceDependencies, 'execa/index.mjs'), 'export function execa() {}\n');
+
+        const provider: LLMProvider = {
+          invoke: vi.fn(async (options) => {
+            const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as typeof observedProjections[number];
+            observedProjections.push(projection);
+            return { success: true, exitCode: 0, output: JSON.stringify({
+              kind: 'judged', rubric: 'tautology', lapId: (projection as any).lapId,
+              snapshotDigest: (projection as any).snapshotDigest, contractVersion: (projection as any).contractVersion, findings: [],
+            }) };
+          }),
+          invokeInteractive: vi.fn().mockResolvedValue(undefined),
+        };
+        const gitRunner = async (args: string[]) => {
+          if (args[0] === 'worktree' && args[1] === 'add') checkoutRoot = args[3];
+          if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
+          const result = await execa('git', args, { cwd: featureRoot, reject: false });
+          return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+        };
+        const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: featureRoot })).stdout;
+        process.env[selectorMarkerEnv] = selectorMarker;
+        const runner = new DefaultStepRunner(provider, 'checkout-proof', featureRoot, {
+          gitRunner,
+          planPath: join(featureRoot, '.docs/plans/feature.md'),
+          pipelineDir: join(featureRoot, '.pipeline'),
+          config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
+            enabled: true, perTaskFloor: false,
+            rubrics: { tautology: { enabled: true }, scope: { enabled: false }, rootCause: { enabled: false }, completeness: { enabled: false } },
+          } } as HarnessConfig,
+          buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },
+        });
+
+        await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
+        expect(checkoutRoot).toBe(join(featureRoot, '.pipeline', 'build-review-preflight', head));
+        const checkoutDependencies = join(checkoutRoot!, 'src/conductor/node_modules');
+        expect((await lstat(checkoutDependencies)).isSymbolicLink()).toBe(true);
+        expect(await realpath(checkoutDependencies)).toBe(await realpath(sourceDependencies));
+        const checkoutCommandDependencies = join(checkoutRoot!, 'node_modules');
+        expect((await lstat(checkoutCommandDependencies)).isSymbolicLink()).toBe(true);
+        expect(await realpath(checkoutCommandDependencies)).toBe(await realpath(sourceDependencies));
+        expect(await readFile(selectorMarker, 'utf8')).toBe('selector-loaded-checkout-dependencies');
+        expect(observedProjections[0]).toMatchObject({
+          preflightEvidence: {
+            classification: 'red',
+            scopedRun: {
+              exitCode: 1,
+              runKind: 'nonzero-exit',
+            },
+          },
+        });
+      } finally {
+        if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
+        else process.env[selectorMarkerEnv] = priorSelectorMarker;
+        await rm(repository, { recursive: true, force: true });
+      }
+    });
+
+    it('writes the raw aggregate but returns and emits the shared effective verdict', async () => {
+      const provider = createMockProvider();
+      const events = { emit: vi.fn(async () => undefined) } as any;
+      let rawAggregate: unknown;
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath, events,
+        buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
+          rawAggregate = aggregate;
+          return {
+            ok: true as const,
+            feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+            effective: {
+              rawVerdict: 'FAIL' as const, verdict: 'PASS' as const, acceptedFindingIds: ['accepted'], unresolvedFindingIds: [],
+              skippedRubrics: [], infrastructureFailureRubrics: [],
+            },
+          };
+        }),
+        ...currentBuildReviewProof(),
+      });
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
+        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v3',
+        findings: branch.rubric === 'scope' ? [{
+          concernKind: 'out-of-plan-change', summary: 'The changed path is outside the approved plan.',
+          evidenceLocations: ['src/example.ts:1'],
+          anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'out-of-plan-change' },
+        }] : [],
+      }));
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject(rawAggregate as object);
+      expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
+      }));
+    });
+
+    it('settles missing current-lap branch artifacts as a blocking infrastructure failure', async () => {
+      const provider = createMockProvider();
+      const events = { emit: vi.fn(async () => undefined) } as any;
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath, events,
+        buildReviewArtifactReader: async () => undefined,
+        ...currentBuildReviewProof(),
+      });
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
+        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      }));
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: false });
+      expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'FAIL',
+      }));
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject({
+        results: { scope: { kind: 'infrastructure-failure', reason: 'artifact-read-failed' } },
+      });
+    });
+
     it.each([
       {
-        name: 'complete five-flag PASS',
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
-        success: true,
+        // #1682: tautology defaults to disabled; only the other three rubrics dispatch.
+        name: 'build_review is absent and defaults to the three enabled rubrics (tautology off, #1682)',
+        config: { wiring: { entry_points: ['src/index.ts'] } } as HarnessConfig,
+        expectedInvokeCalls: 6, // 3 rubrics x (1 dispatch + 1 bounded shape-repair)
+        expectTautology: false,
       },
-      ...(['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const).map((missing) => ({
-        name: `PASS missing rubric.${missing}`,
-        rubric: Object.fromEntries(
-          ['tautology', 'scope', 'rootCause', 'completeness', 'wiring']
-            .filter((name) => name !== missing)
-            .map((name) => [name, false]),
-        ),
-        success: false,
-      })),
-    ])('returns $success for a $name verdict', async ({ rubric, success }) => {
-      const verdictPath = join(dir, '.pipeline', 'build-review.json');
-      const invoke = vi.fn().mockImplementation(async () => {
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric }), 'utf-8');
-        return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
+      {
+        name: 'a partial rubric override inherits the remaining enabled rubrics',
+        config: {
+          build_review: {
+            rubrics: { scope: { model: 'opus' }, tautology: { enabled: true } },
+          },
+          wiring: { entry_points: ['src/index.ts'] },
+        } as HarnessConfig,
+        expectedInvokeCalls: 8, // 4 rubrics x (1 dispatch + 1 bounded shape-repair)
+        expectTautology: true,
+      },
+    ])('uses the production rubric coordinator when $name', async ({ config, expectedInvokeCalls, expectTautology }) => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        config,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
       });
-      const runner = new DefaultStepRunner(
-        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
-        'session-1',
-        dir,
-        { gitRunner: scriptedGit(), planPath },
+
+      await runner.run('build_review', emptyState);
+
+      expect(provider.invoke).toHaveBeenCalledTimes(expectedInvokeCalls);
+      const prompts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => options.prompt);
+      expect(prompts).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('Build Review Scope rubric'),
+          expect.stringContaining('Build Review Root Cause rubric'),
+          expect.stringContaining('Build Review Completeness rubric'),
+        ]),
       );
+      if (expectTautology) {
+        expect(prompts).toEqual(expect.arrayContaining([expect.stringContaining('Build Review Tautology rubric')]));
+      } else {
+        expect(prompts.join('\n')).not.toContain('Build Review Tautology rubric');
+      }
+    });
 
-      const result = await runner.run('build_review', emptyState);
+    it('does not dispatch the coordinator or legacy scalar grader when the whole gate is disabled', async () => {
+      const provider = createMockProvider();
+      const coordinate = vi.fn(async () => ({ success: true, output: 'unexpected coordinator dispatch' }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        config: { build_review: { enabled: false } } as HarnessConfig,
+        buildReviewCoordinator: coordinate,
+        ...currentBuildReviewProof(),
+      });
 
-      expect(result.success).toBe(success);
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: 'build_review disabled',
+      });
+      expect(coordinate).not.toHaveBeenCalled();
+      expect(provider.invoke).not.toHaveBeenCalled();
     });
 
     afterEach(async () => {
@@ -3176,23 +3486,45 @@ TIER: M`,
       return git;
     }
 
+    // #1682: tautology defaults off; these tests exercise four-rubric fan-out mechanics.
+    function tautologyOptIn() {
+      return {
+        config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+      };
+    }
+
+    function currentBuildReviewProof() {
+      return {
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({
+            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+          } as never),
+        },
+      };
+    }
+
     async function prepareContainmentRepo(
       changedPaths: string[],
       commitMessage: string,
+      declaredPath = 'config.ts',
     ): Promise<string> {
       await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
       await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
-      writeFileSync(planPath, '### Task 3: Config only\n**Files:** config.ts\n');
-      writeFileSync(join(dir, 'config.ts'), 'base\n');
-      await execa('git', ['add', 'config.ts'], { cwd: dir });
+      writeFileSync(planPath, `### Task 3: Config only\n**Files:** ${declaredPath}\n`);
+      const declaredDirectory = declaredPath.slice(0, declaredPath.lastIndexOf('/'));
+      if (declaredDirectory !== '') await mkdir(join(dir, declaredDirectory), { recursive: true });
+      writeFileSync(join(dir, declaredPath), 'base\n');
+      await execa('git', ['add', declaredPath], { cwd: dir });
       await execa('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
       await execa('git', ['remote', 'add', 'origin', dir], { cwd: dir });
       await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: dir });
       await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: dir });
       await execa('git', ['checkout', '-q', '-b', 'feature/containment'], { cwd: dir });
       for (const path of changedPaths) {
+        const directory = path.slice(0, path.lastIndexOf('/'));
+        if (directory !== '') await mkdir(join(dir, directory), { recursive: true });
         writeFileSync(join(dir, path), `${path}\n`);
       }
       await execa('git', ['add', '--', ...changedPaths], { cwd: dir });
@@ -3204,6 +3536,7 @@ TIER: M`,
       const sha = await prepareContainmentRepo(
         ['shared.ts'],
         'widen shared parser\n\nTask: 3\nScope: shared.ts — shared parser changes atomically',
+        'engine/config.ts',
       );
       const invoke = vi.fn().mockResolvedValue({
         success: true,
@@ -3218,21 +3551,31 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
+          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+          ...currentBuildReviewProof(),
         },
       );
 
       await runner.run('build_review', emptyState);
 
-      const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-      expect(prompt).toContain('shared.ts');
-      expect(prompt).toContain('shared parser changes atomically');
-      expect(prompt).toContain('Task 3');
-      expect(prompt).toContain(sha);
+      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
+      expect(prompts).toContain('shared.ts');
+      expect(prompts).toContain('shared parser changes atomically');
+      expect(prompts).toContain('Task 3');
+      expect(prompts).toContain(sha);
+      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
+      expect(scopePrompt).toContain('shared parser changes atomically');
+      expect(invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .filter((prompt) => !prompt.includes('"rubric":"scope"')).join('\n'))
+        .not.toContain('shared parser changes atomically');
     });
 
-    it('renders and warning-logs containment violations with task, sha, and every path', async () => {
+    it('passes derived scope-widening evidence into the isolated grader prompt with provenance', async () => {
       const sha = await prepareContainmentRepo(
-        ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
         'out of scope\n\nTask: 3',
       );
       const invoke = vi.fn().mockResolvedValue({
@@ -3240,7 +3583,6 @@ TIER: M`,
         output: '{"verdict":"PASS"}',
         exitCode: 0,
       });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
@@ -3250,38 +3592,28 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           log: (message) => console.warn(message),
+          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+          ...currentBuildReviewProof(),
         },
       );
 
-      try {
-        const result = await runner.run('build_review', emptyState);
-        const warnings = warnSpy.mock.calls.flat().join('\n');
+      await runner.run('build_review', emptyState);
 
-        expect(result.output).toContain('Task 3');
-        expect(result.output).toContain(sha);
-        expect(result.output).toContain('artifacts.ts');
-        expect(result.output).toContain('changelog-pr-finalizer-cli.ts');
-        expect(warnings).toContain('Task 3');
-        expect(warnings).toContain(sha);
-        expect(warnings).toContain('artifacts.ts');
-        expect(warnings).toContain('changelog-pr-finalizer-cli.ts');
-        const sidecar = JSON.parse(await readFile(
-          join(dir, '.pipeline/containment-floor.json'),
-          'utf-8',
-        )) as { violations: Array<{ taskId: string; sha: string; paths: string[] }> };
-        expect(sidecar.violations).toEqual([{
-          taskId: '3',
-          sha,
-          paths: ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
-        }]);
-      } finally {
-        warnSpy.mockRestore();
-      }
+      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
+      expect(scopePrompt).toContain('other/artifacts.ts');
+      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
+      expect(scopePrompt).toContain('out of scope');
+      expect(scopePrompt).toContain('"taskId":"3"');
+      expect(scopePrompt).toContain(sha);
+      // Commit-message-derived widenings must carry their derived provenance
+      // flag into the grader prompt, not just path/rationale/task/sha.
+      expect(scopePrompt).toContain('"derived":true');
     });
 
-    it('prepends containment violations to an ordinary grader failure output', async () => {
+    it('keeps grader failure output separate from derived scope-widening evidence', async () => {
       const sha = await prepareContainmentRepo(
-        ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        ['other/artifacts.ts', 'other/changelog-pr-finalizer-cli.ts'],
         'out of scope\n\nTask: 3',
       );
       const invoke = vi.fn().mockResolvedValue({
@@ -3289,7 +3621,6 @@ TIER: M`,
         output: 'grader exited before writing a verdict',
         exitCode: 1,
       });
-      const log = vi.fn();
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
@@ -3298,100 +3629,106 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
-          log,
+          ...currentBuildReviewProof(),
+          config: { build_review: { scopeContainmentEnforced: true } },
         },
       );
 
       const result = await runner.run('build_review', emptyState);
       const output = result.output ?? '';
+      const scopePrompt = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt)
+        .find((prompt) => prompt.includes('"rubric":"scope"')) ?? '';
 
       expect(result.success).toBe(false);
-      expect(output).toContain('Task 3');
-      expect(output).toContain(sha);
-      expect(output).toContain('artifacts.ts');
-      expect(output).toContain('changelog-pr-finalizer-cli.ts');
-      expect(output.endsWith('grader exited before writing a verdict')).toBe(true);
-      expect(log.mock.calls.flat().join('\n')).toContain('artifacts.ts');
-      expect(log.mock.calls.flat().join('\n')).toContain('changelog-pr-finalizer-cli.ts');
-      const sidecar = JSON.parse(await readFile(
-        join(dir, '.pipeline/containment-floor.json'),
-        'utf-8',
-      )) as { violations: Array<{ taskId: string; sha: string; paths: string[] }> };
-      expect(sidecar.violations).toEqual([{
-        taskId: '3',
-        sha,
-        paths: ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
-      }]);
+      expect(output).not.toContain('out of scope');
+      expect(output).toContain('containment-floor: hook-events ledger is unrecorded');
+      expect(scopePrompt).toContain('other/artifacts.ts');
+      expect(scopePrompt).toContain('other/changelog-pr-finalizer-cli.ts');
+      expect(scopePrompt).toContain('out of scope');
+      expect(scopePrompt).toContain('"taskId":"3"');
+      expect(scopePrompt).toContain(sha);
     });
 
-    it('preserves observed intervals through the build-review scalar adapter', async () => {
-      const observedIntervals = [{ startedAtMs: 500, durationMs: 45 }];
+    it('keeps the widened floor active while containment evidence is disabled', async () => {
+      await prepareContainmentRepo(['src/engine/config.test.ts'], 'test sibling\n\nTask: 3', 'src/engine/config.ts');
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        {
+          gitRunner: makeGitRunner(dir),
+          planPath,
+          pipelineDir: join(dir, '.pipeline'),
+          ...currentBuildReviewProof(),
+          config: { build_review: { scopeContainmentEnforced: false } },
+        },
+      );
+
+      await runner.run('build_review', emptyState);
+
+      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      const floor = JSON.parse(await readFile(join(dir, '.pipeline', 'containment-floor.json'), 'utf8'));
+      expect(floor.acceptedWidenings).toEqual([]);
+      expect(floor.skipNotes).toEqual([]);
+      expect(prompts).not.toContain('test sibling');
+      expect(evaluateScopeContainment({
+        stagedPaths: ['src/engine/config.test.ts'],
+        task: { id: '3', status: 'in_progress', files: ['src/engine/config.ts'] },
+      })).toEqual({ allowed: true });
+    });
+
+    it('leaves no verdict artifact after a vocabulary rejection survives its repair turn', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: true,
-        output: '{"verdict":"PASS"}',
+        output: JSON.stringify({
+          kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: 'lap-head',
+          snapshotDigest: 'sha256:source', findings: [{
+            concernKind: 'other', summary: 'A rejected catch-all.',
+            evidenceLocations: ['src/example.ts:1'],
+            anchor: { rubric: 'scope', path: 'src/example.ts', relation: 'other' },
+          }],
+        }),
         exitCode: 0,
-        observedIntervals,
       });
       const runner = new DefaultStepRunner(
         { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
         'session-1',
         dir,
-        { gitRunner: scriptedGit(), planPath },
+        { gitRunner: scriptedGit(), planPath, ...tautologyOptIn(), ...currentBuildReviewProof() },
       );
 
       const result = await runner.run('build_review', emptyState);
 
-      expect(result.observedIntervals?.[0]).toBe(observedIntervals[0]);
+      expect(result.success).toBe(false);
+      await expect(access(join(dir, '.pipeline/build-review.json'))).rejects.toThrow();
+      expect(invoke).toHaveBeenCalledTimes(8);
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger.gates.build_review?.count ?? 0).toBe(0);
+      expect(ledger.gates.build_review?.cumulative ?? 0).toBe(0);
     });
 
-    it('dispatches with a fresh uuid and resume:false, never the constructor session', async () => {
+    it('dispatches every rubric with a fresh uuid and resume:false, never the constructor session', async () => {
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...tautologyOptIn(),
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      expect(invoke).toHaveBeenCalledOnce();
-      const opts = invoke.mock.calls[0][0] as InvokeOptions;
-      expect(opts.resume).toBe(false);
-      expect(opts.sessionId).not.toBe('session-1');
-      // A real uuid, not empty/undefined.
-      expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
-    });
-
-    it('preserves authentication metadata on a legacy scalar permission denial', async () => {
-      const authentication = {
-        provider: 'codex' as const,
-        source: 'api-key' as const,
-        state: 'ready' as const,
-      };
-      const invoke = vi.fn().mockResolvedValue({
-        success: false,
-        output: 'Codex permission review denied the required action.',
-        exitCode: 1,
-        permissionDenied: true,
-        authentication,
-      });
-      const provider: LLMProvider = {
-        invoke,
-        invokeInteractive: vi.fn().mockResolvedValue(undefined),
-      };
-      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
-        planPath,
-      });
-
-      const result = await runner.run('build_review', emptyState);
-
-      expect(result).toMatchObject({
-        success: false,
-        permissionDenied: true,
-        authentication,
-      });
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
+      for (const [options] of invoke.mock.calls) {
+        const opts = options as InvokeOptions;
+        expect(opts.resume).toBe(false);
+        expect(opts.sessionId).not.toBe('session-1');
+        expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+      }
     });
 
     it('resolves the feature\'s own plan by featureDesc stem, not the alphabetically-last plan file (#788)', async () => {
@@ -3415,14 +3752,18 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         featureDesc: 'block-edits-to-docs-spec-artifacts-during-build-an',
+        ...tautologyOptIn(),
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
-      const opts = invoke.mock.calls[0][0] as InvokeOptions;
-      expect(opts.prompt).toContain('Grade against this one.');
-      expect(opts.prompt).not.toContain('Wrong plan.');
+      const prompts = invoke.mock.calls.map(([options]) => (options as InvokeOptions).prompt).join('\n');
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
+      expect(prompts).toContain('Grade against this one.');
+      expect(prompts).not.toContain('Wrong plan.');
     });
 
     // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
@@ -3435,17 +3776,41 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...tautologyOptIn(),
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
         remoteHeadSha: null,
         fresh: false,
       });
+    });
+
+    // Task 24 (rebase-invalidated-test-failures-never-reach-build): the
+    // middle leg of grading provenance — whatever assembly classified must
+    // reach the conductor on StepRunResult, or the event is never emitted.
+    it('carries the assembled grading provenance through to the conductor', async () => {
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        ...tautologyOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.repairProvenance).toEqual({ disposition: 'none_warranted' });
+      // 4 rubrics x (1 dispatch + 1 bounded shape-repair turn for the unparseable output)
+      expect(invoke).toHaveBeenCalledTimes(8);
     });
 
     it('attaches baseFreshness even on a ladder-exhausted failure (fire-and-forget telemetry)', async () => {
@@ -3459,11 +3824,14 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
+        ...tautologyOptIn(),
+        ...currentBuildReviewProof(),
       });
 
       const result = await runner.run('build_review', emptyState);
 
       expect(result.success).toBe(false);
+      expect(invoke).toHaveBeenCalledTimes(4);
       expect(result.baseFreshness).toEqual({
         mergeBase: 'abc123',
         trackingRefSha: null,
@@ -3506,100 +3874,6 @@ TIER: M`,
       expect(result.success).toBe(false);
     });
 
-    // gate-step-completion-validates-against-code-state (Task 3): the engine
-    // cannot control what JSON the grader writes, so it augments the verdict
-    // file post-write with the HEAD SHA it was formed against.
-    describe('codeStamp augmentation', () => {
-      function initGitRepo(repoDir: string): string {
-        execSync('git init -q', { cwd: repoDir });
-        execSync('git config user.email test@example.com', { cwd: repoDir });
-        execSync('git config user.name Test', { cwd: repoDir });
-        execSync('git add -A', { cwd: repoDir });
-        execSync('git commit -q -m init', { cwd: repoDir });
-        return execSync('git rev-parse HEAD', { cwd: repoDir }).toString().trim();
-      }
-
-      it('attaches codeStamp = current HEAD to a freshly written build-review.json', async () => {
-        const headSha = initGitRepo(dir);
-        const verdictPath = join(dir, '.pipeline', 'build-review.json');
-        const invoke = vi.fn().mockImplementation(async () => {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }), 'utf-8');
-          return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
-        });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(true);
-        const written = JSON.parse(await readFile(verdictPath, 'utf-8'));
-        expect(written.codeStamp).toBe(headSha);
-        expect(written.verdict).toBe('PASS');
-      });
-
-      it('rejects a successful dispatch when build-review.json is missing', async () => {
-        initGitRepo(dir);
-        const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(false);
-      });
-
-      it('rejects a successful dispatch when build-review.json is unparseable', async () => {
-        initGitRepo(dir);
-        const verdictPath = join(dir, '.pipeline', 'build-review.json');
-        const invoke = vi.fn().mockImplementation(async () => {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, 'not json {{{', 'utf-8');
-          return { success: true, output: 'not json {{{', exitCode: 0 };
-        });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(false);
-      });
-
-      // Rework (cycle 1): gate_code_validity.enabled=false must restore
-      // byte-identical pre-feature behavior — no codeStamp field written at
-      // all, not even null.
-      it('does not attach codeStamp when gate_code_validity.enabled is false', async () => {
-        initGitRepo(dir);
-        const verdictPath = join(dir, '.pipeline', 'build-review.json');
-        const invoke = vi.fn().mockImplementation(async () => {
-          await mkdir(join(dir, '.pipeline'), { recursive: true });
-          await writeFile(verdictPath, JSON.stringify({ verdict: 'PASS', rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false } }), 'utf-8');
-          return { success: true, output: '{"verdict":"PASS"}', exitCode: 0 };
-        });
-        const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };
-        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-          gitRunner: scriptedGit(),
-          planPath,
-          config: { gate_code_validity: { enabled: false } } as unknown as HarnessConfig,
-        });
-
-        const result = await runner.run('build_review', emptyState);
-
-        expect(result.success).toBe(true);
-        const written = JSON.parse(await readFile(verdictPath, 'utf-8'));
-        expect('codeStamp' in written).toBe(false);
-        expect(written.verdict).toBe('PASS');
-      });
-    });
   });
 
   describe('resolveSetupFailure one-shot dispatch', () => {
@@ -3742,5 +4016,191 @@ TIER: M`,
       expect(opts.cwd).toBe('/wt/feature-x');
       expect(opts.prompt).toContain("TypeError: Cannot read properties of undefined (reading 'foo')");
     });
+  });
+});
+
+describe('extractJudgedResultCandidate', () => {
+  const judged = { kind: 'judged', rubric: 'scope', contractVersion: 'v1', findings: [] };
+
+  it('parses raw JSON output', () => {
+    expect(extractJudgedResultCandidate(JSON.stringify(judged))).toEqual(judged);
+  });
+
+  it('parses JSON wrapped in a markdown fence', () => {
+    expect(extractJudgedResultCandidate('Here is the verdict:\n```json\n' + JSON.stringify(judged) + '\n```\n')).toEqual(judged);
+  });
+
+  it('parses JSON surrounded by prose', () => {
+    expect(extractJudgedResultCandidate('The scope review found no issues.\n' + JSON.stringify(judged) + '\nLet me know if you need anything else.')).toEqual(judged);
+  });
+
+  it('returns undefined when no candidate parses', () => {
+    expect(extractJudgedResultCandidate('no json here at all')).toBeUndefined();
+  });
+});
+
+describe('build_review rubric dispatch: validate-and-repair loop', () => {
+  const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
+  const snapshotDigest = 'sha256:434fa33612c7d7188d5ba5398a748b54a28400bcb534988863610f64a70896f8';
+  const projection = {
+    rubric: 'tautology', contractVersion: 'v3', projectionVersion: 'v2',
+    lapId, snapshotDigest, digest: 'sha256:projection',
+    mergeBase: 'base', headSha: 'head', changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflightEvidence: {}, repairContext: [],
+  } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
+  const policy = {
+    enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
+    model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
+  };
+  const branch = { rubric: 'tautology' as const, skillName: 'build-review-tautology', policy };
+
+  // The 2026-08-15 lap-a237011e failure verbatim in miniature: a semantically
+  // complete judgement whose finding flattens the anchor into structured
+  // top-level objects — the shape the strict parser rejects.
+  const incidentShapedOutput = [
+    'I read the referenced diff and measured each changed test.',
+    '```json',
+    JSON.stringify({
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v3', lapId, snapshotDigest,
+      findings: [{
+        concernKind: 'assertion-insensitive-to-production',
+        changedTest: { path: 'test/engine/event-sinks.test.ts', suite: 'event sink subscriptions', name: 'rejects an unrelated sink' },
+        exercisedBehavior: { productionSymbol: 'EVENT_SINKS', productionPath: 'src/engine/event-sinks.ts' },
+        violationKind: 'assertion-insensitive-to-production',
+        summary: 'The assertion compares a test-local mutated copy and can never fail.',
+        evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
+      }],
+    }),
+    '```',
+  ].join('\n');
+  const validOutput = JSON.stringify({
+    kind: 'judged', rubric: 'tautology', contractVersion: 'v3', lapId, snapshotDigest,
+    findings: [{
+      concernKind: 'assertion-insensitive-to-production',
+      summary: 'The assertion compares a test-local mutated copy and can never fail.',
+      evidenceLocations: ['src/conductor/test/engine/event-sinks.test.ts:519'],
+      anchor: {
+        rubric: 'tautology',
+        changedTest: {
+          path: 'test/engine/event-sinks.test.ts',
+          contentHash: 'sha256:7849045d0fc1c72a360be630bf414918ecda92a8f0fcd56b79ec0a1bd93c92ca',
+          display: 'test/engine/event-sinks.test.ts changed test',
+        },
+        exercisedBehavior: 'EVENT_SINKS persisted routing',
+        violationKind: 'assertion-insensitive-to-production',
+      },
+    }],
+  });
+
+  function dispatch(runner: DefaultStepRunner) {
+    return (runner as unknown as {
+      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(branch, projection);
+  }
+
+  it('repairs an unparseable-then-valid sequence within the same dispatch (legacy provider path)', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest, verdict: 'FAIL' });
+    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
+    expect(repairPrompt).toContain('ONLY one JSON object');
+    expect(repairPrompt).toContain('did not satisfy the judged-result contract');
+    expect(repairPrompt).toContain('anchor');
+    expect(repairPrompt).toContain(`"lapId": "<echo the projection lapId verbatim>"`);
+    expect(repairPrompt).toContain(
+      'Your previous response (bounded excerpt):\nI read the referenced diff and measured each changed test.',
+    );
+  });
+
+  it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
+    expect(prompt).toContain('"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}');
+    expect(prompt).toContain('never flattened');
+  });
+
+  it('instructs graders with the current v3 structured-anchor contract, not the retired v2 plain-string one', async () => {
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    await dispatch(runner);
+
+    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
+    expect(prompt).toContain('`contractVersion` is "v3"');
+    expect(prompt).not.toContain('`contractVersion` is "v2"');
+    expect(prompt).not.toContain('every anchor value is a plain string');
+    expect(prompt).toContain('content-region');
+  });
+
+  it('yields a bounded dispatch-failure report with the raw output excerpt when the repair turn is still bad', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: `still prose ${'x'.repeat(10_000)} tail-marker`, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'dispatch-failure' });
+    const detail = (result as { detail: string }).detail;
+    expect(Buffer.byteLength(detail, 'utf8')).toBeLessThanOrEqual(RUBRIC_FAILURE_DETAIL_CAP_BYTES);
+    expect(detail).toContain('Raw output excerpt: still prose');
+    expect(detail).toContain('tail-marker');
+    expect(detail).toContain('[...truncated');
+  });
+
+  it('returns undefined (not a failure report) when the provider invocation itself fails', async () => {
+    const invoke = vi.fn().mockResolvedValue({ success: false, output: 'crashed', exitCode: 1 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    await expect(dispatch(runner)).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['claude', 'codex'] as const)('repairs within the same dispatch on the %s runtime-candidates path', async (providerKey) => {
+    const runtimeIncidentShapedOutput = incidentShapedOutput.replace(
+      'I read the referenced diff and measured each changed test.',
+      'Runtime-candidates repair output marker.',
+    );
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: runtimeIncidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
+    const policyForKey = providerKey === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
+    const runtime = {
+      key: providerKey,
+      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke, invokeInteractive: vi.fn() },
+      policy: policyForKey,
+      builtIn: true,
+      availability: new ModelAvailability(policyForKey.modelFallbackLadder),
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project', {
+      config: { llm_provider: [providerKey] },
+      providerRuntimes: new ProviderRuntimeSet([runtime]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: [providerKey],
+    });
+
+    const result = await (runner as unknown as {
+      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
+    }).dispatchBuildReviewRubric({ ...branch, policy: { ...policy, llm_provider: providerKey } }, projection);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest });
+    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
+    expect(repairPrompt).toContain('ONLY one JSON object');
+    expect(repairPrompt).toContain(
+      'Your previous response (bounded excerpt):\nRuntime-candidates repair output marker.',
+    );
   });
 });

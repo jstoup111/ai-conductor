@@ -4,6 +4,7 @@ import { readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
+import { type ContainmentVerdict } from './live-containment.js';
 
 const execFile = promisify(execFileCb);
 
@@ -54,7 +55,7 @@ export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
  * already-tracked content is indistinguishable from an operator edit and is
  * the accepted residual gap in this guard.
  */
-const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
+export const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
   '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
   'src/conductor/dist-versions',
 ];
@@ -132,6 +133,25 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'file-history',                     // per-session snapshots of every file any concurrent session edits
   'paste-cache',                      // per-session scratch for large pasted inputs
 ];
+
+/**
+ * Lock-marker directories the provider CLI writes ANYWHERE under its home, one
+ * file per live process (`plugins/cache/<marketplace>/<plugin>/<version>/.in_use/<pid>`).
+ * Excluded by BASENAME rather than by path because the exclusion matcher is
+ * deliberately root-level only, and these markers sit several levels deep.
+ *
+ * This is the narrow form on purpose. Codex's list excludes all of
+ * `plugins/cache`; the Claude surface keeps every byte of installed plugin
+ * content fingerprinted, because a self-host process rewriting a plugin's
+ * skills or hooks in the operator home is exactly what this surface exists to
+ * catch. Verified 2026-08-18 behind a false halt (`added
+ * plugins/cache/claude-plugins-official/skill-creator/unknown/.in_use/1001617`):
+ * of 348 files under a live `plugins/cache`, the ONLY paths that changed in the
+ * preceding day were `.in_use` markers, each written by a concurrent Claude
+ * process that no longer exists. Widen this only with the same kind of
+ * observed-churn evidence.
+ */
+const PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['.in_use'];
 
 /** Codex counterpart of `CLAUDE_PROVIDER_STATE_VOLATILE` — same leak-detector caveat applies. */
 const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
@@ -257,7 +277,17 @@ export async function fingerprintLiveBoundary(args: {
         LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
       ),
     },
-    { root: args.unrelatedProviderState, label: 'provider state', exclude: excluded, manifest: await manifest(args.unrelatedProviderState, excluded) },
+    {
+      root: args.unrelatedProviderState,
+      label: 'provider state',
+      exclude: excluded,
+      excludeDirectoryBasenames: PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
+      manifest: await manifest(
+        args.unrelatedProviderState,
+        excluded,
+        PROVIDER_STATE_VOLATILE_DIRECTORY_BASENAMES,
+      ),
+    },
   ] };
 }
 
@@ -337,7 +367,15 @@ function describeDiff(diff: { added: string[]; removed: string[]; changed: strin
   return `${counts}: ${shown.join('; ')}${elided > 0 ? `; and ${elided} more` : ''}`;
 }
 
-export async function verifyLiveBoundary(snapshot: LiveBoundarySnapshot): Promise<{ ok: boolean; reason?: string }> {
+export async function verifyLiveBoundary(
+  snapshot: LiveBoundarySnapshot,
+  containmentVerdict: ContainmentVerdict = { contained: false, reason: 'containment not evaluated' },
+): Promise<{
+  ok: boolean;
+  reason?: string;
+  containedDrift?: { evidence: string; summary: string };
+}> {
+  let containedDrift: { evidence: string; summary: string } | undefined;
   for (const surface of snapshot.surfaces) {
     const current = await manifest(
       surface.root,
@@ -347,12 +385,23 @@ export async function verifyLiveBoundary(snapshot: LiveBoundarySnapshot): Promis
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
       if (surface.label === 'live checkout') {
+        if (containmentVerdict.contained) {
+          containedDrift = {
+            evidence: containmentVerdict.evidence,
+            summary: describeDiff(diff),
+          };
+          continue;
+        }
         const paths = [...diff.added, ...diff.removed, ...diff.changed];
         const classifications = await classifyLiveCheckoutDiff(surface.root, paths);
         if (paths.every(path => classifications.get(path) === 'operator-edit')) continue;
+        return {
+          ok: false,
+          reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}. Containment was not in force: ${containmentVerdict.reason}.`,
+        };
       }
       return { ok: false, reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}.` };
     }
   }
-  return { ok: true };
+  return containedDrift ? { ok: true, containedDrift } : { ok: true };
 }

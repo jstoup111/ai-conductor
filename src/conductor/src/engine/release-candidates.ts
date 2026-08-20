@@ -6,7 +6,18 @@ export interface ReleaseCandidatePullRequest {
   mergedAt: string | null;
   mergeSha: string;
   body: string;
+  /** Head branch name; lets the collector exclude the bot's own release PRs. */
+  headRef?: string;
 }
+
+/**
+ * The bot-owned release PR branch. A release PR that was merged but whose
+ * publication has not happened yet (a failed release gate, say) falls inside
+ * the since-last-tag window on the next maintenance run; it carries no
+ * Release-Disposition of its own and must never be a candidate (2026-08-16:
+ * the 0.102.0 gate failure wedged maintenance with invalid-disposition #1467).
+ */
+export const RELEASE_PR_HEAD_REF = 'automation/release-pr';
 
 export interface ReleaseCandidateGit {
   latestTag(): Promise<string>;
@@ -137,6 +148,12 @@ export async function collectReleaseCandidates(input: {
     }
 
     for (const pullRequest of matchingPullRequests) {
+      if (pullRequest.headRef === RELEASE_PR_HEAD_REF) {
+        // A merged-but-unpublished release PR falls inside the since-last-tag
+        // window; it carries no disposition of its own and must never be a
+        // candidate, while its merge commit stays explained by this match.
+        continue;
+      }
       try {
         const disposition = parseReleaseDisposition(pullRequest.body);
         audit.push({ number: pullRequest.number, mergeSha, disposition: disposition.disposition });

@@ -1,8 +1,13 @@
 // Test: computeSignalRates — shared canonical metric-rate function (Task 8, FR-9+FR-12, ADR-006)
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { computeSignalRates } from '../../../src/engine/engineer/rates.js';
 import type { SignalRates } from '../../../src/engine/engineer/rates.js';
-import type { EngineerSignal } from '../../../src/engine/engineer-store.js';
+import { assembleSignal, type EngineerSignal } from '../../../src/engine/engineer-store.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -72,6 +77,36 @@ const sig3 = makeSignal({
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe('computeSignalRates', () => {
+  const temporaryDirectories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(temporaryDirectories.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('returns a nonzero haltRate for a signal assembled from the persisted halt sink', async () => {
+    const worktreeDir = await mkdtemp(join(tmpdir(), 'signal-rates-halt-test-'));
+    temporaryDirectories.push(worktreeDir);
+    const eventsPath = join(worktreeDir, '.pipeline', 'events.jsonl');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(eventsPath, events);
+    persister.start();
+    await events.emit({ type: 'loop_halt', reason: 'retry budget exhausted' });
+    persister.stop();
+
+    const signal = await assembleSignal({
+      eventsPath,
+      outcome: { slug: 'halted-feature', status: 'halted' },
+      project: 'test-project',
+      feature: 'halted-feature',
+      runId: 'halted-run',
+    });
+
+    expect({ halts: signal.halts, haltRate: computeSignalRates([signal]).haltRate }).toEqual({
+      halts: [{ reason: 'retry budget exhausted' }],
+      haltRate: 1,
+    });
+  });
+
   it('returns correct aggregate token spend across all signals', () => {
     const rates = computeSignalRates([sig1, sig2, sig3]);
     expect(rates.tokens.input).toBe(600);

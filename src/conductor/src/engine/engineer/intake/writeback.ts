@@ -7,11 +7,12 @@
 // comment back, apply the `engineer:handled` label, or advance the ledger.
 //
 // Both helpers are ADVISORY (FR-37): a gh outage or an absent ledger entry must
-// never abort spec authoring or revert a delivered spec PR. They therefore
-// swallow every error internally and never throw.
+// never abort spec authoring or revert a delivered spec PR. They swallow ordinary
+// errors, while a CorruptLedgerError reaches the CLI so it can fail closed rather
+// than report success over unreadable durable state.
 
 import type { IntakePort, ReportOutcome } from './port.js';
-import type { Ledger } from './ledger.js';
+import { CorruptLedgerError, type Ledger } from './ledger.js';
 
 /** Common write-back context: the source/sourceRef pair plus optional sinks. */
 export interface WritebackTarget {
@@ -23,7 +24,8 @@ export interface WritebackTarget {
 
 /**
  * Report that an idea was ROUTED: comment "Routed to <repo>" on the originating
- * source and advance the ledger to `routed`. Best-effort — never throws.
+ * source and advance the ledger to `routed`. Best-effort except corrupt-ledger
+ * failures, which must reach the CLI's fail-closed diagnostic path.
  */
 export async function reportRouted(target: WritebackTarget, repo: string): Promise<void> {
   if (target.port) {
@@ -35,7 +37,8 @@ export async function reportRouted(target: WritebackTarget, repo: string): Promi
   }
   try {
     await target.ledger?.transition(target.source, target.sourceRef, 'routed');
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof CorruptLedgerError) throw error;
     // ledger entry absent (non-recording source) — transition is advisory.
   }
 }
@@ -43,7 +46,8 @@ export async function reportRouted(target: WritebackTarget, repo: string): Promi
 /**
  * Report that an idea is DONE: comment the spec PR URL, apply the
  * `engineer:handled` label (via the adapter), and advance the ledger to `done`.
- * Best-effort — never throws (the spec PR is the real artifact).
+ * Best-effort except corrupt-ledger failures, which must reach the CLI's
+ * fail-closed diagnostic path (the spec PR is otherwise the real artifact).
  */
 export async function reportDone(
   target: WritebackTarget,
@@ -69,7 +73,8 @@ export async function reportDone(
       // untouched (TR-3: a pre-seeded stale flag is only cleared on ok:true).
       ...(outcome !== undefined ? { writebackPending: outcome.ok === false } : {}),
     });
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof CorruptLedgerError) throw error;
     // advisory ledger transition.
   }
 }

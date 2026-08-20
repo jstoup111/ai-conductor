@@ -319,6 +319,15 @@ describe('runProjectPrelude (happy paths)', () => {
       },
     );
 
+    // Fresh session per invocation, never the injected store's ids
+    // (session reuse was removed by design).
+    const [bootstrapSessionId] = codexInvoke.mock.calls.map(([options]) => options.sessionId);
+    const [assessSessionId] = claudeInvoke.mock.calls.map(([options]) => options.sessionId);
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    expect(bootstrapSessionId).toMatch(uuidRe);
+    expect(assessSessionId).toMatch(uuidRe);
+    expect(bootstrapSessionId).not.toBe(assessSessionId);
+
     expect({
       capturedCalls: {
         invoke: capturedInvoke.mock.calls,
@@ -364,7 +373,7 @@ describe('runProjectPrelude (happy paths)', () => {
       codexCalls: [
         {
           prompt: '/bootstrap',
-          sessionId: 'bootstrap-codex-session',
+          sessionId: bootstrapSessionId,
           resume: false,
           cwd: dir,
           dangerouslySkipPermissions: true,
@@ -375,7 +384,7 @@ describe('runProjectPrelude (happy paths)', () => {
       claudeCalls: [
         {
           prompt: '/assess',
-          sessionId: 'assess-claude-session',
+          sessionId: assessSessionId,
           resume: false,
           cwd: dir,
           dangerouslySkipPermissions: true,

@@ -88,6 +88,15 @@ function uncommentExamples(raw: string): string {
 }
 
 describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
+  it('defaults updates to stable', async () => {
+    const raw = await readFile(TEMPLATE_PATH, 'utf8');
+    const authoredConfig = loadYaml(raw) as {
+      conductor?: { update_channel?: unknown };
+    };
+
+    expect(authoredConfig.conductor?.update_channel).toBe('stable');
+  });
+
   it('mechanically uncomments only the intended YAML example blocks', async () => {
     const raw = await readFile(TEMPLATE_PATH, 'utf8');
     const uncommented = uncommentExamples(raw);

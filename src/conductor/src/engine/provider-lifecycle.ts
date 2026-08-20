@@ -1,4 +1,4 @@
-import { writeHaltMarker } from './halt-marker.js';
+import { writeHaltMarker, type HaltMarkerWriteResult } from './halt-marker.js';
 import type { ProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
 import type { SpawnPermit, SpawnPermitPurpose } from '../execution/llm-provider.js';
 import type { ProviderAttemptEvent } from '../types/events.js';
@@ -65,6 +65,8 @@ export interface ProviderLifecycleHaltedResult {
   attempt: ProviderAttemptIdentity;
   elapsedMilliseconds: number;
   recoveryCount: number;
+  /** Marker outcome is retained so emitter-less supervisors never discard it. */
+  haltMarkerWrite: HaltMarkerWriteResult;
 }
 
 /** Raised when preparation loses its authority before it can start a provider. */
@@ -201,7 +203,7 @@ async function haltAfterExhaustedRecovery(
   error: ProviderPreparationTimeoutError,
   recoveryCount: number,
 ): Promise<ProviderLifecycleHaltedResult> {
-  await writeHaltMarker(
+  const haltMarkerWrite = await writeHaltMarker(
     options.recovery!.projectRoot,
     [
       'Provider preparation exhausted.',
@@ -227,6 +229,7 @@ async function haltAfterExhaustedRecovery(
     attempt: error.attempt,
     elapsedMilliseconds: error.elapsedMilliseconds,
     recoveryCount,
+    haltMarkerWrite,
   };
 }
 

@@ -154,6 +154,53 @@ else
   esac
 fi
 
+# ── 1c. No NUL bytes in tracked text source ─────────────────────────────────
+# A raw NUL control character committed into a source file makes that file
+# BINARY to every search tool in the toolchain, and they all fail SILENTLY:
+# `grep` (shimmed to `ugrep -I` in agent sessions) and recursive `rg` skip the
+# file entirely — no match, no count line, no warning, exit 1. An agent then
+# reads "0 matches" as "this symbol does not exist" and reasons from a false
+# premise.
+#
+# This is not hypothetical. On 2026-08-18 a raw NUL landed at
+# src/conductor/src/engine/build-review-domain.ts:84, in a template literal
+# where every comparable site writes the `\u0000` escape
+# (plan-protected-targets.ts, build-review-removals.ts, provider-execution.ts,
+# finish-publication-production.ts, intake-loop.ts). It went unnoticed for two
+# days and produced exactly that misdiagnosis.
+#
+# The escape is semantically identical, so there is never a reason to commit
+# the raw byte. Scope is tracked text source; binary assets are excluded by
+# extension, and `git grep -I` skips anything git itself classifies as binary
+# via .gitattributes.
+
+echo ""
+echo -e "${BOLD}1c. No NUL bytes in tracked text source${NC}"
+
+nul_hits=""
+while IFS= read -r tracked; do
+  case "$tracked" in
+    *.ts|*.tsx|*.js|*.mjs|*.cjs|*.json|*.sh|*.md|*.yml|*.yaml) ;;
+    *) continue ;;
+  esac
+  [ -f "${HARNESS_DIR}/${tracked}" ] || continue
+  # A NUL cannot be passed as a grep pattern argument (C strings end at NUL),
+  # so detect by construction: stripping NULs changes the file iff it had one.
+  if ! LC_ALL=C tr -d '\000' < "${HARNESS_DIR}/${tracked}" | cmp -s - "${HARNESS_DIR}/${tracked}"; then
+    nul_hits="${nul_hits}${tracked}"$'\n'
+  fi
+done < <(git -C "${HARNESS_DIR}" ls-files)
+
+if [ -z "$nul_hits" ]; then
+  assert "no tracked text source contains a NUL byte" 0
+else
+  echo -e "  ${RED}FAIL${NC} tracked text source contains a NUL byte:"
+  printf '%s' "$nul_hits" | sed 's/^/    /'
+  echo "    remediation: replace the raw NUL with the \\u0000 escape, e.g."
+  echo "      perl -0777 -pi -e 's/\\000/\\\\u0000/g' <file>"
+  assert "no tracked text source contains a NUL byte" 1
+fi
+
 # ── 2. SKILL.md frontmatter ─────────────────────────────────────────────────
 
 echo ""
@@ -1372,7 +1419,7 @@ else
   fi
 
   architecture_review_skill="${HARNESS_DIR}/skills/architecture-review/SKILL.md"
-  if grep -qF 'adr-2026-08-11-wiring-judged-in-build-review.md' "$architecture_review_skill"; then
+  if grep -qF 'adr-2026-08-14-retire-build-review-wiring-rubric.md' "$architecture_review_skill"; then
     assert "architecture-review relates its unchanged SHIP sweep to BUILD-time judgement" 0
   else
     echo "    architecture-review lacks the BUILD-time wiring judgement ADR citation." | sed 's/^/  /'
@@ -1454,6 +1501,85 @@ else
   else
     assert "skills/plan/SKILL.md — documents Pattern-source and Rename-map headers with accepted forms" 1
   fi
+fi
+
+# ── 24. Tagged update identity copy parity ──────────────────────────────────
+# bin/update and bin/conduct intentionally retain parallel tagged-update entry
+# points. Keep their checkout-derived identity behavior byte-for-byte aligned,
+# and require both to delegate tag-to-identity resolution to the shared helper.
+echo ""
+echo -e "${BOLD}24. Tagged update identity copy parity${NC}"
+
+tagged_update_decision_block() {
+  awk '
+    /^check_harness_update_tagged\(\)/ { tagged_check=1 }
+    tagged_check && /^  # The checkout is the sole identity authority\./ { capture=1 }
+    capture { print }
+    capture && /^  esac$/ { exit }
+  ' "$1"
+}
+
+update_tagged_decision_block=$(tagged_update_decision_block "${HARNESS_DIR}/bin/update")
+conduct_tagged_decision_block=$(tagged_update_decision_block "${HARNESS_DIR}/bin/conduct")
+
+if [ -z "$update_tagged_decision_block" ]; then
+  echo "    missing tagged update decision block: bin/update"
+  assert "bin/update and bin/conduct share the complete tagged update decision" 1
+elif [ -z "$conduct_tagged_decision_block" ]; then
+  echo "    missing tagged update decision block: bin/conduct"
+  assert "bin/update and bin/conduct share the complete tagged update decision" 1
+elif [ "$update_tagged_decision_block" != "$conduct_tagged_decision_block" ]; then
+  echo "    divergence: bin/update and bin/conduct differ in cache, post-release, up-to-date, offer, or prompt behavior"
+  assert "bin/update and bin/conduct share the complete tagged update decision" 1
+else
+  assert "bin/update and bin/conduct share the complete tagged update decision" 0
+fi
+
+tagged_identity_delegation_violation=0
+for tagged_update_script in "${HARNESS_DIR}/bin/update" "${HARNESS_DIR}/bin/conduct"; do
+  tagged_check=$(awk '
+    /^check_harness_update_tagged\(\)/ { capture=1 }
+    capture { print }
+    capture && /^}$/ { exit }
+  ' "$tagged_update_script")
+
+  resolver_call_count=$(grep -cE 'resolve_harness_identity[[:space:]]+"\$HARNESS_DIR"' <<<"$tagged_check" || true)
+  if [ "$resolver_call_count" -ne 1 ]; then
+    echo "    ${tagged_update_script#"${HARNESS_DIR}/"} must call resolve_harness_identity exactly once (found ${resolver_call_count})"
+    tagged_identity_delegation_violation=1
+  fi
+
+  inline_identity_resolution=$(grep -nE 'git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+(describe|tag([[:space:]]+[^[:space:]]+)*[[:space:]]+--merged|rev-list)' <<<"$tagged_check" || true)
+  if [ -n "$inline_identity_resolution" ]; then
+    echo "    inline checkout identity resolution in ${tagged_update_script#"${HARNESS_DIR}/"}: ${inline_identity_resolution}"
+    tagged_identity_delegation_violation=1
+  fi
+done
+assert "bin/update and bin/conduct delegate all checkout identity resolution to resolve_harness_identity" "$tagged_identity_delegation_violation"
+
+
+# ── 25. Build-review rubric vocabulary contract ─────────────────────────────
+# Rubric skills are provider-facing contracts, while the engine owns the
+# closed trust-boundary vocabulary. Compare both sets mechanically so either
+# an undocumented accepted token or an obsolete documented token fails here.
+echo ""
+echo -e "${BOLD}25. Build-review rubric vocabulary contract${NC}"
+
+rubric_vocabulary_check="${HARNESS_DIR}/test/check_build_review_rubric_skill_vocabularies.sh"
+if [ -f "$rubric_vocabulary_check" ]; then
+  set +e
+  rubric_vocabulary_output=$(bash "$rubric_vocabulary_check" 2>&1)
+  rubric_vocabulary_exit=$?
+  set -e
+
+  if [ "$rubric_vocabulary_exit" -eq 0 ]; then
+    assert "build-review rubric SKILL.md vocabularies equal the engine source" 0
+  else
+    echo "$rubric_vocabulary_output" | sed 's/^/    /'
+    assert "build-review rubric SKILL.md vocabularies equal the engine source" 1
+  fi
+else
+  assert "test/check_build_review_rubric_skill_vocabularies.sh exists" 1
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────

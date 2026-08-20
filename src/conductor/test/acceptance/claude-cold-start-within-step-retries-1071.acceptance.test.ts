@@ -105,19 +105,23 @@ describe('ST-1071 cross-component cold-start contracts', () => {
         );
       }
 
+      // The durable run id never moves while every provider dispatch mints its
+      // own fresh UUID session id (store-derived ids were removed by design).
+      const providerIds = invocations.map(({ sessionId }) => sessionId);
       expect({
         runIds: [...new Set(observedRunIds)],
-        providerIds: invocations.map(({ sessionId }) => sessionId),
+        uniqueProviderIds: new Set(providerIds).size,
         resumeFlags: invocations.map(({ resume }) => resume),
       }).toEqual({
         runIds: ['feature-run-identity'],
-        providerIds: [
-          'provider-session-1',
-          'provider-session-2',
-          'provider-session-3',
-        ],
+        uniqueProviderIds: 3,
         resumeFlags: [false, false, false],
       });
+      for (const id of providerIds) {
+        expect(id).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+        );
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

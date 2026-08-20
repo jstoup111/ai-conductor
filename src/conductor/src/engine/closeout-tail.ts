@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { PipelineCloseoutEvent } from './closeout-events.js';
+import type { ExternalPipelineEvent } from './closeout-events.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 const PIPELINE_CLOSEOUT_LEDGER = '.pipeline/pipeline-events.jsonl';
@@ -17,7 +17,7 @@ class CloseoutTailReader {
   constructor(private readonly projectRoot: string) {}
 
   /** Return each newly completed JSONL record exactly once. */
-  async read(): Promise<PipelineCloseoutEvent[]> {
+  async read(): Promise<ExternalPipelineEvent[]> {
     let content: Buffer;
     try {
       content = await readFile(join(this.projectRoot, PIPELINE_CLOSEOUT_LEDGER));
@@ -36,7 +36,7 @@ class CloseoutTailReader {
       .toString('utf8')
       .split('\n')
       .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as PipelineCloseoutEvent);
+      .map((line) => JSON.parse(line) as ExternalPipelineEvent);
 
     this.offset += completed.byteLength;
     return events;

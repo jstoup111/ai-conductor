@@ -15,6 +15,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 import { writeFile, rename, mkdir } from 'node:fs/promises';
 import { writeHaltMarker, readHaltClass, HALT_MARKER, HALT_CLASS_MARKER } from '../../src/engine/halt-marker';
 import type { HaltClass } from '../../src/engine/halt-marker';
+import { ConductorEventEmitter } from '../../src/ui/events';
 
 // These assertions are checked by `npm run typecheck:test`. They deliberately
 // live outside Vitest cases because they describe the TypeScript API contract,
@@ -42,9 +43,50 @@ describe('writeHaltMarker', () => {
 
   it('writes HALT.class with the given halt class', async () => {
     root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
-    await writeHaltMarker(root, 'reason', 'needs-human');
+    await expect(writeHaltMarker(root, 'reason', 'needs-human')).resolves.toEqual({ status: 'written' });
     const contents = await readFile(join(root, HALT_CLASS_MARKER), 'utf-8');
     expect(contents).toContain('needs-human');
+  });
+
+  it('reports a failed marker write and emits its path and reason', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    const emitter = new ConductorEventEmitter();
+    const emitted: Array<{ type: 'halt_marker_write_failed'; path: string; reason: string }> = [];
+    emitter.on('halt_marker_write_failed', (event) => {
+      if (event.type === 'halt_marker_write_failed') emitted.push(event);
+    });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(writeFile).mockImplementation(async (path: any, ...rest: any[]) => {
+      if (path === join(root, HALT_MARKER)) throw new Error('disk full');
+      return (actual.writeFile as any)(path, ...rest);
+    });
+
+    await expect(writeHaltMarker(root, 'reason', 'needs-human', emitter)).resolves.toEqual({
+      status: 'failed',
+      path: join(root, HALT_MARKER),
+      reason: 'disk full',
+    });
+    expect(emitted).toEqual([{
+      type: 'halt_marker_write_failed',
+      path: join(root, HALT_MARKER),
+      reason: 'disk full',
+    }]);
+  });
+
+  it('returns the write failure even when emitting it fails', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(writeFile).mockImplementation(async (path: any, ...rest: any[]) => {
+      if (path === join(root, HALT_MARKER)) throw new Error('disk full');
+      return (actual.writeFile as any)(path, ...rest);
+    });
+    const emitter = { emit: vi.fn().mockRejectedValue(new Error('event sink unavailable')) } as any;
+
+    await expect(writeHaltMarker(root, 'reason', 'needs-human', emitter)).resolves.toEqual({
+      status: 'failed',
+      path: join(root, HALT_MARKER),
+      reason: 'disk full',
+    });
   });
 
   it('removes a stale halt class before replacing the halt body', async () => {
@@ -81,7 +123,7 @@ describe('writeHaltMarker', () => {
     expect(events).toEqual(['body', 'class-temp', 'class-published']);
   });
 
-  it('leaves no retryable old class when the replacement class write is interrupted', async () => {
+  it('reports a HALT.class-only failure while preserving the written HALT park marker', async () => {
     root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
     await mkdir(join(root, '.pipeline'), { recursive: true });
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -94,8 +136,14 @@ describe('writeHaltMarker', () => {
       return (actual.writeFile as any)(path, ...rest);
     });
 
-    await expect(writeHaltMarker(root, 'reason', 'needs-human')).resolves.toBeUndefined();
+    await expect(writeHaltMarker(root, 'reason', 'needs-human')).resolves.toEqual({
+      status: 'partial',
+      writtenPath: join(root, HALT_MARKER),
+      path: join(root, HALT_CLASS_MARKER),
+      reason: 'interrupted class write',
+    });
 
+    await expect(readFile(join(root, HALT_MARKER), 'utf-8')).resolves.toBe('reason');
     await expect(readHaltClass(root)).resolves.toBe('unclassified');
   });
 });

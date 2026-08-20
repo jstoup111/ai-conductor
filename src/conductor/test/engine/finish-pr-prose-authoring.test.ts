@@ -114,7 +114,7 @@ describe('FINISH authors PR prose before it judges it', () => {
     expect(createShippedRecord).not.toHaveBeenCalled();
   });
 
-  it('retries authoring when the pass left the body unauthored', async () => {
+  it('halts when a completed authoring pass left the body unauthored', async () => {
     const authorProse = vi.fn(async () => undefined);
 
     await expect(
@@ -123,11 +123,11 @@ describe('FINISH authors PR prose before it judges it', () => {
           snapshot({ pr: { identity: 'one', url: PR_URL, prose: 'placeholder', ready: false } }),
         effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), authorProse },
       }),
-    ).resolves.toEqual({
-      kind: 'publication_retry',
-      transition: 'author_pr_prose',
-      reason: 'authoring_not_verified_after_pass',
-    });
+    ).resolves.toEqual(expect.objectContaining({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: expect.stringContaining('author_pr_prose'),
+    }));
     expect(authorProse).toHaveBeenCalledTimes(1);
   });
 
@@ -150,8 +150,32 @@ describe('FINISH authors PR prose before it judges it', () => {
     );
   });
 
+  it('halts a failed authoring retry when fresh observation selects a different transition', async () => {
+    let observation = 0;
+
+    await expect(
+      advance({
+        observe: async () => {
+          observation++;
+          return snapshot({
+            releaseReadiness: observation === 1 ? 'valid' : 'missing',
+            pr: { identity: 'one', url: PR_URL, prose: 'placeholder', ready: false },
+          });
+        },
+        effects: {
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+          authorProse: async () => { throw new Error('provider timeout'); },
+        },
+      }),
+    ).resolves.toEqual(expect.objectContaining({
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: expect.stringContaining('verify_release_readiness'),
+    }));
+  });
+
   it.each(['placeholder', 'structurally_incomplete'] as const)(
-    'routes a %s judgment verdict back to the authoring pass instead of halting for a human',
+    'halts a %s judgment verdict when a fresh observation cannot select authoring',
     async (reason) => {
       const dispatchJudgment = vi.fn(async () => ({
         kind: 'revision_required' as const,
@@ -164,11 +188,11 @@ describe('FINISH authors PR prose before it judges it', () => {
             snapshot({ pr: { identity: 'one', url: PR_URL, prose: 'stale', ready: false } }),
           effects: { dispatchJudgment, authorProse: async () => undefined },
         }),
-      ).resolves.toEqual({
-        kind: 'publication_retry',
-        transition: 'author_pr_prose',
-        reason: 'authoring_required_after_judgment',
-      });
+      ).resolves.toEqual(expect.objectContaining({
+        kind: 'human_required',
+        reason: 'publication_transition_unmoved',
+        detail: expect.stringContaining('author_pr_prose'),
+      }));
     },
   );
 

@@ -11,7 +11,7 @@
  * Detection is stateless (Decision 4): halt signal = title prefixed
  * `needs-remediation:` OR the `needs-remediation` label OR the engine-authored
  * halt banner sentinel in the body (`HALT_PR_BANNER_SENTINEL`, issue #632) —
- * three independent, purely-observable signals. Draft status alone is
+ * four independent, purely-observable signals. Draft status alone is
  * NOT a halt signal — `pr_timing: early-draft` opens legitimate clean-titled
  * draft PRs (#199).
  *
@@ -59,7 +59,7 @@ export interface RehabilitateHaltPrDeps {
   preserveDraft?: boolean;
 }
 
-interface PrViewState {
+export interface PrViewState {
   title: string;
   isDraft: boolean;
   labels: string[];
@@ -106,10 +106,7 @@ export async function rehabilitateHaltPr(
     return 'gh-unavailable';
   }
 
-  const hasHaltTitle = view.title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX);
-  const hasHaltLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
-  const hasHaltBanner = (view.body ?? '').includes(HALT_PR_BANNER_SENTINEL);
-  if (!hasHaltTitle && !hasHaltLabel && !hasHaltBanner) return 'not-halt-pr';
+  if (!hasHaltSignal(view)) return 'not-halt-pr';
 
   // Label/draft/body-marker removal is delegated to cleanupHaltPresentation,
   // which retries each mutation (bounded, with backoff) and re-reads to
@@ -496,11 +493,12 @@ export type RetainedPrPresentableOutcome =
   /** The state read failed — nothing attempted. */
   | 'gh-unavailable';
 
-/** True when any of the three stateless halt signals is observable on the PR. */
-function hasHaltSignal(view: PrViewState): boolean {
+/** True when any stateless halt signal is observable on the PR. */
+export function hasHaltSignal(view: PrViewState): boolean {
   return (
-    view.title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
+    view.title.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
     view.labels.includes(NEEDS_REMEDIATION_LABEL) ||
+    (view.body ?? '').includes(NEEDS_REMEDIATION_BODY_MARKER) ||
     (view.body ?? '').includes(HALT_PR_BANNER_SENTINEL)
   );
 }

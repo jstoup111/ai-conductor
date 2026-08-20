@@ -60,8 +60,10 @@ head -1 .worktrees/<slug>/.pipeline/HALT
 cat .worktrees/<slug>/.pipeline/HALT.class
 ```
 
-`.pipeline/HALT` is a full stop for that feature: the daemon never advances, opens a PR, or
-merges past it. The first non-empty line of the body is the reason the dashboard surfaces.
+`.pipeline/HALT` is the durable park state for that feature: the daemon never advances, opens a PR,
+or merges past it. The first non-empty line of the body is the reason the dashboard surfaces. Read
+it by name during recovery; persisted halt events in `.pipeline/events.jsonl` supplement this marker
+and do not replace it.
 
 `.pipeline/HALT.class` classifies it. Every HALT the daemon writes now carries one — the daemon
 stamps any HALT still missing a class at startup as `legacy`, once per feature, so the sidecar is
@@ -203,6 +205,14 @@ checkout or to the operator's real `~/.claude`/`~/.codex` while a step was in fl
 names the paths** — each tagged `added`, `removed`, or `changed`, capped at eight entries followed by
 `and N more`, with exact counts. Read them before investigating anything else.
 
+First determine whether the completed dispatch was proven contained. A contained dispatch records
+`self_host_containment_verdict` and, when the live checkout changed, a
+`contained_live_checkout_drift` event in `.pipeline/events.jsonl`. That event names the containment
+evidence, labels the drift `concurrent-operator`, and does not write a HALT: the dispatch could not
+have made the live checkout writable. A clean contained dispatch still records its containment
+verdict. If the verdict says containment was unavailable, disabled, or its probe failed, the
+ordinary fail-closed behavior below applies.
+
 - A path under the live checkout is usually an untracked file an operator session wrote — a
   permission or approval grant (Claude Code's `.claude/settings.local.json` is untracked and
   fingerprinted), a scratch or generated artifact, or a new file staged with `git add`. Git can
@@ -219,6 +229,21 @@ names the paths** — each tagged `added`, `removed`, or `changed`, capped at ei
 - A provider-state path that is pure telemetry or cache means the exclusion list needs a new entry;
   see [self-hosting: provider-state
   exclusions](../guides/self-hosting.md#provider-state-exclusions).
+
+**`EROFS` during a contained dispatch:** a `Read-only file system` failure usually means the
+dispatch attempted a legitimate live-checkout write that is absent from the shared
+`LIVE_CHECKOUT_VOLATILE` policy. Confirm the attempted path from the provider output and verify it
+is an intended, safe volatile surface. As a short-lived recovery, set
+`harness_self_host.live_containment: false` for the affected run; this restores the fail-closed
+boundary guard, so avoid concurrent root-checkout changes. Then correct the shared
+`LIVE_CHECKOUT_VOLATILE` policy and its containment bind set with focused tests; do not add an
+ad-hoc local carve-out. Resume the feature using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** after resume, inspect `.pipeline/events.jsonl`. A repaired contained dispatch has
+one `self_host_containment_verdict` with `contained: true`; concurrent live-checkout drift, if any,
+has one `contained_live_checkout_drift` record with `attribution: "concurrent-operator"` and its
+changed-path summary. A temporary opt-out instead must either remain clean or halt with the
+uncontained reason, never silently ignore drift.
 
 This is a `mechanical`-class HALT, so the daemon's ordinary re-kick sweep clears it on the next
 base-branch advance. The step that was running keeps its own real verdict, so the re-kick resumes
@@ -274,9 +299,14 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
   continue publication.` and, when the provider supplied one, a trailing `Detail: <provider text>`.
   This is a `human_required` disposition — a condition only an operator can resolve, distinct from
   the three retryable/non-retryable shapes above. Its reasons cover judgment refusal or halt prose
-  (`judgment_refused`, `judgment_halt_prose`), an unresolvable PR match or shipped record
-  (`ambiguous_pr_identity`, `invalid_shipped_record`), and destructive or unrecognized publication
-  intent (`interactive_intent_*`, `unattended_intent_*`). It is always a `needs-human` halt.
+  (`judgment_refused`, `judgment_halt_prose`), a PR that still carries a `needs-remediation` title
+  prefix, banner, label, or body marker (`halt_state_pr` — resolved before judgment is ever
+  dispatched, so no provider pass is spent), a publication transition that ran but left its owned
+  state unchanged (`publication_transition_unmoved` — the detail names the transition and the
+  state that did not move, whether the transition reported success or asked for a retry it could
+  not perform), an unresolvable PR match or shipped record (`ambiguous_pr_identity`,
+  `invalid_shipped_record`), and destructive or unrecognized publication intent
+  (`interactive_intent_*`, `unattended_intent_*`). It is always a `needs-human` halt.
 
 **Diagnosis:** inspect the named last transition and the preceding FINISH publication events in the
 daemon log. Fourteen verified transitions without convergence means the publication state machine is
@@ -501,10 +531,13 @@ Read-only. Renders three tables from `.pipeline/events.jsonl` — Step Durations
 and Token Spend — then exits 0. An unreadable events log exits 1. Run it from inside the
 worktree; it reads `.pipeline/` relative to the current directory.
 
-> **Known limitation.** `--report` cannot show halts or kickbacks. `loop_halt` and `kickback`
-> are among the 28 of 62 event types the engine emits but never registers as readable, so they
-> never reach `events.jsonl` and no report can surface them. Use `.pipeline/HALT` and
-> `.pipeline/gates/<step>.json` instead. Tracked in [#1023](https://github.com/jstoup111/ai-conductor/issues/1023) and [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+> **Known limitation.** `--report` renders neither halt nor kickback tables, although
+> `loop_halt`, `rebase_conflict_halt`, `halt_marker_write_failed`, and `kickback` persist in
+> `events.jsonl`. For halt occurrences, use `cost-rollup.halts`, the shipped record's `## Cost`
+> block, `conduct-ts kpi`, or the engineer-loop signal assembler; use `.pipeline/HALT` as the
+> durable park state and `.pipeline/gates/<step>.json` for the gate verdict. Tracked in
+> [#1023](https://github.com/jstoup111/ai-conductor/issues/1023) and
+> [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
 ### 5. Read the daemon's own narrative
 
@@ -619,7 +652,8 @@ from a `remediate` or `build_review` disposition asking for a DECIDE revision.
    gate that caused it is wrong, and amending the plan to match it makes things worse.
 2. Make the plan edit yourself in the feature worktree. When BUILD discovered that an approved DECIDE
    assertion must change, add the correction beside the original rather than rewriting it — see
-   [amendment requests](#amendment-requests) above.
+   [amendment requests](#amendment-requests) above. Story artifacts under `.docs/stories/` are the
+   exception: replace the superseded assertion in place instead, with no amendment note.
 3. Clear the halt so the feature resumes into BUILD:
    ```bash
    rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
@@ -661,7 +695,20 @@ original assertion before BUILD starts again:
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-The note is additive: retain the original text and create no separate record. Re-author the plan
+The note is additive: retain the original text and create no separate record. Story artifacts under
+`.docs/stories/` are the exception: replace the superseded assertion in place with no amendment note.
+
+**Annotate history-shaped artifacts; rewrite state-shaped ones.** The additive-note rule above is
+for artifacts that downstream machinery reads as *history* — a plan's executed tasks are the ledger
+the completeness grader matches landed commits against, so deleting one orphans its diff. But
+`prd_audit` and the as-built architecture review re-judge the PRD's functional requirements,
+stories' scenarios, and the component diagram as *current state*, comparing what the artifact
+states verbatim against the shipped implementation. An amendment note asking the reader to
+substitute new meaning leaves the stated requirement contradicting the code, and every downstream
+re-judgement risks a finding. For state-shaped artifacts, rewrite the statement outright and keep a
+one-line dated provenance marker. (Precedent: the 2026-08-14 wiring-rubric retirement — the
+rewritten FR-1 and diagram passed `prd_audit` all-ALIGNED on the first pass; the earlier
+annotation-only draft would have shipped an FR still claiming five rubrics.) Re-author the plan
 without a task targeting the other feature's sealed artifact, then run
 `conduct-ts plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
 `No protected-target violations found.`; each violation is reported as `Task <id>: <path> —
@@ -713,12 +760,51 @@ unrelated changes into the seal. On success it writes a new baseline at the curr
 `rebaselines` entry recording the trigger (`operator-reseal`) and rationale, and writes a
 `protected_artifact_reseal` audit record with an `operator` origin — so the override is auditable
 rather than silent. `--clear-halt` also clears the worktree's HALT in the same step, once its class is
-the protected-artifact class.
+the protected-artifact class. The rationale is not only an audit record: the next `build_review` on
+this feature also renders it, alongside the resealed paths and commit range, in the grader's prompt —
+see [operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
+
+The reseal survives later rebaselines. When the base branch subsequently moves and the seal rebaselines
+onto the feature's new merge base, a resealed path is no longer refused as a feature-authored DECIDE
+change: it is kept at its approved content and reported as `kept operator-resealed paths: <path>` in
+the daemon log. That approval is bound to the content it was taken against, not to the path — amend the
+artifact again after resealing and it refuses exactly as before, because the sealed fingerprint no
+longer matches. Reseal again only after reviewing the new amendment.
 
 If REKICK encounters this refusal before starting git, the HALT begins
 `protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase
 resolver or run `git rebase --continue`; review and rotate the seal as above, then clear the HALT
 and re-queue.
+
+### The rebase halted on "dropped feature commit(s)"
+
+**Symptom:** `.pipeline/HALT` is `needs-human` and reads `rebase resolution dropped feature
+commit(s)`, naming the files the resolver had to resolve.
+
+The rebase work-preservation guard requires every pre-rebase commit subject to survive the replay.
+A commit legitimately vanishes when the base already carries its work: the replay empties it and
+Git discards it. That happens whenever the same fix lands independently on `main` first — the
+feature's own copy conflicts, the resolver settles it in the base's favour, and nothing remains to
+commit.
+
+The guard therefore checks each vanished commit's intent before reporting loss: every line it added
+must be present in `HEAD`, and no line it removed may be back (counted against the commit's own
+parent, so a structural line like `});` surviving elsewhere in the file does not count as restored).
+A commit whose work is genuinely absent and cleanly re-appliable still halts.
+
+**Recovery:** confirm the branch really is intact, then clear the halt:
+
+```bash
+cd .worktrees/<slug>
+git log --format=%s "$(git merge-base HEAD main)"..ORIG_HEAD   # pre-rebase subjects
+git log --format=%s "$(git merge-base HEAD main)"..HEAD        # what survived
+git status                                                      # must be clean
+```
+
+For each subject in the first list and not the second, confirm `main` already carries an equivalent
+change (`git log --oneline main -- <path>`). If every difference is accounted for that way, remove
+both halt files and let the daemon re-dispatch. If any feature work is actually missing, recover it
+from `ORIG_HEAD` before clearing anything.
 
 ### A completed rebase still appears halted
 

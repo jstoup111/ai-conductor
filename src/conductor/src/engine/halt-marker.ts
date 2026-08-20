@@ -9,6 +9,7 @@
 
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 /** The park-for-human marker the daemon loop treats as a stop. */
 export const HALT_MARKER = '.pipeline/HALT';
@@ -31,6 +32,12 @@ export type HaltClass =
 /** Classification observed while reading a HALT sidecar. */
 export type HaltDisposition = HaltClass | 'legacy' | 'unclassified';
 
+/** Outcome of a best-effort halt-marker write. */
+export type HaltMarkerWriteResult =
+  | { status: 'written' }
+  | { status: 'partial'; writtenPath: string; path: string; reason: string }
+  | { status: 'failed'; path: string; reason: string };
+
 /**
  * Write `.pipeline/HALT` under `projectRoot` with `body` as its contents,
  * creating `.pipeline/` if needed. Best-effort: mkdir/write failures are
@@ -46,23 +53,33 @@ export async function writeHaltMarker(
   projectRoot: string,
   body: string,
   haltClass: HaltClass,
-): Promise<void> {
+  events?: ConductorEventEmitter,
+): Promise<HaltMarkerWriteResult> {
+  const markerPath = join(projectRoot, HALT_MARKER);
   const haltClassPath = join(projectRoot, HALT_CLASS_MARKER);
   const haltClassTempPath = `${haltClassPath}.tmp`;
 
-  await mkdir(join(projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
   try {
-    await unlink(haltClassPath);
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await unlink(haltClassPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    await writeFile(markerPath, body, 'utf-8');
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return;
+    const reason = error instanceof Error ? error.message : String(error);
+    await events?.emit({ type: 'halt_marker_write_failed', path: markerPath, reason }).catch(() => {});
+    return { status: 'failed', path: markerPath, reason };
   }
 
   try {
-    await writeFile(join(projectRoot, HALT_MARKER), body, 'utf-8');
     await writeFile(haltClassTempPath, haltClass, 'utf-8');
     await rename(haltClassTempPath, haltClassPath);
-  } catch {
+    return { status: 'written' };
+  } catch (error) {
     await unlink(haltClassTempPath).catch(() => {});
+    const reason = error instanceof Error ? error.message : String(error);
+    await events?.emit({ type: 'halt_marker_write_failed', path: haltClassPath, reason }).catch(() => {});
+    return { status: 'partial', writtenPath: markerPath, path: haltClassPath, reason };
   }
 }
 

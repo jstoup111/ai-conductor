@@ -2,11 +2,20 @@
 // Covers: setting true, clearing (false), omission leaves existing flag untouched,
 // and existing {branch, prUrl} meta behavior remains unchanged.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
+import {
+  CorruptLedgerError,
+  createLedger,
+  loadStore,
+} from '../../../../src/engine/engineer/intake/ledger.js';
+import {
+  createConductStateLease,
+  type ConductStateLease,
+} from '../../../../src/engine/conduct-state-lease.js';
+import { resolveEngineerDir } from '../../../../src/engine/engineer-store.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -14,6 +23,632 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+
+describe('CorruptLedgerError', () => {
+  it('identifies a corrupt ledger with its path and reason', () => {
+    const error = new CorruptLedgerError('/tmp/ledger.json', 'invalid JSON');
+
+    expect({
+      errorIsAnError: error instanceof Error,
+      errorIsTyped: error instanceof CorruptLedgerError,
+      ledgerPath: error.ledgerPath,
+      reason: error.reason,
+    }).toEqual({
+      errorIsAnError: true,
+      errorIsTyped: true,
+      ledgerPath: '/tmp/ledger.json',
+      reason: 'invalid JSON',
+    });
+  });
+});
+
+describe('loadStore()', () => {
+  it('copies corrupt ledger bytes to a timestamped sibling without changing the ledger', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const corruptBytes = Buffer.from([0xff, 0xfe, 0x00, 0x7b]);
+    await writeFile(ledgerPath, corruptBytes);
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-13T12:00:00.000Z'));
+      await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const sibling = (await readdir(dir)).find((name) => name.startsWith('ledger.json.corrupt-'));
+    expect({
+      sibling,
+      original: await readFile(ledgerPath),
+      quarantine: sibling === undefined ? undefined : await readFile(join(dir, sibling)),
+    }).toEqual({
+      sibling: 'ledger.json.corrupt-1786622400000',
+      original: corruptBytes,
+      quarantine: corruptBytes,
+    });
+  });
+
+  it('reuses a quarantine for unchanged corrupt bytes and creates another for a new corruption', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const firstCorruption = Buffer.from('not valid json');
+    const secondCorruption = Buffer.from('{ still not valid json');
+    const ledger = createLedger(ledgerPath);
+    await writeFile(ledgerPath, firstCorruption);
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-13T12:00:00.000Z'));
+      await expect(ledger.list()).rejects.toBeInstanceOf(CorruptLedgerError);
+      vi.setSystemTime(new Date('2026-08-13T12:00:01.000Z'));
+      await expect(ledger.known('github-issues', 'o/a#1')).rejects.toBeInstanceOf(CorruptLedgerError);
+      vi.setSystemTime(new Date('2026-08-13T12:00:02.000Z'));
+      await expect(ledger.get('github-issues', 'o/a#1')).rejects.toBeInstanceOf(CorruptLedgerError);
+
+      await writeFile(ledgerPath, '{}', 'utf8');
+      await expect(ledger.list()).resolves.toEqual([]);
+      await writeFile(ledgerPath, secondCorruption);
+      vi.setSystemTime(new Date('2026-08-13T12:00:03.000Z'));
+      await expect(ledger.list()).rejects.toBeInstanceOf(CorruptLedgerError);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const quarantines = (await readdir(dir))
+      .filter((name) => name.startsWith('ledger.json.corrupt-'))
+      .sort();
+    expect({
+      quarantines,
+      bytes: await Promise.all(quarantines.map((name) => readFile(join(dir, name)))),
+    }).toEqual({
+      quarantines: [
+        'ledger.json.corrupt-1786622400000',
+        'ledger.json.corrupt-1786622403000',
+      ],
+      bytes: [firstCorruption, secondCorruption],
+    });
+  });
+
+  it('reports the collision-resolved quarantine path for corrupt bytes', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const corruptBytes = Buffer.from('not valid json');
+    const collidingBytes = Buffer.from('a different corrupt ledger');
+    await writeFile(ledgerPath, corruptBytes);
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-13T12:00:00.000Z'));
+      await writeFile(`${ledgerPath}.corrupt-1786622400000`, collidingBytes);
+      const error = await createLedger(ledgerPath).list().then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toMatchObject({
+        ledgerPath,
+        reason: expect.stringContaining('Unexpected token'),
+        quarantinePath: `${ledgerPath}.corrupt-1786622400001`,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect({
+      collision: await readFile(`${ledgerPath}.corrupt-1786622400000`),
+      resolved: await readFile(`${ledgerPath}.corrupt-1786622400001`),
+    }).toEqual({
+      collision: collidingBytes,
+      resolved: corruptBytes,
+    });
+  });
+
+  it('reports a failed quarantine alongside corruption without changing the ledger bytes', async () => {
+    const lockedDir = join(dir, 'locked');
+    const ledgerPath = join(lockedDir, 'ledger.json');
+    const corruptBytes = Buffer.from('not valid json');
+    await mkdir(lockedDir);
+    await writeFile(ledgerPath, corruptBytes);
+    await chmod(lockedDir, 0o555);
+
+    try {
+      const result = await createLedger(ledgerPath, {
+        lease: {
+          acquire: async () => ({
+            ok: true,
+            handle: { release: async () => ({ ok: true }) },
+          }),
+        },
+      }).list().then(
+        () => ({ error: undefined, errorIsTyped: false, original: undefined }),
+        async (error: unknown) => ({
+          error,
+          errorIsTyped: error instanceof CorruptLedgerError,
+          original: await readFile(ledgerPath),
+        }),
+      );
+
+      expect(result).toEqual({
+        error: expect.objectContaining({
+          message: expect.stringMatching(/corrupt:.*Unexpected.*quarantine.*EACCES/i),
+          quarantinePath: undefined,
+          quarantineDiagnostic: expect.stringMatching(/^failed to quarantine corrupt ledger:.*EACCES/i),
+        }),
+        errorIsTyped: true,
+        original: corruptBytes,
+      });
+    } finally {
+      await chmod(lockedDir, 0o755);
+    }
+  });
+
+  it('distinguishes a missing ledger from a valid empty ledger without warning or quarantine', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const stderr = vi.spyOn(process.stderr, 'write');
+
+    try {
+      const absent = await loadStore(ledgerPath);
+      const ledger = createLedger(ledgerPath);
+      const entries = await ledger.list();
+      const afterAbsent = await readdir(dir);
+      await writeFile(ledgerPath, '{}', 'utf8');
+      const empty = await loadStore(ledgerPath);
+
+      expect({ absent, entries, corruptFiles: afterAbsent.filter((name) => name.startsWith('ledger.json.corrupt-')), empty, stderrWrites: stderr.mock.calls }).toEqual({
+        absent: { kind: 'absent' },
+        entries: [],
+        corruptFiles: [],
+        empty: { kind: 'ok', store: {} },
+        stderrWrites: [],
+      });
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it('classifies a non-ENOENT read failure as corrupt and rejects ledger operations', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    await mkdir(ledgerPath);
+
+    await expect(loadStore(ledgerPath)).resolves.toMatchObject({
+      kind: 'corrupt',
+      reason: expect.stringContaining('EISDIR'),
+    });
+    await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+  });
+
+  it('classifies JSON values other than a ledger store as corrupt', async () => {
+    const values = ['[]', '"text"', '42', 'null', '{ "k": { "no": "entry" } }'];
+    const results = await Promise.all(
+      values.map(async (value, index) => {
+        const ledgerPath = join(dir, `invalid-${index}.json`);
+        await writeFile(ledgerPath, value, 'utf8');
+        return loadStore(ledgerPath);
+      }),
+    );
+
+    expect(results.map((result) => result.kind)).toEqual(['corrupt', 'corrupt', 'corrupt', 'corrupt', 'corrupt']);
+  });
+});
+
+describe('lease-bracketed ledger access', () => {
+  it('recovers a dead default intake-ledger lease before recording a mutation', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const staleLeasePath = `${ledgerPath}.lease`;
+    await mkdir(staleLeasePath);
+    await writeFile(join(staleLeasePath, 'owner.json'), `${JSON.stringify({
+      version: 1,
+      pid: 999_999_999,
+      token: 'dead-owner',
+      acquiredAt: '2026-08-13T12:00:00.000Z',
+    })}\n`, 'utf8');
+
+    const ledger = createLedger(ledgerPath);
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    expect({
+      entries: await ledger.list(),
+      leaseArtifacts: (await readdir(dir)).filter((name) => name.startsWith('ledger.json.lease')).sort(),
+    }).toEqual({
+      entries: [expect.objectContaining({ source: 'github-issues', sourceRef: 'o/a#1' })],
+      leaseArtifacts: [],
+    });
+  });
+
+  it('surfaces the live owner PID when a real intake-ledger lease times out', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const held = await createConductStateLease(ledgerPath, { pid: process.pid }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    try {
+      const ledger = createLedger(ledgerPath, {
+        lease: createConductStateLease(ledgerPath, { pid: process.pid, waitTimeoutMs: 0 }),
+      });
+
+      await expect(ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }))
+        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+    } finally {
+      await held.handle.release();
+    }
+  });
+
+  it('fails closed with an intake-ledger lease error before mutations or reads access the ledger', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const originalBytes = Buffer.from('{"preserved":true}');
+    const refusal = 'another process owns the lease';
+    const lease: ConductStateLease = {
+      acquire: async () => ({ ok: false, kind: 'timeout', message: refusal }),
+    };
+    const ledger = createLedger(ledgerPath, { lease });
+    const unreadableLedgerPath = join(dir, 'unreadable-ledger.json');
+    await writeFile(ledgerPath, originalBytes);
+    await mkdir(unreadableLedgerPath);
+    const readLedger = createLedger(unreadableLedgerPath, { lease });
+
+    const errors = await Promise.all([
+      ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }),
+      readLedger.known('github-issues', 'o/a#1'),
+      readLedger.get('github-issues', 'o/a#1'),
+      readLedger.list(),
+    ].map((operation) => operation.then(
+      () => undefined,
+      (error: unknown) => error instanceof Error ? error.message : String(error),
+    )));
+
+    expect({ errors, bytes: await readFile(ledgerPath) }).toEqual({
+      errors: Array(4).fill(`Unable to acquire intake ledger lease: ${refusal}`),
+      bytes: originalBytes,
+    });
+  });
+
+  it.each([
+    ['known', (ledger: ReturnType<typeof createLedger>) => ledger.known('github-issues', 'o/a#1')],
+    ['get', (ledger: ReturnType<typeof createLedger>) => ledger.get('github-issues', 'o/a#1')],
+    ['list', (ledger: ReturnType<typeof createLedger>) => ledger.list()],
+  ])('refuses corrupt bytes and releases its lease through %s', async (_method, read) => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const events: string[] = [];
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        events.push('acquire');
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              events.push('release');
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    const ledger = createLedger(ledgerPath, { lease });
+    await writeFile(ledgerPath, '{ not valid json', 'utf8');
+
+    const refused = await read(ledger).then(
+      () => false,
+      (error: unknown) => error instanceof CorruptLedgerError,
+    );
+    await writeFile(ledgerPath, '{}', 'utf8');
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    expect({ refused, events }).toEqual({
+      refused: true,
+      events: ['acquire', 'release', 'acquire', 'release'],
+    });
+  });
+
+  it('queues list behind a concurrent write and returns only the complete saved state', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const events: string[] = [];
+    let releaseFirstWrite: (() => void) | undefined;
+    let firstWriteReleaseCalled: (() => void) | undefined;
+    const firstWriteRelease = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    const firstWriteReleased = new Promise<void>((resolve) => {
+      firstWriteReleaseCalled = resolve;
+    });
+    let firstWriteFullyReleased: (() => void) | undefined;
+    const firstWriteReleaseFinished = new Promise<void>((resolve) => {
+      firstWriteFullyReleased = resolve;
+    });
+    let acquireCount = 0;
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        acquireCount += 1;
+        const acquisition = acquireCount;
+        events.push(`acquire-${acquisition}`);
+        if (acquisition > 1) await firstWriteReleaseFinished;
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              events.push(`release-${acquisition}`);
+              if (acquisition === 1) {
+                firstWriteReleaseCalled?.();
+                await firstWriteRelease;
+                firstWriteFullyReleased?.();
+              }
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    const ledger = createLedger(ledgerPath, { lease });
+
+    const write = ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await firstWriteReleased;
+    let listSettled = false;
+    const list = ledger.list().then((entries) => {
+      listSettled = true;
+      return entries;
+    });
+    await Promise.resolve();
+    const stateWhileWriteHeld = { listSettled, events: [...events] };
+    releaseFirstWrite?.();
+    await write;
+    const entries = await list;
+
+    expect({ stateWhileWriteHeld, entries }).toEqual({
+      stateWhileWriteHeld: { listSettled: false, events: ['acquire-1', 'release-1', 'acquire-2'] },
+      entries: [expect.objectContaining({ source: 'github-issues', sourceRef: 'o/a#1' })],
+    });
+  });
+
+  it('queues a mutation while a read still owns the lease', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const events: string[] = [];
+    let releaseRead: (() => void) | undefined;
+    let readReleaseCalled: (() => void) | undefined;
+    const readRelease = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const readReleased = new Promise<void>((resolve) => {
+      readReleaseCalled = resolve;
+    });
+    let readFullyReleased: (() => void) | undefined;
+    const readReleaseFinished = new Promise<void>((resolve) => {
+      readFullyReleased = resolve;
+    });
+    let acquireCount = 0;
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        acquireCount += 1;
+        const acquisition = acquireCount;
+        events.push(`acquire-${acquisition}`);
+        if (acquisition > 1) await readReleaseFinished;
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              events.push(`release-${acquisition}`);
+              if (acquisition === 1) {
+                readReleaseCalled?.();
+                await readRelease;
+                readFullyReleased?.();
+              }
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    const ledger = createLedger(ledgerPath, { lease });
+
+    const read = ledger.list();
+    await readReleased;
+    let mutationSettled = false;
+    const mutation = ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }).then(() => {
+      mutationSettled = true;
+    });
+    await Promise.resolve();
+    const stateWhileReadHeld = { mutationSettled, events: [...events] };
+    releaseRead?.();
+    await Promise.all([read, mutation]);
+
+    expect(stateWhileReadHeld).toEqual({
+      mutationSettled: false,
+      events: ['acquire-1', 'release-1', 'acquire-2'],
+    });
+  });
+
+  it('acquires before record loads, releases after save, and releases when record throws', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const events: string[] = [];
+    let acquireCount = 0;
+    let savedPreAcquireEntry = false;
+    let releaseAfterSave = false;
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        acquireCount += 1;
+        events.push(`acquire-${acquireCount}`);
+        if (acquireCount === 1) await writeFile(ledgerPath, '{}', 'utf8');
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              events.push(`release-${acquireCount}`);
+              if (acquireCount === 1) {
+                const saved = await readFile(ledgerPath, 'utf8');
+                savedPreAcquireEntry = saved.includes('o/a#old');
+                releaseAfterSave = saved.includes('o/a#new');
+              }
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    await writeFile(ledgerPath, JSON.stringify({
+      'github-issues\u0000o/a#old': {
+        source: 'github-issues', sourceRef: 'o/a#old', status: 'pending', attempts: 0,
+      },
+    }), 'utf8');
+    const ledger = createLedger(ledgerPath, { lease });
+
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#new' });
+    await writeFile(ledgerPath, 'not valid json', 'utf8');
+    const rejected = await ledger.record({ source: 'github-issues', sourceRef: 'o/a#broken' }).then(
+      () => false,
+      () => true,
+    );
+
+    expect({ events, savedPreAcquireEntry, releaseAfterSave, rejected }).toEqual({
+      events: ['acquire-1', 'release-1', 'acquire-2', 'release-2'],
+      savedPreAcquireEntry: false,
+      releaseAfterSave: true,
+      rejected: true,
+    });
+  });
+
+  it('fails closed when release fails without masking a body failure', async () => {
+    const releaseMessage = 'intake ledger lease release failed';
+    const lease: ConductStateLease = {
+      acquire: async () => ({
+        ok: true,
+        handle: {
+          release: async () => ({ ok: false, message: releaseMessage }),
+        },
+      }),
+    };
+    const successfulBodyLedger = createLedger(join(dir, 'successful-body.json'), { lease });
+    const failedBodyLedger = createLedger(join(dir, 'failed-body.json'), { lease });
+    await writeFile(join(dir, 'failed-body.json'), 'not valid json', 'utf8');
+
+    const successfulBodyError = await successfulBodyLedger.record({
+      source: 'github-issues', sourceRef: 'o/a#1',
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    const failedBodyError = await failedBodyLedger.record({
+      source: 'github-issues', sourceRef: 'o/a#2',
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect({
+      successfulBodyMessage: successfulBodyError instanceof Error ? successfulBodyError.message : undefined,
+      failedBodyIsCorrupt: failedBodyError instanceof CorruptLedgerError,
+    }).toEqual({
+      successfulBodyMessage: releaseMessage,
+      failedBodyIsCorrupt: true,
+    });
+  });
+
+  it.each([
+    ['record', (ledger: ReturnType<typeof createLedger>) => ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' })],
+    ['transition', (ledger: ReturnType<typeof createLedger>) => ledger.transition('github-issues', 'o/a#1', 'done')],
+    ['forget', (ledger: ReturnType<typeof createLedger>) => ledger.forget('github-issues', 'o/a#1')],
+    ['reopen', (ledger: ReturnType<typeof createLedger>) => ledger.reopen('github-issues', 'o/a#1')],
+    ['requeueClaimed', (ledger: ReturnType<typeof createLedger>) => ledger.requeueClaimed('github-issues', 'o/a#1')],
+  ])('refuses a corrupt ledger without changing its bytes through %s', async (_method, mutate) => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const corruptBytes = Buffer.from('{ not valid json');
+    const leaseEvents: string[] = [];
+    const lease: ConductStateLease = {
+      acquire: async () => {
+        leaseEvents.push('acquire');
+        return {
+          ok: true,
+          handle: {
+            release: async () => {
+              leaseEvents.push('release');
+              return { ok: true };
+            },
+          },
+        };
+      },
+    };
+    await writeFile(ledgerPath, corruptBytes);
+
+    await expect(mutate(createLedger(ledgerPath, { lease }))).rejects.toBeInstanceOf(CorruptLedgerError);
+    expect({
+      bytes: await readFile(ledgerPath),
+      leaseEvents,
+    }).toEqual({
+      bytes: corruptBytes,
+      leaseEvents: ['acquire', 'release'],
+    });
+  });
+
+  it('leaves no temporary residue after every refused mutation and permits each repaired retry', async () => {
+    const ledgerPath = join(dir, 'ledger.json');
+    const source = 'github-issues';
+    const sourceRef = 'o/a#1';
+    const key = `${source}\u0000${sourceRef}`;
+    const entry = (status: 'pending' | 'done' | 'claimed') => ({
+      [key]: { source, sourceRef, status, attempts: 0 },
+    });
+    const mutations = [
+      ['record', {}, (ledger: ReturnType<typeof createLedger>) => ledger.record({ source, sourceRef })],
+      ['transition', entry('pending'), (ledger: ReturnType<typeof createLedger>) => ledger.transition(source, sourceRef, 'done')],
+      ['forget', entry('pending'), (ledger: ReturnType<typeof createLedger>) => ledger.forget(source, sourceRef)],
+      ['reopen', entry('done'), (ledger: ReturnType<typeof createLedger>) => ledger.reopen(source, sourceRef)],
+      ['requeueClaimed', entry('claimed'), (ledger: ReturnType<typeof createLedger>) => ledger.requeueClaimed(source, sourceRef)],
+    ] as const;
+    const results: Array<{
+      method: string;
+      refused: boolean;
+      retrySucceeded: boolean;
+      semanticState: { status: string; attempts: number } | undefined;
+      tempFiles: string[][];
+    }> = [];
+
+    for (const [method, repairedStore, mutate] of mutations) {
+      const corruptBytes = Buffer.from('{ not valid json');
+      await writeFile(ledgerPath, corruptBytes);
+      const ledger = createLedger(ledgerPath);
+      const refused = await mutate(ledger).then(
+        () => false,
+        (error: unknown) => error instanceof CorruptLedgerError,
+      );
+      const tempFilesAfterRefusal = (await readdir(dir)).filter((name) => name.startsWith('ledger.json.tmp.'));
+
+      await writeFile(ledgerPath, JSON.stringify(repairedStore), 'utf8');
+      const retrySucceeded = await mutate(ledger).then(
+        () => true,
+        () => false,
+      );
+      const retriedEntry = await ledger.get(source, sourceRef);
+      const tempFilesAfterRetry = (await readdir(dir)).filter((name) => name.startsWith('ledger.json.tmp.'));
+
+      results.push({
+        method,
+        refused,
+        retrySucceeded,
+        semanticState: retriedEntry === undefined
+          ? undefined
+          : { status: retriedEntry.status, attempts: retriedEntry.attempts },
+        tempFiles: [tempFilesAfterRefusal, tempFilesAfterRetry],
+      });
+    }
+
+    expect(results).toEqual([
+      {
+        method: 'record', refused: true, retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 0 }, tempFiles: [[], []],
+      },
+      {
+        method: 'transition', refused: true, retrySucceeded: true,
+        semanticState: { status: 'done', attempts: 0 }, tempFiles: [[], []],
+      },
+      {
+        method: 'forget', refused: true, retrySucceeded: true,
+        semanticState: undefined, tempFiles: [[], []],
+      },
+      {
+        method: 'reopen', refused: true, retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 1 }, tempFiles: [[], []],
+      },
+      {
+        method: 'requeueClaimed', refused: true, retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 1 }, tempFiles: [[], []],
+      },
+    ]);
+  });
 });
 
 describe('transition() writebackPending marker (#290)', () => {
@@ -162,5 +797,98 @@ describe('requeueClaimed() — claimed to pending recovery (FR-1, FR-4, FR-11)',
     const after = await l.get('github-issues', 'o/a#does-not-exist');
     expect(after).toBeUndefined();
     expect(result).toEqual({ acted: false });
+  });
+});
+
+describe('engineer-directory ledger artifacts', () => {
+  it('creates lease and quarantine artifacts in an initially absent AI_CONDUCTOR_ENGINEER_DIR', async () => {
+    const customEngineerDir = join(dir, 'custom-engineer');
+    const defaultEngineerDir = join(dir, 'home', '.ai-conductor', 'engineer');
+    const resolvedEngineerDir = resolveEngineerDir({
+      home: join(dir, 'home'),
+      env: { AI_CONDUCTOR_ENGINEER_DIR: customEngineerDir },
+    });
+    const ledgerPath = join(resolvedEngineerDir, 'ledger.json');
+
+    const held = await createConductStateLease(ledgerPath, { pid: process.pid }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    try {
+      await expect(createLedger(ledgerPath).record({ source: 'github-issues', sourceRef: 'o/a#1' }))
+        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+
+      expect({
+        customArtifacts: (await readdir(customEngineerDir)).sort(),
+        defaultExists: await readdir(defaultEngineerDir).then(() => true, () => false),
+      }).toEqual({
+        customArtifacts: ['ledger.json.lease'],
+        defaultExists: false,
+      });
+    } finally {
+      await held.handle.release();
+    }
+
+    await createLedger(ledgerPath).record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await writeFile(ledgerPath, '{broken', 'utf8');
+    await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+
+    expect({
+      resolvedEngineerDir,
+      customArtifacts: (await readdir(customEngineerDir)).sort(),
+      defaultExists: await readdir(defaultEngineerDir).then(() => true, () => false),
+    }).toEqual({
+      resolvedEngineerDir: customEngineerDir,
+      customArtifacts: [
+        'ledger.json',
+        expect.stringMatching(/^ledger\.json\.corrupt-\d+$/),
+      ],
+      defaultExists: false,
+    });
+  });
+
+  it.each([
+    ['absent', {}],
+    ['empty', { AI_CONDUCTOR_ENGINEER_DIR: '' }],
+    ['whitespace', { AI_CONDUCTOR_ENGINEER_DIR: ' \t ' }],
+  ])('uses the default engineer directory when AI_CONDUCTOR_ENGINEER_DIR is %s', async (_kind, env) => {
+    const home = join(dir, `home-${_kind}`);
+    const engineerDir = resolveEngineerDir({ home, env });
+    const ledgerPath = join(engineerDir, 'ledger.json');
+
+    await createLedger(ledgerPath).record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    await writeFile(ledgerPath, '{broken', 'utf8');
+    await expect(createLedger(ledgerPath).list()).rejects.toBeInstanceOf(CorruptLedgerError);
+
+    expect({
+      engineerDir,
+      artifacts: (await readdir(engineerDir)).sort(),
+    }).toEqual({
+      engineerDir: join(home, '.ai-conductor', 'engineer'),
+      artifacts: ['ledger.json', expect.stringMatching(/^ledger\.json\.corrupt-\d+$/)],
+    });
+  });
+
+  it('does not contend when separate engineer directories have separate ledger paths', async () => {
+    const firstLedgerPath = join(dir, 'first-engineer', 'ledger.json');
+    const secondLedgerPath = join(dir, 'second-engineer', 'ledger.json');
+    const held = await createConductStateLease(firstLedgerPath, { pid: process.pid }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    try {
+      const firstLedger = createLedger(firstLedgerPath, {
+        lease: createConductStateLease(firstLedgerPath, { pid: process.pid, waitTimeoutMs: 0 }),
+      });
+      const secondLedger = createLedger(secondLedgerPath);
+
+      await expect(firstLedger.record({ source: 'github-issues', sourceRef: 'o/a#1' }))
+        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+      await secondLedger.record({ source: 'github-issues', sourceRef: 'o/a#2' });
+
+      expect(await secondLedger.list()).toEqual([
+        expect.objectContaining({ source: 'github-issues', sourceRef: 'o/a#2' }),
+      ]);
+    } finally {
+      await held.handle.release();
+    }
   });
 });

@@ -231,8 +231,42 @@ export function renderReport(eventsJsonlPath: string): string {
   sections.push(renderRetries(events));
   sections.push(renderTokenSpend(events));
   sections.push(renderOperatorParkBoundaries(events));
+  sections.push(renderBuildReviewMetrics(events));
 
   return sections.join('\n\n');
+}
+
+function renderBuildReviewMetrics(events: ParsedEvent[]): string {
+  const lines = ['## Build Review Metrics', ''];
+  const results = events.filter((event) => event.type === 'build_review_rubric_result');
+  const skips = events.filter((event) => event.type === 'build_review_rubric_skipped');
+  const cacheHits = events.filter((event) => event.type === 'build_review_cache_hit').length;
+  const infrastructureFailures = events.filter((event) => event.type === 'build_review_rubric_infrastructure_failure').length;
+  const verdicts = events.filter((event) => event.type === 'build_review_outer_verdict');
+  const firstPass = verdicts.findIndex((event) => event.effectiveVerdict === 'PASS');
+  if (results.length === 0 && skips.length === 0 && cacheHits === 0 && firstPass === -1) return `${lines.join('\n')}No build-review metrics recorded`;
+  lines.push(`Effective laps-to-pass: ${firstPass === -1 ? 'not reached' : firstPass + 1}`);
+  const skipReasons = new Map<string, number>();
+  for (const skip of skips) {
+    const reason = typeof skip.reason === 'string' ? skip.reason : 'unspecified';
+    skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+  }
+  lines.push(`Reduced coverage (skipped, not pass): ${skips.length}`);
+  if (skipReasons.size > 0) {
+    lines.push(`Skip reasons: ${[...skipReasons.entries()].map(([reason, count]) => `${reason}=${count}`).join(', ')}`);
+  }
+  lines.push(`Cache hits: ${cacheHits}`);
+  const rates = new Map<string, { failures: number; judged: number }>();
+  for (const result of results) {
+    const rubric = typeof result.rubric === 'string' ? result.rubric : 'unknown';
+    const rate = rates.get(rubric) ?? { failures: 0, judged: 0 };
+    rate.judged++;
+    if (result.verdict === 'FAIL') rate.failures++;
+    rates.set(rubric, rate);
+  }
+  for (const [rubric, rate] of rates) lines.push(`Raw ${rubric}: failures=${rate.failures}/${rate.judged}`);
+  lines.push(`Rubric infrastructure failures: ${infrastructureFailures}`);
+  return lines.join('\n');
 }
 
 // ─── Section: Operator Park Boundaries ──────────────────────────────────────

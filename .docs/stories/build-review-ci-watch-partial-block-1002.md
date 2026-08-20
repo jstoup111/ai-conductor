@@ -120,6 +120,12 @@ rest of the block intact so that a typo costs me one key, not the whole block.
   valid, or fully invalid — **when** the config is validated, **then** validation never throws and
   never returns a hard error for these two blocks, and the resolved block is always defined.
 
+> **Amended 2026-08-13 by #1542:** this tolerant totality contract remains for the legacy
+> `build_review.enabled` and `perTaskFloor` keys. The new `maxParallel` and `rubrics` subtree is a
+> strict boundary: invalid types, ranges, rubric IDs, or execution policies reject configuration,
+> as does an enabled gate whose valid resolved rubric map disables every rubric. `ci_watch` is
+> unchanged.
+
 ### Done When
 
 - [ ] Unknown keys warn by name in both blocks.

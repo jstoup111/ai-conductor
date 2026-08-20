@@ -19,6 +19,8 @@ import {
   type IntervalClock,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import { enforceFreshSessionOptions } from './fresh-session.js';
+import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
@@ -26,7 +28,12 @@ import { validateSpawnPermit } from '../engine/provider-runtime.js';
 export const CODEX_AUTH_FAILURE_RE =
   /not logged in|please (?:log in|run codex login)|authentication required|unauthorized|invalid api key|api error:\s*401/i;
 export const CODEX_RATE_LIMIT_RE =
-  /rate limit|too many requests|\b429\b|usage limit|quota exceeded|capacity exceeded/i;
+  /rate limit|too many requests|\b429\b|capacity exceeded/i;
+// A hard usage-cap exhaustion recovers on the plan's usage window, not on a
+// throttle backoff. It keeps rate-limit retry coordination (no budget burn)
+// but waits on an hour-scale default and is reported as usage exhaustion.
+export const CODEX_USAGE_EXHAUSTED_RE =
+  /usage limit|quota exceeded|exhausted [^\n]{0,40}usage|usage [^\n]{0,40}exhausted/i;
 export const CODEX_MODEL_UNAVAILABLE_RE =
   /(?:requested |selected )?model .{0,80}(?:not found|unavailable|not available|unsupported|not supported)|unknown model|model not found|do not have access to (?:the )?model/i;
 export const CODEX_SESSION_EXPIRED_RE =
@@ -120,10 +127,19 @@ export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: 
         if (typeof input === 'number' && Number.isFinite(input)
           && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
           tokenUsage ??= { input: 0, output: 0, numTurns: 0 };
-          tokenUsage.input += input;
+          const cached = event.usage.cached_input_tokens;
+          // Codex's `input_tokens` INCLUDES `cached_input_tokens` (OpenAI
+          // semantics), while Claude's `input_tokens` excludes its cache
+          // fields (Anthropic semantics). TokenUsage.input is fresh-only, so
+          // subtract the cached share here; `cacheRead` keeps the cached
+          // volume. Without this a cache-heavy agentic run reports its
+          // ~100k context times every internal tool-call round trip as
+          // "input" — a 1.5M figure for a ~117k-fresh remediate dispatch.
+          const cachedShare =
+            typeof cached === 'number' && Number.isFinite(cached) ? Math.min(cached, input) : 0;
+          tokenUsage.input += input - cachedShare;
           tokenUsage.output += outputTokens;
           tokenUsage.numTurns = (tokenUsage.numTurns ?? 0) + 1;
-          const cached = event.usage.cached_input_tokens;
           if (typeof cached === 'number' && Number.isFinite(cached)) {
             tokenUsage.cacheRead = (tokenUsage.cacheRead ?? 0) + cached;
           }
@@ -146,9 +162,9 @@ export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: 
   return { output: output ?? stdout, tokenUsage };
 }
 
-function parseWaitSeconds(output: string): number {
+function parseWaitSeconds(output: string, fallbackSeconds = 300): number {
   const match = output.match(/(?:retry|try again)\s*(?:after|in)?\s*(\d+)\s*(?:seconds?|secs?|s)\b/i);
-  return match ? Number(match[1]) : 300;
+  return match ? Number(match[1]) : fallbackSeconds;
 }
 
 export class CodexProvider implements LLMProvider {
@@ -212,6 +228,11 @@ export class CodexProvider implements LLMProvider {
   }
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
+    // Boundary enforcement: session reuse was removed by design — a fresh
+    // session per invocation. Codex `exec` is one-shot and never receives the
+    // session id, but the invariant is enforced uniformly at every adapter
+    // entry so no future arg-building change can resurrect reuse.
+    options = enforceFreshSessionOptions(options, 'codex');
     const readiness = await this.readiness(options.spawnPermit);
     this.logReadinessDiagnostic(readiness, options.diagnosticLog);
     if (readiness.state === 'missing' || readiness.state === 'unusable') {
@@ -219,7 +240,7 @@ export class CodexProvider implements LLMProvider {
     }
 
     const authentication = this.authentication;
-    const args = [...this.buildArgs(options, true, true), ...this.selfHostArgs(options)];
+    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, true, true)];
     const prompt = this.composePrompt(options);
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
@@ -288,6 +309,8 @@ export class CodexProvider implements LLMProvider {
    * usable for conductor's collaborative calls by streaming that one-shot run.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
+    // Boundary enforcement: fresh session per invocation (see invoke()).
+    options = enforceFreshSessionOptions(options, 'codex');
     // A real interactive session leaves authorization to the operator. Auto
     // streaming still uses this method, but is explicitly marked noninteractive
     // by the runner and must prove readiness for every dispatch.
@@ -301,7 +324,7 @@ export class CodexProvider implements LLMProvider {
 
     const authentication = this.authentication;
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.buildArgs(options, false, !options.interactive), ...this.selfHostArgs(options)], {
+      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.selfHostArgs(options), ...this.buildArgs(options, false, !options.interactive)], {
         reject: false,
         input: this.composePrompt(options),
         stdin: 'pipe',
@@ -405,7 +428,8 @@ export class CodexProvider implements LLMProvider {
 
     // Rate limits take precedence over auth: some service responses include
     // both quota and sign-in wording, but retry coordination must win.
-    const rateLimited = exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(rawOutput);
+    const usageExhausted = exitCode !== 0 && CODEX_USAGE_EXHAUSTED_RE.test(rawOutput);
+    const rateLimited = usageExhausted || (exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(rawOutput));
     const modelUnavailable = exitCode !== 0 && CODEX_MODEL_UNAVAILABLE_RE.test(rawOutput);
     const authFailure = exitCode !== 0 && !rateLimited && !modelUnavailable && CODEX_AUTH_FAILURE_RE.test(rawOutput);
     const sessionExpired = CODEX_SESSION_EXPIRED_RE.test(rawOutput);
@@ -435,7 +459,12 @@ export class CodexProvider implements LLMProvider {
         : output,
       exitCode,
       rateLimited: rateLimited || undefined,
-      waitSeconds: rateLimited ? parseWaitSeconds(rawOutput) : undefined,
+      usageExhausted: usageExhausted || undefined,
+      waitSeconds: usageExhausted
+        ? parseWaitSeconds(rawOutput, 3600)
+        : rateLimited
+          ? parseWaitSeconds(rawOutput)
+          : undefined,
       modelUnavailable: modelUnavailable || undefined,
       authFailure: authFailure || undefined,
       permissionDenied: permissionDenied || undefined,
@@ -795,15 +824,22 @@ export class CodexProvider implements LLMProvider {
     return args;
   }
 
-  private invocationEnv(options: InvokeOptions, authentication: SelectedAuthentication): NodeJS.ProcessEnv | undefined {
+  private invocationEnv(options: InvokeOptions, authentication: SelectedAuthentication): NodeJS.ProcessEnv {
     const auth = authentication.apiKey ? { CODEX_API_KEY: authentication.apiKey } : undefined;
-    return options.selfHost ? { ...options.selfHost.env, ...auth } : auth;
+    // Every session env carries the daemon-session marker: any Codex session
+    // spawned through this adapter is engine-managed, and the conduct-ts
+    // entry guard refuses recursive conductor invocations from inside it
+    // (see daemon-session.ts). Applied last so neither self-host env nor auth
+    // can unset it.
+    return withDaemonSessionMarker(
+      options.selfHost ? { ...options.selfHost.env, ...auth } : auth,
+    );
   }
 
   private selfHostArgs(options: InvokeOptions): readonly string[] {
     const args = options.selfHost?.args ?? [];
-    if (args.length > 16 || args.some((arg) => arg.length > 512)) {
-      throw new Error('Codex self-host arguments exceed the bounded provider contract.');
+    if (args.some((arg) => arg.length > 512)) {
+      throw new Error('Codex self-host arguments exceed the 512-character per-argument provider contract.');
     }
     return args;
   }

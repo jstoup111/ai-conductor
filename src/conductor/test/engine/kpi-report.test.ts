@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parseCostBlock, renderKpi } from '../../src/engine/kpi-report.js';
+import { fileURLToPath } from 'node:url';
+import { parseCostBlock, parseTimeBlock, renderKpi } from '../../src/engine/kpi-report.js';
 
 let root: string;
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'kpi-report-'));
@@ -106,7 +108,62 @@ describe('parseCostBlock', () => {
   });
 });
 
+describe('parseTimeBlock', () => {
+  it('returns the reason carried by a partial Time block', () => {
+    expect(parseTimeBlock([
+      '## Time',
+      'state: partial',
+      'active_ms: 80',
+      'reason: provider-evidence-incomplete',
+      '',
+    ].join('\n'))).toEqual({
+      state: 'partial',
+      activeMs: 80,
+      reason: 'provider-evidence-incomplete',
+    });
+  });
+
+  it('preserves the parse states of committed reason-free partial and pre-Time records', async () => {
+    const [reasonFreePartial, noTime] = await Promise.all([
+      readFile(join(repoRoot, '.docs/shipped/codex-readiness-distinguishes-unavailable-doctor-p.md'), 'utf8'),
+      readFile(join(repoRoot, '.docs/shipped/2026-04-12-phase-1-story-catalog.md'), 'utf8'),
+    ]);
+
+    expect({
+      reasonFreePartial: parseTimeBlock(reasonFreePartial),
+      noTime: parseTimeBlock(noTime),
+    }).toEqual({
+      reasonFreePartial: { state: 'partial' },
+      noTime: { state: 'unavailable' },
+    });
+  });
+
+  it('degrades a hand-edited Time block to partial instead of throwing', () => {
+    expect(parseTimeBlock([
+      '## Time',
+      'state: measured',
+      'active_ms: not-a-number',
+      'provider_active_ms: 17',
+      'no_provider_active_ms: 13',
+      '',
+    ].join('\n'))).toEqual({ state: 'partial' });
+  });
+});
+
 describe('renderKpi', () => {
+  it('renders persisted raw build-review denominators and reduced coverage on the public KPI output', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(join(root, '.docs/shipped/feature.md'), record('feature', COST_LINES) + [
+      '', '## Build Review', 'laps_to_pass: 2', 'skipped: 1', 'cache_hits: 3',
+      'infrastructure_failures: 1', 'rubrics:', '  scope: failures: 1, judged: 2', 'skip_reasons:', '  disabled: 1', '',
+    ].join('\n'));
+
+    const report = await renderKpi(root);
+
+    expect(report).toContain('build_review=laps_to_pass=2 skipped=1 cache_hits=3 infrastructure_failures=1');
+    expect(report).toContain('scope: raw_failures=1/2');
+  });
+
   it('reports historical and corrupt timing explicitly without polluting measured averages', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     const fixtures: Record<string, string> = {
@@ -163,6 +220,59 @@ describe('renderKpi', () => {
         'partial=4 unavailable=3 avg_active_ms=100 avg_provider_active_ms=60 ' +
         'avg_no_provider_active_ms=40',
     });
+  });
+
+  it('renders a partial timing reason on the feature row while preserving active time', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/partial.md'),
+      record('partial', COST_LINES) +
+        '\n## Time\nstate: partial\nactive_ms: 80\nreason: provider-evidence-incomplete\n',
+    );
+
+    const report = await renderKpi(root);
+
+    expect(report).toContain('time=partial active_ms=80 reason=provider-evidence-incomplete');
+  });
+
+  it('reports zero measured timing records without emitting timing averages', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/partial.md'),
+      record('partial', COST_LINES) + '\n## Time\nstate: partial\nactive_ms: 80\n',
+    );
+    await writeFile(
+      join(root, '.docs/shipped/unavailable.md'),
+      record('unavailable', COST_LINES) + '\n## Time\nstate: unavailable\n',
+    );
+
+    const aggregate = (await renderKpi(root)).split('\n').find((line) => line.startsWith('Aggregate')) ?? '';
+
+    expect(aggregate).toBe(
+      'Aggregate / trend across 2 feature(s): total tokens=2400 ' +
+        '(input=2000, output=400), total cost_usd=0.2; timing measured=0 partial=1 unavailable=1',
+    );
+  });
+
+  it('averages only measured timing records while retaining partial records in the aggregate count', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/measured.md'),
+      record('measured', COST_LINES) +
+        '\n## Time\nstate: measured\nactive_ms: 120\nprovider_active_ms: 90\nno_provider_active_ms: 30\n',
+    );
+    await writeFile(
+      join(root, '.docs/shipped/partial.md'),
+      record('partial', COST_LINES) + '\n## Time\nstate: partial\nactive_ms: 80\n',
+    );
+
+    const aggregate = (await renderKpi(root)).split('\n').find((line) => line.startsWith('Aggregate')) ?? '';
+
+    expect(aggregate).toBe(
+      'Aggregate / trend across 2 feature(s): total tokens=2400 ' +
+        '(input=2000, output=400), total cost_usd=0.2; timing measured=1 partial=1 unavailable=0 ' +
+        'avg_active_ms=120 avg_provider_active_ms=90 avg_no_provider_active_ms=30',
+    );
   });
 
   it('reports measured timing partitions and measured-only aggregate averages', async () => {

@@ -34,6 +34,10 @@ all planned work was implemented, so completion is judged holistically without a
   when a build runs, then the completeness item STILL runs (completeness is unconditional even if the
   diff-honesty dial is off) — the step no longer silently `skipped`-defaults out of existence.
 
+> **Amended 2026-08-13 by #1542:** Completeness remains default-enabled but is no longer
+> unconditional. An explicit per-rubric disable records `skipped: disabled`; absent rubric settings
+> continue to run Completeness as the default completion authority.
+
 ### Done When
 - [ ] `build-review-prompt.ts` rubric includes a `completeness` item; verdict `rubric.completeness`
       field validated.
@@ -55,6 +59,10 @@ extended rubric, so judgement remains fail-closed.
 #### Happy Path
 - Given `.pipeline/build-review.json` written this session with `verdict: "PASS"` (all four rubric
   items pass), when the `build_review` predicate runs, then it returns `{ done: true }`.
+
+> **Amended 2026-08-13 by #1542:** the aggregate remains the completion artifact, but raw rubric
+> outcomes are now joined from independent branches and the effective verdict applies exact finding
+> dispositions after raw grading. Skips and accepted findings are not grader passes.
 
 #### Negative Paths
 - Given no verdict artifact exists, when the predicate runs, then it returns `done: false`.

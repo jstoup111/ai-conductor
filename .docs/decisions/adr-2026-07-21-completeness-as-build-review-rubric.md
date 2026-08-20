@@ -1,7 +1,9 @@
 # ADR: Plan-completeness judgement as a default-on build_review rubric item
 
 **Date:** 2026-07-21
-**Status:** APPROVED
+**Status:** APPROVED — PARTIALLY SUPERSEDED by
+`adr-2026-08-13-engine-managed-build-review-rubric-branches` for unconditional enablement and
+single-dispatch topology; Completeness meaning and default-on behavior remain approved
 **Deciders:** Operator (jstoup111), via /engineer DECIDE for #773
 **Supersedes:** adr-2026-07-21-build-end-plan-completeness-gate
 **Extends:** adr-2026-07-07-build-review-judgement-gate (#324)
@@ -75,6 +77,11 @@ Adopt **Option A**. Fold the plan-completeness judgement into the existing `buil
    navigates back to `build` exactly as build_review's existing kickback does; the reasons name the
    missing work. (This reuses build_review's kickback rather than the RemediationGap/planRemediation
    path the superseded ADR referenced — build_review's self-heal block is the shipped mechanism.)
+
+> **Amended 2026-08-13 by #1542:** Completeness remains enabled by default, but an operator may now
+> disable that individual rubric explicitly. Its judgement runs in its own rubric branch and joins
+> the same public `build_review` gate. The original rubric meaning, holistic plan-vs-diff rule, and
+> kickback ownership remain authoritative.
 
 ## Consequences
 

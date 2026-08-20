@@ -38,8 +38,9 @@
 
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
+import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 export {
   provisionProviderHome,
   type ProviderHome,
@@ -50,6 +51,7 @@ export {
 /** Injectable filesystem seam so the adversarial branches are deterministic. */
 export interface SandboxFs {
   mkdtemp(prefix: string): Promise<string>;
+  mkdir(path: string): Promise<void>;
   symlink(target: string, path: string): Promise<void>;
   rm(path: string, opts: { recursive?: boolean; force?: boolean }): Promise<void>;
   realpath(path: string): Promise<string>;
@@ -64,6 +66,7 @@ export interface SandboxFs {
 
 export const realSandboxFs: SandboxFs = {
   mkdtemp: (prefix) => fsp.mkdtemp(prefix),
+  mkdir: async (path) => { await fsp.mkdir(path, { recursive: true }); },
   symlink: (target, path) => fsp.symlink(target, path),
   rm: (path, opts) => fsp.rm(path, opts),
   realpath: (path) => fsp.realpath(path),
@@ -95,7 +98,7 @@ export interface SandboxBuildEnv {
   teardown(): Promise<void>;
 }
 
-export interface ProvisionOptions {
+interface ProvisionOptionsBase {
   /** Build worktree root whose skills/ + hooks/ the sandbox links to. */
   worktreeRoot: string;
   /**
@@ -105,8 +108,6 @@ export interface ProvisionOptions {
    * differs from `worktreeRoot`; when equal, the retarget is a no-op.
    */
   harnessRoot: string;
-  /** Base dir for the throwaway config dir (defaults to the OS temp dir). */
-  baseDir?: string;
   /** Parent env the child env is derived from (defaults to process.env). */
   parentEnv?: NodeJS.ProcessEnv;
   /** Filesystem seam (defaults to real fs). */
@@ -121,6 +122,19 @@ export interface ProvisionOptions {
   globalStateFile?: string;
 }
 
+type SandboxScratchLeaseIdentity = {
+  readonly repository: string;
+  readonly featureSlug: string;
+  readonly runId: string;
+  readonly attempt: number;
+};
+
+/** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
+export type ProvisionOptions = ProvisionOptionsBase & (
+  | (SandboxScratchLeaseIdentity & { readonly baseDir?: undefined })
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number }
+);
+
 /** Only edited harness skills are exposed from the worktree. */
 const LINKED_DIRS = ['skills'] as const;
 const SETTINGS_FILE = 'settings.json';
@@ -133,6 +147,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     readonly configDir: string,
     private readonly parentEnv: NodeJS.ProcessEnv,
     private readonly fs: SandboxFs,
+    private readonly releaseScratch?: () => Promise<void>,
   ) {}
 
   childEnv(): NodeJS.ProcessEnv {
@@ -153,6 +168,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     this.tornDown = true;
     // force: true → ENOENT is not an error, so double teardown is a no-op.
     await this.fs.rm(this.configDir, { recursive: true, force: true });
+    if (this.releaseScratch) await this.releaseScratch();
   }
 }
 
@@ -166,11 +182,20 @@ class ThrowawaySandbox implements SandboxBuildEnv {
  */
 export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<SandboxBuildEnv> {
   const fs = opts.fs ?? realSandboxFs;
-  const base = opts.baseDir ?? tmpdir();
+  const usesScratch = opts.baseDir === undefined;
+  const base = opts.baseDir ?? await acquireScratchHome({
+    worktreeRoot: opts.worktreeRoot,
+    repository: opts.repository,
+    featureSlug: opts.featureSlug,
+    runId: opts.runId,
+    attempt: opts.attempt,
+    provider: 'claude',
+  });
   const parentEnv = opts.parentEnv ?? process.env;
 
   let configDir: string | null = null;
   try {
+    await fs.mkdir(base);
     configDir = await fs.mkdtemp(join(base, 'harness-selfbuild-'));
 
     for (const name of LINKED_DIRS) {
@@ -210,8 +235,15 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
     });
   } catch (err) {
     // Remove any partial sandbox so a half-built dir is never launched (TR-5).
-    if (configDir) {
-      await fs.rm(configDir, { recursive: true, force: true }).catch(() => {});
+    if (usesScratch) {
+        await releaseScratchHome({
+          worktreeRoot: opts.worktreeRoot,
+          runId: opts.runId!,
+          attempt: opts.attempt!,
+          provider: 'claude',
+        });
+    } else if (configDir) {
+        await fs.rm(configDir, { recursive: true, force: true }).catch(() => {});
     }
     if (err instanceof SandboxProvisionError) throw err;
     const e = err as NodeJS.ErrnoException;
@@ -221,7 +253,19 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
         'The build was NOT launched.',
     );
   }
-  return new ThrowawaySandbox(configDir, parentEnv, fs);
+  return new ThrowawaySandbox(
+    configDir,
+    parentEnv,
+    fs,
+    usesScratch
+      ? () => releaseScratchHome({
+        worktreeRoot: opts.worktreeRoot,
+        runId: opts.runId!,
+        attempt: opts.attempt!,
+        provider: 'claude',
+      }).then(() => {})
+      : undefined,
+  );
 }
 
 

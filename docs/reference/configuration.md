@@ -126,8 +126,8 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
 | `build_progress_halt` | object | see section | [build_progress_halt](#build_progress_halt) |
 | `retry_routing` | object | `{ enabled: true }` | [retry_routing](#retry_routing) |
-| `wiring` | object | none | [wiring](#wiring) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
+| `cumulative_kickback_bound` | object | `{ enabled: true }` | [cumulative_kickback_bound](#cumulative_kickback_bound) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
 | `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
 | `provider_preparation_timeout_minutes` | number | `5` | [provider_preparation_timeout_minutes](#provider_preparation_timeout_minutes) |
@@ -443,7 +443,7 @@ error.
 
 | Key | Type | Allowed | Written by |
 | --- | --- | --- | --- |
-| `conductor.update_channel` | string | `tagged` or `main` only; anything else is a hard error (`config.ts:1146-1153`) | `bin/install` and the update flow |
+| `conductor.update_channel` | string | `stable`, `tagged`, or `main` only; anything else is a hard error (`config.ts:1146-1153`) | `bin/install` and the update flow |
 | `conductor.auto_check` | boolean | — | `bin/install` and the update flow |
 | `conductor.current_version` | string | — | `bin/install` and the update flow (machine state) |
 | `conductor.last_checked_at` | string | ISO-8601 UTC | `bin/install` and the update flow (machine state) |
@@ -464,6 +464,10 @@ over by legacy JSON on a later run. Without this split, an unseedable `~/.claude
 update check outright even with a perfectly readable `config.yml` — most visibly mid-update, where a
 `conduct-ts` build old enough to predate `config set` failed the seed's write while `config read`
 still worked.
+
+Fresh installs default to `stable`, whose branch advances only after release CI publishes the matching
+semver tag and GitHub Release. `tagged` retains semver tag checkout behavior, and `main` follows every
+merge. Existing configured channels and version pins are preserved by installer updates.
 
 > **Known limitation.** `src/conductor/src/types/config.ts:198-201` states "Project configs should not
 > override this block — it's per-user, not per-repo," but nothing enforces it. Unlike `spec_owner`, a
@@ -688,31 +692,6 @@ Kill-switch for classifying a retry as a rerun versus a route to another step. V
 
 Consumed at `src/conductor/src/engine/conductor.ts:4149`.
 
-## wiring
-
-Production roots supplied to `build_review`'s static wiring rubric. The engine does not run an
-import-graph probe or create a wiring-evidence artifact.
-
-| Key | Type | Validation | Default |
-| --- | --- | --- | --- |
-| `wiring` | object | Must be an object, else hard error | absent |
-| `wiring.entry_points` | string[] | Array of non-empty strings, else hard error | absent |
-
-> **Known limitation.** `wiring` carries no inner allow-list: keys other than `entry_points` pass
-> validation silently (`config.ts:747-765`), so a typo such as `entrypoints` is accepted and the
-> wiring rubric receives no configured roots. This is looser than `retry_routing` and `conductor`,
-> which reject an unknown key outright. Tracked in
-> [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
-
-When `entry_points` is absent or empty, the grader is instructed to mark the wiring item as
-not judged rather than infer roots. A configured root is rendered verbatim into the review prompt.
-
-```yaml
-wiring:
-  entry_points:
-    - src/index.ts
-```
-
 ## harness_self_host
 
 Guardrails that apply when the build target is the harness checkout itself. Validated by
@@ -727,6 +706,7 @@ any omitted field, yields auto-detection with every gate enabled.
 | `activation` | string | `auto`, `force_on`, `force_off` | `auto` | `auto` compares the build root's realpath against the harness root; `force_on` treats any repo as a self-build; `force_off` never self-hosts |
 | `skill_relink_preflight` | boolean | — | `true` | Intended to gate the pre-dispatch `bin/install --update` relink |
 | `sandbox_build_env` | boolean | — | `true` | Runs the self-build under a throwaway `CLAUDE_CONFIG_DIR` |
+| `live_containment` | boolean | — | `true` | Proves the live checkout is read-only to each self-host dispatch with `bwrap`. If `false`, skips containment and restores fail-closed live-boundary behavior. |
 | `version_approval_gate` | boolean | — | `true` | Halts for operator VERSION-bump approval before `finish` |
 | `release_artifact_gate` | boolean | — | `true` | Halts on an integrity, CHANGELOG, or migration-block failure |
 | `version_freeze` | string | Non-empty after trim, else hard error (`config.ts:1056-1064`) | `null` | While it resolves to the repo `VERSION`, the approval gate self-satisfies. Blank or whitespace normalizes to `null`. Besides a pinned semver string, accepts the literal `"latest"` (tracks the resolved base branch's current `VERSION`) or `"branch:<name>"` (tracks an explicit branch's `VERSION`) — see [self-hosting.md](../guides/self-hosting.md#the-self-host-finish-gates) |
@@ -744,6 +724,24 @@ non-numbers.
 `sandbox_build_env: false` does not merely relax the sandbox — it makes the self-build unrunnable, with
 `{ success: false, permissionDenied: true, output: 'Required safety protection unavailable:
 self-host-isolation' }` (`src/conductor/src/engine/conductor.ts:2049-2065`).
+
+`live_containment: false` is a temporary compatibility opt-out, not an exclusion. The dispatch runs
+without the `bwrap` read-only live-checkout proof, so any live-checkout drift again follows the
+existing fail-closed boundary path and writes a HALT. See the [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only) for recovery.
+
+Likewise, containment is not considered active when `bwrap` is unavailable or its probe fails. The
+probe proves three things: the live checkout is read-only, the dispatched worktree is writable, and
+the wrap still lets the provider create its own nested sandbox namespace. Only a full pass permits
+live-checkout drift to be attributed to a concurrent operator; every unproven case remains
+fail-closed.
+
+The nesting assertion exists because providers sandbox themselves inside the wrap — codex's
+`apply_patch` helper and Claude Code's sandboxed bash both spawn `bwrap`. On a host that refuses an
+unprivileged user namespace to an already-namespaced process (for example Ubuntu with
+`kernel.apparmor_restrict_unprivileged_userns=1`), that nested sandbox fails and the provider cannot
+write a single file, so the dispatch burns its whole budget making no progress. Containment refuses
+itself on such hosts with `containment unavailable: the wrap denies the provider its own nested
+sandbox namespace` rather than wrapping a dispatch that cannot work.
 
 > **Known limitation.** `skill_relink_preflight` is resolved into `skillRelinkPreflight`
 > (`resolved-config.ts:562`) but has no consumer outside `resolved-config.ts`. The relink runs
@@ -856,6 +854,8 @@ is written back (`config.ts:898-927`).
 | `build_review.enabled` | boolean | `true` | Works |
 | `build_review.perTaskFloor` | boolean | `true` | Works |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
+| `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
+| `build_review.rubrics` | object | `scope`, `rootCause`, `completeness` enabled; `tautology` off | Closed map: `tautology`, `scope`, `rootCause`, `completeness`. `tautology` is opt-in (`rubrics.tautology.enabled: true`): a zero exit code is green, every nonzero exit is counterfactual RED, and only launch, timeout, and signal outcomes are scoped-run infrastructure failures |
 
 Normalization contract:
 
@@ -876,6 +876,14 @@ is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved o
 
 `perTaskFloor` reaches the build-review resolver (`resolved-config.ts:633-636`) and controls its
 per-task floor telemetry (`step-runners.ts:1569-1584`).
+
+Each retained rubric accepts `enabled`, `llm_provider`, `model`, `effort`,
+`model_fallback_ladder`, `max_retries`, and `escalate`. When neither the rubric nor the
+outer `steps.build_review` block authors an `effort`, per-rubric defaults apply: `tautology` and
+`completeness` default to `high`; `scope` and `rootCause` — the more mechanical judgements —
+default to `medium`. Any authored effort, at either level, overrides the default. Unknown rubric IDs, including the retired
+`wiring` member, are rejected before dispatch. The resolved configuration always contains exactly
+the four retained policies.
 
 `scopeContainmentEnforced` is resolved through the same block and read by the real
 `conduct-ts scope-check` command. It defaults to `false`, so verified violations are reported while
@@ -944,6 +952,34 @@ also not gated by this flag (`src/conductor/src/types/config.ts:302-308`).
 
 The flag applies to active build kickbacks only. `wiring_check` is a deprecated compatibility no-op
 and never produces a kickback. See [`.pipeline/build-outcome.json`](artifacts.md#core-state).
+
+## cumulative_kickback_bound
+
+Kill-switch for the cumulative `build_review` convergence bound.
+
+| Key | Type | Default |
+| --- | --- | --- |
+| `cumulative_kickback_bound.enabled` | boolean | `true` |
+
+Contract (`src/conductor/src/engine/config.ts:1056-1079`), mirroring
+[`kickback_escalation`](#kickback_escalation): absent or `null` yields `{ enabled: true }`; a
+boolean is taken as given; anything malformed — non-object, unknown inner key, or non-boolean
+`enabled` — is replaced with `{ enabled: true }` with **no warning**. A block carrying an unknown
+sibling key is replaced wholesale, so a sibling `enabled: false` in that block is NOT honored.
+
+The per-gate kickback counter resets whenever the tree moves, so a feature that changes the tree
+every lap can re-earn a full budget indefinitely. The cumulative counter is incremented outside the
+progress branch and is therefore tree-movement-proof: after
+`MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW` laps (`kickback-ledger.ts:35`), `build_review` terminates in
+an operator-visible `needs-human` halt naming the cumulative count instead of looping. A passing
+`build_review` does not reset the counter. A rebase credits the convergence laps back only when it
+actually invalidates `build_review`, and does so once for that invalidation; a rebase that preserves
+the gate leaves the accumulated count intact. See
+`adr-2026-08-18-rebase-invalidation-refunds-build-review-convergence.md`.
+
+Consumed at `src/conductor/src/engine/conductor.ts:3703` (`?? true`). Setting `enabled: false`
+disables only the terminal halt; the counter is still maintained and still reported on the
+`kickback` event's `cumulativeCount`, so the history stays observable.
 
 ## daemon_verbose
 
@@ -1143,10 +1179,6 @@ test_suite:
   timeout_seconds: 1800
   environment:
     - CI
-
-wiring:
-  entry_points:
-    - src/index.ts
 
 markdown_viewer:
   preset: glow

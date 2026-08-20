@@ -28,6 +28,25 @@ so the engine's exit code is the shim's.
 `bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
 points, not `conduct-ts` subcommands.
 
+## `bin/update`
+
+```bash
+bin/update
+bin/update --auto
+bin/update --set-channel <stable|tagged|main>
+```
+
+With no arguments, forces an attended check of the configured harness update channel. `--auto` honors
+`conductor.auto_check` and is the startup form spawned by `conduct-ts`. `--set-channel` accepts
+`stable`, `tagged`, or `main` and changes configuration without moving the checkout.
+
+`stable` is the fresh-install default. It fetches `origin/stable`, verifies that its head is an exact
+semver tag, requires a clean local `stable` checkout and a fast-forward relationship, then prompts
+before fast-forwarding to that captured commit and running `bin/migrate`. An untagged target is rejected
+before local mutation. If migration fails after the fast-forward, the updater restores the prior `stable`
+branch head and recorded version.
+`tagged` follows semver tag checkouts; `main` follows every merge to the development branch.
+
 ## `bin/migrate`
 
 ```bash
@@ -64,6 +83,35 @@ already-applied=<n>`.
 
 Commands that are advisory by contract always exit 0 regardless of outcome: `overlap-scan`, `kpi`,
 `shipped-record`, `shipment-evidence audit`, and `render-diagrams` in its default (non-`--check`) mode.
+
+## Daemon-session refusal
+
+Every provider session the engine dispatches (daemon builds, reviews, interactive-conductor steps,
+self-host candidates — both providers, invoke and interactive paths) carries
+`CONDUCT_DAEMON_SESSION=1` in its environment. When that marker is present, `conduct-ts` refuses to
+run — printing `conduct-ts may not be invoked from inside a daemon-managed session; the engine owns
+all conductor operations for this run` and exiting 1 — before any subcommand parsing. This exists
+because dispatched maker sessions have recursively invoked the conductor (including `daemon
+park`/`unpark`/`restart` and `reseal`), corrupting the run that dispatched them; the engine that
+started the session owns all conductor operations for it. The only exceptions are the
+session-sanctioned worker commands the harness's own skills and hooks require a session to run —
+`scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`, `closeout-event`, and
+`derive-feedback` — which stay available under the marker. There is no config off-switch;
+enforcement lives in `src/conductor/src/execution/daemon-session.ts`.
+
+## `conduct-ts build-review`
+
+```bash
+conduct-ts build-review findings --feature <slug> [--json]
+conduct-ts build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+```
+
+`findings` is read-only and renders the current feature's raw and effective build-review findings;
+`--json` selects machine-readable output. `accept` changes state only from an interactive terminal with
+a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
+and a non-empty rationale. Stale, unknown, unauthorized, or non-interactive requests are refused
+without changing artifacts and exit 1; successful findings inspection and accepted exact-current
+findings exit 0.
 
 ## `conduct-ts scope-check`
 
@@ -438,7 +486,8 @@ nest a second interactive session, prints guidance to run `/engineer` directly, 
 
 Before each fresh session, and only when no idea came from the CLI, the loop polls GitHub issues into
 the durable inbox and prints `Intake: N issue(s) queued.` for a non-zero N. That poll is skipped
-entirely while a background brain loop is alive. Poll failures print and never block.
+entirely while a background brain loop is alive. Ordinary poll failures print and never block; a
+corrupt ledger is the exception — it fails closed and exits 1 (see the subcommand table below).
 
 After each session exits, the loop prompts `Process another idea in a fresh session? [Y/n]` on a TTY.
 Non-TTY stdin answers no, so the loop never runs unattended. The child's exit code is returned; a spawn
@@ -463,6 +512,12 @@ returns 1.
 
 `--source-ref` on `worktree`, `--body` on `worktree`, and the `--idea` and free-text launch forms are
 all accepted by the code but absent from the root `--help` output.
+
+Every subcommand that touches the ledger — `launch`'s pre-poll, `land`, `handoff`, `claim`, `forget`,
+`unclaim`, `requeue`, and `resolve` — fails closed on a corrupt ledger: exit 1 with
+`engineer <kind>: intake ledger is corrupt at <path>; quarantine path: <path>; ledger was not
+modified.` The ledger itself is left untouched for repair. See
+[corrupt intake ledger or stuck ledger lease](../runbooks/corrupt-intake-ledger.md).
 
 > **Known limitation.** Omitting a required flag or positional on `worktree`, `land`, `handoff`,
 > `forget`, or `resolve` prints the full guide text and exits **0**, not a usage error. A script that
@@ -648,8 +703,10 @@ the staged content actually changed. Identical already-committed content produce
 
 It also appends a `## Time` block computed independently from `.pipeline/events.jsonl`, reporting
 `state: measured|partial|unavailable` with `active_ms`, `provider_active_ms`, and
-`no_provider_active_ms` when measured. A missing or corrupt event ledger, or any timing-computation
-failure, never blocks the Cost block or the commit — the record ships with `state: unavailable` instead.
+`no_provider_active_ms` when measured. A `partial` block adds `reason: <route>` when the rollup
+identifies its downgrade route; records shipped before this field existed simply omit the line. A
+missing or corrupt event ledger, or any timing-computation failure, never blocks the Cost block or the
+commit — the record ships with `state: unavailable` instead.
 
 The frontmatter also carries `engine_version`: the engine build id that shipped the feature — the same
 value `conduct-ts daemon status` prints as `version:<id>`. It is resolved from the running engine's own
@@ -693,11 +750,15 @@ cost, cost-unmetered dispatches, and dispatch counts by provider.
 Each row also reports engine-observed execution time, parsed from the record's `## Time` block
 independently of Cost: `time=measured active_ms=<n> provider_active_ms=<n> no_provider_active_ms=<n>`
 splits durable feature wall-clock time into time spent inside a provider process versus engine/code
-time; `time=partial` (optionally with `active_ms`) or `time=unavailable` mark evidence that could not
-be trusted, and a record with no `## Time` block — including every record shipped before this
-section existed — reports `time=unavailable`. The aggregate line adds `timing measured=<n>
-partial=<n> unavailable=<n>` counts and `avg_active_ms`/`avg_provider_active_ms`/
-`avg_no_provider_active_ms`, averaged only over measured features.
+time; `time=partial` (optionally with `active_ms`) adds `reason=<route>` when the rollup identifies
+the downgrade route: `empty-active-union`, `active-evidence-incomplete`,
+`open-executions:<ids>`, `provider-outside-active-union`, or `provider-evidence-incomplete`.
+Records shipped before the reason field existed simply omit it and report `time=partial` without a
+route. `time=unavailable` marks evidence that could not be trusted, and a record with no `## Time`
+block — including every record shipped before this section existed — reports `time=unavailable`.
+The aggregate line adds `timing measured=<n> partial=<n> unavailable=<n>` counts and
+`avg_active_ms`/`avg_provider_active_ms`/`avg_no_provider_active_ms`, averaged only over measured
+features.
 
 ## `conduct-ts memory setup`
 
@@ -846,6 +907,11 @@ an `operator` origin, distinct from step-attributed records. See
 [artifacts](artifacts.md#write-guards) for the seal format and
 [the stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#the-halt-is-a-protected-artifact-violation)
 for the full recovery procedure.
+
+The `--reason` rationale is not just an audit-trail entry: the next `build_review` on this feature
+renders every `operator-reseal`-triggered entry, with its paths, rationale, and commit range, in the
+grader's prompt as evidence to judge — see
+[operator-authorized protected-artifact reseals](../explanation/gates.md#operator-authorized-protected-artifact-reseals).
 
 On success the command prints `Resealed protected artifacts: <paths>` and exits 0. With
 `--clear-halt`, it additionally clears the worktree's `HALT`/`HALT.class` markers when a halt is

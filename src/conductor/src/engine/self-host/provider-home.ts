@@ -4,9 +4,9 @@
 
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
+import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 
 export type SelfHostProviderId = 'claude' | 'codex';
 
@@ -59,11 +59,10 @@ export interface ProviderHome {
   teardown(): Promise<void>;
 }
 
-export interface ProvisionProviderHomeOptions {
+interface ProvisionProviderHomeBaseOptions {
   /** The actual candidate selected for this attempt, not a preferred provider. */
   provider: ResolvedSelfHostProvider;
   worktreeRoot: string;
-  baseDir?: string;
   parentEnv?: NodeJS.ProcessEnv;
   fs?: ProviderHomeFs;
   /** Engine-owned controls (for example a write fence) applied only in this home. */
@@ -71,6 +70,19 @@ export interface ProvisionProviderHomeOptions {
   /** Worktree-owned assets exposed inside the isolated home. */
   worktreeAssets?: readonly string[];
 }
+
+type ScratchLeaseIdentity = {
+  readonly repository: string;
+  readonly featureSlug: string;
+  readonly runId: string;
+  readonly attempt: number;
+};
+
+/** Explicit baseDir is test injection; default provisioning always owns a complete lease. */
+export type ProvisionProviderHomeOptions = ProvisionProviderHomeBaseOptions & (
+  | (ScratchLeaseIdentity & { readonly baseDir?: undefined })
+  | { readonly baseDir: string; readonly repository?: string; readonly featureSlug?: string; readonly runId?: string; readonly attempt?: number }
+);
 
 export class ProviderHomeProvisionError extends Error {
   constructor(message: string) {
@@ -95,6 +107,7 @@ class ThrowawayProviderHome implements ProviderHome {
     private readonly additions: NodeJS.ProcessEnv,
     private readonly args: readonly string[],
     private readonly fs: ProviderHomeFs,
+    private readonly releaseScratch?: () => Promise<void>,
   ) {}
 
   childEnv(): NodeJS.ProcessEnv {
@@ -115,6 +128,7 @@ class ThrowawayProviderHome implements ProviderHome {
     if (this.tornDown) return;
     this.tornDown = true;
     await this.fs.rm(this.homeDir, { recursive: true, force: true });
+    if (this.releaseScratch) await this.releaseScratch();
   }
 }
 
@@ -126,12 +140,21 @@ export async function provisionProviderHome(
   options: ProvisionProviderHomeOptions,
 ): Promise<ProviderHome> {
   const fs = options.fs ?? realProviderHomeFs;
-  const baseDir = options.baseDir ?? tmpdir();
+  const usesScratch = options.baseDir === undefined;
+  const baseDir = options.baseDir ?? await acquireScratchHome({
+    worktreeRoot: options.worktreeRoot,
+    repository: options.repository,
+    featureSlug: options.featureSlug,
+    runId: options.runId,
+    attempt: options.attempt,
+    provider: options.provider.id,
+  });
   const parentEnv = options.parentEnv ?? process.env;
   const assets = options.worktreeAssets ?? DEFAULT_WORKTREE_ASSETS;
   let homeDir: string | undefined;
 
   try {
+    await fs.mkdir(baseDir);
     homeDir = await fs.mkdtemp(join(baseDir, `self-host-${options.provider.id}-`));
     const context: ProviderHomeContext = { provider: options.provider.id, homeDir };
 
@@ -179,9 +202,26 @@ export async function provisionProviderHome(
       { ...auth?.env, ...controls?.env },
       [...(auth?.args ?? []), ...(controls?.args ?? [])],
       fs,
+      usesScratch
+        ? () => releaseScratchHome({
+          worktreeRoot: options.worktreeRoot,
+          runId: options.runId!,
+          attempt: options.attempt!,
+          provider: options.provider.id,
+        }).then(() => {})
+        : undefined,
     );
   } catch (error) {
-    if (homeDir) await fs.rm(homeDir, { recursive: true, force: true }).catch(() => {});
+    if (usesScratch) {
+        await releaseScratchHome({
+          worktreeRoot: options.worktreeRoot,
+          runId: options.runId!,
+          attempt: options.attempt!,
+          provider: options.provider.id,
+        });
+    } else if (homeDir) {
+        await fs.rm(homeDir, { recursive: true, force: true }).catch(() => {});
+    }
     if (error instanceof ProviderHomeProvisionError) throw error;
     const reason = redactSafetyText(error instanceof Error ? error.message : String(error));
     throw new ProviderHomeProvisionError(

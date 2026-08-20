@@ -266,6 +266,17 @@ describe('runVersionApprovalGate (TR-7 wiring: HALT on failure, no PR)', () => {
     expect(halt).toMatch(/never merges/i); // ADR-005 resume procedure present
   });
 
+  it('default emitter-less version HALT surfaces a failed marker write without throwing', async () => {
+    const readText = reads({ [join(harnessRoot, 'VERSION')]: '0.99.19' });
+
+    await expect(
+      runVersionApprovalGate({ projectRoot: '/dev/null', harnessRoot, readText }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/HALT marker write failed: .*ENOTDIR/i),
+    });
+  });
+
   it('freeze auto-approval → pass, no HALT, and the standing approval recorded to the marker (#261)', async () => {
     const readText = reads({ [join(harnessRoot, 'VERSION')]: '0.99.19' });
     const written: Record<string, string> = {};

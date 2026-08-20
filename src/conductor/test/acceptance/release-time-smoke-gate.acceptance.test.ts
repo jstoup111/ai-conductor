@@ -81,7 +81,7 @@ describe('Story 1: one command discovers the complete smoke tier', () => {
     expect(config).toMatch(/exclude\s*:\s*\[\s*\]/);
 
     const discovered = smokeFiles(await filesBelow(resolve(CONDUCTOR_ROOT, 'test')));
-    expect(discovered).toHaveLength(9);
+    expect(discovered).toHaveLength(10);
     expect(new Set(discovered).size).toBe(discovered.length);
   });
 });

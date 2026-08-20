@@ -277,6 +277,9 @@ export class TerminalRenderer implements UIRenderer {
       case 'loop_halt':
         this.region.log(chalk.red(`  ✋ loop halted: ${event.reason}`));
         break;
+      case 'halt_marker_write_failed':
+        this.region.log(chalk.red(`  ✋ halt marker write failed: ${event.path} — ${event.reason}`));
+        break;
       case 'loop_converged':
         this.region.log(chalk.green('  ✓ gate loop converged'));
         break;

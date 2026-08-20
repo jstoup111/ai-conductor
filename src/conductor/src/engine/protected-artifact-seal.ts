@@ -42,6 +42,14 @@ export interface ProtectedArtifactRebaseline {
   reason?: string;
 }
 
+/** Operator-authorized protected-artifact reseal evidence for build review. */
+export interface OperatorReseal {
+  fromCommit: string;
+  toCommit: string;
+  paths: string[];
+  reason: string;
+}
+
 export interface ProtectedArtifactSeal {
   version: 2;
   baselineCommit: string;
@@ -56,6 +64,13 @@ export interface EvaluateProtectedArtifactSealRotationInput {
   headArtifacts: ReadonlyMap<string, Buffer>;
   baseTipArtifacts?: ReadonlyMap<string, Buffer>;
   authorshipByPath?: ReadonlyMap<string, 'authored' | 'not-authored' | 'indeterminate'>;
+  /**
+   * Task ids the engine itself appended to the plan during remediation routing
+   * (read back from `.pipeline/engine-state.json`). An authored path whose
+   * divergence from the base tip is exactly an append of these tasks' blocks
+   * is an engine amendment, not a feature amendment, and may rotate.
+   */
+  appendedRemediationTaskIds?: readonly string[];
 }
 
 export interface EvaluateProtectedArtifactSealRotationInRepositoryInput {
@@ -66,7 +81,15 @@ export interface EvaluateProtectedArtifactSealRotationInRepositoryInput {
 }
 
 export type ProtectedArtifactSealRotationVerdict =
-  | { permitted: true; paths: string[]; excludedBaseAheadPaths?: string[] }
+  | {
+      permitted: true;
+      paths: string[];
+      excludedBaseAheadPaths?: string[];
+      /** Feature-authored paths a prior operator reseal already approved at their sealed content. */
+      excludedOperatorResealedPaths?: string[];
+      /** Authored paths accepted because their divergence is exactly the engine's recorded remediation-task append. */
+      includedEngineAppendedPaths?: string[];
+    }
   | ({ permitted: false; condition: 'baseline-unresolvable' } & ProtectedArtifactRotationEvidence)
   | ({ permitted: false; condition: 'same-history-ancestor' } & ProtectedArtifactRotationEvidence)
   | ({ permitted: false; condition: 'head-unresolvable' } & ProtectedArtifactRotationEvidence)
@@ -87,6 +110,8 @@ export type ProtectedArtifactSealRebaselineEvent =
       toCommit: string;
       paths: string[];
       excludedBaseAheadPaths?: string[];
+      excludedOperatorResealedPaths?: string[];
+      includedEngineAppendedPaths?: string[];
     }
   | {
       type: 'protected_artifact_rebaseline_refused';
@@ -138,6 +163,8 @@ export interface RotateProtectedArtifactSealOptions {
   trigger: string;
   paths: string[];
   excludedBaseAheadPaths?: string[];
+  excludedOperatorResealedPaths?: string[];
+  includedEngineAppendedPaths?: string[];
   fileOperations?: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
@@ -302,6 +329,39 @@ function optionalBuffersEqual(left: Buffer | undefined, right: Buffer | undefine
 }
 
 /**
+ * True when `head`'s divergence from `base` is exactly an append of the
+ * engine's own remediation-task blocks: the base content is a byte prefix of
+ * head, and every heading in the appended suffix is a `### Task <id>:` whose
+ * id the engine recorded in `appendedRemediationTaskIds`. Non-heading suffix
+ * lines are accepted only inside a recorded task's block (source/rationale
+ * continuation lines); prose before the first recorded heading, an unrecorded
+ * task id, or any other markdown heading refuses — that is a feature
+ * amendment, not engine bookkeeping.
+ */
+export function isEngineAppendedRemediationAmendment(
+  base: Buffer | undefined,
+  head: Buffer | undefined,
+  appendedRemediationTaskIds: readonly string[] | undefined,
+): boolean {
+  if (!base || !head || !appendedRemediationTaskIds?.length) return false;
+  if (head.length <= base.length || !head.subarray(0, base.length).equals(base)) return false;
+  const recorded = new Set(appendedRemediationTaskIds);
+  let sawRecordedHeading = false;
+  for (const line of head.subarray(base.length).toString('utf8').split('\n')) {
+    if (line.trim() === '') continue;
+    const heading = /^### Task ([^:\s]+):/.exec(line);
+    if (heading) {
+      if (!recorded.has(heading[1])) return false;
+      sawRecordedHeading = true;
+      continue;
+    }
+    if (/^#{1,6}\s/.test(line)) return false;
+    if (!sawRecordedHeading) return false;
+  }
+  return sawRecordedHeading;
+}
+
+/**
  * Decides whether a rewritten history may rotate an immutable artifact seal.
  * A rotation is safe only when every workspace divergence is independently
  * vouched for by both the rewritten HEAD and the current base tip.
@@ -313,6 +373,7 @@ export function evaluateProtectedArtifactSealRotation({
   headArtifacts,
   baseTipArtifacts,
   authorshipByPath,
+  appendedRemediationTaskIds,
 }: EvaluateProtectedArtifactSealRotationInput): ProtectedArtifactSealRotationVerdict {
   if (baselineAncestry === 'unresolvable') {
     return { permitted: false, condition: 'baseline-unresolvable' };
@@ -347,8 +408,16 @@ export function evaluateProtectedArtifactSealRotation({
     })
     .sort(comparePaths);
 
+  const operatorResealedPaths = new Set(
+    seal.rebaselines
+      .filter(({ trigger }) => trigger === 'operator-reseal')
+      .flatMap(({ paths: resealed }) => resealed),
+  );
+
   const rotationPaths: string[] = [];
   const excludedBaseAheadPaths: string[] = [];
+  const excludedOperatorResealedPaths: string[] = [];
+  const includedEngineAppendedPaths: string[] = [];
   for (const path of paths) {
     const workspace = workspaceArtifacts.get(path);
     const head = headArtifacts.get(path);
@@ -356,7 +425,32 @@ export function evaluateProtectedArtifactSealRotation({
       return { permitted: false, condition: 'workspace-differs-from-head', path };
     }
     if (authorshipByPath?.get(path) === 'authored') {
-      return { permitted: false, condition: 'head-differs-from-base', path };
+      // A feature may not amend a DECIDE artifact — except where the operator
+      // already reviewed and resealed this exact path. The reseal approves the
+      // content it was taken against, not the path forever: an amendment made
+      // after it no longer matches the sealed fingerprint and stays refused.
+      if (
+        !operatorResealedPaths.has(path)
+        || workspace === undefined
+        || sealed.get(path) !== fingerprint(workspace)
+      ) {
+        // The one non-operator exception: the engine's own remediation-task
+        // append (d6c53022c commits it as a feature commit, so git-inheritance
+        // authorship cannot distinguish it). Accepted only when the divergence
+        // from the base tip is exactly the recorded appended task blocks.
+        if (isEngineAppendedRemediationAmendment(
+          baseTipArtifacts.get(path),
+          head,
+          appendedRemediationTaskIds,
+        )) {
+          includedEngineAppendedPaths.push(path);
+          rotationPaths.push(path);
+          continue;
+        }
+        return { permitted: false, condition: 'head-differs-from-base', path };
+      }
+      excludedOperatorResealedPaths.push(path);
+      continue;
     }
     const base = baseTipArtifacts.get(path);
     if (head === undefined ? base !== undefined : base === undefined || !head.equals(base)) {
@@ -373,6 +467,8 @@ export function evaluateProtectedArtifactSealRotation({
     permitted: true,
     paths: rotationPaths,
     ...(excludedBaseAheadPaths.length > 0 ? { excludedBaseAheadPaths } : {}),
+    ...(excludedOperatorResealedPaths.length > 0 ? { excludedOperatorResealedPaths } : {}),
+    ...(includedEngineAppendedPaths.length > 0 ? { includedEngineAppendedPaths } : {}),
   };
 }
 
@@ -421,6 +517,25 @@ async function readExistingSeal(path: string): Promise<ProtectedArtifactSeal | u
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
+  }
+}
+
+/**
+ * Reads the operator-authorized subset of a feature's durable seal lineage.
+ */
+export async function readOperatorReseals(projectRoot: string): Promise<OperatorReseal[]> {
+  try {
+    const seal = await readExistingSeal(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
+    return (seal?.rebaselines ?? [])
+      .filter(({ trigger }) => trigger === 'operator-reseal')
+      .map(({ fromCommit, toCommit, paths, reason }) => ({
+        fromCommit,
+        toCommit,
+        paths,
+        reason: reason ?? '',
+      }));
+  } catch {
+    return [];
   }
 }
 
@@ -480,6 +595,27 @@ async function workspaceProtectedArtifacts(
     artifacts: new Map(artifacts.filter((artifact) => artifact !== undefined)),
     ...(unresolvedIndex === -1 ? {} : { unresolvedPath: paths[unresolvedIndex] }),
   };
+}
+
+/**
+ * Read the engine-recorded appended remediation task ids from
+ * `.pipeline/engine-state.json`. Duplicates `readAppendedRemediationTaskIds`
+ * in `artifacts.ts` (importing it here would close a cycle through
+ * `rebase.ts`); keep both in sync. Absent/invalid state → no ids → no
+ * engine-append tolerance, matching that reader's fail-open shape while
+ * keeping this gate fail-closed.
+ */
+async function readRecordedAppendedRemediationTaskIds(projectRoot: string): Promise<string[]> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (Array.isArray(parsed?.appendedRemediationTaskIds)) {
+      return parsed.appendedRemediationTaskIds.filter((v: unknown): v is string => typeof v === 'string');
+    }
+  } catch {
+    // absent/invalid → no recorded ids
+  }
+  return [];
 }
 
 export async function evaluateProtectedArtifactSealRotationInRepository({
@@ -555,6 +691,7 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
     headArtifacts,
     baseTipArtifacts,
     authorshipByPath,
+    appendedRemediationTaskIds: await readRecordedAppendedRemediationTaskIds(projectRoot),
   });
   if (verdict.permitted || !('path' in verdict)) return verdict;
   return { ...verdict, ...provenanceByPath.get(verdict.path)?.provenance };
@@ -990,6 +1127,8 @@ interface ApplyPermittedProtectedArtifactSealRotationInput {
   headCommit: string;
   paths: string[];
   excludedBaseAheadPaths?: string[];
+  excludedOperatorResealedPaths?: string[];
+  includedEngineAppendedPaths?: string[];
 }
 
 async function applyPermittedProtectedArtifactSealRotation(
@@ -999,6 +1138,8 @@ async function applyPermittedProtectedArtifactSealRotation(
     headCommit,
     paths,
     excludedBaseAheadPaths,
+    excludedOperatorResealedPaths,
+    includedEngineAppendedPaths,
   }: ApplyPermittedProtectedArtifactSealRotationInput,
 ): Promise<ProtectedArtifactSealVerdict> {
   const rotated = await rotateProtectedArtifactSeal({
@@ -1008,6 +1149,8 @@ async function applyPermittedProtectedArtifactSealRotation(
     trigger: 'defensive-history-rewrite',
     paths,
     excludedBaseAheadPaths,
+    excludedOperatorResealedPaths,
+    includedEngineAppendedPaths,
     onRebaseline: options.onRebaseline,
   });
   return { ok: true, seal: rotated, selfAmendments: [] };
@@ -1051,6 +1194,8 @@ async function verifyExistingProtectedArtifactSeal(
     headCommit: context.headCommit,
     paths: rotation.paths,
     excludedBaseAheadPaths: rotation.excludedBaseAheadPaths,
+    excludedOperatorResealedPaths: rotation.excludedOperatorResealedPaths,
+    includedEngineAppendedPaths: rotation.includedEngineAppendedPaths,
   });
 }
 
@@ -1086,6 +1231,8 @@ export async function rotateProtectedArtifactSeal({
   trigger,
   paths,
   excludedBaseAheadPaths,
+  excludedOperatorResealedPaths,
+  includedEngineAppendedPaths,
   fileOperations = { writeFile, rename, rm },
   onRebaseline,
 }: RotateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
@@ -1097,6 +1244,8 @@ export async function rotateProtectedArtifactSeal({
     trigger,
     paths,
     excludedBaseAheadPaths,
+    excludedOperatorResealedPaths,
+    includedEngineAppendedPaths,
     fileOperations,
     onRebaseline,
   });
@@ -1136,6 +1285,8 @@ interface PersistProtectedArtifactSealRotationOptions {
   trigger: string;
   paths: string[];
   excludedBaseAheadPaths?: string[];
+  excludedOperatorResealedPaths?: string[];
+  includedEngineAppendedPaths?: string[];
   reason?: string;
   fileOperations: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
@@ -1148,6 +1299,8 @@ async function persistProtectedArtifactSealRotation({
   trigger,
   paths,
   excludedBaseAheadPaths,
+  excludedOperatorResealedPaths,
+  includedEngineAppendedPaths,
   reason,
   fileOperations,
   onRebaseline,
@@ -1180,6 +1333,10 @@ async function persistProtectedArtifactSealRotation({
       toCommit: recomputed.baselineCommit,
       paths,
       ...(excludedBaseAheadPaths && excludedBaseAheadPaths.length > 0 ? { excludedBaseAheadPaths } : {}),
+      ...(excludedOperatorResealedPaths && excludedOperatorResealedPaths.length > 0
+        ? { excludedOperatorResealedPaths } : {}),
+      ...(includedEngineAppendedPaths && includedEngineAppendedPaths.length > 0
+        ? { includedEngineAppendedPaths } : {}),
     });
     return rotated;
   } catch (error) {

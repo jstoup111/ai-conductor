@@ -172,6 +172,25 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
   });
 
   it.each([
+    [{ type: 'scratch_cleanup_reclaimed', reason: 'dead-owner' }, 'scratch reclaimed'],
+    [{ type: 'scratch_cleanup_retained', reason: 'live-owner' }, 'scratch retained'],
+    [{ type: 'scratch_cleanup_failed', reason: 'removal blocked' }, 'scratch cleanup failed'],
+  ] as const)('renders cleanup event %s to the daemon log', (partial, expected) => {
+    const [line] = lines({
+      ...partial,
+      repository: 'owner/repository',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 1,
+      path: '/worktree/.daemon/scratch/R/1-codex',
+    });
+
+    expect(line).toContain(expected);
+    expect(line).toContain('owner/repository/provider-scratch');
+    expect(line).toContain(partial.reason);
+  });
+
+  it.each([
     ['invalid-json', 'invalid-json'],
     ['unsupported-schema', 'unsupported-schema'],
     [undefined, undefined],

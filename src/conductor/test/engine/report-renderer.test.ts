@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { renderReport, ReportError, parseEvents, aggregateKickbacks } from '../../src/engine/report-renderer.js';
+import { renderReport, ReportError, parseEvents, aggregateHalts, aggregateKickbacks } from '../../src/engine/report-renderer.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 // Helper: build a JSONL line from event + timestamp offset in ms
 function makeEvent(event: Record<string, unknown>, ts: string): string {
@@ -26,6 +28,22 @@ describe('report-renderer', () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('renders raw rubric, cache, and explicit skipped-not-pass metrics', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'build_review_rubric_result', rubric: 'scope', verdict: 'FAIL' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'build_review_rubric_skipped', rubric: 'wiring', reason: 'missing-entry-points' }, ts: '2026-01-01T00:00:01.000Z' },
+      { event: { type: 'build_review_cache_hit', rubric: 'tautology' }, ts: '2026-01-01T00:00:02.000Z' },
+      { event: { type: 'build_review_outer_verdict', lapId: 'lap-1', effectiveVerdict: 'PASS' }, ts: '2026-01-01T00:00:03.000Z' },
+    ]), 'utf8');
+
+    expect(renderReport(eventsPath)).toContain('Effective laps-to-pass: 1\nReduced coverage (skipped, not pass): 1\nSkip reasons: missing-entry-points=1\nCache hits: 1\nRaw scope: failures=1/1');
+  });
+
+  it('renders absent build-review data safely', async () => {
+    await writeFile(eventsPath, '', 'utf8');
+    expect(renderReport(eventsPath)).toContain('## Build Review Metrics\nNo build-review metrics recorded');
   });
 
   it('ignores persisted kickback lines in report, timing, and cost rollups', async () => {
@@ -56,6 +74,60 @@ describe('report-renderer', () => {
     ];
 
     expect(kickbackResults).toEqual(baselineResults);
+  });
+
+  it('aggregates loop_halt records persisted through the event sink', async () => {
+    const worktreeDir = join(tempDir, 'halted-feature');
+    const ledgerPath = join(worktreeDir, '.pipeline', 'events.jsonl');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(ledgerPath, events);
+    persister.start();
+    await events.emit({ type: 'loop_halt', reason: 'retry budget exhausted' });
+    persister.stop();
+
+    const halts = aggregateHalts(parseEvents(await readFile(ledgerPath, 'utf-8')));
+
+    expect(halts).toEqual([{ reason: 'retry budget exhausted' }]);
+  });
+
+  async function persistHaltLedger(): Promise<string> {
+    const ledgerPath = join(tempDir, 'halted-feature', '.pipeline', 'events.jsonl');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(ledgerPath, events);
+    persister.start();
+    await events.emit({ type: 'loop_halt', step: 'build', reason: 'retry budget exhausted' });
+    persister.stop();
+    return ledgerPath;
+  }
+
+  it('uses unknown for persisted loop_halt records with a missing reason', async () => {
+    const ledgerPath = await persistHaltLedger();
+    const persisted = await readFile(ledgerPath, 'utf-8');
+    await writeFile(ledgerPath, persisted.replace(',"reason":"retry budget exhausted"', ''), 'utf-8');
+
+    const halts = aggregateHalts(parseEvents(await readFile(ledgerPath, 'utf-8')));
+
+    expect(halts).toEqual([{ reason: 'unknown' }]);
+  });
+
+  it('uses unknown for persisted loop_halt records with a non-string reason', async () => {
+    const ledgerPath = await persistHaltLedger();
+    const persisted = await readFile(ledgerPath, 'utf-8');
+    await writeFile(ledgerPath, persisted.replace('"retry budget exhausted"', '42'), 'utf-8');
+
+    const halts = aggregateHalts(parseEvents(await readFile(ledgerPath, 'utf-8')));
+
+    expect(halts).toEqual([{ reason: 'unknown' }]);
+  });
+
+  it('skips malformed JSONL while retaining persisted loop_halt records', async () => {
+    const ledgerPath = await persistHaltLedger();
+    const persisted = await readFile(ledgerPath, 'utf-8');
+    await writeFile(ledgerPath, `not valid JSON\n${persisted}`, 'utf-8');
+    const events = parseEvents(await readFile(ledgerPath, 'utf-8'));
+
+    expect(events).toHaveLength(1);
+    expect(aggregateHalts(events)).toEqual([{ reason: 'retry budget exhausted' }]);
   });
 
   // ─── Task 9: step durations table ─────────────────────────────────────────
@@ -125,6 +197,27 @@ describe('report-renderer', () => {
 
     expect(kickbacks).toHaveLength(1);
     expect(kickbacks[0].kickbackOutcome).toBeUndefined();
+  });
+
+  it('reads legacy kickback records without convergenceCredit unchanged', () => {
+    const legacyKickback = {
+      type: 'kickback',
+      from: 'conflict_check',
+      to: 'architecture_review',
+      evidence: 'missing seam',
+      count: 1,
+    };
+
+    const kickbacks = aggregateKickbacks(parseEvents(makeLines([
+      { event: legacyKickback, ts: '2026-01-01T00:00:00.000Z' },
+    ])));
+
+    expect(kickbacks).toEqual([{
+      from: 'conflict_check',
+      to: 'architecture_review',
+      evidence: 'missing seam',
+      count: 1,
+    }]);
   });
 
   it('sorts Step Durations table descending by duration', async () => {

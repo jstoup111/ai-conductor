@@ -20,6 +20,25 @@ export type ScopeContainmentResult =
   | { allowed: true }
   | { allowed: false; taskId: string; offendingPaths: string[] };
 
+function pathDirectory(path: string): string {
+  return path.slice(0, Math.max(0, path.lastIndexOf('/')));
+}
+
+function isSameDirectory(path: string, declaredPath: string): boolean {
+  const declaredDirectory = pathDirectory(declaredPath);
+  const pathDirectoryValue = pathDirectory(path);
+  return (
+    (declaredDirectory === '' && pathDirectoryValue === '') ||
+    (declaredDirectory !== '' && fileMatchesPlanPath(pathDirectoryValue, declaredDirectory))
+  );
+}
+
+function isMachineryAuthoredPath(path: string, machineryPath: string): boolean {
+  return machineryPath.endsWith('/')
+    ? path.startsWith(machineryPath)
+    : path === machineryPath || path.startsWith(`${machineryPath}/`);
+}
+
 /**
  * Determines whether every staged path is declared by the active plan task.
  *
@@ -57,8 +76,12 @@ export function evaluateScopeContainment({
 
   const offendingPaths = stagedPaths.filter(
     (path) =>
-      !MACHINERY_AUTHORED_PATHS.some((machineryPath) => path.startsWith(machineryPath)) &&
+      !MACHINERY_AUTHORED_PATHS.some((machineryPath) => isMachineryAuthoredPath(path, machineryPath)) &&
       !declaredFiles.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)) &&
+      !declaredFiles.some((declaredPath) =>
+        fileMatchesPlanPath(path, declaredPath.replace(/(\.[^./]+)$/, '.test$1')),
+      ) &&
+      !declaredFiles.some((declaredPath) => isSameDirectory(path, declaredPath)) &&
       !scopeTrailers.some((trailer) => fileMatchesPlanPath(path, trailer.path)),
   );
 

@@ -100,6 +100,21 @@ describe('conduct shipped-record — record committed on the implementation bran
     expect(content).toContain(`spec_hash: ${digest}`);
   });
 
+  it('publishes merged build-review metrics in the committed shipped record', async () => {
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(join(repo, '.pipeline/events.jsonl'), [
+      { type: 'build_review_rubric_result', ts: 1, rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
+      { type: 'build_review_rubric_skipped', ts: 2, rubric: 'tautology', lapId: 'lap-1', reason: 'disabled' },
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+    await writeFile(join(repo, '.pipeline/pipeline-events.jsonl'), JSON.stringify(
+      { type: 'build_review_outer_verdict', ts: 3, lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
+    ) + '\n');
+
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
+    const content = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(content).toContain('## Build Review\nlaps_to_pass: 1\nskipped: 1\ncache_hits: 0\ninfrastructure_failures: 0\nrubrics:\n  scope: failures: 1, judged: 1\nskip_reasons:\n  disabled: 1');
+  });
+
   it('merge-local finish: the record (pr: local) is committed before the merge and lands in the merged commits', async () => {
     const code = await runShippedRecord(SLUG, 'local');
     expect(code).toBe(0);

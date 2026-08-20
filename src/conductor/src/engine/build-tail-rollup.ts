@@ -46,6 +46,22 @@ export type BuildWindowsResult =
   | PartialBuildTailRollup
   | { state: 'unavailable' };
 
+export interface BuildReviewMetrics { readonly lapsToPass: number | undefined; readonly rubricFailureRates: Readonly<Record<string, { failures: number; judged: number }>>; readonly skipped: number; readonly cacheHits: number; readonly infrastructureFailures: number; readonly skipReasons: Readonly<Record<string, number>>; }
+/** Raw rubric outcomes are counted before accepted risks affect the outer verdict. */
+export function computeBuildReviewMetrics(events: readonly BuildTailEvent[]): BuildReviewMetrics {
+  const rubricFailureRates: Record<string, { failures: number; judged: number }> = {}; const skipReasons: Record<string, number> = {}; const laps: string[] = []; let pass: string | undefined; let skipped = 0; let cacheHits = 0; let infrastructureFailures = 0;
+  for (const e of events) {
+    if (
+      (e.type === 'build_review_rubric_result' || e.type === 'build_review_rubric_skipped' ||
+        e.type === 'build_review_rubric_infrastructure_failure' || e.type === 'build_review_outer_verdict') &&
+      typeof e.lapId === 'string' && !laps.includes(e.lapId)
+    ) laps.push(e.lapId);
+    if (e.type === 'build_review_rubric_result' && typeof e.rubric === 'string' && typeof e.lapId === 'string') { if (!laps.includes(e.lapId)) laps.push(e.lapId); const r = rubricFailureRates[e.rubric] ??= { failures: 0, judged: 0 }; r.judged++; if (e.verdict === 'FAIL') r.failures++; }
+    else if (e.type === 'build_review_rubric_skipped') { skipped++; if (typeof e.reason === 'string' && e.reason.trim()) skipReasons[e.reason] = (skipReasons[e.reason] ?? 0) + 1; } else if (e.type === 'build_review_cache_hit') cacheHits++; else if (e.type === 'build_review_rubric_infrastructure_failure') infrastructureFailures++; else if (e.type === 'build_review_outer_verdict' && e.effectiveVerdict === 'PASS' && typeof e.lapId === 'string' && pass === undefined) pass = e.lapId;
+  }
+  return { lapsToPass: pass === undefined ? undefined : (laps.indexOf(pass) < 0 ? laps.length + 1 : laps.indexOf(pass) + 1), rubricFailureRates, skipped, cacheHits, infrastructureFailures, skipReasons };
+}
+
 interface BuildProgressTick {
   ts: number;
   resolved: number;
@@ -178,24 +194,28 @@ async function readOptionalLedger(path: string): Promise<BuildTailEvent[] | unde
   }
 }
 
+/** Read the feature's two event ledgers as one stable, timestamp-ordered stream. */
+export async function readMergedFeatureEvents(
+  worktreeDir: string,
+): Promise<readonly BuildTailEvent[] | undefined> {
+  const pipelineDir = join(worktreeDir, '.pipeline');
+  const engineEvents = await readOptionalLedger(join(pipelineDir, 'events.jsonl'));
+  const pipelineEvents = await readOptionalLedger(join(pipelineDir, 'pipeline-events.jsonl'));
+  if (engineEvents === undefined || pipelineEvents === undefined) return undefined;
+  return [...engineEvents, ...pipelineEvents]
+    .map((event, ordinal) => ({ event, ordinal }))
+    .sort((left, right) => left.event.ts - right.event.ts || left.ordinal - right.ordinal)
+    .map(({ event }) => event);
+}
+
 /**
  * Read both event ledgers, merge their shared event schema in stable timestamp
  * order, and return each completed build window.  Classification and degraded
  * result states are intentionally owned by later build-tail-rollup tasks.
  */
 export async function readBuildWindows(worktreeDir: string): Promise<BuildWindowsResult> {
-  const pipelineDir = join(worktreeDir, '.pipeline');
-  const engineEvents = await readOptionalLedger(
-    join(pipelineDir, 'events.jsonl'),
-  );
-  const pipelineEvents = await readOptionalLedger(
-    join(pipelineDir, 'pipeline-events.jsonl'),
-  );
-  if (engineEvents === undefined || pipelineEvents === undefined) return { state: 'partial' };
-  const events = [...engineEvents, ...pipelineEvents]
-    .map((event, ordinal) => ({ event, ordinal }))
-    .sort((left, right) => left.event.ts - right.event.ts || left.ordinal - right.ordinal)
-    .map(({ event }) => event);
+  const events = await readMergedFeatureEvents(worktreeDir);
+  if (events === undefined) return { state: 'partial' };
 
   const windows: BuildWindow[] = [];
   let current: { startedAt: number; events: BuildTailEvent[] } | undefined;

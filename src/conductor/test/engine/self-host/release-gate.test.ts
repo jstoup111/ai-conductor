@@ -246,6 +246,22 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
     expect(changelogRead).toBe(false); // short-circuits on the first failing gate
   });
 
+  it('default emitter-less integrity HALT surfaces a failed marker write without throwing', async () => {
+    await expect(
+      runReleaseArtifactGate({
+        projectRoot: '/dev/null',
+        harnessRoot,
+        readText: async () => GOOD_CHANGELOG,
+        changedFiles: async () => [],
+        access: async () => {},
+        exec: async () => ({ code: 1, timedOut: false }),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/HALT marker write failed: .*ENOTDIR/i),
+    });
+  });
+
   it('integrity ok and empty [Unreleased] with non-breaking changes → pass without HALT', async () => {
     const v = await runReleaseArtifactGate({
       projectRoot,

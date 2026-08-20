@@ -11,8 +11,9 @@ requires: [verify-claims]
 ## Overview
 
 Generate failing acceptance specs from user stories in `.docs/stories/*.md`. Each acceptance
-criterion (happy AND negative paths) becomes a concrete test. Tests are generated BEFORE
-implementation — they are the RED phase of BDD.
+criterion (happy AND negative paths) receives a concrete coverage disposition. Only the criteria
+that need acceptance/system coverage become generated specs; those specs are written BEFORE
+implementation and are the RED phase of BDD.
 
 **Correctness gate:** a test encodes an expected-behavior claim. Per the `/verify-claims` protocol,
 if a spec rests on an assumption about what "correct" means that is not pinned by the story's
@@ -77,9 +78,36 @@ Then determine **project shape** to pick the acceptance test type:
 
 ### 2. Check for Missing Acceptance Specs
 
-Compare `.docs/stories/*.md` against the existing acceptance specs in the project's acceptance
-test directory (whatever the framework uses — see §1). Generate specs for any story file that
-lacks a corresponding spec.
+For **every** happy and negative criterion in every story, record one concrete coverage
+disposition before writing a spec. This applies on both the product and technical tracks:
+
+- **`existing-sufficient-test`** — a named existing behavioral test already proves the criterion
+  at a sufficient layer. Cite its path and test name/line.
+- **`planned-lower-layer-test`** — a named behavioral test assigned to the implementation task
+  will prove the criterion sufficiently below the acceptance layer. Cite the plan task and the
+  intended request/endpoint, command/public-interface, or unit/domain test.
+- **`acceptance-system-spec`** — this pass will write and execute an acceptance/system spec for a
+  distinct multi-step externally observable flow that cannot be proven sufficiently below. Cite
+  the target spec and flow.
+
+The disposition is about the behavior and its failure boundary, not the directory label of a test.
+A request-level test can be sufficient for a public command or endpoint contract; a test under an
+`integration` directory is not automatically acceptance coverage. Negative permutations remain at
+the lower layer when that layer proves the observable failure sufficiently. Do not elevate each
+negative permutation merely to populate an acceptance suite.
+
+Every criterion must have exactly one disposition and its cited proof or assigned test. If a
+criterion has neither existing proof nor a specific planned/generated test, block this step and
+report the criterion; do not silently omit it or create a speculative spec. Ordinary changes to
+skill prose and the existence, creation, or modification of a production file do not themselves
+create behavioral criteria or require a test.
+
+Record the criterion dispositions and citations in this step's report. On the product track, the
+FR table in §3e additionally maps the same record to approved functional requirements; it does not
+replace the all-track criterion check.
+
+Only after this disposition pass, compare the `acceptance-system-spec` criteria against the
+project's existing acceptance specs in its established layout. Generate only the uncovered flows.
 
 ### 2a. Declared Pattern Replication
 
@@ -111,14 +139,26 @@ If all copied specs pass, fail closed and report the passing specs by path. A fu
 set establishes neither the required missing-target RED failure nor evidence that the copied tests
 exercise the new target; do not treat it as successful RED evidence.
 
-**Skip specs for already-tested behavior:** Before generating, grep the existing test suite
-for overlap. For each acceptance criterion, search test files for keywords from the criterion
-(e.g., function/method names, status codes, error messages). If a matching test already exists —
-unit test, request/endpoint test, or prior acceptance spec — do not generate a duplicate.
+**Find existing sufficient proof:** Before generating, search the existing test suite for each
+criterion's behavior and failure boundary (for example, function/method names, status codes, and
+error messages). A keyword hit alone is not proof: confirm the test asserts the expected behavior.
+If it does — unit, request/endpoint, command/public-interface, or prior acceptance spec — assign
+`existing-sufficient-test` and do not generate a duplicate.
 
-Concrete check: `grep -rE "criterion keyword" <the project's test directories>`. If a test file
-already asserts the expected behavior, skip that criterion. Log skipped criteria so the retro
-can verify nothing was missed.
+Concrete search: `grep -rE "criterion keyword" <the project's test directories>`. Record the
+criterion's disposition and citation; this record, rather than a count of generated specs, proves
+nothing was missed.
+
+### No Legitimate Acceptance-Spec RED for Already-Existing Behavior
+
+For a plan-marked verify-only/verification task, generate at most the documenting acceptance spec
+explicitly requested by the plan. Outside such a task, no acceptance spec is invented for
+already-existing behavior just to manufacture a RED result.
+
+If investigation discovers that behavior already exists but the sealed plan did not mark the task
+verify-only/verification, follow `/tdd`'s **No Legitimate RED for Already-Existing Behavior**
+discovered-case exit. Do not amend the sealed plan or retain a redundant acceptance spec. This
+boundary never applies to work that adds, changes, or fixes behavior.
 
 **End-to-end internally; fake third parties:** Acceptance specs test the real application entry
 point and internal system. Do NOT mock internal infrastructure (database, queues, caches,
@@ -150,7 +190,8 @@ Extract from each story file:
 - Happy path criteria (Given/When/Then under Happy Path heading)
 - Negative path criteria (Given/When/Then under Negative Paths heading)
 
-**Both happy AND negative paths become tests.** Negative paths are not optional.
+**Both happy AND negative paths need a coverage disposition.** Negative paths are not optional;
+when a lower-layer behavioral test is sufficient, assign it there rather than duplicating it above.
 
 **Derive specs from stories, not code.** Extract field names, value types, and expected
 behaviors from the story acceptance criteria TEXT — not from existing implementation code.
@@ -165,24 +206,32 @@ story-specified names. This catches cases where code conventions diverge from do
 (e.g., builder context key `token` vs story's `refresh_token`, model field `payload` vs
 story's `request_payload`).
 
-### 3a. Classify Story Flows
+### 3a. Classify Behavioral Scope
 
-Before generating specs, classify each story:
+For each criterion, decide the lowest layer that can prove its behavior. Generate an
+acceptance/system spec only when the criterion belongs to a **distinct multi-step externally
+observable flow** that a lower-layer behavioral test cannot prove sufficiently. Typical examples
+are create → assign → observe an outcome, or configure → invoke → observe an externally visible
+result. The operations need not be HTTP endpoints; use the project's actual public interface.
 
-- **Multi-step flow** (2+ endpoints/operations in the happy path): Generate an
-  integration/acceptance spec. Examples: "create a contact then assign tags", "search contacts
-  filtered by tag".
-- **Single-operation** (1 endpoint/operation CRUD): Mark as `unit-covered` — this story will be
-  covered by the lower-layer tests written during implementation (the framework's
-  request/endpoint or unit tests under `/tdd`). Do NOT generate an acceptance spec for it.
-  Examples: "create a contact", "delete a tag", "update a contact's email".
+Single operations and their validation/error permutations normally receive
+`planned-lower-layer-test` coverage through `/tdd` — for example, a request/endpoint, command, or
+domain test. A multi-step sequence does not automatically need an acceptance spec if a lower-layer
+behavioral test can already prove the relevant observable flow. Conversely, a multi-step external
+flow that cannot be proven below receives `acceptance-system-spec` even if the project's directory
+name would normally suggest another label.
 
-**If ALL stories are single-operation (pure CRUD with no multi-step business logic), skip
-acceptance spec generation entirely.** The lower-layer tests from TDD will cover all acceptance
-criteria. Only generate acceptance specs when at least one story genuinely crosses 2+
-endpoints/operations.
-
-This avoids generating acceptance specs that duplicate lower-layer tests for simple CRUD operations.
+If no criterion needs `acceptance-system-spec`, generate no acceptance specs. The disposition
+record must still show sufficient existing proof or a specific lower-layer assignment for every
+happy and negative criterion. This avoids duplicate acceptance coverage without treating any
+criterion as optional. Record `outcome: "disposition-only"` in
+`.pipeline/acceptance-specs-red.json` with an exhaustive `dispositions` array: each record names
+one happy or negative criterion and is exactly either `existing-sufficient-test` with a verifiable
+test `citation`, or `planned-lower-layer-test` with a verifiable plan `citation`, `owningTask`, and
+`layer`. Do not fabricate an acceptance RED run in this case: the assigned lower-layer test must
+produce its genuine RED evidence during `/tdd`, and no acceptance run contract or failing-spec
+commit is written. Whenever this step copies or generates an acceptance/system spec, record
+`outcome: "specs-generated"`; §6's executable RED machinery remains mandatory.
 
 ### 3b. Replacement Tasks: Drive the REAL Entry Point
 
@@ -193,10 +242,12 @@ PRODUCTION entry point actually calls it. A unit test that invokes the new funct
 ships orphaned (zero production callers). This class escaped into ~5 consecutive Phase-9
 features; it is caught late by the fresh-context evaluator, not the suite.
 
-**Rule:** for any replacement task, generate **≥1 acceptance test that drives the real
-production entry point** (the command / handler / route / loop a user or caller actually
-invokes) — NOT the new unit under test — and asserts the **observable artifact** the replacement
-is supposed to produce (file written, PR opened, gate enforced, record persisted). The test
+**Rule:** for any replacement task, assign **≥1 behavioral test at the lowest sufficient layer**
+that drives the real production entry point (the command / handler / route / loop a user or caller
+actually invokes) — NOT the new unit under test — and asserts the **observable artifact** the
+replacement is supposed to produce (file written, PR opened, gate enforced, record persisted).
+Use `acceptance-system-spec` only when this is a distinct multi-step externally observable flow
+that cannot be proven below; otherwise assign a specific lower-layer behavioral test. The test
 must fail if the entry point is still wired to the OLD behavior.
 
 - Identify the real entry point from the story/plan ("when `runEngineerMode` processes an
@@ -239,7 +290,7 @@ injected one; an injected project name that masked the real derivation — each 
 fresh-context evaluator, never by the suite.
 
 **Rule:** for each such derivation, enumerate **EVERY production call site** that invokes it, and
-generate a failing spec **per call site** that:
+assign a failing behavioral test **per call site** at the lowest sufficient layer that:
 
 - feeds the **real adversarial input that site actually passes** — a URL carrying a real token, a
   path with a trailing slash / sibling prefix / traversal segment, a dirty or stale tree state, an
@@ -249,7 +300,7 @@ generate a failing spec **per call site** that:
   value in isolation.
 
 A derivation covered only by its own unit test is incomplete. List the call sites you found
-(`file:line`) in the spec file or the PR body so the domain reviewer (TDD) can confirm none were
+(`file:line`) in the assigned test file or the PR body so the domain reviewer (TDD) can confirm none were
 missed.
 
 ### 3e. FR Coverage Mapping (Product Track)
@@ -272,23 +323,22 @@ with **exactly one row per FR** — every `FR-N` in the PRD must appear exactly 
 may reference an `FR-N` that isn't in the PRD. A table that omits an FR or invents one not
 present in the PRD is invalid and must be corrected before proceeding.
 
-For each FR row, assign exactly one disposition from the **closed set**:
+For each FR row, derive exactly one disposition from the criterion record's **closed set**:
 
-- **`already-tested`** — maps to the §2 overlap check. The FR's behavior is already asserted by
-  an existing test (unit, request/endpoint, or prior acceptance spec) found via the §2 grep-for-overlap
-  step.
-- **`unit-covered`** — maps to the §3a classification. The FR corresponds to a single-operation
-  (pure CRUD) story classified `unit-covered` under §3a, so it will be covered by the lower-layer
-  tests written during `/tdd`, not by an acceptance spec here.
-- **`spec-covered`** — the FR is covered by an acceptance spec generated in this pass (§5a/§5b).
+- **`existing-sufficient-test`** — maps to §2. The FR's behavior is asserted by a cited existing
+  behavioral test at a sufficient layer.
+- **`planned-lower-layer-test`** — maps to §3a. The cited implementation task owns the specific
+  lower-layer behavioral test that will prove the FR.
+- **`acceptance-system-spec`** — the FR is covered by a generated (or declared-copy) acceptance/
+  system spec in this pass (§5a/§5b).
 
-No disposition outside this closed set (`already-tested`, `unit-covered`, `spec-covered`) is
-permitted.
+No disposition outside this closed set (`existing-sufficient-test`,
+`planned-lower-layer-test`, `acceptance-system-spec`) is permitted.
 
 **Citation requirement:** every row must cite the evidence for its disposition:
-- `already-tested` → cite the existing test file/line found by the §2 grep.
-- `unit-covered` → cite the story and the §3a classification reasoning.
-- `spec-covered` → cite the generated spec file (and test name) that covers it.
+- `existing-sufficient-test` → cite the existing test file/line found by the §2 search.
+- `planned-lower-layer-test` → cite the implementation plan task and intended test.
+- `acceptance-system-spec` → cite the generated spec file (and test name) that covers it.
 
 **Unresolved rows are flagged as errors.** A row is unresolved — and must be flagged rather than
 silently accepted — if any of the following hold:
@@ -336,12 +386,12 @@ SUITE "Link lifecycle":
 
 **Key distinction: acceptance specs test FLOWS, not endpoints/operations.**
 
-An acceptance spec that only hits one endpoint is a request/endpoint test wearing a costume. If
-the test doesn't cross at least 2 endpoints/operations or verify a multi-step story, it belongs
-in the lower request/endpoint layer instead.
+An acceptance spec that only hits one endpoint is usually a request/endpoint test wearing a
+costume. If it does not prove a distinct multi-step externally observable flow that cannot be
+proven sufficiently below, it belongs in the lower behavioral layer instead.
 
-| Test hits one endpoint/operation | → request/endpoint-level test (the framework's request test layer) |
-| Test hits 2+ endpoints/operations in sequence | → acceptance/integration test (this skill) |
+| Test proves one operation or negative permutation sufficiently | → lower-layer behavioral test |
+| Test proves a distinct multi-step external flow no lower layer can prove | → acceptance/system spec (this skill) |
 | Test verifies model/domain logic directly | → unit test |
 
 **This avoids duplication.** Request/endpoint tests own individual endpoint behavior (status
@@ -387,7 +437,8 @@ SUITE "Authentication" (driven through a real UI driver):
 ```
 
 **Rules for E2E / UI specs:**
-- Every criterion gets concrete driver code — no stubs, no `pending`/skipped placeholders
+- Every criterion assigned `acceptance-system-spec` gets concrete driver code — no stubs, no
+  `pending`/skipped placeholders
 - Each test is independent — creates its own data, signs in if needed
 - Do not mock the application stack or locally controlled infrastructure; inject faithful fakes
   at every third-party adapter boundary
@@ -398,7 +449,7 @@ SUITE "Authentication" (driven through a real UI driver):
   (framework-agnostic; comma-separated for multiple FRs) — so `grep -rE "FR-[0-9]+"` over the
   acceptance directory finds every FR's specs.
 
-### 6. Run and Verify RED
+### 6. Run and Verify RED (Generated or Copied Acceptance/System Specs)
 
 Run the acceptance suite using the project's test runner against its acceptance directory.
 Examples (use whatever the project actually uses):
@@ -440,12 +491,13 @@ not a failing test. Two rules follow:
   daemon is a gate hole: the build will be declared GREEN while the specs never ran, and CI (which
   has the infra) then fails.
 
-**Record the RED evidence (gating).** After the RED run, write `.pipeline/acceptance-specs-red.json`
+**Record the RED evidence (gating, `specs-generated` only).** After the RED run, write `.pipeline/acceptance-specs-red.json`
 capturing the REAL result of running the feature's own specs, so the harness can verify they
 actually executed — not merely that spec files exist on disk:
 
 ```json
 {
+  "outcome": "specs-generated",
   "command": "cd backend && pytest spec/integration/test_017_sec_edgar_acceptance.py",
   "targetSpecs": ["spec/integration/test_017_sec_edgar_acceptance.py"],
   "executed": 5,
@@ -481,13 +533,14 @@ subsection entirely — no evidence file is written, no error.
 
 **Finalize the §3e table.** Before writing the evidence file, verify every row is actually
 correct, not just internally consistent:
-- For each `already-tested` or `spec-covered` row, confirm the cited spec/test file **exists on
-  disk** and, for `spec-covered` rows, **contains the FR identifier** — run
+- For each `existing-sufficient-test` or `acceptance-system-spec` row, confirm the cited spec/test
+  file **exists on disk** and, for `acceptance-system-spec` rows, **contains the FR identifier** — run
   `grep -E "FR-N"` (substituting the real FR number) against the cited file and confirm a match.
-- For each `unit-covered` row, confirm the cited **story exists** as a file under
-  `.docs/stories/`.
+- For each `planned-lower-layer-test` row, confirm the cited implementation task and intended test
+  are present in the plan.
 - Re-check that every `FR-N` in the PRD has exactly one row, no invented rows exist, and every
-  disposition is one of the closed set (`already-tested`, `unit-covered`, `spec-covered`).
+  disposition is one of the closed set (`existing-sufficient-test`,
+  `planned-lower-layer-test`, `acceptance-system-spec`).
 
 **Write `.pipeline/fr-coverage.md`** with this format:
 
@@ -499,9 +552,9 @@ Date: <YYYY-MM-DD>
 
 | FR   | Disposition    | Evidence                                              |
 |------|----------------|--------------------------------------------------------|
-| FR-1 | spec-covered   | spec/integration/links_spec.rb — "expired link"        |
-| FR-2 | unit-covered   | .docs/stories/links.md — single-op CRUD, §3a           |
-| FR-3 | already-tested | spec/requests/links_spec.rb:42                          |
+| FR-1 | acceptance-system-spec  | spec/integration/links_spec.rb — "expired link" |
+| FR-2 | planned-lower-layer-test | plan Task 4 — request test for invalid link input |
+| FR-3 | existing-sufficient-test | spec/requests/links_spec.rb:42                   |
 
 Coverage: COMPLETE
 ```
@@ -521,7 +574,30 @@ stop (a hard stop under the daemon, not a logged warning).
 On complete resolution, report the task as PASS with the evidence file written and the verdict
 "Coverage: COMPLETE".
 
-#### Record the run contract (deterministic RED backstop)
+For `disposition-only`, write only this outcome record instead; it must contain no RED counters,
+run command, target specs, exception, or other generated-spec fields:
+
+```json
+{
+  "outcome": "disposition-only",
+  "dispositions": [
+    {
+      "criterion": "happy: reports the persisted result",
+      "disposition": "existing-sufficient-test",
+      "citation": "test/engine/result.test.ts:42"
+    },
+    {
+      "criterion": "negative: rejects a missing result",
+      "disposition": "planned-lower-layer-test",
+      "citation": ".docs/plans/<feature-stem>.md:88",
+      "owningTask": "Task 5",
+      "layer": "engine"
+    }
+  ]
+}
+```
+
+#### Record the run contract (deterministic RED backstop, `specs-generated` only)
 
 **Write `.pipeline/acceptance-specs-run.json` before reporting complete.** The RED evidence in
 `.pipeline/acceptance-specs-red.json` captures the RESULT of one run this skill happened to
@@ -573,31 +649,35 @@ committed design artifact, same as `acceptance-specs-red.json`.
 - Example of a correct boundary stub: freeze the clock, or pin the random generator to a known
   value, using the framework's idiomatic stub/mock facility.
 
-### 7. Commit the Failing Tests
+### 7. Commit the Failing Tests (`specs-generated` only)
 
 ```bash
 git add <acceptance test dir> <test support dir>   # paths per the project's layout
 git commit -m "test: add failing acceptance specs for [feature area]"
 ```
 
-Failing tests get committed. They represent the acceptance criteria.
-Implementation (via `/pipeline` or `/tdd`) makes them pass.
+For `specs-generated`, failing tests get committed. They represent the acceptance criteria and
+implementation (via `/pipeline` or `/tdd`) makes them pass. For `disposition-only`, do not commit
+an acceptance spec; the cited lower-layer task owns its genuine RED test and commit.
 
 **Verification checklist before completing this skill:**
-- RED evidence written to `.pipeline/acceptance-specs-red.json` (§6)
-- Run contract written to `.pipeline/acceptance-specs-run.json` (command, cwd, targetSpecs) (§6)
-  — BEFORE reporting complete
+- `.pipeline/acceptance-specs-red.json` records exactly one outcome:
+  `specs-generated` with RED evidence, or `disposition-only` with exhaustive cited happy and
+  negative criterion records
+- For `specs-generated`, RED evidence and the run contract are written before reporting complete
+- For `disposition-only`, no acceptance spec, RED-run evidence fields, run contract, or
+  failing-spec commit is written
 - Evidence file written to `.pipeline/fr-coverage.md` (only for product-track runs with an
   approved PRD) with verdict "Coverage: COMPLETE" — otherwise the step is a hard stop per §6's
   FR-coverage gate
-- Failing tests committed
+- For `specs-generated`, failing tests committed
 
 ## How This Relates to Other Test Types
 
 ```
-Acceptance specs (this skill)      — Multi-step story flows across 2+ endpoints/operations
-  ↕ generated from .docs/stories/     "Create link → visit → verify click recorded"
-  ↕ NO single-operation tests here
+Acceptance specs (this skill)      — Distinct multi-step externally observable flows that
+  ↕ generated from .docs/stories/     cannot be proven sufficiently below
+  ↕                                    "Create link → visit → verify click recorded"
 
 Request/endpoint tests (TDD)       — Single endpoint/operation contract
   ↕ generated during RED phase        "POST /links with blank URL returns 422"
@@ -614,17 +694,22 @@ lower level. This skill handles the top layer. TDD handles the bottom two.
 
 ## Verify
 
-- [ ] Acceptance specs generated for every story's happy AND negative paths
-- [ ] The new specs were EXECUTED, not just written — a spec that never ran does not
-      establish RED
-- [ ] The real RED run's results recorded to `.pipeline/acceptance-specs-red.json`
+- [ ] Every story's happy AND negative criterion has exactly one cited disposition:
+      `existing-sufficient-test`, `planned-lower-layer-test`, or `acceptance-system-spec`
+- [ ] Acceptance specs generated only for the assigned distinct multi-step externally observable
+      flows that cannot be proven sufficiently below
+- [ ] `.pipeline/acceptance-specs-red.json` declares `specs-generated` or `disposition-only`
+- [ ] When `specs-generated`, an acceptance/system spec was EXECUTED, not just written —
+      a spec that never ran does not establish RED
+- [ ] When `specs-generated`, the real RED run's results are
+      recorded to `.pipeline/acceptance-specs-red.json`
       (command, targetSpecs, executed/passed/failed/skipped/errors counts, failing-test identity,
       `ranAt`, and `intentRationale`) — the
       completion gate validates this file and rejects runs where the feature's own
       specs were skipped, deselected, or errored at collection
-- [ ] Failures are for the RIGHT reason (missing implementation), not
+- [ ] When `specs-generated`, failures are for the RIGHT reason (missing implementation), not
       import/syntax/collection errors
-- [ ] Specs use the project's own test framework and directory conventions
-- [ ] The run contract written to `.pipeline/acceptance-specs-run.json` (command, cwd,
+- [ ] When `specs-generated`, specs use the project's own test framework and directory conventions
+- [ ] When `specs-generated`, the run contract is written to `.pipeline/acceptance-specs-run.json` (command, cwd,
       targetSpecs) before reporting complete — the deterministic RED backstop the engine's
       self-heal runner consumes when the RED evidence marker is missing or misplaced

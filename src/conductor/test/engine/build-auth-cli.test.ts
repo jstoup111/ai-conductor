@@ -22,6 +22,7 @@ function baseSelfHost(overrides: Partial<ResolvedSelfHostConfig> = {}): Resolved
     activation: 'auto',
     skillRelinkPreflight: true,
     sandboxBuildEnv: true,
+    liveContainment: true,
     versionApprovalGate: true,
     releaseArtifactGate: true,
     versionFreeze: null,

@@ -9,19 +9,17 @@ export interface MeasuredTimingRollup {
   noProviderActiveMs: number;
 }
 
+type PartialTimingReason =
+  | 'empty-active-union'
+  | 'active-evidence-incomplete'
+  | `open-executions:${string}`
+  | 'provider-outside-active-union'
+  | 'provider-evidence-incomplete';
+
 export type TimingRollup =
   | MeasuredTimingRollup
-  | { state: 'partial'; activeMs?: number }
+  | { state: 'partial'; activeMs?: number; reason?: PartialTimingReason }
   | { state: 'unavailable' };
-
-interface TimingEvidence {
-  activeIntervals: unknown[];
-  providerIntervals: unknown[];
-  openExecutions: Map<string, number>;
-  closedParallelExecutions: Set<string>;
-  activeEvidenceIncomplete: boolean;
-  providerEvidenceIncomplete: boolean;
-}
 
 function parseLedger(raw: string): Record<string, unknown>[] | null {
   const events: Record<string, unknown>[] = [];
@@ -38,6 +36,23 @@ function parseLedger(raw: string): Record<string, unknown>[] | null {
   return events;
 }
 
+async function readTimingLedger(path: string): Promise<Record<string, unknown>[] | null> {
+  try {
+    return parseLedger(await readFile(path, 'utf8'));
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
+  }
+}
+
+interface TimingEvidence {
+  activeIntervals: unknown[];
+  providerIntervals: unknown[];
+  openExecutions: Map<string, number>;
+  closedParallelExecutions: Set<string>;
+  activeEvidenceIncomplete: boolean;
+  providerEvidenceIncomplete: boolean;
+}
+
 function collectExecutionEvidence(
   event: Record<string, unknown>,
   evidence: TimingEvidence,
@@ -49,7 +64,8 @@ function collectExecutionEvidence(
   const terminalKind =
     event.type === 'step_completed' || event.type === 'step_failed'
       ? 'step'
-      : event.type === 'parallel_completed' || event.type === 'parallel_failure'
+      : event.type === 'parallel_completed'
+        || (event.type === 'parallel_failure' && event.terminal !== false)
         ? 'parallel'
         : undefined;
 
@@ -141,8 +157,14 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
   evidence.providerEvidenceIncomplete ||= providerUnion.invalidIntervals.length > 0;
 
   if (activeUnion.intervals.length === 0) {
-    return evidence.activeEvidenceIncomplete || evidence.openExecutions.size > 0
-      ? { state: 'partial' }
+    if (evidence.openExecutions.size > 0) {
+      return {
+        state: 'partial',
+        reason: `open-executions:${[...evidence.openExecutions.keys()].sort().join(',')}`,
+      };
+    }
+    return evidence.activeEvidenceIncomplete
+      ? { state: 'partial', reason: 'empty-active-union' }
       : { state: 'unavailable' };
   }
 
@@ -154,12 +176,17 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
     (total, interval) => total + interval.durationMs,
     0,
   );
-  if (
-    evidence.activeEvidenceIncomplete ||
-    evidence.openExecutions.size > 0 ||
-    providerDurationMs !== providerWithinActiveDurationMs
-  ) {
-    return { state: 'partial' };
+  if (evidence.activeEvidenceIncomplete) {
+    return { state: 'partial', reason: 'active-evidence-incomplete' };
+  }
+  if (evidence.openExecutions.size > 0) {
+    return {
+      state: 'partial',
+      reason: `open-executions:${[...evidence.openExecutions.keys()].sort().join(',')}`,
+    };
+  }
+  if (providerDurationMs !== providerWithinActiveDurationMs) {
+    return { state: 'partial', reason: 'provider-outside-active-union' };
   }
 
   const activeMs = Math.round(
@@ -168,7 +195,9 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
       0,
     ),
   );
-  if (evidence.providerEvidenceIncomplete) return { state: 'partial', activeMs };
+  if (evidence.providerEvidenceIncomplete) {
+    return { state: 'partial', activeMs, reason: 'provider-evidence-incomplete' };
+  }
 
   const providerActiveMs = Math.round(providerWithinActiveDurationMs);
 
@@ -183,12 +212,12 @@ function calculateTimingRollup(evidence: TimingEvidence): TimingRollup {
 export async function computeTimingRollup(
   worktreeDir: string,
 ): Promise<TimingRollup> {
-  const raw = await readFile(
-    join(worktreeDir, '.pipeline', 'events.jsonl'),
-    'utf8',
-  );
-  const events = parseLedger(raw);
-  return events === null
+  const pipelineDir = join(worktreeDir, '.pipeline');
+  const [events, pipelineEvents] = await Promise.all([
+    readTimingLedger(join(pipelineDir, 'events.jsonl')),
+    readTimingLedger(join(pipelineDir, 'pipeline-events.jsonl')),
+  ]);
+  return events === null || pipelineEvents === null
     ? { state: 'partial' }
-    : calculateTimingRollup(collectTimingEvidence(events));
+    : calculateTimingRollup(collectTimingEvidence([...events, ...pipelineEvents]));
 }

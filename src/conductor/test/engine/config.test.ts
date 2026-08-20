@@ -143,7 +143,7 @@ complexity:
       }).toEqual({
         ordinary: {
           auto_restart_on_stale_engine: false,
-          build_review: { enabled: true },
+          build_review: expect.objectContaining({ enabled: true }),
           build_progress_halt: {
             enabled: true,
             attempt_ceiling: 30,
@@ -443,7 +443,7 @@ complexity:
         },
         ordinary: {
           auto_restart_on_stale_engine: false,
-          build_review: { enabled: true },
+          build_review: expect.objectContaining({ enabled: true }),
           mergeable_autoresolve: {
             enabled: true,
             cooldownMinutes: 60,
@@ -925,9 +925,12 @@ complexity:
   });
 
   describe('conductor block validation', () => {
-    it('accepts tagged/main update_channel', () => {
-      expect(validateConfig({ conductor: { update_channel: 'tagged' } }).ok).toBe(true);
-      expect(validateConfig({ conductor: { update_channel: 'main' } }).ok).toBe(true);
+    it('accepts tagged/main/stable update_channel', () => {
+      expect(
+        (['tagged', 'stable', 'main'] as const).map((update_channel) => (
+          validateConfig({ conductor: { update_channel } }).ok
+        )),
+      ).toEqual([true, true, true]);
     });
 
     it('rejects other update_channel values', () => {
@@ -1797,6 +1800,88 @@ complexity:
   });
 
   describe('build_review config field', () => {
+    it('materializes the closed four-rubric configuration with default and per-rubric execution policy fields', () => {
+      const defaults = validateConfig({ build_review: {} });
+      const configured = validateConfig({
+        build_review: {
+          maxParallel: 3,
+          rubrics: {
+            tautology: {
+              enabled: false,
+              llm_provider: ['codex', 'claude'],
+              model: 'gpt-5.6-sol',
+              effort: 'high',
+              model_fallback_ladder: ['gpt-5.6-terra'],
+              max_retries: 2,
+              escalate: true,
+            },
+          },
+        },
+      });
+
+      expect({
+        defaults: defaults.ok ? defaults.config.build_review : defaults,
+        configured: configured.ok ? configured.config.build_review : configured,
+      }).toEqual({
+        defaults: {
+          enabled: true,
+          maxParallel: 4,
+          rubrics: {
+            tautology: { enabled: true },
+            scope: { enabled: true },
+            rootCause: { enabled: true },
+            completeness: { enabled: true },
+          },
+        },
+        configured: {
+          enabled: true,
+          maxParallel: 3,
+          rubrics: {
+            tautology: {
+              enabled: false,
+              llm_provider: ['codex', 'claude'],
+              model: 'gpt-5.6-sol',
+              effort: 'high',
+              model_fallback_ladder: ['gpt-5.6-terra'],
+              max_retries: 2,
+              escalate: true,
+            },
+            scope: { enabled: true },
+            rootCause: { enabled: true },
+            completeness: { enabled: true },
+          },
+        },
+      });
+    });
+
+    it('keeps legacy keys tolerant while the rubric execution subtree is fail-closed', () => {
+      const legacy = validateConfig({
+        build_review: { enabled: 'not-a-boolean', perTaskFloor: 'not-a-boolean' },
+      });
+      const rubricPolicy = validateConfig({
+        build_review: { rubrics: { completeness: { max_retries: 'many' } } },
+      });
+
+      expect({
+        legacy: legacy.ok
+          ? {
+              buildReview: legacy.config.build_review,
+              warnings: legacy.warnings,
+            }
+          : legacy,
+        rubricPolicy: rubricPolicy.ok ? rubricPolicy : rubricPolicy.error.message,
+      }).toEqual({
+        legacy: {
+          buildReview: expect.objectContaining({ enabled: true }),
+          warnings: [
+            expect.stringMatching(/build_review\.enabled/),
+            expect.stringMatching(/build_review\.perTaskFloor/),
+          ],
+        },
+        rubricPolicy: expect.stringMatching(/build_review\.rubrics\.completeness\.max_retries/),
+      });
+    });
+
     it('resolves absent key to enabled (default-on, #773 Task 4), no warning', () => {
       const result = validateConfig({ harness_version: '>=1.0.0' });
       expect(result.ok).toBe(true);
@@ -1821,7 +1906,7 @@ complexity:
         build_review: result.config.build_review,
         warnings: result.warnings,
       }).toEqual({
-        build_review: { enabled: false, perTaskFloor: false },
+        build_review: expect.objectContaining({ enabled: false, perTaskFloor: false }),
         warnings: [],
       });
     });
@@ -1832,7 +1917,7 @@ complexity:
         build_review: result.config.build_review,
         warnings: result.warnings,
       }).toEqual({
-        build_review: { enabled: true, perTaskFloor: false },
+        build_review: expect.objectContaining({ enabled: true, perTaskFloor: false }),
         warnings: [],
       });
     });
@@ -1841,11 +1926,13 @@ complexity:
       const result = validateConfig({
         build_review: { enabled: true, perTaskFloor: false },
       });
-      expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual({
+      expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual(expect.objectContaining({
         enabled: true,
         perTaskFloor: false,
         scopeContainmentEnforced: false,
-      });
+        maxParallel: 4,
+        rubrics: expect.objectContaining({ scope: expect.objectContaining({ enabled: true }) }),
+      }));
     });
 
     it('preserves an explicit boolean scope-containment enforcement mode', () => {
@@ -1857,7 +1944,7 @@ complexity:
         build_review: result.config.build_review,
         warnings: result.warnings,
       }).toEqual({
-        build_review: { enabled: true, scopeContainmentEnforced: true },
+        build_review: expect.objectContaining({ enabled: true, scopeContainmentEnforced: true }),
         warnings: [],
       });
     });
@@ -1871,7 +1958,7 @@ complexity:
         build_review: result.config.build_review,
         warnings: result.warnings,
       }).toEqual({
-        build_review: { enabled: false },
+        build_review: expect.objectContaining({ enabled: false }),
         warnings: [expect.stringMatching(/build_review\.scopeContainmentEnforced/)],
       });
     });
@@ -1884,7 +1971,7 @@ complexity:
         build_review: result.config.build_review,
         warnings: result.warnings,
       }).toEqual({
-        build_review: { enabled: false },
+        build_review: expect.objectContaining({ enabled: false }),
         warnings: [expect.stringMatching(/perTaskFlooor/)],
       });
     });
@@ -1897,7 +1984,7 @@ complexity:
         build_review: result.config.build_review,
         warnings: result.warnings,
       }).toEqual({
-        build_review: { enabled: false },
+        build_review: expect.objectContaining({ enabled: false }),
         warnings: [expect.stringMatching(/"a"/), expect.stringMatching(/"b"/)],
       });
     });
@@ -1944,7 +2031,7 @@ complexity:
         build_review: result.config.build_review,
         warnings: result.warnings,
       }).toEqual({
-        build_review: { enabled: true, perTaskFloor: false },
+        build_review: expect.objectContaining({ enabled: true, perTaskFloor: false }),
         warnings: [expect.stringMatching(/build_review\.enabled/)],
       });
     });
@@ -1957,7 +2044,7 @@ complexity:
         build_review: result.config.build_review,
         warnings: result.warnings,
       }).toEqual({
-        build_review: { enabled: false },
+        build_review: expect.objectContaining({ enabled: false }),
         warnings: [expect.stringMatching(/build_review\.perTaskFloor/)],
       });
     });

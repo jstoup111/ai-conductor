@@ -46,8 +46,8 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
-    'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, root-cause fixes, plan completeness, and static wiring reachability — adversarial code review demands a high-capability model, same class of judgement as prd_audit/code-review.',
-  wiring_check: 'Deprecated compatibility step; build_review owns wiring judgement.',
+    'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, root-cause fixes, and plan completeness — adversarial code review demands a high-capability model, same class of judgement as prd_audit/code-review.',
+  wiring_check: 'Deprecated compatibility no-op; reachability is no longer judged anywhere in BUILD.',
   test_suite:
     'Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required.',
   manual_test: 'Structured validation against stories — pattern-following.',
@@ -130,6 +130,62 @@ export interface ExtraModelTableRow {
   codexEffort: string;
   why: string;
 }
+
+/**
+ * Rows for engine-managed auxiliary judgements. These are intentionally not
+ * `StepName`s: each row inherits its independently resolved rubric policy
+ * from the public build_review gate rather than inventing a lifecycle step.
+ */
+export interface AuxiliaryModelTableRow {
+  name: string;
+  executionPath: 'engine-managed auxiliary rubric';
+  claudeModel: 'inherits resolved rubric policy';
+  claudeEffort: 'inherits resolved rubric policy';
+  codexModel: 'inherits resolved rubric policy';
+  codexEffort: 'inherits resolved rubric policy';
+  why: string;
+}
+
+const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
+
+export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
+  {
+    name: 'build-review-tautology',
+    executionPath: 'engine-managed auxiliary rubric',
+    claudeModel: RESOLVED_RUBRIC_POLICY,
+    claudeEffort: RESOLVED_RUBRIC_POLICY,
+    codexModel: RESOLVED_RUBRIC_POLICY,
+    codexEffort: RESOLVED_RUBRIC_POLICY,
+    why: 'Judges mutation sensitivity from the engine-owned green proof and reverted-production preflight.',
+  },
+  {
+    name: 'build-review-scope',
+    executionPath: 'engine-managed auxiliary rubric',
+    claudeModel: RESOLVED_RUBRIC_POLICY,
+    claudeEffort: RESOLVED_RUBRIC_POLICY,
+    codexModel: RESOLVED_RUBRIC_POLICY,
+    codexEffort: RESOLVED_RUBRIC_POLICY,
+    why: 'Judges changed paths and surfaces against the approved plan and accepted widening context.',
+  },
+  {
+    name: 'build-review-root-cause',
+    executionPath: 'engine-managed auxiliary rubric',
+    claudeModel: RESOLVED_RUBRIC_POLICY,
+    claudeEffort: RESOLVED_RUBRIC_POLICY,
+    codexModel: RESOLVED_RUBRIC_POLICY,
+    codexEffort: RESOLVED_RUBRIC_POLICY,
+    why: 'Judges whether the implementation addresses the stated defect rather than only a symptom.',
+  },
+  {
+    name: 'build-review-completeness',
+    executionPath: 'engine-managed auxiliary rubric',
+    claudeModel: RESOLVED_RUBRIC_POLICY,
+    claudeEffort: RESOLVED_RUBRIC_POLICY,
+    codexModel: RESOLVED_RUBRIC_POLICY,
+    codexEffort: RESOLVED_RUBRIC_POLICY,
+    why: 'Judges the approved plan holistically against the full implementation diff.',
+  },
+];
 
 const INTERACTIVE_EXECUTION_PATH = 'supported-host interactive' as const;
 const CODEX_MODEL_INHERITANCE =

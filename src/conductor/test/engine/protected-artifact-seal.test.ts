@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConductorEvent } from '../../src/types/events.js';
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
+  type ProtectedArtifactSeal,
   type ProtectedArtifactSealRebaselineEvent,
   createProtectedArtifactSeal,
   classifyMutationTarget,
@@ -16,6 +17,7 @@ import {
   isActiveStepArtifactException,
   isProtectedArtifactPath,
   namesOwnFeature,
+  readOperatorReseals,
   resealProtectedArtifactSeal,
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
@@ -104,6 +106,224 @@ it('classifies decision records as protected wherever protected artifacts are se
     phase: 'BUILD',
     step: 'build',
   })).toEqual({ kind: 'protected', target: path });
+});
+
+it('reads persisted operator-reseal lineage for build-review evidence', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const fromCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const toCommit = 'a'.repeat(40);
+  await mkdir(join(repo, '.pipeline'), { recursive: true });
+  await writeFile(join(repo, '.pipeline/protected-artifact-seal.json'), `${JSON.stringify({
+    version: 2,
+    baselineCommit: toCommit,
+    protectedArtifacts: [],
+    rebaselines: [{
+      trigger: 'operator-reseal',
+      fromCommit,
+      toCommit,
+      paths: ['.docs/stories/feature.md'],
+      reason: 'Correct the approved story after operator review.',
+    }],
+  })}\n`);
+
+  await expect(readOperatorReseals(repo)).resolves.toEqual([{
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+    fromCommit,
+    toCommit,
+  }]);
+});
+
+it('retains operator-reseal evidence after a proactive-rebase rotation', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const baseline = await git(repo, ['rev-parse', 'HEAD']);
+  const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: baseline });
+  await writeProjectFile(repo, '.docs/stories/feature.md', 'corrected story\n');
+  await git(repo, ['add', '.docs/stories/feature.md']);
+  await git(repo, ['commit', '-q', '-m', 'correct approved story']);
+  const resealCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const resealed = await resealProtectedArtifactSeal({
+    projectRoot: repo,
+    seal,
+    toCommit: resealCommit,
+    trigger: 'operator-reseal',
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+  });
+  await writeProjectFile(repo, 'README.md', 'rebase bookkeeping\n');
+  await git(repo, ['add', 'README.md']);
+  await git(repo, ['commit', '-q', '-m', 'rotate rebase lineage']);
+
+  await rotateProtectedArtifactSeal({
+    projectRoot: repo,
+    seal: resealed,
+    toCommit: await git(repo, ['rev-parse', 'HEAD']),
+    trigger: 'proactive-rebase',
+    paths: [],
+  });
+
+  await expect(readOperatorReseals(repo)).resolves.toEqual([{
+    fromCommit: baseline,
+    toCommit: resealCommit,
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+  }]);
+});
+
+it('preserves operator-reseal lineage order and every path in multi-path entries', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const commits = ['a', 'b', 'c', 'd'].map((character) => character.repeat(40));
+  await mkdir(join(repo, '.pipeline'), { recursive: true });
+  await writeFile(join(repo, '.pipeline/protected-artifact-seal.json'), `${JSON.stringify({
+    version: 2,
+    baselineCommit: commits[3],
+    protectedArtifacts: [],
+    rebaselines: [
+      {
+        trigger: 'operator-reseal',
+        fromCommit: commits[0],
+        toCommit: commits[1],
+        paths: ['.docs/stories/first.md'],
+        reason: 'First correction.',
+      },
+      {
+        trigger: 'operator-reseal',
+        fromCommit: commits[1],
+        toCommit: commits[2],
+        paths: ['.docs/plans/second.md', '.docs/stories/second.md'],
+        reason: 'Second correction.',
+      },
+      {
+        trigger: 'operator-reseal',
+        fromCommit: commits[2],
+        toCommit: commits[3],
+        paths: ['.docs/specs/third.md'],
+        reason: 'Third correction.',
+      },
+    ],
+  })}\n`);
+
+  await expect(readOperatorReseals(repo)).resolves.toEqual([
+    {
+      fromCommit: commits[0],
+      toCommit: commits[1],
+      paths: ['.docs/stories/first.md'],
+      reason: 'First correction.',
+    },
+    {
+      fromCommit: commits[1],
+      toCommit: commits[2],
+      paths: ['.docs/plans/second.md', '.docs/stories/second.md'],
+      reason: 'Second correction.',
+    },
+    {
+      fromCommit: commits[2],
+      toCommit: commits[3],
+      paths: ['.docs/specs/third.md'],
+      reason: 'Third correction.',
+    },
+  ]);
+});
+
+it('reads only operator reseals from persisted v2 lineage', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const commits = ['a', 'b', 'c', 'd', 'e'].map((character) => character.repeat(40));
+  const operatorReseal = {
+    trigger: 'operator-reseal',
+    fromCommit: commits[3],
+    toCommit: commits[4],
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+  };
+  const writeSeal = async (rebaselines: unknown[]) => {
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(join(repo, '.pipeline/protected-artifact-seal.json'), `${JSON.stringify({
+      version: 2,
+      baselineCommit: commits[4],
+      protectedArtifacts: [],
+      rebaselines,
+    })}\n`);
+  };
+
+  await writeSeal([{ ...operatorReseal, trigger: 'proactive-rebase' }]);
+  const proactiveRebases = await readOperatorReseals(repo);
+  await writeSeal([{ ...operatorReseal, trigger: 'defensive-history-rewrite' }]);
+  const defensiveHistoryRewrites = await readOperatorReseals(repo);
+  await writeSeal([{ ...operatorReseal, trigger: 'unrecognized-trigger' }]);
+  const unknownTriggers = await readOperatorReseals(repo);
+  await writeSeal([
+    { ...operatorReseal, trigger: 'proactive-rebase' },
+    { ...operatorReseal, trigger: 'defensive-history-rewrite' },
+    { ...operatorReseal, trigger: 'unrecognized-trigger' },
+    operatorReseal,
+  ]);
+
+  expect([
+    proactiveRebases,
+    defensiveHistoryRewrites,
+    unknownTriggers,
+    await readOperatorReseals(repo),
+  ]).toEqual([[], [], [], [{
+    fromCommit: commits[3],
+    toCommit: commits[4],
+    paths: ['.docs/stories/feature.md'],
+    reason: 'Correct the approved story after operator review.',
+  }]]);
+});
+
+it('degrades absent-rationale and unusable operator-reseal seals to safe evidence', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const commits = ['a', 'b'].map((character) => character.repeat(40));
+  const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+  const writeSeal = async (seal: unknown) => {
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal)}\n`);
+  };
+  const operatorResealWithoutReason = {
+    trigger: 'operator-reseal',
+    fromCommit: commits[0],
+    toCommit: commits[1],
+    paths: ['.docs/stories/feature.md'],
+  };
+
+  const absent = await readOperatorReseals(repo);
+  await writeSeal({
+    version: 2,
+    baselineCommit: commits[1],
+    protectedArtifacts: [],
+    rebaselines: [operatorResealWithoutReason],
+  });
+  const absentReason = await readOperatorReseals(repo);
+  await writeFile(sealPath, '{not JSON}\n');
+  const malformed = await readOperatorReseals(repo);
+  await writeSeal({ version: 1, baselineCommit: commits[1], protectedArtifacts: [] });
+  const versionOne = await readOperatorReseals(repo);
+  await writeSeal({ version: 2, baselineCommit: commits[1], protectedArtifacts: [], rebaselines: {} });
+  const nonArrayRebaselines = await readOperatorReseals(repo);
+  await rm(sealPath);
+  await mkdir(sealPath);
+  const unreadable = await readOperatorReseals(repo);
+
+  expect([
+    absent,
+    absentReason,
+    malformed,
+    versionOne,
+    nonArrayRebaselines,
+    unreadable,
+  ]).toEqual([
+    [],
+    [{
+      fromCommit: commits[0],
+      toCommit: commits[1],
+      paths: ['.docs/stories/feature.md'],
+      reason: '',
+    }],
+    [],
+    [],
+    [],
+    [],
+  ]);
 });
 
 describe('createProtectedArtifactSeal', () => {
@@ -624,6 +844,207 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     });
   });
 
+  describe('operator-resealed authored paths (#1574)', () => {
+    const path = '.docs/plans/amended.md';
+    const approvedBytes = Buffer.from('operator-approved amendment\n');
+    const baseBytes = Buffer.from('base-owned plan\n');
+
+    function sealWith(rebaselines: ProtectedArtifactSeal['rebaselines']): ProtectedArtifactSeal {
+      return {
+        version: 2,
+        baselineCommit: 'sealed-head',
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update(approvedBytes).digest('hex')}`,
+        }],
+        rebaselines,
+      };
+    }
+
+    const operatorReseal = {
+      fromCommit: 'sealed-head',
+      toCommit: 'amended-head',
+      trigger: 'operator-reseal',
+      paths: [path],
+      reason: 'Operator-approved plan repair',
+    };
+
+    function evaluate(
+      seal: ProtectedArtifactSeal,
+      content: Buffer,
+    ): ReturnType<typeof evaluateProtectedArtifactSealRotation> {
+      return evaluateProtectedArtifactSealRotation({
+        seal,
+        baselineAncestry: 'non-ancestor',
+        workspaceArtifacts: new Map([[path, content]]),
+        headArtifacts: new Map([[path, content]]),
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        authorshipByPath: new Map([[path, 'authored']]),
+      });
+    }
+
+    it('permits rotation for an authored path the operator already resealed at its sealed content', () => {
+      expect(evaluate(sealWith([operatorReseal]), approvedBytes)).toEqual({
+        permitted: true,
+        paths: [],
+        excludedOperatorResealedPaths: [path],
+      });
+    });
+
+    it('refuses an authored path amended again after its operator reseal', () => {
+      expect(evaluate(sealWith([operatorReseal]), Buffer.from('unapproved later edit\n'))).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('refuses an authored path carried only by a non-operator rebaseline trigger', () => {
+      const engineRebaseline = { ...operatorReseal, trigger: 'defensive-history-rewrite' };
+
+      expect(evaluate(sealWith([engineRebaseline]), approvedBytes)).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+  });
+
+  describe('engine-appended remediation tasks (rotation acceptance)', () => {
+    const path = '.docs/plans/feature.md';
+    const baseBytes = Buffer.from('# Plan\n\n### Task 1: ship it\n');
+    const seal: ProtectedArtifactSeal = {
+      version: 2,
+      baselineCommit: 'sealed-head',
+      protectedArtifacts: [],
+      rebaselines: [],
+    };
+
+    function evaluate(headBytes: Buffer, appendedRemediationTaskIds?: readonly string[]) {
+      return evaluateProtectedArtifactSealRotation({
+        seal,
+        baselineAncestry: 'non-ancestor',
+        workspaceArtifacts: new Map([[path, headBytes]]),
+        headArtifacts: new Map([[path, headBytes]]),
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        authorshipByPath: new Map([[path, 'authored']]),
+        ...(appendedRemediationTaskIds ? { appendedRemediationTaskIds } : {}),
+      });
+    }
+
+    it('permits an authored plan whose divergence is exactly the recorded appended task blocks', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from(
+        '### Task rem-scope-1: remove the unauthorized change\n'
+        + '  - source: build_review:scope\n'
+        + '  - rationale: gap repair\n'
+        + '### Task rem-completeness-1: deliver the missing outcome\n',
+      )]);
+
+      expect(evaluate(head, ['rem-scope-1', 'rem-completeness-1'])).toEqual({
+        permitted: true,
+        paths: [path],
+        includedEngineAppendedPaths: [path],
+      });
+    });
+
+    it('refuses when the appended suffix carries an unrecorded task heading', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from(
+        '### Task rem-scope-1: recorded repair\n### Task rem-rogue-9: unrecorded extra\n',
+      )]);
+
+      expect(evaluate(head, ['rem-scope-1'])).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('refuses when the divergence is not a pure append of the base content', () => {
+      const head = Buffer.from('# Rewritten Plan\n### Task rem-scope-1: recorded repair\n');
+
+      expect(evaluate(head, ['rem-scope-1'])).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('refuses when no appended remediation task ids are recorded', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from('### Task rem-scope-1: repair\n')]);
+
+      expect({
+        omitted: evaluate(head),
+        empty: evaluate(head, []),
+      }).toEqual({
+        omitted: { permitted: false, condition: 'head-differs-from-base', path },
+        empty: { permitted: false, condition: 'head-differs-from-base', path },
+      });
+    });
+
+    it('refuses prose appended before the first recorded task heading', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from(
+        'freeform addendum the plan never approved\n### Task rem-scope-1: repair\n',
+      )]);
+
+      expect(evaluate(head, ['rem-scope-1'])).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('refuses a non-task heading smuggled into the appended suffix', () => {
+      const head = Buffer.concat([baseBytes, Buffer.from(
+        '### Task rem-scope-1: repair\n## New Section: rewrite the scope\n',
+      )]);
+
+      expect(evaluate(head, ['rem-scope-1'])).toEqual({
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+      });
+    });
+
+    it('permits rotation in-repository by reading recorded ids from engine-state', async () => {
+      const planPath = '.docs/plans/feature.md';
+      const repo = await makeRepo({ [planPath]: 'approved plan\n' });
+      const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
+      await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
+      await writeProjectFile(repo, planPath, 'approved plan\n### Task rem-scope-1: remove the unauthorized change\n');
+      await git(repo, ['add', planPath]);
+      await git(repo, ['commit', '-q', '-m', 'chore(plan): record appended remediation tasks']);
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(repo, '.pipeline/engine-state.json'),
+        `${JSON.stringify({ appendedRemediationTaskIds: ['rem-scope-1'] })}\n`,
+      );
+
+      const verdict = await evaluateProtectedArtifactSealRotationInRepository({
+        projectRoot: repo,
+        seal: {
+          version: 2,
+          baselineCommit,
+          protectedArtifacts: [{
+            path: planPath,
+            fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+          }],
+          rebaselines: [],
+        },
+        headCommit: await git(repo, ['rev-parse', 'HEAD']),
+        baseTipRef: 'main',
+      });
+
+      expect(verdict).toEqual({
+        permitted: true,
+        paths: [planPath],
+        includedEngineAppendedPaths: [planPath],
+      });
+    });
+  });
+
   it('refuses a diverging path when its authorship is indeterminate', () => {
     const path = '.docs/plans/changed.md';
     const headBytes = Buffer.from('head\n');
@@ -844,6 +1265,50 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       headCommit: await git(repo, ['rev-parse', 'HEAD']),
       baseTipRef: 'main',
     })).resolves.toEqual({ permitted: true, paths: [], excludedBaseAheadPaths: [path] });
+  });
+
+  it('rebaselines a feature-authored plan the operator resealed, once the base moves on (#1574)', async () => {
+    const path = '.docs/plans/feature.md';
+    const amended = 'approved plan\n\nOperator-approved amendment.\n';
+    const repo = await makeRepo({ [path]: 'approved plan\n' });
+    const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
+    await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
+    await writeProjectFile(repo, path, amended);
+    await git(repo, ['add', path]);
+    await git(repo, ['commit', '-q', '-m', 'docs(plan): operator-approved amendment']);
+    const amendedCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path,
+        fingerprint: `sha256:${createHash('sha256').update(amended).digest('hex')}`,
+      }],
+      rebaselines: [{
+        fromCommit: sharedCommit,
+        toCommit: amendedCommit,
+        trigger: 'operator-reseal',
+        paths: [path],
+        reason: 'Operator-approved plan repair',
+      }],
+    };
+
+    await expect(evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: repo,
+      seal,
+      headCommit: amendedCommit,
+      baseTipRef: 'main',
+    })).resolves.toEqual({
+      permitted: true,
+      paths: [],
+      excludedOperatorResealedPaths: [path],
+    });
   });
 
   it('probes authorship only for protected paths that diverge from the base tip', async () => {

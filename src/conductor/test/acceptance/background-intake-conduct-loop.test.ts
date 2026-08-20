@@ -37,7 +37,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, vi } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RUN_TMP_ROOT_ENV } from '../tmpdir-leak-guard.js';
@@ -689,9 +690,11 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('dispatchIntakeLoop({once:true}) dispatches the real loop for exactly one tick using mocked buildIntake/notifier/sleep', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const effects: string[] = [];
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
+        effects.push('poll');
         polled.count++;
         return [makeEnvelope('o/a#1')];
       },
@@ -700,7 +703,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: {} as any,
+      ledger: { list: async () => void effects.push('ledger-read') } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });
@@ -732,18 +735,73 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     );
 
     expect(code).toBe(0);
+    expect(effects.slice(0, 2)).toEqual(['ledger-read', 'poll']);
     expect(polled.count).toBe(1);
     expect(enqueued).toHaveLength(1);
     expect(notified).toHaveLength(1);
     expect(sleepCalls).toBe(0);
   });
 
+  it('the production continuous entry point reports each ledger-corruption episode once', async () => {
+    const mod = await load(CLI_MOD);
+    const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const engineerDir = await mkdtemp(join(tmpdir(), 'intake-loop-cli-corruption-'));
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    const { createLedger } = await import('../../src/engine/engineer/intake/ledger.js');
+    const ledger = createLedger(ledgerPath);
+    const STOP = new Error('stop continuous loop');
+    const logs: string[] = [];
+    let polls = 0;
+    let sleeps = 0;
+
+    try {
+      await writeFile(ledgerPath, '{first corrupt ledger', 'utf8');
+      await expect(dispatch(
+        { kind: 'run', once: false, intervalMs: 1 },
+        {
+          buildIntake: () => ({
+            reader: {} as any,
+            ledger,
+            queue: { enqueue: async () => undefined } as any,
+            adapter: {
+              poll: async () => {
+                polls += 1;
+                return ledger.list() as Promise<any[]>;
+              },
+            } as any,
+          }),
+          createNotifier: () => ({ notify: async () => undefined }) as any,
+          sleep: async () => {
+            sleeps += 1;
+            if (sleeps === 2) await writeFile(ledgerPath, '{}', 'utf8');
+            if (sleeps === 3) await writeFile(ledgerPath, '{second corrupt ledger', 'utf8');
+            if (sleeps === 4) throw STOP;
+          },
+          log: (line: string) => logs.push(line),
+          printErr: () => {},
+          engineerDir,
+        },
+      )).rejects.toBe(STOP);
+
+      const corruptLogs = logs.filter((line) => line.startsWith('intake loop: corrupt ledger'));
+      expect({
+        polls,
+        corruptLogs: corruptLogs.length,
+        quarantines: (await readdir(engineerDir)).filter((name) => name.startsWith('ledger.json.corrupt-')).length,
+      }).toEqual({ polls: 1, corruptLogs: 2, quarantines: 2 });
+    } finally {
+      await rm(engineerDir, { recursive: true, force: true });
+    }
+  });
+
   it('Production push transport wiring: sends notification for new ideas', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const effects: string[] = [];
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
+        effects.push('poll');
         polled.count++;
         return [makeEnvelope('o/a#1')];
       },
@@ -752,7 +810,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: {} as any,
+      ledger: { list: async () => void effects.push('ledger-read') } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });
@@ -778,6 +836,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     );
 
     expect(code).toBe(0);
+    expect(effects.slice(0, 2)).toEqual(['ledger-read', 'poll']);
     expect(polled.count).toBe(1);
     expect(enqueued).toHaveLength(1);
     expect(sleepCalls).toBe(0);
@@ -793,9 +852,11 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('Production push transport wiring: no notification when poll is empty', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
+    const effects: string[] = [];
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
+        effects.push('poll');
         polled.count++;
         return [];
       },
@@ -804,7 +865,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     const fakeQueue = { enqueue: async (e: any) => void enqueued.push(e) };
     const fakeBuildIntake = () => ({
       reader: {} as any,
-      ledger: {} as any,
+      ledger: { list: async () => void effects.push('ledger-read') } as any,
       queue: fakeQueue as any,
       adapter: fakeAdapter as any,
     });
@@ -830,6 +891,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
     );
 
     expect(code).toBe(0);
+    expect(effects.slice(0, 2)).toEqual(['ledger-read', 'poll']);
     expect(polled.count).toBe(1);
     expect(enqueued).toHaveLength(0);
     expect(sleepCalls).toBe(0);

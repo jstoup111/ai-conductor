@@ -37,6 +37,7 @@ export interface SmokeRunDependencies {
   hasCommand?: (command: string) => boolean;
   environment?: Readonly<Record<string, string | undefined>>;
   emit?: (line: string) => void;
+  selectedFile?: string;
 }
 
 /** Parses one discovered smoke file's declaration and enforces the closed capability set. */
@@ -62,29 +63,42 @@ async function runSmoke({
   hasCommand = defaultHasCommand,
   environment = process.env,
   emit = console.info,
+  selectedFile,
 }: SmokeRunDependencies): Promise<void> {
   const files = (await discover()).map(({ file, source }) => ({
     file,
     capability: parseSmokeCapabilityDeclaration(file, source),
   }));
   assertSmokeDiscovery(files);
+  const selectedFiles = selectedFile === undefined
+    ? files
+    : files.filter(({ file }) => file === selectedFile);
+  if (selectedFiles.length === 0) {
+    throw new Error(`Selected smoke file was not discovered: ${selectedFile}`);
+  }
 
   const ledger: SmokeOutcomeLedgerEntry[] = [];
   const executedCapabilities: SmokeCapability[] = [];
+  let selectedCredentialedLegRequiresExecution = false;
   let failure: Error | undefined;
 
-  for (const { file, capability } of files) {
+  for (const { file, capability } of selectedFiles) {
     const resolution = mode === 'gate'
       ? resolveGateSmokeFile(file, capability, { hasCommand, environment })
       : resolveAdvisorySmokeFile(file, capability, { hasCommand, environment });
     if (resolution.outcome !== 'ran') {
-      ledger.push(mode === 'gate'
+      const gateFailure = mode === 'gate' && resolution.outcome === 'failed';
+      ledger.push(gateFailure
         ? { file, capability, outcome: 'failed', evidencePath: resolution.unmet }
         : { file, capability, outcome: 'skipped', unmet: resolution.unmet });
-      if (mode === 'gate') {
+      if (gateFailure) {
         failure ??= new Error(`Smoke gate unmet for ${file}: ${resolution.unmet}`);
       }
       continue;
+    }
+
+    if (selectedFile !== undefined && capability.startsWith('credentialed:')) {
+      selectedCredentialedLegRequiresExecution = true;
     }
 
     try {
@@ -106,7 +120,12 @@ async function runSmoke({
 
   emitSmokeOutcomeLedger(ledger, emit);
   if (failure !== undefined) throw failure;
-  if (mode === 'gate') assertGateCredentialedExecution(executedCapabilities);
+  // A selected matrix leg with an absent credential remains an attributable
+  // non-gating skip. Once its credential resolves, however, it must execute
+  // assertions just like a complete gate run.
+  if (mode === 'gate' && (selectedFile === undefined || selectedCredentialedLegRequiresExecution)) {
+    assertGateCredentialedExecution(executedCapabilities);
+  }
 }
 
 interface VitestJsonReport {
@@ -226,5 +245,18 @@ export async function runSmokeCli(
     hasCommand: dependencies.hasCommand,
     environment: dependencies.environment,
     emit: dependencies.emit,
+    selectedFile: dependencies.selectedFile,
   });
+}
+
+/** Runs the production smoke CLI with its optional config and matrix-file selection. */
+export async function runSmokeCommand(
+  arguments_: readonly string[],
+  runner: typeof runSmokeCli = runSmokeCli,
+): Promise<void> {
+  const [config, selectedFile, ...unexpectedArguments] = arguments_;
+  if (unexpectedArguments.length > 0) {
+    throw new Error(`Smoke CLI accepts at most a config and one selected file; received ${arguments_.length} arguments`);
+  }
+  await runner(config, { selectedFile });
 }

@@ -29,7 +29,8 @@ import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
-import { writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { KICKBACK_LEDGER_PATH, readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { Conductor } from '../test-conductor.js';
 
 const execFile = promisify(execFileCb);
@@ -292,7 +293,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     const seededState = (seeded.ok ? seeded.value : {}) as ConductState;
     seededState.run_started_at = Date.now();
     await writeState(statePath, seededState);
-    await writeKickbackLedger(repo, {
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(join(repo, KICKBACK_LEDGER_PATH), JSON.stringify({
       version: 1,
       gates: {
         build_review: {
@@ -303,7 +305,8 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
           resolvedBefore: 0,
         },
       },
-    });
+    }));
+    expect((await readKickbackLedger(repo)).gates.build_review?.cumulative).toBe(0);
 
     let genuineFails = 2;
     let sawStaleFail = false;
@@ -555,6 +558,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     await seedToBuildReview(statePath, repo, { markRemainingStepsDone: true });
 
     const calls: StepName[] = [];
+    let proofInspections = 0;
     const runner: StepRunner = {
       run: async (step: StepName): Promise<StepRunResult> => {
         calls.push(step);
@@ -567,10 +571,19 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
           const inputs = await assembleBuildReviewInputs(
             makeGitRunner(repo),
             join(repo, '.docs/plans/feat.md'),
+            {
+              inspectTestSuite: async () => {
+                proofInspections += 1;
+                return {
+                  status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+                } as never;
+              },
+            },
           );
           expect(inputs.baseKind).toBe('local');
           expect(inputs.fresh).toBe(false);
           expect(inputs.remoteHeadSha).toBeNull();
+          expect(inputs.testSuiteProof).toMatchObject({ provenanceHeadSha: 'fixture-head', outcome: 'PASS' });
 
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
@@ -605,6 +618,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     await conductor.run();
 
     expect(calls.filter((s) => s === 'build_review').length).toBeGreaterThanOrEqual(1);
+    expect(proofInspections).toBeGreaterThanOrEqual(1);
     const finalVerdict = JSON.parse(
       await readFile(join(repo, '.pipeline/build-review.json'), 'utf-8'),
     );
@@ -613,16 +627,83 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     expect(haltContent).toBeNull();
   }, 30000);
 
-  it.each([
-    ['an incomplete rubric', /rubric\.completeness/, {
+  it.each(['missing', 'unreadable'] as const)('build_review PASS does not turn a %s ledger reset into a gate failure', async (ledgerState) => {
+    const fixture = await setupStaleTrackingRefFixture(dir);
+    const repo = fixture.repo;
+    await seedToBuildReview(statePath, repo, { markRemainingStepsDone: true });
+    const ledgerPath = join(repo, '.pipeline/kickback-ledger.json');
+    if (ledgerState === 'unreadable') await mkdir(ledgerPath, { recursive: true });
+
+    const calls: StepName[] = [];
+    const runner: StepRunner = { run: async (step) => {
+      calls.push(step);
+      if (step === 'build_review') {
+        await writeFile(join(repo, '.pipeline/build-review.json'), JSON.stringify({
+          verdict: 'PASS', reasons: [], rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+        }));
+      }
+      return { success: true };
+    } };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: withPassingBuildVerification(repo, runner), events,
+      projectRoot: repo, mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1,
+      fromStep: 'build_review',
+    } as never).run();
+
+    expect(calls).toContain('build_review');
+    expect(await readFile(join(repo, HALT_MARKER), 'utf8').catch(() => null)).toBeNull();
+    if (ledgerState === 'missing') {
+      await expect(readFile(ledgerPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  }, 30000);
+
+  it('carries the cumulative-cap reason on the emitted loop_halt and the operator halt marker', async () => {
+    const state: Record<string, unknown> = {};
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build_review') break;
+      state[step.name] = 'done';
+    }
+    state.complexity_tier = 'M';
+    state.feature_desc = 'cumulative-cap-event-ledger';
+    state.run_started_at = Date.now();
+    await writeState(statePath, state as ConductState);
+    await writeKickbackLedger(dir, { version: 1, gates: { build_review: {
+      count: 1, cumulative: 5, treeHash: 'previous-tree', lastReason: 'tautology: stale assertion', priorVerdict: true, resolvedBefore: 0,
+    } } });
+    // Asserted on the emitter and the halt marker, NOT on .pipeline/events.jsonl:
+    // `loop_halt` is declared persist:false, and flipping that declaration is
+    // Task 1 of the loop-halt-never-reaches-events-jsonl feature (ADR
+    // adr-2026-08-11-halt-events-ride-the-persisted-spine). This feature owns
+    // the reason text, not the sink policy.
+    const haltReasons: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt' && typeof event.reason === 'string') haltReasons.push(event.reason);
+    });
+    const runner: StepRunner = { run: async (step) => {
+      if (step === 'build_review') await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({
+        verdict: 'FAIL', reasons: ['tautology: stale assertion'], findings: { tautology: ['stale assertion'] },
+        rubric: { tautology: true, scope: false, rootCause: false, completeness: false, wiring: false },
+      }));
+      return { success: true };
+    } };
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'build_review',
+      config: { build_review: { enabled: true } },
+    }).run();
+
+    const expectedReason =
+      'build_review cumulative kickback cap exceeded (cumulative 6, cap 5): tautology: stale assertion\n[tautology] stale assertion';
+    expect(haltReasons).toContain(expectedReason);
+    expect(await readFile(join(dir, '.pipeline/HALT'), 'utf8')).toContain(expectedReason);
+  }, 30000);
+
+  it('accepts a retired four-rubric result without the wiring member', async () => {
+    const validVerdict = {
       verdict: 'PASS', reasons: [],
-      rubric: { tautology: false, scope: false, rootCause: false, wiring: false },
-    }],
-    ['wiring without actionable findings', /findings\.wiring/, {
-      verdict: 'FAIL', reasons: ['wiring failed'],
-      rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: true },
-    }],
-  ])('fails closed for %s before any retry can dispatch wiring_check', async (_label, expectedHalt, invalidVerdict) => {
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+    };
     const fixture = await setupStaleTrackingRefFixture(dir);
     const repo = fixture.repo;
     await seedToBuildReview(statePath, repo, { markRemainingStepsDone: true });
@@ -631,7 +712,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
       run: async (step) => {
         calls.push(step);
         if (step === 'build_review') {
-          await writeFile(join(repo, '.pipeline/build-review.json'), JSON.stringify(invalidVerdict));
+          await writeFile(join(repo, '.pipeline/build-review.json'), JSON.stringify(validVerdict));
         }
         return { success: true };
       },
@@ -645,6 +726,6 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     expect(calls.filter((step) => step === 'build_review')).toHaveLength(1);
     expect(calls).not.toContain('wiring_check');
-    expect(await readFile(join(repo, HALT_MARKER), 'utf8')).toMatch(expectedHalt);
+    expect(await readFile(join(repo, HALT_MARKER), 'utf8').catch(() => null)).toBeNull();
   }, 30000);
 });

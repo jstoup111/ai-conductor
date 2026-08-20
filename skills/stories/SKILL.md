@@ -160,17 +160,16 @@ Each negative path MUST be:
 Save to `.docs/stories/<feature-name>.md` (one file per feature area).
 
 If stories already exist for this feature area, append new stories to the existing file.
-When a new story supersedes or modifies an assertion in an accepted story, amend that accepted
-artifact during the DECIDE pass; never defer it to a later BUILD phase. Add this note beside
-the original assertion:
-
-```markdown
-> **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
-```
-
-The amendment is additive: the original assertion remains; do not rewrite or delete it, and create
-no separate record. The amended artifact becomes part of the spec-branch baseline before
+When a DECIDE correction supersedes or modifies an assertion in an accepted story, replace the
+superseded story content in place during that DECIDE pass; never defer the correction to a later
+BUILD phase. The story carries no amendment record of any kind. Git history and the spec PR carry
+the correction's provenance. The corrected artifact becomes part of the spec-branch baseline before
 BUILD begins.
+
+When a DECIDE pass amends a story file with pre-existing amendment blocks, resolve every amendment
+block in that file by folding its determined behavior into the current behavioral text during the
+same DECIDE pass. If a block's prose cannot determine current behavior, raise it through the
+correctness-and-assumption gate rather than deleting it.
 
 **Stamp the canonical approval marker.** Every stories file MUST begin with a `**Status:**`
 line. Once the operator approves the stories, the file carries `**Status:** Accepted` — this is

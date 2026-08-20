@@ -16,7 +16,7 @@ set -euo pipefail
 # Usage:
 #   update                          — force an update check now, bypassing the autoCheck gate
 #   update --auto                   — check only if autoCheck config is not false (silent no-op otherwise); used by conduct-ts at startup
-#   update --set-channel <tagged|main> — set the update channel
+#   update --set-channel <tagged|stable|main> — set the update channel
 #   update -h|--help                — usage
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -126,37 +126,64 @@ apply_harness_update() {
 check_harness_update_tagged() {
   timeout 5 git -C "$HARNESS_DIR" fetch --tags --quiet 2>/dev/null || return 0
 
-  local latest_tag
-  latest_tag=$(git -C "$HARNESS_DIR" tag -l 'v*.*.*' --sort=-v:refname 2>/dev/null | head -1)
-  [ -z "$latest_tag" ] && return 0
+  # The checkout is the sole identity authority. The resolver supplies its
+  # reachable release baseline; persisted currentVersion is only refreshed
+  # from an exact checked-out release and is never read for this decision.
+  local _identity_kind _display_identity baseline _distance _source
+  IFS=$'\t' read -r _identity_kind _display_identity baseline _distance _source \
+    < <(resolve_harness_identity "$HARNESS_DIR")
 
-  # The checked-out release is authoritative. VERSION intentionally advances
-  # immediately after a release, so neither it nor a stale config value can
-  # identify the installed tagged release. Between tags, retain the tag that a
-  # prior successful update recorded; with neither identity, do not guess.
-  local checked_out_tag current_version
-  checked_out_tag=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD --match 'v*.*.*' 2>/dev/null || echo "")
-  if [ -n "$checked_out_tag" ]; then
-    current_version="$checked_out_tag"
-    conductor_cfg_set currentVersion "$current_version"
-  else
-    current_version=$(conductor_cfg_get currentVersion "")
-  fi
+  # Bash collapses consecutive tab separators while reading the resolver's
+  # intentionally empty undeterminable baseline and distance fields.
+  [ "$_identity_kind" = "undeterminable" ] && _source="none"
 
-  if ! [[ "$current_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if [ "$_identity_kind" = "undeterminable" ]; then
+    echo "Update identity: unverifiable (source: ${_source})"
     warn "Installed tagged release is unverifiable; cannot check for tagged updates."
     return 0
   fi
 
-  if ! semver_lt "$current_version" "$latest_tag"; then
-    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local latest_tag
+  latest_tag=$(git -C "$HARNESS_DIR" tag -l 'v*.*.*' --sort=-v:refname 2>/dev/null | head -1)
+  [ -z "$latest_tag" ] && return 0
+
+  echo "Update identity: ${_display_identity} (source: ${_source})"
+
+  if ! [[ "$baseline" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    warn "Installed tagged release is unverifiable; cannot check for tagged updates."
+    return 0
+  fi
+
+  # This is a write-only cache for bin/migrate's semver lower bound, never
+  # an input to update identity or offer decisions. Persist the checkout's
+  # bare baseline before any no-update, no-TTY, or declined-offer exit.
+  conductor_cfg_set currentVersion "$baseline" || \
+    warn "Could not record the installed release baseline."
+
+  if [ "$_identity_kind" = "post-release" ]; then
+    local commit_label="commits"
+    [ "$_distance" = "1" ] && commit_label="commit"
+    if [ "$baseline" = "$latest_tag" ]; then
+      warn "${_distance} ${commit_label} past ${baseline}, no newer release exists"
+      conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" || \
+        warn "Could not record when the installed release was checked."
+      return 0
+    fi
+
+    warn "${_distance} ${commit_label} past ${baseline}"
+  fi
+
+  if ! semver_lt "$baseline" "$latest_tag"; then
+    conductor_cfg_set lastCheckedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" || \
+      warn "Could not record when the installed release was checked."
+    ok "Harness is up to date at ${baseline}."
     return 0
   fi
 
   echo ""
-  warn "Harness update available: ${current_version} → ${latest_tag}"
+  warn "Harness update available: ${baseline} → ${latest_tag}"
   echo ""
-  render_changelog_range "$current_version" "$latest_tag"
+  render_changelog_range "$baseline" "$latest_tag"
   echo ""
 
   if [ ! -t 0 ]; then
@@ -179,26 +206,113 @@ check_harness_update_tagged() {
   apply_harness_update "$latest_tag" "$rollback_ref"
 }
 
+# Stable-channel update: fast-forward the stable branch to its next tagged
+# release and retain that semver tag as the installed version identity.
+restore_stable_checkout() {
+  local local_head=$1
+  git -C "$HARNESS_DIR" reset --hard HEAD >/dev/null 2>&1 &&
+    git -C "$HARNESS_DIR" checkout stable >/dev/null 2>&1 &&
+    git -C "$HARNESS_DIR" reset --hard "$local_head" >/dev/null 2>&1
+}
+
+check_harness_update_stable() {
+  timeout 5 git -C "$HARNESS_DIR" fetch --tags --quiet origin stable 2>/dev/null || return 0
+
+  local branch local_head remote_head target_version
+  branch=$(git -C "$HARNESS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  [ "$branch" = "stable" ] || return 0
+
+  local_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  remote_head=$(git -C "$HARNESS_DIR" rev-parse origin/stable 2>/dev/null || echo "")
+  [ -z "$remote_head" ] && return 0
+  target_version=$(git -C "$HARNESS_DIR" describe --tags --exact-match "$remote_head" --match 'v*.*.*' 2>/dev/null || echo "")
+  if ! [[ "$target_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    fail "Stable update refused: origin/stable must point to an exact semver vX.Y.Z tag"
+    return 1
+  fi
+  [ "$local_head" = "$remote_head" ] && return 0
+
+  if ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD origin/stable 2>/dev/null; then
+    return 0
+  fi
+  if [ -n "$(git -C "$HARNESS_DIR" status --porcelain 2>/dev/null)" ]; then
+    fail "Stable update refused: the stable checkout must be clean"
+    return 1
+  fi
+
+  echo ""
+  warn "Harness stable update available"
+  if [ ! -t 0 ]; then
+    warn "No TTY — run: cd ${HARNESS_DIR} && git pull --ff-only origin stable && bin/migrate"
+    return 0
+  fi
+
+  read -r -p "  Pull latest stable release? [y/n]: " choice
+  case "$choice" in
+    [yY]) ;;
+    *) log "Skipping update"; return 0 ;;
+  esac
+
+  local rollback_ref prior_version prior_checked_at
+  rollback_ref=$local_head
+  if ! prior_version=$(conductor_cfg_get currentVersion ""); then
+    warn "Stable update declined: current version identity could not be read"
+    return 1
+  fi
+  prior_checked_at=$(conductor_cfg_get lastCheckedAt "" 2>/dev/null || true)
+  if ! git -C "$HARNESS_DIR" merge --ff-only "$remote_head" >/dev/null 2>&1; then
+    fail "Fast-forward to approved stable commit failed — update manually: cd ${HARNESS_DIR} && git merge --ff-only ${remote_head}"
+    return 1
+  fi
+
+  local new_head new_version
+  new_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  new_version=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD --match 'v*.*.*' 2>/dev/null || echo "")
+  if [ "$new_head" != "$remote_head" ] || [ "$new_version" != "$target_version" ]; then
+    fail "Stable branch head is not an exact semver tag — update aborted"
+    restore_stable_checkout "$local_head" || fail "Stable rollback failed — restore ${local_head} manually"
+    return 1
+  fi
+
+  if apply_harness_update "$new_version" "$rollback_ref"; then
+    return 0
+  fi
+
+  local restored=true
+  restore_stable_checkout "$local_head" || restored=false
+  conductor_cfg_set currentVersion "$prior_version" || restored=false
+  if [ -n "$prior_checked_at" ]; then
+    conductor_cfg_set lastCheckedAt "$prior_checked_at" || restored=false
+  fi
+  if [ "$restored" != true ]; then
+    fail "Stable rollback was incomplete — restore ${local_head} and ${prior_version} manually"
+  fi
+  return 1
+}
+
 # Main-channel update: preserve the old fast-forward pull behavior but run
 # bin/migrate afterward so symlinks and settings refresh.
 check_harness_update_main() {
   timeout 5 git -C "$HARNESS_DIR" fetch --quiet 2>/dev/null || return 0
 
-  local branch local_head remote_head
+  local branch local_head remote_head local_sha behind_count
   branch=$(git -C "$HARNESS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
   [ -z "$branch" ] && return 0
 
   local_head=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "")
   remote_head=$(git -C "$HARNESS_DIR" rev-parse "origin/${branch}" 2>/dev/null || echo "")
-  [ "$local_head" = "$remote_head" ] && return 0
   [ -z "$remote_head" ] && return 0
+
+  local_sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  behind_count=$(git -C "$HARNESS_DIR" rev-list --count "HEAD..origin/${branch}" 2>/dev/null || echo "0")
+  echo "Update identity: main@${local_sha} (branch: ${branch}; behind: ${behind_count})"
+
+  [ "$local_head" = "$remote_head" ] && return 0
 
   if ! git -C "$HARNESS_DIR" merge-base --is-ancestor HEAD "origin/${branch}" 2>/dev/null; then
     return 0
   fi
 
-  local behind_count
-  behind_count=$(git -C "$HARNESS_DIR" rev-list --count "HEAD..origin/${branch}" 2>/dev/null || echo "0")
   [ "$behind_count" = "0" ] && return 0
 
   echo ""
@@ -216,12 +330,7 @@ check_harness_update_main() {
 
   local rollback_ref
   rollback_ref=$(git -C "$HARNESS_DIR" rev-parse HEAD 2>/dev/null || echo "HEAD")
-  # Explicit remote+branch: relies on origin/<branch> already having been
-  # fetched above, not on upstream tracking config being set (a checkout
-  # whose branch has no "branch.<name>.merge" set — e.g. never pushed with
-  # -u — would otherwise make plain `git pull` fail with "no tracking
-  # information" even though the ff-only merge itself is perfectly safe).
-  if ! git -C "$HARNESS_DIR" pull --ff-only origin "$branch" 2>/dev/null; then
+  if ! git -C "$HARNESS_DIR" pull --ff-only 2>/dev/null; then
     fail "Fast-forward pull failed — update manually: cd ${HARNESS_DIR} && git pull"
     return 0
   fi
@@ -236,10 +345,15 @@ check_harness_update_main() {
 dispatch_update_channel() {
   local channel
   if ! channel=$(conductor_cfg_get updateChannel tagged); then
-    warn "Update check declined: conductor configuration could not be read."
-    return 1
+    if ! command -v conduct-ts &>/dev/null; then
+      warn "Update check declined: conductor configuration could not be read."
+      return 1
+    fi
+    warn "Conductor configuration could not be read; checking the default tagged channel."
+    channel=tagged
   fi
   case "$channel" in
+    stable) check_harness_update_stable ;;
     main)   check_harness_update_main ;;
     tagged|*) check_harness_update_tagged ;;
   esac
@@ -271,8 +385,8 @@ check_harness_update_auto() {
 set_update_channel() {
   local new_channel=$1
   case "$new_channel" in
-    tagged|main) ;;
-    *) fail "Invalid channel: ${new_channel} (expected: tagged, main)"; exit 2 ;;
+    tagged|stable|main) ;;
+    *) fail "Invalid channel: ${new_channel} (expected: tagged, stable, main)"; exit 2 ;;
   esac
   conductor_cfg_set updateChannel "$new_channel" || exit 1
   ok "Update channel set to: ${new_channel}"
@@ -285,7 +399,7 @@ Usage: update [OPTIONS]
 
   (no args)           Force an update check now, bypassing the autoCheck gate.
   --auto              Run an update check only if autoCheck is not "false".
-  --set-channel <c>   Set the update channel (tagged, main).
+  --set-channel <c>   Set the update channel (tagged, stable, main).
   -h, --help          Show this help message.
 EOF
 }
@@ -306,7 +420,7 @@ case "${1:-}" in
     ;;
   --set-channel)
     if [ -z "${2:-}" ]; then
-      fail "Missing channel argument for --set-channel (expected: tagged, main)"
+      fail "Missing channel argument for --set-channel (expected: tagged, stable, main)"
       exit 2
     fi
     set_update_channel "$2"

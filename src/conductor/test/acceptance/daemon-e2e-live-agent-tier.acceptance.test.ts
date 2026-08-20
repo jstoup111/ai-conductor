@@ -1,31 +1,27 @@
-/**
- * RED acceptance specs for
- * `.docs/stories/daemon-e2e-smoke-step-has-no-real-agent-live-llm-t.md`.
- *
- * These specs verify the repository-level contract joining the opt-in smoke
- * test, its shared diagnostics, and its workflow. They do not launch a real
- * provider: that third-party boundary belongs exclusively to the smoke file.
- *
- * PRE-IMPLEMENTATION RED: the live smoke file and workflow do not exist, and
- * the deterministic fixture's diagnostics helper is private and omits the two
- * task-evidence artifacts.
- */
+/** Acceptance coverage for the live-agent daemon E2E tier. */
 
-import { readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
+import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
+import { LIVE_E2E_PROVIDERS } from '../fixtures/live-e2e-providers.js';
+import {
+  enforceLiveE2ETokenCap,
+  reportLiveE2ESpend,
+  TokenMeter,
+  withLiveE2EFailureDiagnostics,
+} from '../fixtures/live-e2e-run-body.js';
+
+vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+  dumpPipelineDiagnostics: vi.fn(),
+}));
 
 const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
-const LIVE_SMOKE_PATH = join(
-  CONDUCTOR_ROOT,
-  'test/engine/daemon-e2e-live.smoke.test.ts',
-);
-const FIXTURE_PATH = join(
-  CONDUCTOR_ROOT,
-  'test/engine/daemon-e2e-fixture.test.ts',
-);
 const WORKFLOW_PATH = join(REPO_ROOT, '.github/workflows/live-daemon-e2e.yml');
 
 async function requiredSource(path: string): Promise<string> {
@@ -36,77 +32,102 @@ async function requiredSource(path: string): Promise<string> {
 }
 
 describe('live-agent daemon E2E tier (#1124)', () => {
-  it('wires the real Claude provider through the daemon fixture and asserts outcomes, not agent choices', async () => {
-    const source = await requiredSource(LIVE_SMOKE_PATH);
+  it('wires the real Claude provider through the descriptor and restores its isolated auth', async () => {
+    const claude = LIVE_E2E_PROVIDERS.find(({ id }) => id === 'claude');
+    expect(claude).toBeDefined();
+    const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
-    expect(source).toMatch(/new\s+ClaudeProvider\s*\(/);
-    expect(source).toMatch(/new\s+DefaultStepRunner\s*\(/);
-    expect(source).toMatch(/runDaemon\s*\(/);
-    expect(source).toMatch(/class\s+ProvisionedHome\s+implements\s+LLMProvider/);
-    expect(source).toMatch(/dispatches\s*=\s*0/);
-    expect(source).toMatch(/dispatchAfterLivePreflight\s*\(\s*providerHome\s*,\s*async/);
-    expect(source).toMatch(/\.pipeline[/'"`]+DONE|join\([^)]*pipeline[^)]*['"]DONE['"]/);
-    expect(source).toMatch(/\.pipeline[/'"`]+HALT|join\([^)]*pipeline[^)]*['"]HALT['"]/);
-    expect(source).toMatch(/\.daemon[/'"`]+parked|join\([^)]*\.daemon[^)]*['"]parked['"]/);
-    expect(source).toContain('test/fixtures/daemon-e2e/touched.txt');
-    expect(source).toMatch(/Task:/);
+    try {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = 'live-claude-token';
+      const provider = claude!.createProvider();
+      const authenticationSource = await claude!.resolveAuthenticationSource(provider);
+      const selfHostAuth = await provider.prepareSelfHostAuth?.({
+        provider: 'claude', homeDir: '/tmp/live-e2e-claude-home',
+      });
 
-    expect(source).not.toMatch(/providerCalls\s*[:),]/);
-    expect(source).not.toContain('test: complete fixture task');
-    expect(source).not.toMatch(/retry(?:Count|Attempts?)\s*[:=]/i);
+      expect({ authenticationSource, selfHostAuth }).toEqual({
+        authenticationSource: 'oauth-token',
+        selfHostAuth: { env: { CLAUDE_CODE_OAUTH_TOKEN: 'live-claude-token' }, args: [] },
+      });
+    } finally {
+      if (priorToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+    }
   });
 
   it('combines an accumulated token cap with an independent workflow wall-clock timeout', async () => {
-    const [smoke, workflow] = await Promise.all([
-      requiredSource(LIVE_SMOKE_PATH),
-      requiredSource(WORKFLOW_PATH),
-    ]);
+    const provider: LLMProvider = {
+      invoke: vi.fn()
+        .mockResolvedValueOnce({ success: true, output: 'first', exitCode: 0, tokenUsage: { input: 11, output: 7, numTurns: 1 } })
+        .mockResolvedValueOnce({ success: true, output: 'second', exitCode: 0, tokenUsage: { input: 13, output: 11, numTurns: 2 } }),
+      invokeInteractive: vi.fn(),
+    };
+    const meter = new TokenMeter(provider);
+    const report = vi.fn();
 
-    expect(smoke).toMatch(/tokenUsage/);
-    expect(smoke).toMatch(/process\.env\.[A-Z0-9_]*TOKEN[A-Z0-9_]*CAP/);
-    expect(smoke).toMatch(/console\.(?:log|info)\([^)]*(?:token|cost)/i);
-    expect(smoke).toMatch(/(?:cap|limit)[^\n]*(?:observed|total)|(?:observed|total)[^\n]*(?:cap|limit)/i);
-    expect(workflow).toMatch(/timeout-minutes:\s*[1-9][0-9]*/);
+    await meter.invoke({ prompt: 'first', sessionId: 'one', resume: false } satisfies InvokeOptions);
+    await meter.invoke({ prompt: 'second', sessionId: 'two', resume: false } satisfies InvokeOptions);
+    reportLiveE2ESpend({ totalTokens: meter.totalTokens, dispatches: 2 }, 41, report);
+    await expect(enforceLiveE2ETokenCap(async () => 'completed', () => meter, 41))
+      .rejects.toThrow('Token cap 41 exceeded: observed 42; unmetered results: 0');
+
+    expect({ totalTokens: meter.totalTokens, totalTurns: meter.totalTurns, report: report.mock.calls }).toEqual({
+      totalTokens: 42,
+      totalTurns: 3,
+      report: [['daemon E2E live smoke observed total: 42; dispatch count: 2; cap: 41']],
+    });
+    expect(await requiredSource(WORKFLOW_PATH)).toMatch(/timeout-minutes:\s*[1-9][0-9]*/);
   });
 
   it('shares one diagnostics implementation that reports terminal and task-evidence state', async () => {
-    const [fixture, smoke] = await Promise.all([
-      requiredSource(FIXTURE_PATH),
-      requiredSource(LIVE_SMOKE_PATH),
-    ]);
+    const worktreeDir = await mkdtemp(`${tmpdir()}/live-e2e-acceptance-diagnostics-`);
+    const stderr: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderr.push(args.map(String).join(' '));
+    });
 
-    expect(fixture).toMatch(/export\s+async\s+function\s+dumpPipelineDiagnostics/);
-    expect(fixture).toContain('task-status.json');
-    expect(fixture).toContain('task-evidence.json');
-    expect(smoke).toMatch(/import\s*\{[^}]*dumpPipelineDiagnostics[^}]*\}\s*from/);
-    expect(smoke).not.toMatch(/function\s+dumpPipelineDiagnostics/);
+    try {
+      await mkdir(join(worktreeDir, '.daemon'), { recursive: true });
+      vi.mocked(dumpPipelineDiagnostics).mockImplementation(async () => {
+        console.error('terminal state: HALT');
+        console.error('task-evidence.json: present');
+        return '';
+      });
+      await expect(withLiveE2EFailureDiagnostics(
+        worktreeDir,
+        [],
+        async () => { throw new Error('shared diagnostics failure'); },
+      )).rejects.toThrow('shared diagnostics failure');
+
+      expect({ calls: vi.mocked(dumpPipelineDiagnostics).mock.calls, diagnostics: stderr.join('\n') }).toEqual({
+        calls: [[worktreeDir]],
+        diagnostics: expect.stringContaining('terminal state: HALT'),
+      });
+      expect(stderr.join('\n')).toContain('task-evidence.json: present');
+    } finally {
+      errorSpy.mockRestore();
+      vi.mocked(dumpPipelineDiagnostics).mockReset();
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
   });
 
-  it('keeps the live workflow advisory to merges and fail-closed for reusable gating callers', async () => {
-    const [workflow, ci, smoke] = await Promise.all([
+  it('keeps the live workflow advisory to merges and makes each credential-present leg gate-enforced', async () => {
+    const [workflow, ci] = await Promise.all([
       requiredSource(WORKFLOW_PATH),
       requiredSource(join(REPO_ROOT, '.github/workflows/ci.yml')),
-      requiredSource(LIVE_SMOKE_PATH),
     ]);
 
     expect(workflow).toMatch(/workflow_dispatch\s*:/);
     expect(workflow).toMatch(/workflow_call\s*:/);
-    expect(workflow).toMatch(/require_credentials:[\s\S]*?type:\s*boolean[\s\S]*?default:\s*false/);
     expect(workflow).not.toMatch(/^\s*(?:pull_request|schedule)\s*:/m);
     expect(workflow).toMatch(/fail-fast:\s*false/);
-    expect(workflow).toMatch(/provider:\s*\[\s*claude\s*\]/);
-    expect(workflow).toMatch(/inputs\.require_credentials/);
+    expect(workflow).toMatch(/include:[\s\S]*provider:\s*claude[\s\S]*provider:\s*codex/);
     expect(workflow).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
-    expect(workflow).toMatch(/npm\s+run\s+smoke/);
-    expect(workflow).toMatch(/SMOKE_MODE:\s*\$\{\{\s*inputs\.require_credentials\s*&&\s*'gate'\s*\|\|\s*'advisory'\s*\}\}/);
-
-    const ciGate = ci.slice(ci.indexOf('ci-gate:'));
-    expect(ciGate).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
-
-    expect(smoke).toMatch(/describe\.skipIf\s*\(/);
-    expect(smoke).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
-    expect(smoke).toMatch(/delete\s+process\.env\.AI_CONDUCTOR_NO_REAL_EXEC/);
-    expect(smoke).toMatch(/expect\(process\.env\.AI_CONDUCTOR_NO_REAL_EXEC\)\.toBeUndefined\(\)/);
+    expect(workflow).toMatch(/export\s+"\$\{\{\s*matrix\.credential_env\s*\}\}=\$LIVE_PROVIDER_CREDENTIAL"/);
+    expect(workflow).toMatch(/SMOKE_MODE=gate\s+npm\s+run\s+smoke\s+--\s+"\$\{\{\s*matrix\.smoke_file\s*\}\}"/);
+    expect(workflow).toMatch(/unset\s+LIVE_PROVIDER_CREDENTIAL/);
+    expect(workflow).not.toMatch(/exit\s+0/);
+    expect(ci.slice(ci.indexOf('ci-gate:'))).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
   });
 
   it('routes the live workflow through the full smoke entry point without running third-party smoke cases in acceptance', async () => {
@@ -116,7 +137,8 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       requiredSource(join(CONDUCTOR_ROOT, 'vitest.smoke.config.ts')),
     ]);
 
-    expect(workflow).toMatch(/run:\s*npm\s+run\s+smoke/);
+    expect(workflow).toMatch(/SMOKE_MODE=gate\s+npm\s+run\s+smoke\s+--\s+"\$\{\{\s*matrix\.smoke_file\s*\}\}"/);
+    expect(workflow).not.toMatch(/(?:npx\s+)?vitest\s+run/);
     expect(JSON.parse(packageJson).scripts.smoke)
       .toBe('node --import tsx scripts/smoke.ts vitest.smoke.config.ts');
     expect(smokeConfig).toMatch(/environment:\s*['"]node['"]/);

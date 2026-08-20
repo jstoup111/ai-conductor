@@ -135,7 +135,7 @@ describe('conductor build-outcome baseline capture', () => {
         if (step === 'build_review') {
           await writeFile(join(dir, '.pipeline', 'build-review.json'), JSON.stringify({
             verdict: 'PASS', reasons: [],
-            rubric: { tautology: false, scope: false, rootCause: false, completeness: false, wiring: false },
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
           }));
           return { success: true, output: 'complete build review pass' };
         }

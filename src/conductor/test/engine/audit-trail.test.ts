@@ -419,21 +419,52 @@ describe('engine/audit-trail', () => {
     expect(record.reason).not.toBe('');
   });
 
-  it('subscribe() maps loop_halt to an intervention record with cause', async () => {
+  it('subscribe() uses the halt event step as the intervention origin, defaulting legacy events to build', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();
     writer.subscribe(emitter);
 
-    await emitter.emit({ type: 'loop_halt', reason: 'stuck cap exceeded' });
+    await emitter.emit({ type: 'loop_halt', step: 'manual_test', reason: 'stuck cap exceeded' });
+    await emitter.emit({ type: 'loop_halt', reason: 'legacy stuck cap exceeded' });
 
     const eventsPath = join(dir, '.pipeline', 'audit-trail', 'events.jsonl');
     const contents = await readFile(eventsPath, 'utf8');
     const lines = contents.split('\n').filter((line) => line.length > 0);
 
-    expect(lines).toHaveLength(1);
-    const record = JSON.parse(lines[0]) as AuditRecord;
-    expect(record.event).toBe('intervention');
-    expect(record.cause).toBe('stuck cap exceeded');
+    expect(lines).toHaveLength(2);
+    const steppedRecord = JSON.parse(lines[0]) as AuditRecord;
+    const legacyRecord = JSON.parse(lines[1]) as AuditRecord;
+    expect(steppedRecord).toMatchObject({
+      origin: 'manual_test',
+      event: 'intervention',
+      cause: 'stuck cap exceeded',
+    });
+    expect(legacyRecord).toMatchObject({
+      origin: 'build',
+      event: 'intervention',
+      cause: 'legacy stuck cap exceeded',
+    });
+  });
+
+  it('subscribe() audits a failed halt-marker write with its path and reason', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+
+    await emitter.emit({
+      type: 'halt_marker_write_failed',
+      path: '/tmp/project/.pipeline/HALT',
+      reason: 'disk full',
+    });
+
+    const contents = await readFile(join(dir, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8');
+    const [line] = contents.split('\n').filter((value) => value.length > 0);
+    expect(JSON.parse(line) as AuditRecord).toMatchObject({
+      origin: 'build',
+      event: 'halt_marker_write_failed',
+      path: '/tmp/project/.pipeline/HALT',
+      reason: 'disk full',
+    });
   });
 
   it('subscribe() keeps both records in order when a kickback is immediately followed by loop_halt (cap exceeded)', async () => {

@@ -770,10 +770,19 @@ it('binds every production step-resolution call to the policy owned by its execu
   );
   const resolverModule = resolverSource &&
     checker.getSymbolAtLocation(resolverSource);
-  const resolverSymbol = resolverModule &&
-    checker.getExportsOfModule(resolverModule).find(
-      (symbol) => symbol.name === 'resolveStepConfig',
-    );
+  if (!resolverModule) throw new Error('resolved-config module not found');
+  const resolverSymbols = new Set(
+    checker.getExportsOfModule(resolverModule).filter(
+      (symbol) =>
+        symbol.name === 'resolveStepConfig' ||
+        symbol.name === 'resolveProviderNativeStepConfig' ||
+        symbol.name === 'resolveProviderNeutralStepConfig',
+    ),
+  );
+  const directResolverSymbols = new Set(
+    [...resolverSymbols].filter((symbol) => symbol.name !== 'resolveStepConfig'),
+  );
+  const resolverNames = new Set([...resolverSymbols].map((symbol) => symbol.name));
   const canonicalSymbol = (node: ts.Node): ts.Symbol | undefined => {
     let symbol = checker.getSymbolAtLocation(node);
     while (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
@@ -782,11 +791,11 @@ it('binds every production step-resolution call to the policy owned by its execu
     return symbol;
   };
   const isResolverDeclarationName = (node: ts.Identifier): boolean =>
-    resolverSymbol?.declarations?.some(
+    [...resolverSymbols].some((resolverSymbol) => resolverSymbol.declarations?.some(
       (declaration) =>
         'name' in declaration &&
         declaration.name === node,
-    ) ?? false;
+    )) ?? false;
   const isImportOrExportBinding = (node: ts.Identifier): boolean => {
     let current: ts.Node | undefined = node;
     while (
@@ -856,7 +865,7 @@ it('binds every production step-resolution call to the policy owned by its execu
       ts.isStringLiteral(node.argumentExpression) ||
       ts.isNoSubstitutionTemplateLiteral(node.argumentExpression)
     ) &&
-    node.argumentExpression.text === 'resolveStepConfig';
+    resolverNames.has(node.argumentExpression.text);
   const enclosingFunction = (
     node: ts.Node,
   ): ts.FunctionDeclaration | ts.MethodDeclaration | undefined => {
@@ -895,6 +904,31 @@ it('binds every production step-resolution call to the policy owned by its execu
     let current: ts.Node | undefined = declaration;
     while (current && !ts.isParameter(current)) current = current.parent;
     return current && ts.isParameter(current) ? current : undefined;
+  };
+  const isProviderModelPolicyResolution = (node: ts.Expression): boolean => {
+    if (!ts.isCallExpression(node)) return false;
+    const callee = unwrapExpression(node.expression);
+    return ts.isIdentifier(callee) && callee.text === 'resolveProviderModelPolicy';
+  };
+  const isBuildReviewPolicyParameter = (node: ts.Expression): boolean => {
+    if (!ts.isIdentifier(node) || node.text !== 'policy') return false;
+    return canonicalSymbol(node)?.declarations?.some((declaration) => {
+      const parameter = parameterContaining(declaration);
+      return parameter?.parent.name?.getText() === 'resolveBuildReviewConfig';
+    }) ?? false;
+  };
+  const isInheritedBuildReviewPolicy = (node: ts.Expression): boolean => {
+    if (!ts.isIdentifier(node) || node.text !== 'inheritedPolicy') return false;
+    return canonicalSymbol(node)?.declarations?.some(
+      (declaration): declaration is ts.VariableDeclaration =>
+        ts.isVariableDeclaration(declaration) &&
+        ts.isIdentifier(declaration.name) &&
+        declaration.name.text === 'inheritedPolicy' &&
+        declaration.initializer !== undefined &&
+        ts.isConditionalExpression(declaration.initializer) &&
+        isBuildReviewPolicyParameter(declaration.initializer.whenTrue) &&
+        isProviderModelPolicyResolution(declaration.initializer.whenFalse),
+    ) ?? false;
   };
   const policyProvenance = (
     argument: ts.Expression | undefined,
@@ -968,8 +1002,21 @@ it('binds every production step-resolution call to the policy owned by its execu
             callee.name.text === 'modelPolicyForStep';
         },
       );
-      return stepPolicyBinding && type === 'ProviderModelPolicy'
-        ? `step-resolver:Conductor.modelPolicyForStep:${type}`
+      if (stepPolicyBinding && type === 'ProviderModelPolicy') {
+        return `step-resolver:Conductor.modelPolicyForStep:${type}`;
+      }
+      const rubricPolicyBinding = symbol?.declarations?.find(
+        (candidate): candidate is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(candidate) &&
+          ts.isIdentifier(candidate.name) &&
+          candidate.name.text === 'rubricPolicy' &&
+          candidate.initializer !== undefined &&
+          ts.isConditionalExpression(candidate.initializer) &&
+          isInheritedBuildReviewPolicy(candidate.initializer.whenTrue) &&
+          isProviderModelPolicyResolution(candidate.initializer.whenFalse),
+      );
+      return rubricPolicyBinding && type === 'ProviderModelPolicy'
+        ? `rubric-provider-selection:resolveProviderModelPolicy:${type}`
         : `unproven:${expression.getText()}:${type}`;
     }
     if (
@@ -1012,7 +1059,7 @@ it('binds every production step-resolution call to the policy owned by its execu
   ): void => {
     if (
       requiresCanonicalSymbol &&
-      canonicalSymbol(expression) !== resolverSymbol
+      !resolverSymbols.has(canonicalSymbol(expression) as ts.Symbol)
     ) {
       unexpectedReferences.push(
         `${file}:computed-unresolved:${
@@ -1038,6 +1085,12 @@ it('binds every production step-resolution call to the policy owned by its execu
       policyProvenance: policyProvenance(call.arguments[2], call),
     });
   };
+  const tracksResolverReference = (node: ts.Identifier): boolean => {
+    const symbol = canonicalSymbol(node);
+    if (!symbol || !resolverSymbols.has(symbol)) return false;
+    if (!directResolverSymbols.has(symbol)) return true;
+    return enclosingFunction(node)?.name?.getText() === 'resolveBuildReviewConfig';
+  };
   for (const sourceUrl of sourceUrls.sort(
     (left, right) => left.pathname.localeCompare(right.pathname),
   )) {
@@ -1050,7 +1103,7 @@ it('binds every production step-resolution call to the policy owned by its execu
         recordResolverReference(node, sourceFile, file, true);
       } else if (
         ts.isIdentifier(node) &&
-        canonicalSymbol(node) === resolverSymbol &&
+        tracksResolverReference(node) &&
         !isResolverDeclarationName(node) &&
         !isImportOrExportBinding(node)
       ) {
@@ -1076,7 +1129,23 @@ it('binds every production step-resolution call to the policy owned by its execu
         config,
         options,
       );
+      resolverNamespace['resolveProviderNativeStepConfig'](
+        step,
+        phase,
+        modelPolicy,
+        config,
+        options,
+      );
+      resolverNamespace['resolveProviderNeutralStepConfig'](
+        step,
+        phase,
+        modelPolicy,
+        config,
+        options,
+      );
       const escapedResolver = resolverNamespace[\`resolveStepConfig\`];
+      const escapedNativeResolver = resolverNamespace[\`resolveProviderNativeStepConfig\`];
+      const escapedNeutralResolver = resolverNamespace[\`resolveProviderNeutralStepConfig\`];
     `,
     ts.ScriptTarget.Latest,
     true,
@@ -1132,6 +1201,20 @@ it('binds every production step-resolution call to the policy owned by its execu
           'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
+        file: 'engine/resolved-config.ts',
+        scope: 'resolveBuildReviewConfig',
+        argumentCount: 5,
+        policyProvenance:
+          'rubric-provider-selection:resolveProviderModelPolicy:ProviderModelPolicy',
+      },
+      {
+        file: 'engine/resolved-config.ts',
+        scope: 'resolveBuildReviewConfig',
+        argumentCount: 5,
+        policyProvenance:
+          'rubric-provider-selection:resolveProviderModelPolicy:ProviderModelPolicy',
+      },
+      {
         file: 'engine/step-runners.ts',
         scope: 'resolvedConfigFor',
         argumentCount: 5,
@@ -1141,6 +1224,10 @@ it('binds every production step-resolution call to the policy owned by its execu
     ],
     computedMutationReferences: [
       'computed-call',
+      'computed-call',
+      'computed-call',
+      'computed-non-call',
+      'computed-non-call',
       'computed-non-call',
     ],
     unexpectedReferences: [],

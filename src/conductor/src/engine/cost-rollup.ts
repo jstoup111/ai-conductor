@@ -86,6 +86,7 @@ export function toFeatureUsageTotals(rollup: CostRollup): FeatureUsageTotals {
     costUsd: rollup.costUsd,
     inputTokens: rollup.tokens.input,
     outputTokens: rollup.tokens.output,
+    cachedInputTokens: rollup.tokens.cacheRead + rollup.tokens.cacheCreation,
   };
 }
 

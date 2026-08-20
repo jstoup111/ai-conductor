@@ -31,10 +31,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { runContainmentFloor } from '../../src/engine/per-task-commit-floor.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFileAsync = promisify(execFile);
 const FLOOR_ARTIFACT_RELATIVE = '.pipeline/per-task-floor.json';
@@ -67,30 +70,28 @@ function planBody(tasks: PlanTaskSpec[]): string {
 
 /** Canned provider that always reports the grader as PASS — the floor's
  * wiring must never change this outcome (non-blocking disposition). */
-function passingProvider(
-  rubric: Record<string, boolean> = {
-    tautology: false,
-    scope: false,
-    rootCause: false,
-    completeness: false,
-    wiring: false,
-  },
-): { provider: LLMProvider; invokeCalls: InvokeOptions[] } {
+function passingProvider(): { provider: LLMProvider; invokeCalls: InvokeOptions[] } {
   const invokeCalls: InvokeOptions[] = [];
   const provider: LLMProvider = {
     invoke: async (opts: InvokeOptions): Promise<InvokeResult> => {
       invokeCalls.push(opts);
-      const projectRoot = opts.cwd as string;
-      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(projectRoot, '.pipeline', 'build-review.json'),
-        JSON.stringify({
-          verdict: 'PASS',
-          rubric,
+      const projection = JSON.parse(opts.prompt.split('\n\n').at(-1)!) as {
+        rubric: string;
+        lapId: string;
+        snapshotDigest: string;
+      };
+      return {
+        success: true,
+        output: JSON.stringify({
+          kind: 'judged',
+          rubric: projection.rubric,
+          lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v3',
+          findings: [],
         }),
-        'utf-8',
-      );
-      return { success: true, output: 'PASS', exitCode: 0 };
+        exitCode: 0,
+      };
     },
     invokeInteractive: async (): Promise<void> => {},
   };
@@ -129,6 +130,8 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
     await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
     await git('checkout', '-b', 'feature/per-task-floor');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'hook-events.jsonl'), '', 'utf-8');
   }
 
   /** Commit a trivial file change carrying the given Task: trailer (or no
@@ -153,6 +156,7 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     featureDesc: string,
     config?: HarnessConfig,
     providerFixture = passingProvider(),
+    useBuildReviewCoordinator = false,
   ) {
     const { provider, invokeCalls } = providerFixture;
     const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -160,6 +164,29 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
       gitRunner: realGit(),
       modelOverride: 'fable',
       config: (config ?? { model_fallback_ladder: ['fable'] }) as HarnessConfig,
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
+      // This acceptance suite owns the deterministic task-floor seam. The
+      // linked-worktree-only accepted-risk join is covered by its own engine
+      // and acceptance suites, so keep that unrelated gate satisfied here.
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: '/repo', feature: 'fixture' },
+        effective: {
+          rawVerdict: 'PASS' as const,
+          verdict: 'PASS' as const,
+          acceptedFindingIds: [],
+          unresolvedFindingIds: [],
+          skippedRubrics: [],
+          infrastructureFailureRubrics: [],
+        },
+      }),
+      ...(useBuildReviewCoordinator
+        ? { buildReviewCoordinator: async () => ({ success: true, output: 'PASS' }) }
+        : {}),
     });
     return { runner, invokeCalls };
   }
@@ -234,6 +261,46 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     expect(report).not.toBeNull();
     expect(report?.satisfied).toBe(true);
     expect(report?.gaps).toEqual([]);
+  });
+
+  it('reconciles a hook ledger record with an ISO-timestamped engine event', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'per-task-floor-ledger-'));
+    await initRepo();
+    const slug = 'per-task-floor-ledger';
+    await writePlan(slug, [{ id: '1', title: 'First' }]);
+
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    await events.emit({
+      type: 'containment_check_unresolved',
+      failure: 'evaluation-failed',
+      taskId: 'engine',
+      ts: 2_000,
+    });
+    persister.stop();
+    await writeFile(
+      join(dir, '.pipeline', 'hook-events.jsonl'),
+      JSON.stringify({
+        type: 'containment_check_unresolved',
+        failure: 'task-status-malformed',
+        taskId: 'hook',
+        ts: 1_000,
+      }) + '\n',
+      'utf8',
+    );
+
+    const report = await runContainmentFloor({
+      projectRoot: dir,
+      planPath: join(dir, '.docs', 'plans', `${slug}.md`),
+      scopeContainmentEnforced: true,
+    });
+
+    expect(report.unresolvedChecks).toEqual([
+      expect.objectContaining({ taskId: 'hook', ts: 1_000 }),
+      expect.objectContaining({ taskId: 'engine', ts: expect.any(Number) }),
+    ]);
+    expect(report.unresolvedChecks[1]!.ts).toBeGreaterThan(report.unresolvedChecks[0]!.ts);
   });
 
   // ── Story 3 — verify-only / skipped task does NOT trip the floor ────────
@@ -312,29 +379,6 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     ).resolves.toMatchObject({ success: true });
   });
 
-  it('refuses completion when the real build_review runner receives a legacy incomplete rubric', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'per-task-floor-incomplete-rubric-'));
-    await initRepo();
-    const slug = 'per-task-floor-incomplete-rubric';
-    await writePlan(slug, [{ id: '1', title: 'First' }]);
-    await commitWithTrailer('t1.txt', '1');
-    const legacyProvider = passingProvider({
-      tautology: false,
-      scope: false,
-      rootCause: false,
-      completeness: false,
-    });
-    const { runner, invokeCalls } = makeRunner(slug, undefined, legacyProvider);
-
-    await expect(
-      runner.run('build_review', { feature_desc: slug } as ConductState),
-    ).resolves.toMatchObject({
-      success: false,
-      output: expect.stringMatching(/rubric\.wiring/i),
-    });
-    expect(invokeCalls).toHaveLength(1);
-  });
-
   // ── Story 6 — kill-switch disables emission entirely ────────────────────
   it('emits nothing and writes no artifact when build_review.perTaskFloor is false, even with a real gap', async () => {
     dir = await mkdtemp(join(tmpdir(), 'per-task-floor-s6-'));
@@ -349,7 +393,7 @@ describe('acceptance: per-task "work happened at all" floor wired into build_rev
     const { runner } = makeRunner(slug, {
       model_fallback_ladder: ['fable'],
       build_review: { perTaskFloor: false },
-    } as HarnessConfig);
+    } as HarnessConfig, passingProvider(), true);
     const result = await runner.run('build_review', { feature_desc: slug } as ConductState);
 
     expect(result.success).toBe(true);

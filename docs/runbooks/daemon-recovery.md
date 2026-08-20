@@ -27,6 +27,7 @@ anything.
 | `daemon status` shows `⏳ restart-pending` | [A restart is queued](#a-restart-is-queued) |
 | `daemon status` shows `⏸ paused (process dead)` | [A paused daemon that looks dead](#a-paused-daemon-that-looks-dead) |
 | The same feature fails identically on every start | [Spin loops](#spin-loops) |
+| `corrupt ledger ledger=… quarantine=…` or a ledger lease timeout | [Corrupt intake ledger or stuck ledger lease](#corrupt-intake-ledger-or-stuck-ledger-lease) |
 | `[daemon] engine stale after rebuild — …` | [Stale engine](#stale-engine) |
 | Several repos are wrong at once | [Fleet-wide recovery](#fleet-wide-recovery) |
 
@@ -195,6 +196,14 @@ conduct-ts daemon resume
 
 **What it changes:** removes `.daemon/PAUSED`. Prints `daemon resumed`, or `not paused` if there
 was no marker. **Confirm:** `conduct-ts daemon status` no longer shows `⏸`.
+
+### Corrupt intake ledger or stuck ledger lease
+
+A corrupt engineer intake ledger deliberately stops intake: the failing command reports `corrupt
+ledger ledger=… quarantine=…`, and the intake loop refuses to proceed. A stuck `ledger.json.lease`
+blocks every ledger operation, including read-only `list` and `get`. Do not delete either the
+ledger or the lease directory before diagnosing — recovery is in
+[corrupt intake ledger or stuck ledger lease](corrupt-intake-ledger.md).
 
 ### Spin loops
 

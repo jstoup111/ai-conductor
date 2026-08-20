@@ -1,4 +1,6 @@
-import { writeFile, access, readFile, mkdir } from 'node:fs/promises';
+import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
@@ -28,11 +30,15 @@ import {
   findArtifactFiles,
   resolveFeaturePlanPath,
   BUILD_REVIEW_VERDICT,
-  validateBuildReviewVerdict,
 } from './artifacts.js';
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
-import { assembleBuildReviewInputs } from './build-review-inputs.js';
+import {
+  assembleBuildReviewInputs,
+  type BuildReviewFrozenInputs,
+  type BuildReviewInputOptions,
+  type BuildReviewRepairProvenance,
+} from './build-review-inputs.js';
 import {
   runContainmentFloor,
   runPerTaskCommitFloor,
@@ -41,7 +47,23 @@ import {
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
-import { buildGraderPrompt } from './build-review-prompt.js';
+import { coordinateBuildReviewRubrics, validateBuildReviewDispatchedResult, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
+import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
+import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
+import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
+import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
+import {
+  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+  describeBuildReviewJudgedResultRejection,
+  makeBuildReviewDispatchFailure,
+  parseBuildReviewLapId,
+  renderBuildReviewJudgedResultShape,
+  type BuildReviewRubricResult,
+} from './build-review-domain.js';
+import type { BuildReviewRubricProjection } from './build-review-projections.js';
+import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-tautology-preflight.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -52,6 +74,7 @@ import type {
 } from './provider-session.js';
 import {
   executeProviderCandidates,
+  executeAuxiliaryProviderCandidates,
   type ExecuteProviderCandidatesInput,
   type ProviderExecutionResult,
   type ProviderExecutionContext,
@@ -65,6 +88,7 @@ import { normalizeProviderSelection } from './provider-selection.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
 import {
   renderSkillInvocation,
+  renderAuxiliarySkillInvocation,
   STEP_SKILL_INVOCATIONS,
 } from './skill-invocation.js';
 import {
@@ -137,6 +161,26 @@ function isProviderLifecycleHalted(
   result: ProviderExecutionResult | ProviderLifecycleHaltedResult,
 ): result is ProviderLifecycleHaltedResult {
   return 'kind' in result && result.kind === 'halted';
+}
+
+/** Preserve an exhausted lifecycle's durable-marker outcome for provider callers. */
+function mapProviderLifecycleHalt(
+  result: ProviderLifecycleHaltedResult,
+  preferredProvider: string,
+): ProviderExecutionResult {
+  const markerMessage = result.haltMarkerWrite.status === 'written'
+    ? ' See .pipeline/HALT.'
+    : result.haltMarkerWrite.status === 'partial'
+      ? ` HALT was written, but HALT.class write failed at ${result.haltMarkerWrite.path}: ${result.haltMarkerWrite.reason}.`
+      : ` Halt marker write failed at ${result.haltMarkerWrite.path}: ${result.haltMarkerWrite.reason}.`;
+  return {
+    success: false,
+    output: `Provider preparation timed out twice.${markerMessage}`,
+    exitCode: 1,
+    preferredProvider,
+    attempts: [],
+    haltMarkerWrite: result.haltMarkerWrite,
+  };
 }
 
 /**
@@ -314,6 +358,22 @@ export interface StepRunnerOptions {
    */
   gitRunner?: GitRunner;
   planPath?: string;
+  /** Process-free test-suite-proof seam retained by the public build_review step. */
+  buildReviewInputOptions?: BuildReviewInputOptions;
+  /**
+   * Engine-owned rubric fan-out seam. It receives the single frozen snapshot
+   * and resolved policy, and returns only after every branch has settled.
+   */
+  buildReviewCoordinator?: (
+    inputs: BuildReviewFrozenInputs,
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ) => Promise<StepRunResult>;
+  /** Shared raw-aggregate/disposition join. Tests inject a bounded fake store. */
+  buildReviewEffectiveResolver?: typeof resolveEffectiveBuildReviewVerdict;
+  /** Test seam for a missing or malformed current-lap branch artifact. */
+  buildReviewArtifactReader?: typeof readBuildReviewBranchArtifact;
+  /** Shared event spine for engine-owned build-review occurrences. */
+  events?: ConductorEventEmitter;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
@@ -364,6 +424,33 @@ type ProviderAwareOneShotRequest =
       step: ProviderAwareFreeFormOneShotStep;
     });
 
+
+/**
+ * Extracts the judged-result JSON object from a rubric session's output.
+ * Sessions intermittently wrap the JSON in prose or markdown fences; a strict
+ * whole-output parse turned that wrapping into `invalid-provider-result`
+ * infrastructure failures. Parsing tries the raw output first, then a fenced
+ * block, then the outermost balanced object. Returns undefined when no
+ * candidate parses — validation of the parsed shape stays with the caller.
+ */
+/** Byte cap for the previous-output excerpt embedded in a rubric repair prompt. */
+export const RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES = 8_192;
+/** Byte cap for the raw-output diagnostic detail on a final rubric shape failure. */
+export const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
+
+export function extractJudgedResultCandidate(output: string): unknown {
+  const candidates: string[] = [output.trim()];
+  const fence = output.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
+  if (fence) candidates.push(fence[1].trim());
+  const first = output.indexOf('{');
+  const last = output.lastIndexOf('}');
+  if (first !== -1 && last > first) candidates.push(output.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try { return JSON.parse(candidate); } catch { /* try next shape */ }
+  }
+  return undefined;
+}
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -387,6 +474,11 @@ export class DefaultStepRunner implements StepRunner {
   private modelAvailability: ModelAvailability;
   private gitRunner: GitRunner;
   private planPathOverride?: string;
+  private buildReviewInputOptions?: BuildReviewInputOptions;
+  private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
+  private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
+  private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
+  private events?: ConductorEventEmitter;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
   private providerKey: string;
@@ -405,6 +497,8 @@ export class DefaultStepRunner implements StepRunner {
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private providerLifecycleAttempt = 0;
+  /** Bounded per-run evidence cache; failed preflights never enter it. */
+  private readonly tautologyPreflightCache = new Map<string, import('./build-review-tautology-preflight.js').TautologyCompletedPreflight>();
   callCount = 0;
 
   constructor(
@@ -434,6 +528,11 @@ export class DefaultStepRunner implements StepRunner {
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
     this.planPathOverride = options?.planPath;
+    this.buildReviewInputOptions = options?.buildReviewInputOptions;
+    this.buildReviewCoordinator = options?.buildReviewCoordinator;
+    this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
+    this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
+    this.events = options?.events;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerKey = options?.providerKey ?? 'claude';
@@ -475,6 +574,10 @@ export class DefaultStepRunner implements StepRunner {
 
   modelForStep(step: StepName): string {
     return this.resolvedConfigFor(step).model;
+  }
+
+  selfHostRunId(): string {
+    return this.runId;
   }
 
   escalateForStep(step: StepName, state: ConductState): boolean {
@@ -775,6 +878,7 @@ export class DefaultStepRunner implements StepRunner {
             config: this.config,
             tier: state.complexity_tier,
             attempt: opts?.attempt ?? 1,
+            runId: this.runId,
             escalate: opts?.escalate ?? true,
             modelOverride: opts?.modelOverride ?? this.modelOverride,
             effortOverride: opts?.effortOverride ?? this.effortOverride,
@@ -865,6 +969,7 @@ export class DefaultStepRunner implements StepRunner {
           config: this.config,
           tier: request.tier,
           attempt: request.dispatch?.attempt ?? 1,
+          runId: this.runId,
           escalate: request.dispatch?.escalate ?? true,
           modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
           effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
@@ -930,13 +1035,7 @@ export class DefaultStepRunner implements StepRunner {
       }),
     );
     if (isProviderLifecycleHalted(result)) {
-      return {
-        success: false,
-        output: 'Provider preparation timed out twice. See .pipeline/HALT.',
-        exitCode: 1,
-        preferredProvider: this.configuredProviders[0] ?? 'unknown',
-        attempts: [],
-      };
+      return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
     }
     return result;
   }
@@ -1071,6 +1170,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.rateLimited
         ? {
             rateLimited: true,
+            ...(result.usageExhausted ? { usageExhausted: true } : {}),
             waitSeconds: result.waitSeconds ?? 300,
             ...(result.deadline !== undefined
               ? { deadline: result.deadline }
@@ -1188,6 +1288,7 @@ export class DefaultStepRunner implements StepRunner {
         success: false,
         output: result.output,
         rateLimited: true,
+        ...(result.usageExhausted ? { usageExhausted: true } : {}),
         waitSeconds,
         deadline: result.deadline,
         ...(result.authentication
@@ -1673,6 +1774,373 @@ export class DefaultStepRunner implements StepRunner {
    * completion gate (artifacts.ts) stays unsatisfied; it is never reported
    * as a PASS.
    */
+  private async runRubricBuildReview(
+    inputs: BuildReviewFrozenInputs,
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ): Promise<StepRunResult> {
+    const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
+    if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
+
+    const coordination = await coordinateBuildReviewRubrics({
+      config,
+      inputs,
+      lapId,
+      preflight: async () => this.runTautologyPreflight(inputs),
+      readCache: async (branch) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
+      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection),
+      writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
+      writeCache: async (entry) => writeBuildReviewCacheEntry(this.projectDir, entry, {
+        readFile: async (path) => readFile(path, 'utf-8'),
+        mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+        writeFile,
+        rename,
+      }),
+      emit: async (event) => { await this.events?.emit(event); },
+    });
+
+    if (coordination.kind === 'gate-disabled') {
+      return { success: true, output: 'build_review disabled' };
+    }
+    if (coordination.kind === 'refused') {
+      return { success: false, output: `build_review refused: ${coordination.reason}` };
+    }
+
+    const writeFailure = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
+      branch.kind === 'infrastructure-failure' && /(?:artifact|cache)-write-failed/.test(branch.reason),
+    );
+    if (writeFailure) {
+      return { success: false, output: `build_review evidence write failed for ${writeFailure.rubric}: ${writeFailure.reason}` };
+    }
+
+    // A result that still violates the judged contract after its one repair
+    // turn is not a reviewer decision about the diff.  Do not publish it as
+    // a fresh FAIL aggregate: completion deliberately classifies a missing
+    // verdict as `absent`, which re-dispatches this rubric without consuming
+    // the build_review kickback budget.
+    const rejectedAfterRepair = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
+      branch.kind === 'infrastructure-failure' &&
+      branch.reason === 'invalid-provider-result' &&
+      branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true,
+    );
+    if (rejectedAfterRepair) {
+      return {
+        success: false,
+        output: `build_review ${rejectedAfterRepair.rubric} rubric rejected after repair: ${rejectedAfterRepair.detail}`,
+      };
+    }
+
+    const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
+      if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
+        const artifact = await this.buildReviewArtifactReader(
+          this.projectDir,
+          branch.rubric,
+          lapId,
+          inputs.sourceSnapshot.digest,
+          {
+            readFile: async (path) => readFile(path, 'utf-8'),
+            mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+            writeFile,
+            rename,
+          },
+        );
+        return [branch.rubric, artifact?.result ?? {
+          kind: 'infrastructure-failure' as const,
+          rubric: branch.rubric,
+          reason: 'artifact-read-failed' as const,
+          detail: 'missing or invalid current-lap branch artifact',
+        }];
+      }
+      return [branch.rubric, branch.kind === 'skipped'
+        ? branch
+        : {
+            kind: 'infrastructure-failure' as const,
+            rubric: branch.rubric,
+            reason: 'provider-error' as const,
+            detail: branch.detail === undefined ? branch.reason : `${branch.reason}: ${branch.detail}`,
+          }];
+    }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: inputs.sourceSnapshot.digest,
+      results,
+    });
+    const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
+    const aggregatePath = join(effectivePipelineDir, 'build-review.json');
+    const publication = await new BuildReviewDispositionStore(this.projectDir).withLease(async () => {
+      await mkdir(effectivePipelineDir, { recursive: true });
+      const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
+      await writeFile(temporaryPath, `${JSON.stringify(aggregate, null, 2)}\n`, 'utf-8');
+      await rename(temporaryPath, aggregatePath);
+    });
+    if (!publication.ok) {
+      return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
+    }
+    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
+      emit: (event) => this.events?.emit(event),
+    });
+    await this.events?.emit({
+      type: 'build_review_outer_verdict',
+      lapId,
+      rawVerdict: aggregate.verdict,
+      effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
+    });
+    if (!effective.ok) {
+      return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
+    }
+    if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
+    return { success: effective.effective.verdict === 'PASS', output: JSON.stringify(aggregate) };
+  }
+
+  private async dispatchBuildReviewRubric(
+    branch: BuildReviewDispatchableRubric,
+    projection: BuildReviewRubricProjection,
+  ): Promise<unknown> {
+    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
+      tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness',
+    };
+    const contractShape = renderBuildReviewJudgedResultShape(branch.rubric);
+    const rubricPrompt = [
+        `Build Review ${label[branch.rubric]} rubric.`,
+        'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
+        `Return exactly one JSON judged result for rubric ${branch.rubric}: a single JSON object whose top-level field \`kind\` is exactly the string "judged" (not \`result\`, not any other field name), whose \`rubric\` is "${branch.rubric}", whose \`contractVersion\` is "${CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION}", whose \`lapId\` and \`snapshotDigest\` echo the projection's values verbatim, and whose \`findings\` is an array. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display}\` objects and every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
+        JSON.stringify(projection),
+      ].join('\n\n');
+    // Regression visibility for prompt bloat (#projection-size): record the
+    // serialized rubric-prompt byte size on the event spine, per dispatch.
+    await this.events?.emit({
+      type: 'build_review_rubric_prompt',
+      rubric: branch.rubric,
+      lapId: projection.lapId,
+      promptBytes: Buffer.byteLength(rubricPrompt, 'utf8'),
+    });
+    const invokeOnce = async (prompt: string): Promise<{ success: boolean; output?: string }> => {
+      if (this.providerRuntimes && this.sessionStore) {
+        const safety = this.candidateSafetyFor('build_review');
+        const result = await this.dispatchProviderWithLifecycleSupervision(
+          'build_review',
+          this.withFeatureDiagnosticLog({
+            prompt,
+            cwd: this.projectDir,
+            dangerouslySkipPermissions: true,
+          }),
+          (options) => executeAuxiliaryProviderCandidates({
+            step: 'build_review',
+            memberId: branch.rubric,
+            policy: branch.policy,
+            runtimes: this.providerRuntimes!,
+            sessions: this.sessionStore!.beginBranch(`build-review:${branch.rubric}`),
+            config: this.config,
+            runId: this.runId,
+            taskAttribution: this.taskAttribution,
+            withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
+            prepareCandidateSelfHost:
+              this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            onAttempt: this.providerAttempt,
+            warn: this.providerWarn,
+            options,
+            optionsForCandidate: (providerKey) => ({
+              ...options,
+              prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
+            }),
+          }),
+        );
+        const verified = safety?.verify(result) ?? result;
+        this.callCount++;
+        return typeof verified.output === 'string'
+          ? { success: verified.success, output: verified.output }
+          : { success: verified.success };
+      }
+      const result = await this.provider.invoke({
+        prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
+        sessionId: randomUUID(),
+        resume: false,
+        dangerouslySkipPermissions: true,
+        cwd: this.projectDir,
+        model: branch.policy.model,
+        effort: branch.policy.effort,
+      });
+      this.callCount++;
+      return typeof result.output === 'string'
+        ? { success: result.success, output: result.output }
+        : { success: result.success };
+    };
+
+    // Validate-and-repair loop (deterministic shape enforcement): a session
+    // that answered but missed the judged contract gets exactly ONE bounded
+    // repair invocation — a pure re-emit task carrying the rejection
+    // diagnosis, the exact contract shape, and a bounded excerpt of its own
+    // previous output — instead of burning the whole dispatch as an
+    // infrastructure failure. Provider-agnostic by construction: both the
+    // runtime-candidates path and the legacy provider path share invokeOnce.
+    const initial = await invokeOnce(rubricPrompt);
+    if (!initial.success || initial.output === undefined) return undefined;
+    const validated = this.validateRubricOutput(initial.output, branch.rubric, projection);
+    if (validated.result) return validated.result;
+    const repairPrompt = [
+      `Your previous response for the Build Review ${label[branch.rubric]} rubric did not satisfy the judged-result contract: ${validated.rejection}.`,
+      `Re-emit your judgement as ONLY one JSON object — no prose, no markdown fences, no other text — of exactly this shape:\n${contractShape}`,
+      `Echo lapId "${projection.lapId}" and snapshotDigest "${projection.snapshotDigest}" verbatim. Preserve the semantic content of your previous findings; change only the shape.`,
+      `Your previous response (bounded excerpt):\n${boundedHeadTailExcerpt(initial.output, RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES)}`,
+    ].join('\n\n');
+    const repair = await invokeOnce(repairPrompt);
+    if (repair.success && repair.output !== undefined) {
+      const repaired = this.validateRubricOutput(repair.output, branch.rubric, projection);
+      if (repaired.result) return repaired.result;
+      return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
+        `judged-result contract not satisfied after one repair turn: ${repaired.rejection}. Raw output excerpt: ${repair.output}`,
+        RUBRIC_FAILURE_DETAIL_CAP_BYTES,
+      ));
+    }
+    return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
+      `judged-result contract not satisfied: ${validated.rejection}; the repair invocation failed. Raw output excerpt: ${initial.output}`,
+      RUBRIC_FAILURE_DETAIL_CAP_BYTES,
+    ));
+  }
+
+  /** Shared accept/reject predicate for rubric outputs — identical to the coordinator's settlement check. */
+  private validateRubricOutput(
+    output: string,
+    rubric: BuildReviewDispatchableRubric['rubric'],
+    projection: BuildReviewRubricProjection,
+  ): { result?: ReturnType<typeof validateBuildReviewDispatchedResult>; rejection: string } {
+    const candidate = extractJudgedResultCandidate(output);
+    if (candidate === undefined) {
+      return { rejection: 'no parseable JSON object was found in the response' };
+    }
+    const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
+    if (result) return { result, rejection: '' };
+    try {
+      return {
+        rejection: describeBuildReviewJudgedResultRejection(candidate, rubric, {
+          lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        }),
+      };
+    } catch {
+      // Diagnosis must never turn a repairable shape failure into a thrown
+      // provider-error that burns the dispatch.
+      return { rejection: 'the result did not satisfy the judged contract' };
+    }
+  }
+
+  private async runTautologyPreflight(inputs: BuildReviewFrozenInputs) {
+    const paths = [...inputs.diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+    const classified = classifyTautologyPaths(paths);
+    // There is no empty selector fallback: a rubric still receives an
+    // explicit, engine-authored exception projection and decides whether the
+    // absence of changed tests is a concern.
+    if (classified.tests.length === 0) {
+      return {
+        classification: 'approved-exception' as const,
+        exception: 'empty-test-set' as const,
+        cacheable: true as const,
+        cacheProvenance: 'miss' as const,
+        changedPaths: paths,
+        changedTestSelectors: [],
+        revertedProductionManifest: [],
+        sourceIdentities: { mergeBase: inputs.sourceSnapshot.mergeBase, headSha: inputs.sourceSnapshot.headSha },
+      };
+    }
+    const controller = new AbortController();
+    const timeoutMs = (this.config?.test_suite?.timeout_seconds ?? 300) * 1_000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+    const removalMaintenanceSelectors = deriveRemovalMaintenanceSelectors(
+      inputs.diff,
+      classified.tests,
+      inputs.sourceSnapshot.removalContext,
+    );
+    return await materializeTautologyPreflight({
+      scopedWorkingDirectory: this.projectDir,
+      mergeBase: inputs.sourceSnapshot.mergeBase,
+      headSha: inputs.sourceSnapshot.headSha,
+      diff: inputs.diff,
+      scopedCommand: this.config?.test_suite?.scoped_command ?? null,
+      currentGreenProofIdentity: `${inputs.testSuiteProof.provenanceHeadSha}:${inputs.testSuiteProof.fingerprint}`,
+      ...(removalMaintenanceSelectors.length > 0
+        ? { approvedException: 'removal-maintenance' as const, removalMaintenanceSelectors }
+        : {}),
+      createCheckout: async (path, headSha) => {
+        const result = await this.gitRunner(['worktree', 'add', '--detach', path, headSha]);
+        if (result.exitCode !== 0) throw new Error(result.stderr);
+        // A detached worktree contains tracked files only.  The source
+        // worktree's dependency installation is deliberately ignored by git,
+        // so expose it by reference rather than copying or tracking it.
+        try {
+          const sourceDependencies = join(this.projectDir, 'src', 'conductor', 'node_modules');
+          const detachedDependencies = join(path, 'src', 'conductor', 'node_modules');
+          await access(sourceDependencies);
+          await mkdir(join(path, 'src', 'conductor'), { recursive: true });
+          await Promise.all([
+            symlink(sourceDependencies, detachedDependencies, 'dir'),
+            symlink(sourceDependencies, join(path, 'node_modules'), 'dir'),
+          ]);
+        } catch (error: unknown) {
+          // Missing dependencies remain the scoped command's ordinary
+          // launch/runtime concern.  Do not make projects without a local
+          // node_modules directory fail materialization merely for this aid.
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      },
+      readMergeBaseFile: async (path) => {
+        const result = await this.gitRunner(['show', `${inputs.sourceSnapshot.mergeBase}:${path}`]);
+        return result.exitCode === 0 ? result.stdout : undefined;
+      },
+      writeFile,
+      removeFile: async (path) => { await rm(path, { force: true }); },
+      runScoped: async (cwd, selectors, signal) => this.runScopedTautologyCommand(cwd, selectors, signal),
+      removeCheckout: async (path) => {
+        await this.gitRunner(['worktree', 'remove', '--force', path]);
+      },
+      abortSignal: controller.signal,
+      readCache: async (key) => this.tautologyPreflightCache.get(key),
+      writeCache: async (key, evidence) => {
+        if (this.tautologyPreflightCache.size >= 32) this.tautologyPreflightCache.delete(this.tautologyPreflightCache.keys().next().value!);
+        this.tautologyPreflightCache.set(key, evidence);
+      },
+    });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async runScopedTautologyCommand(cwd: string, selectors: readonly string[], signal: AbortSignal): Promise<TautologyScopedRunResult> {
+    const template = this.config?.test_suite?.scoped_command;
+    if (!template || selectors.length === 0) return { kind: 'launch-error' as const, stdout: '', stderr: '' };
+    const command = template.replace('{selectors}', selectors.map((selector) => JSON.stringify(selector)).join(' '));
+    return new Promise<TautologyScopedRunResult>((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const child = spawn('sh', ['-c', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const finish = (value: TautologyScopedRunResult) => {
+        if (!settled) { settled = true; resolve(value); }
+      };
+      child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+      child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+      child.once('error', () => finish({ kind: 'launch-error', stdout, stderr }));
+      child.once('close', (code, receivedSignal) => {
+        if (receivedSignal) finish({ kind: 'signal', signal: receivedSignal, stdout, stderr });
+        else if (code === 0) finish({ exitCode: 0, stdout, stderr });
+        else finish({ kind: 'nonzero-exit', exitCode: code ?? 1, stdout, stderr });
+      });
+      signal.addEventListener('abort', () => {
+        child.kill('SIGTERM');
+        finish({ kind: 'timeout', stdout, stderr });
+      }, { once: true });
+    });
+  }
+
   private async runBuildReview(): Promise<StepRunResult> {
     // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
     // sort()[last] guess (#407): with several features in flight the shared plans
@@ -1699,13 +2167,17 @@ export class DefaultStepRunner implements StepRunner {
       };
     }
 
-    const buildReviewConfig = resolveBuildReviewConfig(this.config);
+    const buildReviewConfig = resolveBuildReviewConfig(this.config, this.modelPolicy, {
+      modelCliOverride: this.modelOverride,
+      effortCliOverride: this.effortOverride,
+    });
     let containmentReport: ContainmentFloorReport | undefined;
     if (buildReviewConfig.perTaskFloor) {
       try {
         containmentReport = await runContainmentFloor({
           projectRoot: this.projectDir,
           planPath,
+          scopeContainmentEnforced: buildReviewConfig.scopeContainmentEnforced,
         });
       } catch {
         // Fail-soft: containment telemetry must never fail build_review.
@@ -1715,9 +2187,12 @@ export class DefaultStepRunner implements StepRunner {
     let inputs;
     try {
       inputs = {
-        ...await assembleBuildReviewInputs(this.gitRunner, planPath),
-        entryPoints: this.config?.wiring?.entry_points,
-        acceptedWidenings: containmentReport?.acceptedWidenings ?? [],
+        ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
+          ...this.buildReviewInputOptions,
+          acceptedWidenings: buildReviewConfig.scopeContainmentEnforced
+            ? containmentReport?.acceptedWidenings ?? []
+            : [],
+        }),
       };
     } catch (err) {
       return {
@@ -1731,6 +2206,7 @@ export class DefaultStepRunner implements StepRunner {
     // step — this is pure fire-and-forget telemetry the conductor turns into
     // a `build_review_base` event after this runner returns.
     let baseFreshness: StepRunResult['baseFreshness'];
+    let repairProvenance: StepRunResult['repairProvenance'];
     try {
       baseFreshness = {
         mergeBase: inputs.mergeBase,
@@ -1738,11 +2214,17 @@ export class DefaultStepRunner implements StepRunner {
         remoteHeadSha: inputs.remoteHeadSha,
         fresh: inputs.fresh,
       };
+      // Task 24: grading provenance rides the same fire-and-forget telemetry
+      // path — the conductor emits `build_review_repair_context` from it.
+      repairProvenance = inputs.repairProvenance;
     } catch {
       baseFreshness = undefined;
+      repairProvenance = undefined;
     }
-    const withBaseFreshness = (r: StepRunResult): StepRunResult =>
-      baseFreshness ? { ...r, baseFreshness } : r;
+    const withBaseFreshness = (r: StepRunResult): StepRunResult => {
+      const withFreshness = baseFreshness ? { ...r, baseFreshness } : r;
+      return repairProvenance ? { ...withFreshness, repairProvenance } : withFreshness;
+    };
 
     // Per-task "work happened at all" floor (#781): purely additive,
     // non-blocking telemetry computed alongside the grader dispatch. It
@@ -1778,6 +2260,7 @@ export class DefaultStepRunner implements StepRunner {
         containmentReport ??= await runContainmentFloor({
           projectRoot: this.projectDir,
           planPath,
+          scopeContainmentEnforced: buildReviewConfig.scopeContainmentEnforced,
         });
         await writeFile(
           join(effectivePipelineDir, 'containment-floor.json'),
@@ -1786,7 +2269,9 @@ export class DefaultStepRunner implements StepRunner {
         );
         floorAdvisoryLines = [
           ...renderPerTaskFloorReport(floorReport),
-          ...renderContainmentFloorReport(containmentReport),
+          ...(buildReviewConfig.scopeContainmentEnforced
+            ? renderContainmentFloorReport(containmentReport)
+            : []),
         ];
         if (floorAdvisoryLines.length > 0) {
           for (const line of floorAdvisoryLines) {
@@ -1797,9 +2282,6 @@ export class DefaultStepRunner implements StepRunner {
         // Fail-soft: telemetry must never fail the build_review step.
       }
     }
-
-    const prependFloorAdvisory = (output: string): string =>
-      floorAdvisoryLines.length > 0 ? `${floorAdvisoryLines.join('\n')}\n\n${output}` : output;
 
     // A declared replication is mechanically verified at the build_review
     // gate. Unlike the advisory floors above, a mismatch is a blocking gate
@@ -1835,153 +2317,36 @@ export class DefaultStepRunner implements StepRunner {
       if (!equivalence.success) return withBaseFreshness(equivalence);
     }
 
-    const prompt = buildGraderPrompt(inputs);
-
-    // Track every model attempted during the ladder walk so a full-ladder
-    // exhaustion failure names every model tried.
-    const attemptedModels: string[] = [];
-    const providerResult = await this.executeProviderAwareOneShot(
-      'build_review',
-      {
-        prompt,
-        dangerouslySkipPermissions: true,
-        cwd: this.projectDir,
-      },
-    );
-    const result =
-      providerResult ??
-      (await (async () => {
-        // Legacy scalar-provider adapter: retain the grader's internal native
-        // model ladder and fresh one-shot session contract.
-        const resolved = this.resolvedConfigFor('build_review');
-        const { v4: uuidv4 } = await import('uuid');
-        const trackingProvider: LLMProvider = {
-          invoke: (invokeOpts) => {
-            attemptedModels.push(invokeOpts.model ?? '');
-            return this.provider.invoke(invokeOpts);
-          },
-          invokeInteractive: (invokeOpts) =>
-            this.provider.invokeInteractive(invokeOpts),
-        };
-        return this.modelAvailability.invokeWithLadder(trackingProvider, {
-          prompt,
-          sessionId: uuidv4(),
-          resume: false,
-          dangerouslySkipPermissions: true,
-          model: this.modelAvailability.effectiveModel(resolved.model).model,
-          effort: resolved.effort,
-          cwd: this.projectDir,
-        }, async () => ({ sessionId: uuidv4(), resume: false }));
-      })());
-    if (providerResult) {
-      attemptedModels.push(
-        ...providerResult.attempts.flatMap((attempt) =>
-          attempt.invoked && attempt.model ? [attempt.model] : [],
-        ),
-      );
-    }
-    this.callCount++;
-    const withProviderMetadata = (r: StepRunResult): StepRunResult =>
-      ({
-        ...r,
-        ...(result.observedIntervals
-          ? { observedIntervals: result.observedIntervals }
-          : {}),
-        ...(providerResult
-          ? {
-            ...this.providerAttribution(providerResult),
-            ...(providerResult.resolvedModel
-              ? { model: providerResult.resolvedModel }
-              : {}),
-            ...(providerResult.tokenUsage
-              ? { tokenUsage: providerResult.tokenUsage }
-              : {}),
-          }
-          : {}),
-      });
-    const finalize = (r: StepRunResult): StepRunResult =>
-      withBaseFreshness(withProviderMetadata({
-        ...r,
-        ...(typeof r.output === 'string'
-          ? { output: prependFloorAdvisory(r.output) }
-          : {}),
-      }));
-
-    if (result.authFailure) {
-      return finalize({ success: false, output: result.output, authFailure: true });
-    }
-    if (result.permissionDenied) {
-      return finalize({
-        success: false,
-        output: result.output,
-        permissionDenied: true,
-        ...(result.authentication
-          ? { authentication: result.authentication }
-          : {}),
-      });
-    }
-    if (result.rateLimited) {
-      return finalize({
-        success: false,
-        output: result.output,
-        rateLimited: true,
-        waitSeconds: result.waitSeconds ?? 300,
-      });
-    }
-    if (result.sessionExpired) {
-      return finalize({ success: false, output: result.output, sessionExpired: true });
-    }
-    if (result.success) {
-      await this.stampBuildReviewVerdict();
-      const verdictPath = join(this.projectDir, BUILD_REVIEW_VERDICT);
-      try {
-        const validation = validateBuildReviewVerdict(JSON.parse(await readFile(verdictPath, 'utf-8')));
-        if (!validation.ok) return finalize({ success: false, output: validation.reason });
-      } catch {
-        return finalize({
-          success: false,
-          output: `${BUILD_REVIEW_VERDICT} is not valid JSON — the build_review grader must record a complete PASS/FAIL verdict`,
-        });
-      }
-      return finalize({ success: true, output: result.output });
+    // The deterministic floor and declared-copy checks deliberately precede
+    // this dispatch: they are gate-owned preconditions, and must remain
+    // observable even when configuration activates the rubric fan-out.
+    // An explicit whole-gate opt-out is the only route that avoids the
+    // coordinator. The resolved config defaults an absent raw block to
+    // enabled, so raw config shape can never select the retired scalar grader.
+    if (!buildReviewConfig.enabled) {
+      return withBaseFreshness({ success: true, output: 'build_review disabled' });
     }
 
-    // Full-ladder exhaustion: every attempted model reported unavailable.
-    // Name them all so the eventual HALT is diagnosable from daemon.log alone.
-    // #814: this is a grader-DISPATCH failure (no model could run the grader),
-    // not a returned FAIL — flag it so the conductor backs off and names it.
-    if (result.modelUnavailable && attemptedModels.length > 1) {
-      return finalize({
-        success: false,
-        output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
-        graderDispatchFailed: true,
-      });
+    // The lifecycle still exposes one public build_review step. Its
+    // coordinator owns the bounded auxiliary fan-out and receives the one
+    // frozen snapshot. The injectable coordinator remains a narrow test seam.
+    const withFloorAdvisory = (result: StepRunResult): StepRunResult => ({
+      ...result,
+      ...(typeof result.output === 'string' && floorAdvisoryLines.length > 0
+        ? { output: `${floorAdvisoryLines.join('\n')}\n\n${result.output}` }
+        : {}),
+    });
+    if (this.buildReviewCoordinator) {
+      return withBaseFreshness(withFloorAdvisory(
+        await this.buildReviewCoordinator(inputs, buildReviewConfig),
+      ));
     }
 
-    // #814: generic grader-dispatch failure — the grader session ended without
-    // success (subprocess crashed / exited non-zero / died at startup) and never
-    // wrote a PASS/FAIL verdict. A fast empty-output death here is exactly what
-    // collapsed the retry ladder in ~118ms with "no reason recorded". Never
-    // return an empty output (it renders blank), and flag it as a dispatch
-    // failure so the conductor backs off between re-dispatches and the HALT
-    // names an infrastructure cause rather than a code-quality rejection.
-    const graderOutput =
-      typeof result.output === 'string' && result.output.trim().length > 0
-        ? result.output
-        : 'build_review grader session ended without a result — it failed to start or exited before writing a PASS/FAIL verdict';
-    return finalize({ success: false, output: graderOutput, graderDispatchFailed: true });
+    return withBaseFreshness(withFloorAdvisory(
+      await this.runRubricBuildReview(inputs, buildReviewConfig),
+    ));
   }
 
-  /**
-   * Post-write augmentation of the grader-authored build-review.json: attach
-   * the HEAD SHA the verdict was formed against (gate-code-validity-on-
-   * redispatch, #817, Task 3). The engine cannot control what JSON the LLM
-   * grader writes, so this reads the file back after a successful dispatch
-   * and merges in `codeStamp` before the completion predicate ever reads it.
-   * Never fails the step: a missing/unparseable file is left untouched and
-   * silently skipped (an absent stamp is the safe fail-closed default —
-   * treated as "rerun" by the re-dispatch preservation check, Task 5/6).
-   */
   private async stampBuildReviewVerdict(): Promise<void> {
     if (!resolveGateCodeValidityConfig(this.config).enabled) {
       // gate_code_validity disabled: restore pre-feature behavior exactly —

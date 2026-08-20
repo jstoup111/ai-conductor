@@ -5,11 +5,70 @@
 // phase can gut autoheal.ts's evidence-derivation logic without breaking the
 // wiring-reachability gate.
 import { describe, expect, it } from 'vitest';
-import { parsePlanTaskPaths, TASK_ID_PATTERN } from '../../src/engine/plan-task-parse.js';
+import {
+  parsePlanTaskPaths,
+  parsePlanTaskPreserves,
+  TASK_HEADER_PATTERN,
+  TASK_ID_PATTERN,
+} from '../../src/engine/plan-task-parse.js';
+import { parsePlanTaskVerifyOnly } from '../../src/engine/autoheal.js';
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
+  it('parses one preserved behavior from its task block', () => {
+    const result = parsePlanTaskPreserves(`# Plan
+
+### Task 9: Preserve wrapper behavior
+**Preserves:** the ungated TokenMeter wrapper transparency
+`);
+
+    expect(result).toEqual(new Map([['9', ['the ungated TokenMeter wrapper transparency']]]));
+  });
+
+  it('accumulates separate preserved behaviors from one task block', () => {
+    const result = parsePlanTaskPreserves(`# Plan
+
+### Task 9: Preserve wrapper behavior
+**Preserves:** the ungated TokenMeter wrapper transparency
+**Preserves:** the provider-facing TokenMeter metric name
+`);
+
+    expect(result).toEqual(new Map([['9', [
+      'the ungated TokenMeter wrapper transparency',
+      'the provider-facing TokenMeter metric name',
+    ]]]));
+  });
+
   it('exports TASK_ID_PATTERN matching the H9 id grammar', () => {
     expect(TASK_ID_PATTERN).toBe('[A-Za-z0-9._-]+');
+  });
+
+  it('keeps every task parser on the shared supported header grammar', () => {
+    const plan = `### Task rem-adr-001: Colon-delimited
+**Preserves:** colon behavior
+**Verify-only:** yes
+**Files:** src/colon.ts
+
+#### Task task_1 — Dash-delimited
+**Preserves:** dash behavior
+**Verify-only:** yes
+**Files:** src/dash.ts
+
+##### Task 1.2
+**Preserves:** bare numeric behavior
+**Verify-only:** yes
+**Files:** src/bare.ts
+
+###### T0 — Shorthand
+**Preserves:** shorthand behavior
+**Verify-only:** yes
+**Files:** src/shorthand.ts
+`;
+    const ids = ['rem-adr-001', 'task_1', '1.2', 'T0'];
+
+    expect(TASK_HEADER_PATTERN).toBeInstanceOf(RegExp);
+    expect(Array.from(parsePlanTaskPaths(plan).keys())).toEqual(ids);
+    expect(Array.from(parsePlanTaskPreserves(plan).keys())).toEqual(ids);
+    expect(Array.from(parsePlanTaskVerifyOnly(plan).keys())).toEqual(ids);
   });
 
   it('exports a working parsePlanTaskPaths', () => {

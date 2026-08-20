@@ -1,5 +1,5 @@
 export * from './types/index.js';
-export { parseArgs, createProgram, type CLIOptions } from './cli.js';
+export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
 export { runReleasePrAction } from './engine/release-pr-action.js';
@@ -9,6 +9,7 @@ export { classifyReleasePublication, runReleasePublisherAction } from './engine/
 
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
+import { guardDaemonSessionInvocation } from './execution/daemon-session.js';
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -54,6 +55,8 @@ import {
   renderFullHelp,
   renderDaemonHelp,
   detectInline,
+  detectBuildReviewFindingsCommand,
+  detectBuildReviewAcceptCommand,
   detectDecideGrantCommand,
   dispatchDecideGrantCommand,
   detectPlanProtectedTargetsCommand,
@@ -67,6 +70,7 @@ import {
   userConfigSetCommand,
   type CLIOptions,
 } from './cli.js';
+import { dispatchBuildReviewAccept, dispatchBuildReviewFindings } from './engine/build-review-cli.js';
 import type { ConductState, StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
@@ -445,6 +449,30 @@ export async function overlapScanCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  // Boundary enforcement, before any subcommand parsing: a conduct-ts
+  // invocation from inside an engine-dispatched provider session (daemon
+  // builds, reviews, self-host candidates — marked CONDUCT_DAEMON_SESSION=1)
+  // is refused, except for the session-sanctioned worker subcommands the
+  // harness's own skills/hooks mandate. See execution/daemon-session.ts.
+  const daemonSessionVerdict = guardDaemonSessionInvocation(process.argv);
+  if (!daemonSessionVerdict.allowed) {
+    console.error(`Error: ${daemonSessionVerdict.message}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const buildReviewAcceptCmd = detectBuildReviewAcceptCommand(process.argv);
+  if (buildReviewAcceptCmd) {
+    process.exitCode = await dispatchBuildReviewAccept(buildReviewAcceptCmd);
+    return;
+  }
+
+  const buildReviewFindingsCmd = detectBuildReviewFindingsCommand(process.argv);
+  if (buildReviewFindingsCmd) {
+    process.exitCode = await dispatchBuildReviewFindings(buildReviewFindingsCmd);
+    return;
+  }
+
   const buildTailCmd = detectBuildTailCommand(process.argv);
   if (buildTailCmd) {
     process.exitCode = await dispatchBuildTailCommand(buildTailCmd);
@@ -1140,7 +1168,7 @@ async function main(): Promise<void> {
   const mode = deriveMode(opts);
 
   // Set up terminal UI with live dashboard (needed before registry initialization)
-  const renderEvent = createRenderer({
+  const rendererOpts = {
     stateFilePath,
     featureDesc: opts.featureDesc,
     steps: ALL_STEPS,
@@ -1150,7 +1178,8 @@ async function main(): Promise<void> {
     liveRegion,
     viewMode: opts.view,
     tailLines: opts.tailLines,
-  });
+  };
+  const renderEvent = createRenderer(rendererOpts);
 
   // Initialize plugin registry and discover plugins
   const registry = new PluginRegistry();
@@ -1161,7 +1190,7 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  registerCliBuiltins(registry, events, renderEvent, config);
+  registerCliBuiltins(registry, events, renderEvent, config, rendererOpts);
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
@@ -1235,6 +1264,7 @@ async function main(): Promise<void> {
     modelPolicy: compatibilityRuntime.policy,
     mode,
     providerExecution,
+    events,
   });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and

@@ -6,7 +6,7 @@ import { originDefaultBranch, makeGitRunner } from './rebase.js';
 // dropped (feature #773, Task 11): the only remaining consumers were the now-
 // deleted derivation engine and its tests; all other callers import directly
 // from plan-task-parse.ts.
-import { TASK_ID_PATTERN, parsePlanTaskPaths } from './plan-task-parse.js';
+import { TASK_HEADER_PATTERN, TASK_ID_PATTERN, parsePlanTaskPaths } from './plan-task-parse.js';
 
 // #405: near-miss derive diagnostics (path-corroboration miss, pinned-stamp
 // demotion prevention) repeat on EVERY build-gate evaluation — H7 deliberately
@@ -636,14 +636,11 @@ const TYPE_LINE = /^\s*(?:[-*]\s+)?\*\*Type\s*:?\s*\*\*\s*:?\s*(.*)$/i;
  * unaffected.
  */
 export function parsePlanTaskVerifyOnly(text: string): Map<string, boolean> {
-  const taskHeader =
-    /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
-
   const result = new Map<string, boolean>();
   let currentIds: string[] = [];
 
   for (const line of text.split('\n')) {
-    const headerMatch = line.match(taskHeader);
+    const headerMatch = line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       currentIds = expandTaskIds(
         headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
@@ -694,4 +691,3 @@ function expandTaskIds(raw: string): string[] {
   }
   return ids;
 }
-
