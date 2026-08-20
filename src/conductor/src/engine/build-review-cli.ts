@@ -67,7 +67,7 @@ export interface BuildReviewRecordReducedCoverageDeps extends Omit<BuildReviewFi
   readonly resolveOperator?: () => string | undefined;
   readonly createStore?: (worktree: string) => ReducedCoverageDispositionStore;
   readonly readMechanicalFaults?: (worktree: string) => Promise<number | undefined>;
-  readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_disposition_refused' }>) => void;
+  readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_reduced_coverage_accepted' | 'build_review_disposition_refused' }>) => void;
 }
 
 const BUILD_REVIEW_RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness']);
@@ -377,6 +377,15 @@ export async function dispatchBuildReviewRecordReducedCoverage(
       if (stateRefusal) return refuse('current-rubric-lap-or-state-invalid', `build-review record-reduced-coverage: refused because ${stateRefusal}.`);
       throw new Error(appended.message);
     }
+    (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
+      type: 'build_review_reduced_coverage_accepted',
+      feature: command.feature,
+      lapId: requestedLap,
+      rubric,
+      reason: result.reason,
+      operator: operator.trim(),
+      ts: new Date().toISOString(),
+    });
     print(`build-review record-reduced-coverage: recorded ${rubric} for lap ${requestedLap}.`);
     return 0;
   } catch {

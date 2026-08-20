@@ -94,6 +94,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_skipped',
   'build_review_cache_hit',
   'build_review_rubric_infrastructure_failure',
+  'build_review_mechanical_allowance_exhausted',
   'build_review_disposition_version_invalidated',
   'build_review_outer_verdict',
   'loop_halt',

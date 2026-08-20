@@ -169,7 +169,25 @@ export type ConductorEvent =
   | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
   | { type: 'build_review_cache_hit'; rubric: string; lapId: string }
   | { type: 'build_review_rubric_infrastructure_failure'; rubric: string; lapId: string; reason: string; excerpt?: string }
+  | {
+      /** The shared retry allowance was exhausted for a mechanical rubric failure. */
+      type: 'build_review_mechanical_allowance_exhausted';
+      lapId: string;
+      rubric: string;
+      reason: string;
+      consumed: number;
+      allowance: number;
+    }
   | { type: 'build_review_disposition_accepted'; feature: string; lapId: string; findingId: string; operator: string }
+  | {
+      /** An interactive operator accepted reduced review coverage for one failed rubric. */
+      type: 'build_review_reduced_coverage_accepted';
+      feature: string;
+      lapId: string;
+      rubric: string;
+      reason: string;
+      operator: string;
+    }
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
   | { type: 'build_review_disposition_version_invalidated'; feature: string; findingId: string; rubric: string; contractVersion: string }
   | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }

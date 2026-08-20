@@ -39,6 +39,7 @@ import {
 } from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { Conductor } from '../test-conductor.js';
+import { dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 
 const execFile = promisify(execFileCb);
 
@@ -757,6 +758,10 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     });
 
     const calls: StepName[] = [];
+    const allowanceOccurrences: unknown[] = [];
+    events.on('build_review_mechanical_allowance_exhausted' as never, (event) => {
+      allowanceOccurrences.push(event);
+    });
     const lapId = parseBuildReviewLapId('lap-mechanical-root-cause')!;
     const aggregate = joinBuildReviewRubricOutcomes({
       lapId,
@@ -801,5 +806,68 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     );
     expect(haltBody).not.toContain('cannot converge');
     expect(await readFile(join(repo, '.pipeline/HALT.class'), 'utf8')).toBe('needs-human');
+    expect(allowanceOccurrences).toEqual([expect.objectContaining({
+      type: 'build_review_mechanical_allowance_exhausted',
+      lapId,
+      rubric: 'rootCause',
+      reason: 'provider-error',
+      consumed: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+      allowance: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+    })]);
+  }, 30000);
+
+  it('writes reduced-coverage CLI outcomes through the external same-schema writer', async () => {
+    const lapId = parseBuildReviewLapId('lap-event-spine')!;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:event-spine',
+      results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:event-spine', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:event-spine', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:event-spine', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      },
+    });
+    const externalOccurrences: unknown[] = [];
+    const command = {
+      kind: 'record-reduced-coverage' as const,
+      feature: 'event-spine',
+      lapId,
+      rubric: 'rootCause',
+      rationale: 'The provider remains unavailable.',
+    };
+    const commonDeps = {
+      cwd: dir,
+      resolveMainRoot: async () => dir,
+      realpath: async (path: string) => path,
+      isInteractive: true,
+      resolveOperator: () => 'local-operator',
+      readFile: async () => JSON.stringify(aggregate),
+      readMechanicalFaults: async () => MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+      createStore: () => ({
+        appendReducedCoverageIfCurrent: async (_input: unknown, validate: (records: readonly unknown[]) => Promise<boolean>) => {
+          await validate([]);
+          return { ok: true as const, record: {} };
+        },
+      }),
+      appendEvent: (_worktree: string, event: unknown) => externalOccurrences.push(event),
+      print: () => {},
+    };
+    await expect(dispatchBuildReviewRecordReducedCoverage(command, commonDeps as never)).resolves.toBe(0);
+    await expect(dispatchBuildReviewRecordReducedCoverage(command, {
+      ...commonDeps,
+      isInteractive: false,
+    } as never)).resolves.toBe(1);
+
+    expect(externalOccurrences).toEqual([
+      expect.objectContaining({
+        type: 'build_review_reduced_coverage_accepted', feature: 'event-spine', lapId,
+        rubric: 'rootCause', reason: 'provider-error', operator: 'local-operator',
+      }),
+      expect.objectContaining({
+        type: 'build_review_disposition_refused', feature: 'event-spine',
+        reason: 'non-interactive-or-unidentified-operator',
+      }),
+    ]);
   }, 30000);
 });

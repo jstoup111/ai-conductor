@@ -6785,6 +6785,20 @@ export class Conductor {
                   mechanicalEntry ?? { mechanicalFaults: 0 },
                   aggregateRaw,
                 );
+                const aggregate = parseBuildReviewAggregate(aggregateRaw);
+                const failure = aggregate && Object.values(aggregate.results).find(
+                  (result) => result.kind === 'infrastructure-failure',
+                );
+                if (failure) {
+                  await this.events.emit({
+                    type: 'build_review_mechanical_allowance_exhausted',
+                    lapId: aggregate.lapId,
+                    rubric: failure.rubric,
+                    reason: failure.reason,
+                    consumed: mechanicalEntry!.mechanicalFaults ?? 0,
+                    allowance: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+                  });
+                }
                 state[step.name] = 'failed';
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
