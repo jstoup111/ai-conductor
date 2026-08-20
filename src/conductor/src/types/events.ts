@@ -142,6 +142,7 @@ export interface ProviderAttemptEvent {
 }
 
 export type ConductorEvent =
+  | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */

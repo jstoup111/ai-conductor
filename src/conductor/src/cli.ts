@@ -642,6 +642,11 @@ export function createProgram(): Command {
     .requiredOption('--reason <reason>', 'Operator rationale for the reseal')
     .option('--clear-halt', 'Clear a resolved protected-artifact halt after resealing');
 
+  program
+    .command('rewind')
+    .description('Return a halted feature to an earlier step')
+    .requiredOption('--to <step>', 'Earlier step to resume from');
+
   registerCommands(program);
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:

@@ -28,6 +28,9 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const REPO_ROOT = join(process.cwd(), '..', '..');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
+const OPERATOR_ENV = { ...process.env };
+delete OPERATOR_ENV.CONDUCT_DAEMON_SESSION;
+OPERATOR_ENV.CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW = '1';
 
 let projectRoot: string;
 let stateFilePath: string;
@@ -81,11 +84,14 @@ describe('conduct-ts rewind recovery', () => {
   it('rewinds a halted feature to test_suite and the next daemon resume advances to build_review', async () => {
     const rewind = await execa(REAL_CONDUCT_TS, ['rewind', '--to', 'test_suite'], {
       cwd: projectRoot,
+      // The acceptance harness itself runs under a managed session, while
+      // rewind is intentionally an operator-only command boundary.
+      env: OPERATOR_ENV,
       reject: false,
       timeout: 20_000,
     });
 
-    expect(rewind.exitCode, rewind.stderr || rewind.stdout).toBe(0);
+    if (rewind.exitCode !== 0) throw new Error(rewind.stderr || rewind.stdout);
 
     const rewoundResult = await readState(stateFilePath);
     if (!rewoundResult.ok) throw new Error(rewoundResult.error.message);

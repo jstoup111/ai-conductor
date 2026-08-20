@@ -84,6 +84,7 @@ describe('rewindState', () => {
         { field: 'retro', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
         { field: 'rebase', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
         { field: 'finish', expected: 'done', intent: 'operator rewind to lint', next: 'stale' },
+        { field: 'last_step', expected: 'finish', intent: 'operator rewind to lint', next: 'build' },
       ],
     }]);
   });
