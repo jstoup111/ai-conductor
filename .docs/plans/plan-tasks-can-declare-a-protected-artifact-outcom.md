@@ -140,3 +140,4 @@ destination and whose README ownership section governs that list. This task exis
 step decides impact from the surfaces a diff changed, and this diff changes a scanner and prose
 rather than recovery behavior — so it would record an evidence-backed no-op and the runbook would
 never be written.
+### Task rem-stall-parser-scope-1: src/conductor/src/engine/plan-task-parse.ts:219-308 — in architecture review, approve and record a parser/scanner contract that preserves foreign protected prose references for Files-declared tasks without changing the protected-path predicate, then revise Task 3's file scope to match
