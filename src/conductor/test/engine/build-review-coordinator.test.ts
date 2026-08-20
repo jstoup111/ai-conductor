@@ -608,6 +608,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
   });
 
   it("settles an empty findings-only payload as a scope PASS stamped with engine-held envelope values", async () => {
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
       inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
@@ -615,7 +616,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
       dispatchModel: async (branch, projection) => branch.rubric === "scope"
         ? { findings: [] }
         : judged(branch.rubric, projection),
-      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeArtifact,
       writeCache: async () => undefined,
     });
 
@@ -627,6 +628,16 @@ describe("build-review coordinator: findings-only provider payloads", () => {
           findings: [], verdict: "PASS",
         },
       });
+    expect(writeArtifact.mock.calls
+      .map(([artifact]) => artifact)
+      .filter((artifact) => artifact.rubric === "scope"))
+      .toEqual([{
+        rubric: "scope", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
+        result: {
+          kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+          findings: [], verdict: "PASS",
+        },
+      }]);
   });
 
   it("settles a well-formed scope finding without provider envelope fields", async () => {
