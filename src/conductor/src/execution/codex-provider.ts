@@ -41,6 +41,34 @@ export const CODEX_SESSION_EXPIRED_RE =
 export const CODEX_PERMISSION_DECISION_RE =
   /(?:permission|approval|review).{0,80}(?:denied|unavailable|rejected|cancel(?:led|ed)|timed out|timeout|unknown result|failed to (?:produce|return) (?:an? )?decision|indeterminate|no decision)/i;
 
+/**
+ * Codex's own tool sandbox could not CREATE a process for a shell tool call.
+ *
+ * This is deliberately structural rather than prose matching: both markers are
+ * emitted together by Codex's tool router, and together they mean the exec was
+ * never created at all. That is distinct from a command that ran and failed,
+ * and distinct from an approval-policy rejection of a command Codex could
+ * otherwise have spawned — neither of those carries the `CreateProcess` frame.
+ *
+ * It matters because such a run still exits 0 and still emits a confident final
+ * answer. A judge that could not run `git diff` returning "no findings" is a
+ * silently degraded reviewer, which is worse than a loud failure.
+ */
+function countToolProcessCreationFailures(output: string): number {
+  return output
+    .split('\n')
+    .filter((line) => line.includes('exec_command failed for') && line.includes('CreateProcess {'))
+    .length;
+}
+
+function toolProcessCreationFailureMessage(failures: number): string {
+  return `Codex could not create a process for ${failures} shell tool call${failures === 1 ? '' : 's'} `
+    + '(its tool router reported `exec_command failed ... CreateProcess`). The dispatch had no working '
+    + 'command execution, so its answer is not evidence-backed and is not reported as a success. '
+    + "Recovery action: verify this host lets Codex's sandbox create a process (bubblewrap / "
+    + 'unprivileged user namespaces), then retry.';
+}
+
 interface CodexJsonEvent {
   type?: string;
   item?: { type?: string; text?: string; content?: Array<{ text?: string }> };
@@ -449,13 +477,19 @@ export class CodexProvider implements LLMProvider {
     const authentication = authFailure
       ? this.authenticationResult(source, 'unusable')
       : readyReadiness ?? this.authenticationResult(source, 'ready');
+    // A dispatch whose every tool call was structurally impossible is not a
+    // result, whatever its exit code says. Evaluated last so no established
+    // recovery classification above loses its precedence.
+    const toolProcessCreationFailures = countToolProcessCreationFailures(rawOutput);
 
     return {
-      success: exitCode === 0,
+      success: exitCode === 0 && toolProcessCreationFailures === 0,
       output: authFailure
         ? `Codex authentication failed using the selected ${source} source.`
         : permissionDenied
           ? 'Codex automatic permission review was denied or unavailable. Verify the review policy or permissions, then retry.'
+        : toolProcessCreationFailures > 0
+          ? toolProcessCreationFailureMessage(toolProcessCreationFailures)
         : output,
       exitCode,
       rateLimited: rateLimited || undefined,

@@ -132,6 +132,56 @@ describe('CodexProvider', () => {
     });
   });
 
+  // A Codex dispatch whose sandbox cannot create a process for ANY shell tool
+  // call still exits 0 and still emits a confident final answer. Observed on a
+  // host that denies Codex's sandbox its user namespace: every `exec_command`
+  // was rejected, yet the build_review rubric returned `findings: []` — a PASS
+  // from a reviewer that could not run `git diff`. Classify it as a failed
+  // dispatch so it fails loudly instead of degrading silently.
+  describe('tool-call process creation rejected by the provider sandbox', () => {
+    const routerRejection = (command: string) =>
+      'ERROR codex_core::tools::router: error=exec_command failed for `' + command
+      + '`: CreateProcess { message: "Rejected(\\"Failed to create unified exec process: '
+      + 'No such file or directory (os error 2)\\")" }';
+
+    it('fails the dispatch when the provider could not create a tool process, despite exit 0', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: jsonlMessage('{"kind":"judged","rubric":"rootCause","findings":[]}'),
+        stderr: [routerRejection('/usr/bin/zsh -lc pwd'), routerRejection('/bin/sh -c pwd')].join('\n'),
+        exitCode: 0,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect({
+        success: result.success,
+        namesTheFailure: /could not create a process for 2 shell tool call/.test(result.output),
+        leaksTheAnswer: result.output.includes('"kind":"judged"'),
+        rateLimited: result.rateLimited,
+        authFailure: result.authFailure,
+      }).toEqual({
+        success: false,
+        namesTheFailure: true,
+        leaksTheAnswer: false,
+        rateLimited: undefined,
+        authFailure: undefined,
+      });
+    });
+
+    it('leaves an ordinary successful dispatch untouched when the sandbox rejects a single command by policy', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: jsonlMessage('Done.'),
+        stderr: 'command rejected: Rejected("approval policy denied `rm -rf /`")',
+        exitCode: 0,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect({ success: result.success, output: result.output.startsWith('Done.') })
+        .toEqual({ success: true, output: true });
+    });
+  });
+
   it('declares synchronous spawn-permit lifecycle capability', () => {
     expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
   });

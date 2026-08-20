@@ -900,6 +900,32 @@ daemon during an episode, see
 [emergency stop a running feature](emergency-stop-a-running-feature.md) — and note that halts
 raised during the episode will not be auto-recovered by the replacement process.
 
+### Codex could not create a process for its shell tool calls
+
+The dispatch output names the failure directly:
+
+```text
+Codex could not create a process for 4 shell tool calls (its tool router reported
+`exec_command failed ... CreateProcess`).
+```
+
+Codex sandboxes each shell tool call inside its own bubblewrap namespace. When the host denies
+that namespace, every `exec_command` is rejected while Codex itself still exits 0 and still
+answers. The engine now classifies such a dispatch as a failure rather than a result, so a
+`build_review` rubric that could not run `git diff` reports an infrastructure failure instead of a
+hollow PASS.
+
+**Diagnose the host, not the feature.** Confirm the sandbox can create a namespace:
+
+```bash
+bwrap --unshare-user --ro-bind / / /bin/true; echo "exit=$?"
+sysctl kernel.apparmor_restrict_unprivileged_userns
+```
+
+A non-zero exit, or the restriction enabled while the daemon already runs inside a namespace,
+means Codex has no way to spawn a shell there. Until the host grants it, route the affected steps
+to another provider; clearing the halt alone re-runs into the same denial.
+
 ### The feature must stop being dispatched entirely
 
 ```bash
