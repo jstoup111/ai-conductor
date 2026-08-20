@@ -2,7 +2,7 @@ import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { join, relative } from 'node:path';
-import type { LLMProvider } from '../execution/llm-provider.js';
+import type { LLMProvider, ProviderStreamObservation } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
@@ -1066,6 +1066,18 @@ export class DefaultStepRunner implements StepRunner {
     ) => Promise<ProviderExecutionResult>,
   ): Promise<ProviderExecutionResult> {
     const pulse = createHeartbeatPulse(this.projectDir, step);
+    const providerStreamThrottle = createProviderStreamThrottle<ProviderStreamObservation>(
+      (observation) => {
+        void this.events?.emit({
+          type: 'provider_stream_progress',
+          step,
+          provider: this.configuredProviders[0] ?? 'unknown',
+          ...observation,
+          ts: new Date().toISOString(),
+        }).catch(() => {});
+      },
+      { minIntervalMs: resolveProviderStreamMinIntervalMs(this.config as ProviderStreamIntervalConfig) },
+    );
     const nextAttempt = () => ({
       logicalStep: step,
       id: `${this.runId}:${step}:${++this.providerLifecycleAttempt}`,
@@ -1088,6 +1100,7 @@ export class DefaultStepRunner implements StepRunner {
       run({
         ...baseOptions,
         onActivity: pulse,
+        onProviderStream: providerStreamThrottle,
         spawnPermit: lease.spawnPermit,
       }),
     );
