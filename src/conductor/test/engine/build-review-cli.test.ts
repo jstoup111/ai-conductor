@@ -33,7 +33,15 @@ describe('build-review findings CLI', () => {
       expect(await validate([])).toBe(true);
       return {
       ok: true as const,
-      record: { kind: 'reduced-coverage' as const, version: 'v1' as const, ...input, acceptedAt: '2026-08-19T12:00:00.000Z' },
+      record: {
+        kind: 'reduced-coverage' as const,
+        version: 'v1' as const,
+        feature: input.feature,
+        identity: { rubric: input.rubric, reason: input.reason },
+        rationale: input.rationale,
+        operator: input.operator,
+        acceptedAt: '2026-08-19T12:00:00.000Z',
+      },
       };
     });
     const store = { appendReducedCoverageIfCurrent };
@@ -42,7 +50,7 @@ describe('build-review findings CLI', () => {
       kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'Provider is unavailable.',
     }, {
       cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
-      readFile: async () => JSON.stringify(aggregate), readMechanicalFaults: async () => 3, createStore: () => store, print: vi.fn(),
+      readFile: async () => JSON.stringify(aggregate), readMechanicalFaults: async () => 3, createStore: () => store, print: vi.fn(), appendEvent: vi.fn(),
     })).resolves.toBe(0);
 
     expect(appendReducedCoverageIfCurrent).toHaveBeenCalledWith({
