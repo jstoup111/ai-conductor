@@ -201,6 +201,19 @@ describe('conduct shipped-record — record committed on the implementation bran
     expect(await git(['log', '--format=%s'])).not.toContain(`shipped record: ${SLUG}`);
   });
 
+  it('treats explicitly unreadable reduced-coverage state as absent evidence and still commits the record', async () => {
+    vi.spyOn(BuildReviewDispositionStore.prototype, 'listReducedCoverage').mockResolvedValue({
+      ok: false,
+      kind: 'unreadable',
+      message: 'reduced-coverage state cannot be read',
+    });
+
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
+    const record = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(record).not.toContain('## Build Review Reduced Coverage');
+    expect(await git(['log', '-1', '--format=%s'])).toBe(`shipped record: ${SLUG}`);
+  });
+
   // The daemon runs `dispatchShippedRecord` IN-PROCESS (finish-publication-production.ts),
   // and daemon-cli.ts tees `console.error` into `.daemon/daemon.log` stamped `[error]`.
   // A successful record write therefore has to leave stderr entirely, or every ship
