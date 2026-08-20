@@ -196,6 +196,7 @@ import {
   clearKickbackLedger,
   creditKickbackGateLaps,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readKickbackLedger,
   writeKickbackLedger,
   type KickbackLedger,
@@ -6731,6 +6732,34 @@ export class Conductor {
 
           if (!result.success) {
             failedStepResult = result;
+            // Task 10: the mechanical lane publishes a terminal aggregate
+            // only after consuming its separate allowance. That aggregate is
+            // the operator's diagnostic, not a retryable grader-dispatch
+            // failure, so stop here instead of entering the generic retry
+            // loop below.
+            if (step.name === 'build_review') {
+              const ledger = await readKickbackLedger(this.projectRoot);
+              const mechanicalFaults = ledger.gates.build_review?.mechanicalFaults ?? 0;
+              const aggregatePublished = await readFile(
+                join(this.projectRoot, BUILD_REVIEW_VERDICT),
+                'utf-8',
+              ).then(() => true).catch(() => false);
+              if (
+                mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW &&
+                aggregatePublished
+              ) {
+                const reason =
+                  `build_review mechanical fault allowance exhausted after ` +
+                  `${mechanicalFaults} fault(s); aggregate published for human review`;
+                state[step.name] = 'failed';
+                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await this.emitLoopHalt(reason);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+            }
             // #814: an EMPTY/whitespace runner output slips past `??` (which
             // only substitutes null/undefined), so `lastError` used to become
             // '' and render as "no reason recorded" — masking a grader/subprocess

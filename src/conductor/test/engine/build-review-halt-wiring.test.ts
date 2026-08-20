@@ -29,7 +29,12 @@ import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
-import { KICKBACK_LEDGER_PATH, readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import {
+  KICKBACK_LEDGER_PATH,
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  readKickbackLedger,
+  writeKickbackLedger,
+} from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { Conductor } from '../test-conductor.js';
 
@@ -727,5 +732,58 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     expect(calls.filter((step) => step === 'build_review')).toHaveLength(1);
     expect(calls).not.toContain('wiring_check');
     expect(await readFile(join(repo, HALT_MARKER), 'utf8').catch(() => null)).toBeNull();
+  }, 30000);
+
+  it('halts for a human after an exhausted mechanical allowance publishes its aggregate instead of retrying', async () => {
+    const fixture = await setupStaleTrackingRefFixture(dir);
+    const repo = fixture.repo;
+    await seedToBuildReview(statePath, repo);
+    const seeded = await readState(statePath);
+    await writeState(statePath, {
+      ...(seeded.ok ? seeded.value : {}),
+      run_started_at: Date.now(),
+    } as ConductState);
+    await writeKickbackLedger(repo, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0,
+          mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+          treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        calls.push(step);
+        if (step === 'build_review') {
+          await writeFile(
+            join(repo, '.pipeline/build-review.json'),
+            JSON.stringify({ terminalMechanicalAggregate: true }),
+          );
+          return { success: false, output: 'scope rubric infrastructure failure' };
+        }
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: withPassingBuildVerification(repo, runner),
+      events,
+      projectRoot: repo,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'build_review',
+    } as never).run();
+
+    expect(calls.filter((step) => step === 'build_review')).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(repo, '.pipeline/build-review.json'), 'utf8')))
+      .toEqual({ terminalMechanicalAggregate: true });
+    expect(await readFile(join(repo, '.pipeline/HALT.class'), 'utf8')).toBe('needs-human');
   }, 30000);
 });
