@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -132,5 +133,63 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
     expect(JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState).toMatchObject({
       test_suite: 'done',
     });
+  });
+
+  it('fast-forwards a CURRENT test-suite proof to build_review without native suite dispatch', async () => {
+    const stateFilePath = await installFixture('unsatisfied-verdict');
+    const observed: StepName[] = [];
+    const inspect = vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never }));
+    const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: {
+        run: async (step) => {
+          observed.push(step);
+          throw new Error('stop after build-review fast-forward');
+        },
+      },
+      events: new ConductorEventEmitter(),
+      resume: true,
+      verifyArtifacts: true,
+      fullSuiteVerifier: { inspect, ensure },
+    });
+
+    await conductor.run();
+
+    expect(observed).toEqual(['build_review']);
+    expect(inspect).toHaveBeenCalledTimes(1);
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it('keeps an all-satisfied resume at its existing no-dispatch endpoint', async () => {
+    const stateFilePath = await installFixture('satisfied-verdict');
+    const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState;
+    for (const step of ALL_STEPS) state[step.name] = 'done';
+    await writeFile(stateFilePath, JSON.stringify(state));
+
+    const observed: StepName[] = [];
+    const inspect = vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never }));
+    const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: {
+        run: async (step) => {
+          observed.push(step);
+          return { success: true };
+        },
+      },
+      events: new ConductorEventEmitter(),
+      resume: true,
+      verifyArtifacts: true,
+      fullSuiteVerifier: { inspect, ensure },
+    });
+
+    await conductor.run();
+
+    expect(observed).toEqual([]);
+    expect(inspect).not.toHaveBeenCalled();
+    expect(ensure).not.toHaveBeenCalled();
   });
 });
