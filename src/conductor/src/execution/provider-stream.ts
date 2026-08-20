@@ -20,6 +20,37 @@ export class ProviderStreamAssembler {
   }
 }
 
+/** Tracks the live child spans represented by Claude's Task tool calls. */
+export class ProviderStreamChildTracker {
+  readonly childObservability = 'observed' as const;
+
+  private readonly openChildIds = new Set<string>();
+
+  get activeChildren(): number {
+    return this.openChildIds.size;
+  }
+
+  /** Apply one stream record; malformed or unrelated records leave state unchanged. */
+  observe(record: unknown): void {
+    if (typeof record !== 'object' || record === null) return;
+    const message = (record as Record<string, unknown>).message;
+    if (typeof message !== 'object' || message === null) return;
+    const content = (message as Record<string, unknown>).content;
+    if (!Array.isArray(content)) return;
+
+    for (const block of content) {
+      if (typeof block !== 'object' || block === null) continue;
+      const fields = block as Record<string, unknown>;
+      if (fields.type === 'tool_use' && fields.name === 'Task' && typeof fields.id === 'string') {
+        this.openChildIds.add(fields.id);
+      }
+      if (fields.type === 'tool_result' && typeof fields.tool_use_id === 'string') {
+        this.openChildIds.delete(fields.tool_use_id);
+      }
+    }
+  }
+}
+
 export interface ProviderStreamTokenTotals {
   uncachedInputTokens: number;
   cachedInputTokens: number;
