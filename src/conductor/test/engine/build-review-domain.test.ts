@@ -594,6 +594,52 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     expect(rejection).not.toMatch(/\b(?:verdict|passed)\b/);
   });
 
+  const diagnoseWithReferences = describeBuildReviewJudgedResultRejection as unknown as (
+    value: unknown,
+    rubric: 'scope' | 'completeness' | 'rootCause',
+    expected: { readonly lapId: string; readonly snapshotDigest: string },
+    references: unknown,
+  ) => string;
+  const membershipRejectionCases = [
+    ['changed path', 'scope', {
+      ...validScopeResult(),
+      findings: [{
+        ...validScopeFinding(), concernKind: 'out-of-plan-change',
+        anchor: { ...validScopeAnchor(), path: 'src/absent.ts' },
+      }],
+    }, { changedTests: [], changedPaths: ['src/changed.ts'], planTasks: [] }, 'findings[0].anchor.path must reference a changed path in the projection'],
+    ['plan task', 'completeness', {
+      kind: 'judged', rubric: 'completeness', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'missing-deliverable', summary: 'The requested output is absent.', evidenceLocations: ['src/task.ts:1'],
+        anchor: { rubric: 'completeness', planTask: '8', missingSurface: 'src/task.ts', missingOutcome: 'writes output', missingKind: 'missing-deliverable' },
+      }],
+    }, { changedTests: [], changedPaths: [], planTasks: ['7'], planTaskSurfaces: { '7': ['src/task.ts'] } }, 'findings[0].anchor.planTask must reference a plan task in the projection'],
+    ['missing surface ownership', 'completeness', {
+      kind: 'judged', rubric: 'completeness', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'missing-deliverable', summary: 'The requested output is absent.', evidenceLocations: ['src/not-owned.ts:1'],
+        anchor: { rubric: 'completeness', planTask: '7', missingSurface: 'src/not-owned.ts', missingOutcome: 'writes output', missingKind: 'missing-deliverable' },
+      }],
+    }, { changedTests: [], changedPaths: [], planTasks: ['7'], planTaskSurfaces: { '7': ['src/owned.ts'] } }, 'findings[0].anchor.missingSurface must be owned by the referenced plan task'],
+    ['content-region hash', 'rootCause', {
+      kind: 'judged', rubric: 'rootCause', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'root-cause-unaddressed', summary: 'The changed path does not repair the cause.', evidenceLocations: ['src/handler.ts:1'],
+        anchor: {
+          rubric: 'rootCause', statedDefect: 'the state is stale', relation: 'root-cause-unaddressed',
+          locus: { path: 'src/handler.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'stale state branch' },
+        },
+      }],
+    }, {
+      changedTests: [], changedPaths: [], planTasks: [],
+      rootCauseLoci: [{ path: 'src/handler.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'persisted state branch' }],
+    }, 'findings[0].anchor.locus must reference a projected content region'],
+  ] as const;
+  it.each(membershipRejectionCases)('diagnoses the rejected %s reference specifically', (_kind, rubric, result, references, diagnostic) => {
+    expect(diagnoseWithReferences(result, rubric, expected, references)).toContain(diagnostic);
+  });
+
   const rejectionCases: ReadonlyArray<readonly [string, () => unknown, string]> = [
     ['non-object result', () => 'just prose', 'not a single JSON object'],
     ['kind', () => ({ ...validScopeResult(), kind: 'result' }), 'top-level "kind"'],
