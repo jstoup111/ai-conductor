@@ -91,6 +91,17 @@ Read \`.docs/specs/2026-07-04-operator-park.md\` first.
     ]);
   });
 
+  it('rejects a declared task that cites a foreign protected artifact', () => {
+    const plan = `### Task 17: Review the existing decision
+**Files:** .docs/validation/report.md
+Read \`.docs/decisions/adr-2026-01-01-other.md\` first.
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([
+      { taskId: '17', path: '.docs/decisions/adr-2026-01-01-other.md' },
+    ]);
+  });
+
   it('allows a declared task to cite a protected artifact as context', () => {
     const plan = `### Task 17: Implement the scanner
 **Files:** src/conductor/src/x.ts
