@@ -520,9 +520,7 @@ export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId):
       ? renderFindingVocabularyMemberShape((BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields as Record<string, readonly string[]>)[field]!.filter((member) => member !== 'out-of-plan-change'))
       : '<canonical projection reference or report string>'}"`,
   ).join(', ');
-  return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "' + CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION + '", ' +
-    '"lapId": "<echo the projection lapId verbatim>", "snapshotDigest": "<echo the projection snapshotDigest verbatim>", ' +
-    `"findings": [{"concernKind": "${renderFindingVocabularyMemberShape(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds)}", "summary": "<non-empty actionable string>", ` +
+  return '{"findings": [{"concernKind": "' + renderFindingVocabularyMemberShape(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds) + '", "summary": "<non-empty actionable string>", ' +
     '"evidenceLocations": ["<path:line or path:line:column>"], ' +
     `"anchor": {"rubric": "${rubric}", ${anchorFields}}}]}`;
 }

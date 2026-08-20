@@ -43,9 +43,9 @@ does not exempt them. Reseal evidence does not weaken another rubric.
 
 ## Result contract (v3)
 
-Return exactly one JSON `judged` result for rubric `scope`: its top-level `kind` field is exactly
-the string `judged` (never `result` or any other field name), it carries contract version `v3`, it
-echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
+Return exactly one JSON object whose only top-level field is `findings`, an array. The engine owns
+the `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot
+identity after validating this findings-only payload.
 Return every independent finding; an empty array means no Scope concern was found. Each finding
 contains:
 

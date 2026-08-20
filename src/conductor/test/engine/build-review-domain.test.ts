@@ -472,6 +472,10 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
   });
 
   it('renders the exact per-rubric anchor schema', () => {
+    expect(renderBuildReviewJudgedResultShape('tautology')).toMatch(/^\{"findings": \[/);
+    expect(renderBuildReviewJudgedResultShape('tautology')).not.toContain('"lapId"');
+    expect(renderBuildReviewJudgedResultShape('tautology')).not.toContain('"snapshotDigest"');
+    expect(renderBuildReviewJudgedResultShape('tautology')).not.toContain('"contractVersion"');
     expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
       '"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
     );

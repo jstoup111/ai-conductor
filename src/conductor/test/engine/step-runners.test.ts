@@ -4112,7 +4112,10 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain('ONLY one JSON object');
     expect(repairPrompt).toContain('did not satisfy the judged-result contract');
     expect(repairPrompt).toContain('anchor');
-    expect(repairPrompt).toContain(`"lapId": "<echo the projection lapId verbatim>"`);
+    expect(repairPrompt).toContain('{"findings": [{');
+    expect([invoke.mock.calls[0][0], invoke.mock.calls[1][0]]
+      .map((options) => (options as InvokeOptions).prompt)
+      .join('\n')).not.toMatch(/\becho\b/i);
     expect(repairPrompt).toContain(
       'Your previous response (bounded excerpt):\nI read the referenced diff and measured each changed test.',
     );
@@ -4130,14 +4133,15 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(prompt).toContain('never flattened');
   });
 
-  it('instructs graders with the current v3 structured-anchor contract, not the retired v2 plain-string one', async () => {
+  it('instructs graders with a findings-only structured-anchor payload', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
     const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
 
     await dispatch(runner);
 
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('`contractVersion` is "v3"');
+    expect(prompt).toContain('only top-level field is `findings`');
+    expect(prompt).not.toContain('`contractVersion` is "v3"');
     expect(prompt).not.toContain('`contractVersion` is "v2"');
     expect(prompt).not.toContain('every anchor value is a plain string');
     expect(prompt).toContain('content-region');
