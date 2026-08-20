@@ -16,7 +16,7 @@ Every `covered` verdict below was confirmed by reading the counterpart id in its
 The consistency pass found no contradiction and no oscillation across the outcome/story/task/ADR
 layers; the one cross-layer pair that could have oscillated — story 3's version override against
 story 5's at-rest version preservation — is satisfiable by a single implementation and is bound by
-the placement constraint recorded in `.docs/conflicts/2026-08-19-clean-rubric-judgements.md` and
+the placement constraint recorded in `.docs/conflicts/2026-08-19-clean-rubric-judgements-rejected-as-invalid-provid.md` and
 restated in plan tasks 16 and 20.
 
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |

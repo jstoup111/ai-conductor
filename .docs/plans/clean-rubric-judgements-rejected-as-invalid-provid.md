@@ -4,7 +4,7 @@
 **Issue:** #1683
 **Design:** [ADR](../decisions/adr-2026-08-19-engine-stamped-rubric-judged-result-envelope.md)
 **Stories:** .docs/stories/clean-rubric-judgements-rejected-as-invalid-provid.md
-**Conflict check:** Clean as of 2026-08-19 — `.docs/conflicts/2026-08-19-clean-rubric-judgements.md`
+**Conflict check:** Clean as of 2026-08-19 — `.docs/conflicts/2026-08-19-clean-rubric-judgements-rejected-as-invalid-provid.md`
 **Architecture review:** [APPROVED WITH CONDITIONS](../decisions/architecture-review-2026-08-19-clean-rubric-judgements-rejected-as-invalid-provid.md)
 
 ## Summary
