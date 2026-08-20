@@ -423,7 +423,7 @@ export async function planProtectedTargetsCommand(
   cmd: PlanProtectedTargetsDispatch,
   deps: {
     print?: (message: string) => void;
-    readFile?: typeof readFile;
+    readFile?: (path: string, encoding: BufferEncoding) => Promise<string>;
   } = {},
 ): Promise<number> {
   const print = deps.print ?? console.log;
@@ -439,7 +439,7 @@ export async function planProtectedTargetsCommand(
 
   for (const { taskId, path } of violations) {
     print(
-      `Task ${taskId}: ${path} — ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the task's targets.`,
+      `Task ${taskId}: ${path} — return this amendment to DECIDE; BUILD tasks must not target protected artifacts.`,
     );
   }
   return 1;
