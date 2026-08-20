@@ -24,10 +24,10 @@ function filesystem(files: Record<string, string> = {}): BuildReviewArtifactFile
   };
 }
 
-function judged() {
+function judged(contractVersion: 'v1' | 'v2' = 'v1') {
   return {
     kind: 'judged' as const, rubric: 'scope' as const, lapId, snapshotDigest: 'sha256:snapshot',
-    contractVersion: 'v1' as never, findings: [], verdict: 'PASS' as const,
+    contractVersion: contractVersion as never, findings: [], verdict: 'PASS' as const,
   };
 }
 
@@ -53,6 +53,19 @@ describe('build-review current-lap branch artifacts', () => {
     expect(artifact).toMatchObject({ rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: judged() });
     expect(Object.keys(fs.files)).toEqual(['/feature/.pipeline/build-review/lap-current/scope.json']);
     expect(await readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
+  });
+
+  it.each(['v1', 'v2'] as const)('parses a persisted %s record under the version it declares', (contractVersion) => {
+    const artifact = {
+      version: 1,
+      rubric: 'scope',
+      lapId,
+      snapshotDigest: 'sha256:snapshot',
+      result: judged(contractVersion),
+      provenance: { kind: 'fresh' },
+    } as const;
+
+    expect(parseBuildReviewBranchArtifact(artifact)).toEqual(artifact);
   });
 
   it.each([

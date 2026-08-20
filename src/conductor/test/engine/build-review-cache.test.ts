@@ -8,6 +8,7 @@ import {
   type BuildReviewCacheEntry,
   type BuildReviewCacheFilesystem,
 } from "../../src/engine/build-review-cache.js";
+import { projectionDigest } from "../../src/engine/build-review-projections.js";
 
 function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   return {
@@ -228,6 +229,41 @@ describe("build-review semantic cache", () => {
       changedPolicy: { kind: "miss", reason: "policy-fingerprint-mismatch" },
       changedProjection: { kind: "miss", reason: "projection-digest-mismatch" },
     });
+  });
+
+  it("serves a pre-change v3 entry as a cache hit and excludes lap identity from its projection digest", () => {
+    const projection = {
+      rubric: "scope",
+      contractVersion: "v3",
+      projectionVersion: "v2",
+      lapId: "lap-before",
+      snapshotDigest: "sha256:snapshot-before",
+      contentDigest: "sha256:content",
+      digest: "sha256:ignored",
+      planBody: "# Plan",
+    } as never;
+    const request = {
+      rubric: "scope" as const,
+      contractVersion: "v3" as const,
+      projectionVersion: "v2" as const,
+      projectionDigest: "sha256:projection-a",
+      policyFingerprint: "sha256:policy-a",
+      lapId: "lap-current" as never,
+      snapshotDigest: "snapshot-current",
+    };
+
+    expect({
+      cache: classifyBuildReviewCacheLookup(entry(), request),
+      digestBefore: projectionDigest(projection),
+      digestAfter: projectionDigest({ ...projection, lapId: "lap-after", snapshotDigest: "sha256:snapshot-after" }),
+    }).toMatchObject({
+      cache: { kind: "hit", hit: { result: { lapId: "lap-current", snapshotDigest: "snapshot-current" } } },
+      digestBefore: expect.any(String),
+      digestAfter: expect.any(String),
+    });
+    expect(projectionDigest(projection)).toBe(
+      projectionDigest({ ...projection, lapId: "lap-after", snapshotDigest: "sha256:snapshot-after" }),
+    );
   });
 
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {

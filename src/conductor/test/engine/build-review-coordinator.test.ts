@@ -170,7 +170,24 @@ describe("build-review coordinator: frozen fan-out", () => {
 
     expect(writeArtifact).toHaveBeenCalledTimes(4);
     expect(writeCache).toHaveBeenCalledTimes(4);
-    expect(writeArtifact.mock.calls.every(([artifact]) => artifact.provenance.kind === "fresh")).toBe(true);
+    expect(writeArtifact.mock.calls.map(([artifact]) => artifact)).toEqual([
+      expect.objectContaining({
+        rubric: "tautology", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
+        result: expect.objectContaining({ kind: "judged", rubric: "tautology", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
+      }),
+      expect.objectContaining({
+        rubric: "scope", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
+        result: expect.objectContaining({ kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
+      }),
+      expect.objectContaining({
+        rubric: "rootCause", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
+        result: expect.objectContaining({ kind: "judged", rubric: "rootCause", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
+      }),
+      expect.objectContaining({
+        rubric: "completeness", lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "fresh" },
+        result: expect.objectContaining({ kind: "judged", rubric: "completeness", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
+      }),
+    ]);
     expect(writeCache.mock.calls.every(([entry]) => entry.result.kind === "judged")).toBe(true);
   });
 
