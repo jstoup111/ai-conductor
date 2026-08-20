@@ -22,6 +22,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Story artifacts under `.docs/stories/` are now corrected in place during DECIDE instead of accumulating additive amendment blocks; all other accepted DECIDE artifacts keep the additive-amendment rule. ([implementation PR #1539](https://github.com/jstoup111/ai-conductor/pull/1539)).
 - Acceptance-spec authoring is disposition-driven — criteria proven at a lower layer complete the acceptance_specs gate with grounded disposition records instead of fabricated specs, and BUILD prefers applicable local patterns. ([implementation PR #1678](https://github.com/jstoup111/ai-conductor/pull/1678)).
+- The plan skill requires every task to carry a "Done when:" block of falsifiable completion checks, closing unbounded outcome language at DECIDE so completion review has a definite stopping point. ([implementation PR #1764](https://github.com/jstoup111/ai-conductor/pull/1764)).
 
 ### Fixed
 
