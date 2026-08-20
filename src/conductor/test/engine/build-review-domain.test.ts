@@ -616,18 +616,27 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     expect(rejection).toContain('findings[0].anchor.changedTest must be a content-region reference');
   });
 
-  it('does not fabricate a verdict contradiction for the recorded non-canonical completeness anchor', () => {
-    const rejection = describeBuildReviewJudgedResultRejection({
-      kind: 'judged', rubric: 'completeness', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+  it('distinguishes an unexplained finding-classification rejection from a supplied verdict contradiction', () => {
+    const withoutVerdict = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'rootCause', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      // Both classifications are valid, but they must agree.
       findings: [{
-        concernKind: 'missing-deliverable', summary: 'The documentation remains stale.', evidenceLocations: ['docs/x.md:648'],
+        concernKind: 'symptom-only-fix', summary: 'The change repairs only a symptom.', evidenceLocations: ['src/x.ts:1'],
         anchor: {
-          rubric: 'completeness', planTask: 'Task 11', missingSurface: 'docs/x.md', missingOutcome: 'Documentation is current', missingKind: 'missing-deliverable',
+          rubric: 'rootCause', statedDefect: 'The root cause remains.',
+          locus: { path: 'src/x.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'changed branch' },
+          relation: 'root-cause-unaddressed',
         },
       }],
-    }, 'completeness', expected);
+    }, 'rootCause', expected);
+    const withContradictoryVerdict = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [], verdict: 'FAIL',
+    }, 'scope', expected);
 
-    expect(rejection).not.toMatch(/\b(?:verdict|passed)\b/);
+    expect(withoutVerdict).toContain('no enumerated check explains why');
+    expect(withoutVerdict).not.toMatch(/contradicts the findings array/);
+    expect(withContradictoryVerdict).toContain('contradicts the findings array');
   });
 
   const diagnoseWithReferences = describeBuildReviewJudgedResultRejection as unknown as (
