@@ -1,7 +1,36 @@
 # ADR: build_review short-circuits on a repeatedly-failing rubric, and every convergence halt names what repeated
 
 **Date:** 2026-08-17
-**Status:** APPROVED
+**Status:** WITHDRAWN (2026-08-20) — was APPROVED
+
+> **Withdrawn 2026-08-20 by operator decision (#1652 → v1.1; #1718 covers the solution).**
+> Not implemented. This ADR is retained as the historical record and because other features'
+> artifacts cite it; it is **not** live guidance and `MAX_RUBRIC_FAILURES_BUILD_REVIEW` does not
+> exist in the engine.
+>
+> D4's threshold of 4 was selected as "the only threshold in the sweep with complete separation" at
+> 85% confidence over an **11-feature** corpus. Re-running the sweep over the current **20-feature**
+> corpus separates at no threshold in 3–6: `rubric-cache-identity-is-sha-anchored` shipped clean
+> with **6** per-rubric failures, while the cap-terminated `2026-08-13-implementation-drifts` peaks
+> at **3**. D4's own stated residual — "corpus size and the labelling of spin versus healthy" — is
+> what came due.
+>
+> The deeper fault is the key, not the number. It counts how *often* a rubric failed, not whether it
+> failed on the *same thing*. `rubric-cache-identity` tautology failed 6 times across **7 distinct
+> sites** (max repetition 1) — convergence; `shipped-record-timing` rootCause failed 4 times across
+> **2 sites** with one repeating **4 of 4** — spin. D2 chose the rubric enum expressly to avoid
+> finding identity ("Not the finding, the site, or any prose"), and that avoidance is why the key
+> cannot tell the two apart.
+>
+> #1718 establishes that the dominant failure mode is **frontier expansion** — later laps opening
+> new substance without repeating any — and assumes this ADR's machinery detects same-substance
+> repetition. It does not. As specified, this design would terminal-HALT exactly the converging
+> features #1718 exists to protect.
+>
+> Any re-spec should key on same-substance repetition, and must account for the #1611 identity drift
+> D2 was avoiding — most likely mechanical bookkeeping plus an LLM equivalence judgement. See #1652
+> for the full corpus replay.
+
 **Deciders:** Engineer (DECIDE phase, #1652), operator-confirmed — including an explicit operator
 override of a recommendation to descope (D9), and an operator direction to re-key the bound onto
 whatever the corpus showed carried real value, which produced D2.
