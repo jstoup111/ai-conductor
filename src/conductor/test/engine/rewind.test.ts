@@ -198,6 +198,43 @@ describe('rewindState', () => {
     }
   });
 
+  it('fails closed with a HALT marker when restoring a deleted marker also fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-marker-protective-failure-'));
+    const state: ConductState = { ...completeState };
+    const original = { ...state };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline/conduct-state.json'), JSON.stringify(state));
+      await writeFile(join(root, '.pipeline/HALT'), 'operator action required\n');
+      await writeFile(join(root, '.pipeline/HALT.class'), 'needs-human\n');
+      let removeCount = 0;
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root, {
+        clearDerivedRecords: async (cwd) => clearHaltAtomically(cwd, {
+          rename,
+          remove: async (path, options) => {
+            removeCount += 1;
+            if (removeCount === 2) throw new Error('second staged marker cannot be removed');
+            await rm(path, options);
+          },
+          readFile: (path) => readFile(path, 'utf-8'),
+          writeFile: async (path, contents) => {
+            if (path.endsWith('/HALT')) throw new Error('HALT restoration write failed');
+            await writeFile(path, contents, 'utf-8');
+          },
+        }),
+      })).resolves.toBe(1);
+
+      expect(await readFile(join(root, '.pipeline/HALT'), 'utf-8')).toBe('needs-human\n');
+      expect(JSON.parse(await readFile(join(root, '.pipeline/conduct-state.json'), 'utf-8'))).toEqual(original);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('HALT restoration write failed'));
+    } finally {
+      error.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('writes operator rewind audit evidence through the existing audit sink', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rewind-audit-'));
     try {

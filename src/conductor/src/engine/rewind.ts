@@ -79,12 +79,41 @@ export async function clearHaltAtomically(
       removed.add(index);
     }
   } catch (error) {
-    for (const index of moved.reverse()) {
+    const restorationFailures: unknown[] = [];
+    let classRepurposedAsHalt = false;
+    for (const index of moved) {
       if (removed.has(index)) {
-        await filesystem.writeFile(originals[index], contents[index]).catch(() => {});
-      } else {
-        await filesystem.rename(staged[index], originals[index]).catch(() => {});
+        try {
+          await filesystem.writeFile(originals[index], contents[index]);
+        } catch (restoreError) {
+          restorationFailures.push(restoreError);
+          // A missing class sidecar is deliberately fail-closed when HALT is
+          // present. If HALT itself cannot be restored, move the still-staged
+          // class into its place so the daemon cannot resume this feature.
+          if (index === 0 && !removed.has(1)) {
+            try {
+              await filesystem.rename(staged[1], originals[0]);
+              classRepurposedAsHalt = true;
+            } catch (protectiveError) {
+              restorationFailures.push(protectiveError);
+            }
+          }
+        }
       }
+    }
+    for (const index of [...moved].reverse()) {
+      if (removed.has(index) || (index === 1 && classRepurposedAsHalt)) continue;
+      try {
+        await filesystem.rename(staged[index], originals[index]);
+      } catch (restoreError) {
+        restorationFailures.push(restoreError);
+      }
+    }
+    if (restorationFailures.length > 0) {
+      throw new AggregateError(
+        [error, ...restorationFailures],
+        `Failed to clear HALT atomically and restore its protective marker: ${restorationFailures.map((failure) => failure instanceof Error ? failure.message : String(failure)).join('; ')}`,
+      );
     }
     throw error;
   }
