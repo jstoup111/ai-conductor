@@ -491,6 +491,13 @@ function selectTerminalResult(stdout: string): string | undefined {
     }
   }
 
+  const terminalLine = stdout.trimEnd().split('\n').at(-1) ?? '';
+  try {
+    JSON.parse(terminalLine);
+  } catch {
+    return undefined;
+  }
+
   return terminalResult === undefined ? undefined : JSON.stringify(terminalResult);
 }
 
