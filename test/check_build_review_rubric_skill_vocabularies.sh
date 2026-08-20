@@ -10,6 +10,36 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 failures=0
 
+# `plan-task` is enforced by this helper, not by its call-site name. Pin its
+# source region so a grammar-only helper edit cannot leave the bindings and
+# provider contracts apparently aligned.
+readonly EXPECTED_PLAN_TASK_GRAMMAR_IMPLEMENTATION_SHA256='6b49982974fff5740ecfcc6932966319eab42d7d307dc9dfc531b00942277004'
+
+extract_plan_task_grammar_implementation_digest() {
+  local domain_file=$1
+
+  sed -n '/^export function parseBuildReviewCanonicalPlanTaskReference/,/^}/p' "$domain_file" \
+    | sha256sum \
+    | awk '{ print $1 }'
+}
+
+check_reference_grammar_implementation_drift() {
+  local domain_file=$1
+  local implementation_digest
+
+  if [ ! -r "$domain_file" ]; then
+    echo "could not read build-review reference grammar source: ${domain_file}" >&2
+    return 1
+  fi
+
+  implementation_digest=$(extract_plan_task_grammar_implementation_digest "$domain_file")
+  if [ -z "$implementation_digest" ] ||
+      [ "$implementation_digest" != "$EXPECTED_PLAN_TASK_GRAMMAR_IMPLEMENTATION_SHA256" ]; then
+    echo 'build-review plan-task grammar implementation drift: update the parser grammar and SKILL.md contracts together' >&2
+    return 1
+  fi
+}
+
 extract_current_engine_vocabulary() {
   local domain_file=$1
   local rubric=$2
@@ -350,6 +380,29 @@ else
   failures=1
 fi
 
+# The parser branch and reference binding remain byte-identical here; only the
+# plan-task helper body changes. The grammar guard must pin the implementation
+# that enforces a declared `plan-task` reference rather than infer its grammar
+# from the helper name at the call site.
+fixture_plan_task_grammar_domain="$fixture_dir/src/conductor/src/engine/build-review-domain-plan-task-grammar.ts"
+cp "$fixture_domain" "$fixture_plan_task_grammar_domain"
+sed -i '/^function parseBuildReviewCanonicalPlanTaskReference/c\function parseBuildReviewCanonicalPlanTaskReference(value: unknown): unknown { return parseBuildReviewCanonicalPathReference(value); }' \
+  "$fixture_plan_task_grammar_domain"
+
+if ! grep -Fq 'return parseBuildReviewCanonicalPathReference(value);' "$fixture_plan_task_grammar_domain"; then
+  echo 'rubric plan-task grammar implementation fixture is malformed' >&2
+  failures=1
+elif fixture_output=$(check_reference_grammar_implementation_drift "$fixture_plan_task_grammar_domain" 2>&1); then
+  echo 'known gap: reference-grammar guard accepts a parser-helper-only grammar change' >&2
+  failures=1
+elif grep -Fq 'build-review plan-task grammar implementation drift: update the parser grammar and SKILL.md contracts together' <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard rejects parser-helper-only grammar drift'
+else
+  echo 'rubric reference-grammar guard rejected parser-helper-only grammar drift without the required diagnostic' >&2
+  echo "$fixture_output" >&2
+  failures=1
+fi
+
 fixture_missing_domain="$fixture_dir/src/conductor/src/engine/missing-build-review-domain.ts"
 if fixture_output=$(check_reference_grammar_drift "$fixture_missing_domain" "$fixture_harness" 2>&1); then
   echo 'known gap: reference-grammar guard accepts an unreadable parser source' >&2
@@ -367,6 +420,10 @@ if ! check_vocabulary_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-
 fi
 
 if ! check_reference_grammar_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
+  failures=1
+fi
+
+if ! check_reference_grammar_implementation_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts"; then
   failures=1
 fi
 
