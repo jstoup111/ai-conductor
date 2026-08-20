@@ -604,7 +604,7 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     ['changed path', 'scope', {
       ...validScopeResult(),
       findings: [{
-        ...validScopeFinding(), concernKind: 'out-of-plan-change',
+        ...validScopeFinding(), concernKind: 'not-authorized-by-plan',
         anchor: { ...validScopeAnchor(), path: 'src/absent.ts' },
       }],
     }, { changedTests: [], changedPaths: ['src/changed.ts'], planTasks: [] }, 'findings[0].anchor.path must reference a changed path in the projection'],

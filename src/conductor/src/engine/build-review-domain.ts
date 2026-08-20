@@ -539,6 +539,7 @@ export function describeBuildReviewJudgedResultRejection(
   value: unknown,
   rubric: BuildReviewRubricId,
   expected: { readonly lapId: string; readonly snapshotDigest: string },
+  references?: BuildReviewFindingReferenceContext,
 ): string {
   const source = record(value);
   if (!source) return 'the result is not a single JSON object';
@@ -571,6 +572,17 @@ export function describeBuildReviewJudgedResultRejection(
       } else {
         if (anchor.rubric !== rubric) problems.push(`findings[${index}].anchor.rubric must be "${rubric}"`);
         for (const field of ANCHOR_FIELDS[rubric]) {
+          const contentRegionField = source.contractVersion === 'v3' &&
+            ((rubric === 'tautology' && field === 'changedTest') || (rubric === 'rootCause' && field === 'locus'));
+          if (contentRegionField) {
+            const reference = parseContentRegionReference(anchor[field]);
+            const candidates = field === 'changedTest' ? references?.changedTestRegions : references?.rootCauseLoci;
+            if (!reference) problems.push(`findings[${index}].anchor.${field} must be a content-region reference`);
+            else if (candidates && !matchesContentRegion(candidates, reference)) {
+              problems.push(`findings[${index}].anchor.${field} must reference a projected content region`);
+            }
+            continue;
+          }
           if (!nonEmptyString(anchor[field])) problems.push(`findings[${index}].anchor.${field} must be a non-empty string`);
           else if (field === CLASSIFICATION_ANCHOR_FIELDS[rubric] && !parseAnchorClassification(
             anchor[field], rubric, field as 'violationKind' | 'relation' | 'missingKind',
@@ -579,6 +591,24 @@ export function describeBuildReviewJudgedResultRejection(
               (BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields as Record<string, readonly string[]>)[field]!,
               `findings[${index}].anchor.${field}`,
             ));
+          }
+          else if (rubric === 'scope' && field === 'path') {
+            const path = parseBuildReviewCanonicalPathReference(anchor.path);
+            if (path && references?.changedPaths && !references.changedPaths.includes(path)) {
+              problems.push(`findings[${index}].anchor.path must reference a changed path in the projection`);
+            }
+          } else if (rubric === 'completeness' && field === 'planTask') {
+            const planTask = parseBuildReviewCanonicalPlanTaskReference(anchor.planTask);
+            if (planTask && references?.planTasks && !references.planTasks.includes(planTask)) {
+              problems.push(`findings[${index}].anchor.planTask must reference a plan task in the projection`);
+            }
+          } else if (rubric === 'completeness' && field === 'missingSurface') {
+            const planTask = parseBuildReviewCanonicalPlanTaskReference(anchor.planTask);
+            const surface = parseBuildReviewCanonicalPathReference(anchor.missingSurface);
+            const surfaces = planTask && references?.planTaskSurfaces?.[planTask];
+            if (surface && surfaces && !surfaces.includes(surface)) {
+              problems.push(`findings[${index}].anchor.missingSurface must be owned by the referenced plan task`);
+            }
           }
         }
       }
@@ -599,7 +629,7 @@ export function describeBuildReviewJudgedResultRejection(
   if (problems.length === 0 && hasVerdictContradiction) {
     problems.push('a supplied "verdict"/"passed" field contradicts the findings array — omit both; the engine derives the verdict');
   }
-  if (problems.length === 0 && parseBuildReviewJudgedResult(source) === undefined) {
+  if (problems.length === 0 && parseBuildReviewJudgedResult(source, references) === undefined) {
     problems.push('the result did not satisfy the judged contract and no enumerated check explains why');
   }
   if (problems.length === 0) return 'the result parsed but did not satisfy the judged contract (duplicate finding identities are rejected)';

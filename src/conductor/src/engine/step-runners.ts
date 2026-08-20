@@ -56,6 +56,7 @@ import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+  buildReviewFindingReferenceContext,
   describeBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
@@ -2022,9 +2023,8 @@ export class DefaultStepRunner implements StepRunner {
     if (result) return { result, rejection: '' };
     try {
       return {
-        rejection: describeBuildReviewJudgedResultRejection(candidate, rubric, {
-          lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        }),
+        rejection: describeBuildReviewJudgedResultRejection(candidate, rubric, projection,
+          buildReviewFindingReferenceContext(projection)),
       };
     } catch {
       // Diagnosis must never turn a repairable shape failure into a thrown
