@@ -461,6 +461,15 @@ describe('build-review domain', () => {
 
 describe('build-review judged-result contract rendering and rejection diagnosis', () => {
   const expected = { lapId: 'lap-a237', snapshotDigest: 'sha256:snap' };
+  const validScopeAnchor = () => ({ rubric: 'scope' as const, path: 'src/x.ts', relation: 'not-authorized-by-plan' });
+  const validScopeFinding = () => ({
+    concernKind: 'not-authorized-by-plan', summary: 'The file is outside the plan.', evidenceLocations: ['src/x.ts:1'],
+    anchor: validScopeAnchor(),
+  });
+  const validScopeResult = () => ({
+    kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+    findings: [],
+  });
 
   it('renders the exact per-rubric anchor schema', () => {
     expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
@@ -583,6 +592,31 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     }, 'completeness', expected);
 
     expect(rejection).not.toMatch(/\b(?:verdict|passed)\b/);
+  });
+
+  const rejectionCases: ReadonlyArray<readonly [string, () => unknown, string]> = [
+    ['non-object result', () => 'just prose', 'not a single JSON object'],
+    ['kind', () => ({ ...validScopeResult(), kind: 'result' }), 'top-level "kind"'],
+    ['rubric', () => ({ ...validScopeResult(), rubric: 'rootCause' }), '"rubric" must be "scope"'],
+    ['lap id', () => ({ ...validScopeResult(), lapId: 'lap-other' }), 'must echo the projection\'s lapId'],
+    ['contract version', () => ({ ...validScopeResult(), contractVersion: 'v2' }), '"contractVersion" must be "v3"'],
+    ['snapshot digest', () => ({ ...validScopeResult(), snapshotDigest: 'sha256:other' }), '"snapshotDigest" must echo'],
+    ['findings array', () => ({ ...validScopeResult(), findings: 'none' }), '"findings" must be an array'],
+    ['finding object', () => ({ ...validScopeResult(), findings: ['not an object'] }), 'findings[0] is not an object'],
+    ['concern kind presence', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), concernKind: '' }] }), 'findings[0].concernKind must be a non-empty string'],
+    ['concern kind vocabulary', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), concernKind: 'unknown' }] }), 'findings[0].concernKind must be one of'],
+    ['summary', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), summary: '' }] }), 'findings[0].summary must be a non-empty string'],
+    ['evidence locations', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), evidenceLocations: [] }] }), 'findings[0].evidenceLocations must be a non-empty array'],
+    ['anchor presence', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: undefined }] }), 'findings[0].anchor is required'],
+    ['anchor rubric', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), rubric: 'rootCause' } }] }), 'findings[0].anchor.rubric must be "scope"'],
+    ['anchor field presence', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), path: '' } }] }), 'findings[0].anchor.path must be a non-empty string'],
+    ['anchor classification vocabulary', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), relation: 'unknown' } }] }), 'findings[0].anchor.relation must be one of'],
+    ['relocation audit', () => ({ ...validScopeResult(), relocationAudit: ['unexpected'] }), '"relocationAudit" must be absent or empty for rubric scope'],
+    ['verdict contradiction', () => ({ ...validScopeResult(), verdict: 'FAIL' }), 'contradicts the findings array'],
+    ['passed contradiction', () => ({ ...validScopeResult(), passed: false }), 'contradicts the findings array'],
+  ];
+  it.each(rejectionCases)('retains the %s rejection diagnosis', (_cause, candidate, diagnostic) => {
+    expect(describeBuildReviewJudgedResultRejection(candidate(), 'scope', expected)).toContain(diagnostic);
   });
 
   it('bounds the diagnosis to a fixed number of named problems', () => {

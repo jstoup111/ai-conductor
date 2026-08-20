@@ -236,6 +236,26 @@ describe('build-review finding identity', () => {
     expect(titled?.id).toBe(bare?.id);
   });
 
+  it('rejects title-differing completeness findings after they normalize to one identity', () => {
+    const findings = [
+      'Task 7: confirm the resolved channel',
+      'Task 7: document the resolved channel source',
+    ].map((planTask) => ({
+      rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-deliverable',
+      anchor: {
+        rubric: 'completeness', planTask,
+        missingSurface: 'src/conductor/src/engine/build-review-domain.ts',
+        missingOutcome: 'normalizes the plan-task reference', missingKind: 'missing-deliverable',
+      },
+    }));
+    const expectedId = 'sha256:682da73785b1445942b0a6f6b0239b0c1709baab2b8f882c014e2ab8eed76701';
+
+    expect({
+      normalizedIds: findings.map((finding) => canonicalizeBuildReviewFindingIdentity(finding)?.id),
+      findingSet: canonicalizeBuildReviewFindingSet(findings),
+    }).toEqual({ normalizedIds: [expectedId, expectedId], findingSet: undefined });
+  });
+
   it('keeps distinct canonical snapshot references as distinct identities', () => {
     const subjects = [
       { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'source-text-mirror' }, field: 'changedTest', alternate: 'test/b.test.ts' },
