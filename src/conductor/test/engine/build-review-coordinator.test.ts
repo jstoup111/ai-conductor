@@ -615,4 +615,28 @@ describe("build-review coordinator: findings-only provider payloads", () => {
         },
       });
   });
+
+  it("stamps one projection identity onto concurrent findings-only rubric results", async () => {
+    const coordination = await coordinateBuildReviewRubrics({
+      config: noTautology(),
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async () => ({ findings: [] }),
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+
+    expect(coordination.kind === "ready" ? coordination.branches.filter((branch) =>
+      branch.kind === "dispatched" && (branch.rubric === "scope" || branch.rubric === "rootCause"),
+    ) : []).toEqual([
+      {
+        kind: "dispatched", rubric: "scope",
+        result: expect.objectContaining({ lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
+      },
+      {
+        kind: "dispatched", rubric: "rootCause",
+        result: expect.objectContaining({ lapId: "lap-current", snapshotDigest: "sha256:snapshot" }),
+      },
+    ]);
+  });
 });
