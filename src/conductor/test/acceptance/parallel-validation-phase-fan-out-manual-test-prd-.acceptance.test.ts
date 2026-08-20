@@ -41,8 +41,8 @@ import type { ConductState, ConductorEvent, StepName } from '../../src/types/ind
 // function's return value:
 //
 //   A. manual_test and prd_audit dispatch with overlapping execution windows
-//      under a cap, and the group's wall-clock beats the serial sum (Story 1
-//      happy path 1, negative 1)
+//      without exceeding the configured cap (Story 1 happy path 1,
+//      negative 1)
 //   B. a validator that throws before writing any completion marker still
 //      lets its siblings dispatch, and produces no remediation.json for that
 //      branch (Story 1 negative 2)
@@ -188,7 +188,7 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     );
   }
 
-  // ── A. concurrent dispatch under cap + wall-clock proof ──────────────────
+  // ── A. concurrent dispatch under cap ─────────────────────────────────────
   it('dispatches manual_test and prd_audit with overlapping execution windows instead of strictly serially (cap 2)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'parvalid-overlap-'));
     const statePath = join(dir, 'conduct-state.json');
@@ -216,7 +216,9 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       };
 
       const events = new ConductorEventEmitter();
-      const conductor = makeConductor(dir, statePath, runner, events);
+      const conductor = makeConductor(dir, statePath, runner, events, {
+        config: { validation_concurrency: 2 },
+      });
       await conductor.run();
 
       const manualTestEnd = timeline.find((e) => e.step === 'manual_test' && e.phase === 'end');
@@ -234,10 +236,9 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     }
   });
 
-  it('the group wall-clock beats the serial sum for three stub validators of durations 3t/2t/t under cap 2', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'parvalid-wallclock-'));
+  it('runs three validators concurrently without exceeding cap 2', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-cap-'));
     const statePath = join(dir, 'conduct-state.json');
-    const t = 50;
     try {
       await seedToValidators(dir, statePath, {
         retro: 'done',
@@ -245,33 +246,50 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
         finish: 'done',
       });
 
+      let inFlight = 0;
+      let peakInFlight = 0;
+      const validatorsRun: StepName[] = [];
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
+          const isValidator = [
+            'manual_test',
+            'prd_audit',
+            'architecture_review_as_built',
+          ].includes(step);
+          if (isValidator) {
+            inFlight += 1;
+            peakInFlight = Math.max(peakInFlight, inFlight);
+            validatorsRun.push(step);
+
+            // Yield without relying on elapsed time. A concurrent dispatcher
+            // starts the second validator before this one resumes; a serial
+            // dispatcher cannot do so until this invocation returns.
+            await Promise.resolve();
+          }
+
           if (step === 'manual_test') {
-            await delay(3 * t);
             await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           } else if (step === 'prd_audit') {
-            await delay(2 * t);
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
-          } else if (step === 'architecture_review_as_built') {
-            await delay(t);
           }
+          if (isValidator) inFlight -= 1;
           return { success: true } as StepRunResult;
         }),
       };
 
       const events = new ConductorEventEmitter();
-      const conductor = makeConductor(dir, statePath, runner, events);
+      const conductor = makeConductor(dir, statePath, runner, events, {
+        config: { validation_concurrency: 2 },
+      });
 
-      const startedAt = Date.now();
       await conductor.run();
-      const totalMs = Date.now() - startedAt;
 
-      // Serial sum is 6t (300ms); a real cap-2 fan-out finishes in ~3t
-      // (150ms, the longest single branch). Assert comfortably below the
-      // serial sum (5t) so this is not a hair-trigger timing flake, while
-      // still failing today's genuinely-serial ~6t execution.
-      expect(totalMs).toBeLessThan(5 * t);
+      expect(validatorsRun).toEqual([
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
+      expect(peakInFlight).toBe(2);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
