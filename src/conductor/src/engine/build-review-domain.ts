@@ -528,6 +528,38 @@ export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId):
 }
 
 const MAX_REJECTION_PROBLEMS = 6;
+const MAX_REJECTION_VALUE_LENGTH = 63;
+
+function describeRejectionValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.length <= MAX_REJECTION_VALUE_LENGTH
+      ? JSON.stringify(value)
+      : `${JSON.stringify(value.slice(0, MAX_REJECTION_VALUE_LENGTH)).slice(0, -1)}…"`;
+  }
+  return JSON.stringify(value) ?? `a ${typeof value}`;
+}
+
+function anchorReferenceGrammar(
+  rubric: BuildReviewRubricId,
+  field: string,
+): { readonly description: string; readonly parse: (value: unknown) => string | undefined } | undefined {
+  if (rubric === 'scope' && field === 'path') {
+    return { description: 'canonical repository-relative path', parse: parseBuildReviewCanonicalPathReference };
+  }
+  if (rubric === 'completeness' && field === 'planTask') {
+    return { description: 'canonical plan-task reference', parse: parseBuildReviewCanonicalPlanTaskReference };
+  }
+  if (rubric === 'completeness' && field === 'missingSurface') {
+    return { description: 'canonical repository-relative path', parse: parseBuildReviewCanonicalPathReference };
+  }
+  if (rubric === 'tautology' && field === 'changedTest') {
+    return { description: 'canonical repository-relative path', parse: parseBuildReviewCanonicalPathReference };
+  }
+  if (rubric === 'rootCause' && field === 'locus') {
+    return { description: 'canonical repository-relative path', parse: parseBuildReviewCanonicalPathReference };
+  }
+  return undefined;
+}
 
 /**
  * Diagnose why a candidate fails `parseBuildReviewJudgedResult` (plus the
@@ -583,7 +615,13 @@ export function describeBuildReviewJudgedResultRejection(
             }
             continue;
           }
-          if (!nonEmptyString(anchor[field])) problems.push(`findings[${index}].anchor.${field} must be a non-empty string`);
+          const grammar = anchorReferenceGrammar(rubric, field);
+          if (!Object.hasOwn(anchor, field)) problems.push(`findings[${index}].anchor.${field} is required`);
+          else if (typeof anchor[field] !== 'string') problems.push(`findings[${index}].anchor.${field} must be a string (got ${describeRejectionValue(anchor[field])})`);
+          else if (!nonEmptyString(anchor[field])) problems.push(`findings[${index}].anchor.${field} must be a non-empty string`);
+          else if (grammar && !grammar.parse(anchor[field])) {
+            problems.push(`findings[${index}].anchor.${field} must be a ${grammar.description} (got ${describeRejectionValue(anchor[field])})`);
+          }
           else if (field === CLASSIFICATION_ANCHOR_FIELDS[rubric] && !parseAnchorClassification(
             anchor[field], rubric, field as 'violationKind' | 'relation' | 'missingKind',
           )) {

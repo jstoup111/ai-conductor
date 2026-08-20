@@ -640,6 +640,25 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     expect(diagnoseWithReferences(result, rubric, expected, references)).toContain(diagnostic);
   });
 
+  it('distinguishes absent, wrong-type, non-canonical, and bounded anchor field values', () => {
+    const completenessResult = (planTask: unknown, includePlanTask = true) => ({
+      kind: 'judged', rubric: 'completeness', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'missing-deliverable', summary: 'The requested output is absent.', evidenceLocations: ['src/task.ts:1'],
+        anchor: {
+          rubric: 'completeness', missingSurface: 'src/task.ts', missingOutcome: 'writes output', missingKind: 'missing-deliverable',
+          ...(includePlanTask ? { planTask } : {}),
+        },
+      }],
+    });
+    const longPlanTask = `the ${'x'.repeat(512)}`;
+
+    expect(describeBuildReviewJudgedResultRejection(completenessResult(undefined, false), 'completeness', expected)).toContain('findings[0].anchor.planTask is required');
+    expect(describeBuildReviewJudgedResultRejection(completenessResult(7), 'completeness', expected)).toContain('findings[0].anchor.planTask must be a string (got 7)');
+    expect(describeBuildReviewJudgedResultRejection(completenessResult('the install channel resolution step'), 'completeness', expected)).toContain('findings[0].anchor.planTask must be a canonical plan-task reference');
+    expect(describeBuildReviewJudgedResultRejection(completenessResult(longPlanTask), 'completeness', expected)).toMatch(/planTask.*"the x{59}…"/);
+  });
+
   const rejectionCases: ReadonlyArray<readonly [string, () => unknown, string]> = [
     ['non-object result', () => 'just prose', 'not a single JSON object'],
     ['kind', () => ({ ...validScopeResult(), kind: 'result' }), 'top-level "kind"'],
