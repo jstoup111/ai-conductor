@@ -81,6 +81,8 @@ contains:
 `test-does-not-exercise-changed-behavior`, `assertion-derived-from-test-data`,
 `source-text-mirror`.
 
+**Reference grammar:** `anchor.changedTest` is a `content-region` reference.
+
 - a `concernKind` field (never `kind`) carrying the concern kind, with one of:
   `assertion-insensitive-to-production`,
   `test-does-not-exercise-changed-behavior`, `assertion-derived-from-test-data`, or

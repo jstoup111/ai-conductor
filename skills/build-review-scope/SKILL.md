@@ -51,6 +51,8 @@ contains:
 
 **Closed vocabulary:** `out-of-plan-change`, `not-authorized-by-plan`.
 
+**Reference grammar:** `anchor.path` is a `path` reference.
+
 - a `concernKind` field (never `kind`) with the sole allowed member
   `out-of-plan-change`;
 - typed logical anchors for the out-of-plan path or surface and its plan-scope relation, carried

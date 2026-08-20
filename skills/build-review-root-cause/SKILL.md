@@ -45,6 +45,8 @@ Return every independent finding; an empty array means a PASS for this rubric. E
 **Closed vocabulary:** `root-cause-unaddressed`, `symptom-only-fix`,
 `provenance-sensitive-cache-identity`.
 
+**Reference grammar:** `anchor.locus` is a `content-region` reference.
+
 - a `concernKind` field (never `kind`) with one of: `root-cause-unaddressed`,
   `symptom-only-fix`, or `provenance-sensitive-cache-identity`;
 - typed logical anchors for the stated defect/outcome and implementation mechanism or locus judged

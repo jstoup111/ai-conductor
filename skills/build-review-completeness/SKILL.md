@@ -98,6 +98,8 @@ Each finding contains:
 
 **Closed vocabulary:** `missing-deliverable`.
 
+**Reference grammar:** `anchor.planTask` is a `plan-task` reference; `anchor.missingSurface` is a `path` reference.
+
 - a `concernKind` field (never `kind`) with the sole allowed member `missing-deliverable`;
 - typed logical anchors for the approved plan outcome/task and missing deliverable, carried in a
   nested `anchor` object — `{"rubric": "completeness", "planTask": "<projection task reference>",

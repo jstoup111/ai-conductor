@@ -24,6 +24,21 @@ extract_current_engine_vocabulary() {
     | sort -u
 }
 
+extract_current_engine_reference_grammars() {
+  local domain_file=$1
+  local rubric=$2
+
+  awk -v rubric="$rubric" '
+    /^export const BUILD_REVIEW_FINDING_REFERENCE_BINDINGS = Object\.freeze\(\{$/ { in_bindings = 1; next }
+    in_bindings && $0 ~ "^  " rubric ": Object\\.freeze\\(\\{" { in_rubric = 1 }
+    in_rubric { print }
+    in_rubric && /\}\),$/ { exit }
+  ' "$domain_file" \
+    | grep -oE "[A-Za-z][A-Za-z0-9]*: '[a-z-]+'" \
+    | sed "s/: '/=/; s/'$//" \
+    | sort -u
+}
+
 check_vocabulary_drift() {
   local domain_file=$1
   local harness_dir=$2
@@ -47,6 +62,60 @@ check_vocabulary_drift() {
       echo "build-review ${rubric} vocabulary drift: update the engine and SKILL.md together" >&2
       return 1
     fi
+  done
+}
+
+extract_documented_reference_grammars() {
+  local skill_file=$1
+
+  grep '^\*\*Reference grammar:\*\*' "$skill_file" \
+    | grep -oE '`anchor\.[A-Za-z][A-Za-z0-9]*` is a `[a-z-]+` reference' \
+    | sed -E 's/`anchor\.([A-Za-z][A-Za-z0-9]*)` is a `([a-z-]+)` reference/\1=\2/' \
+    | sort -u
+}
+
+check_reference_grammar_drift() {
+  local domain_file=$1
+  local harness_dir=$2
+  local rubric skill_file engine_grammars documented_grammars field grammar
+
+  if [ ! -r "$domain_file" ]; then
+    echo "could not read build-review reference grammar source: ${domain_file}" >&2
+    return 1
+  fi
+
+  for rubric in tautology scope rootCause completeness; do
+    skill_file="$harness_dir/skills/build-review-${rubric//rootCause/root-cause}/SKILL.md"
+    if [ ! -r "$skill_file" ]; then
+      echo "could not read build-review ${rubric} reference grammar contract: ${skill_file}" >&2
+      return 1
+    fi
+
+    if ! engine_grammars=$(extract_current_engine_reference_grammars "$domain_file" "$rubric"); then
+      echo "could not extract build-review ${rubric} reference grammar bindings from ${domain_file}" >&2
+      return 1
+    fi
+    if [ -z "$engine_grammars" ]; then
+      echo "could not extract build-review ${rubric} reference grammar bindings from ${domain_file}" >&2
+      return 1
+    fi
+
+    documented_grammars=$(extract_documented_reference_grammars "$skill_file")
+    while IFS='=' read -r field grammar; do
+      [ -n "$field" ] || continue
+      if ! grep -Fxq "${field}=${grammar}" <<<"$documented_grammars"; then
+        echo "build-review ${rubric} reference grammar drift: anchor.${field} requires ${grammar}, but SKILL.md does not state that grammar" >&2
+        return 1
+      fi
+    done <<<"$engine_grammars"
+
+    while IFS='=' read -r field grammar; do
+      [ -n "$field" ] || continue
+      if ! grep -Fxq "${field}=${grammar}" <<<"$engine_grammars"; then
+        echo "build-review ${rubric} reference grammar drift: anchor.${field} states stale ${grammar}, which the engine no longer enforces" >&2
+        return 1
+      fi
+    done <<<"$documented_grammars"
   done
 }
 
@@ -85,6 +154,13 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
 });
 
 const CANONICAL_PLAN_TASK_REFERENCE = /^Task [1-9][0-9]*$/;
+
+export const BUILD_REVIEW_FINDING_REFERENCE_BINDINGS = Object.freeze({
+  tautology: Object.freeze({ changedTest: 'content-region' }),
+  scope: Object.freeze({ path: 'path' }),
+  rootCause: Object.freeze({ locus: 'content-region' }),
+  completeness: Object.freeze({ planTask: 'plan-task', missingSurface: 'path' }),
+});
 EOF
 
 for rubric in tautology scope root-cause completeness; do
@@ -93,25 +169,44 @@ done
 
 printf '%s\n' '**Closed vocabulary:** `assertion-insensitive-to-production`' \
   >"$fixture_harness/skills/build-review-tautology/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.changedTest` is a `content-region` reference.' \
+  >>"$fixture_harness/skills/build-review-tautology/SKILL.md"
 printf '%s\n' '**Closed vocabulary:** `out-of-plan-change`' \
   >"$fixture_harness/skills/build-review-scope/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.path` is a `path` reference.' \
+  >>"$fixture_harness/skills/build-review-scope/SKILL.md"
 printf '%s\n' '**Closed vocabulary:** `root-cause-unaddressed`' \
   >"$fixture_harness/skills/build-review-root-cause/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
+  >>"$fixture_harness/skills/build-review-root-cause/SKILL.md"
 printf '%s\n' '**Closed vocabulary:** `missing-deliverable`' \
   >"$fixture_harness/skills/build-review-completeness/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.missingSurface` is a `path` reference.' \
+  >>"$fixture_harness/skills/build-review-completeness/SKILL.md"
 
 if ! grep -q 'CANONICAL_PLAN_TASK_REFERENCE' "$fixture_domain" \
     || grep -q 'Task \[1-9\]' "$fixture_harness/skills/build-review-completeness/SKILL.md"; then
   echo 'rubric reference-grammar fixture is malformed' >&2
   failures=1
-elif check_vocabulary_drift "$fixture_domain" "$fixture_harness"; then
-  echo 'known gap: vocabulary guard accepts an unstated plan-task reference grammar fixture'
+elif ! check_vocabulary_drift "$fixture_domain" "$fixture_harness"; then
+  echo 'rubric vocabulary guard unexpectedly rejected the reference-grammar fixture' >&2
+  failures=1
+elif fixture_output=$(check_reference_grammar_drift "$fixture_domain" "$fixture_harness" 2>&1); then
+  echo 'known gap: reference-grammar guard accepts an unstated plan-task grammar fixture' >&2
+  failures=1
+elif grep -Fq 'build-review completeness reference grammar drift: anchor.planTask requires plan-task, but SKILL.md does not state that grammar' <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard rejects the unstated plan-task grammar fixture'
 else
-  echo 'rubric vocabulary guard unexpectedly rejected the unstated-grammar fixture' >&2
+  echo 'rubric reference-grammar guard rejected the fixture without the required diagnostic' >&2
+  echo "$fixture_output" >&2
   failures=1
 fi
 
 if ! check_vocabulary_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
+  failures=1
+fi
+
+if ! check_reference_grammar_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
   failures=1
 fi
 
