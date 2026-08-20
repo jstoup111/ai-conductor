@@ -1,5 +1,6 @@
 import type { BuildReviewRubricId } from "../types/config.js";
 import {
+  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
   parseBuildReviewDispatchFailure,
   buildReviewFindingReferenceContext,
   parseBuildReviewJudgedResult,
@@ -175,16 +176,24 @@ export function validateBuildReviewDispatchedResult(
   rubric: BuildReviewRubricId,
   projection: BuildReviewRubricProjection,
 ): BuildReviewJudgedResult | undefined {
-  const result = parseBuildReviewJudgedResult(candidate, buildReviewFindingReferenceContext(projection));
+  const source = typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
+    ? candidate as Record<string, unknown>
+    : undefined;
+  const result = source && parseBuildReviewJudgedResult({
+    kind: "judged",
+    rubric,
+    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+    lapId: projection.lapId,
+    snapshotDigest: projection.snapshotDigest,
+    findings: source.findings,
+  }, buildReviewFindingReferenceContext(projection));
   // Treat the provider list as one boundary value.  Parsing individual
   // findings is insufficient: duplicate/colliding identities would otherwise
   // become two independently persisted branch facts.
   const canonical = result && canonicalizeBuildReviewFindingSet(result.findings.map((finding) => ({
     rubric: result.rubric, contractVersion: result.contractVersion, ...finding,
   })));
-  return result && canonical && canonical.length === result.findings.length &&
-    result.rubric === rubric && result.lapId === projection.lapId &&
-    result.snapshotDigest === projection.snapshotDigest ? result : undefined;
+  return result && canonical && canonical.length === result.findings.length ? result : undefined;
 }
 
 function validWrittenArtifact(

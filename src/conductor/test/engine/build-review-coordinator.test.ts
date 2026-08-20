@@ -561,7 +561,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
   const noTautology = () =>
     config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } });
 
-  const judged = (rubric: "scope" | "rootCause" | "completeness", projection: { lapId: string; snapshotDigest: string }) => ({
+  const judged = (rubric: "tautology" | "scope" | "rootCause" | "completeness", projection: { lapId: string; snapshotDigest: string }) => ({
     kind: "judged" as const, rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
     contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
   });
