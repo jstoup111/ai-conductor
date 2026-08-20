@@ -241,6 +241,33 @@ else
   failures=1
 fi
 
+# Remediation Task root-cause-3 fixture: the parser reads `anchor.changedTest`
+# for the root-cause locus while the binding and contract remain `anchor.locus`.
+# This exercises parser-only reference-field drift independently of a grammar
+# substitution, because the manually maintained declaration is deliberately
+# left untouched.
+fixture_field_domain="$fixture_dir/src/conductor/src/engine/build-review-domain-reference-field.ts"
+cp "$fixture_domain" "$fixture_field_domain"
+sed -i 's/parseContentRegionReference(source\.locus)/parseContentRegionReference(source.changedTest)/' "$fixture_field_domain"
+
+if ! grep -q "rootCause: Object.freeze({ locus: 'content-region' })" "$fixture_field_domain" \
+    || ! grep -q 'parseContentRegionReference(source.changedTest)' "$fixture_field_domain"; then
+  echo 'rubric reference-field fixture is malformed' >&2
+  failures=1
+elif ! check_vocabulary_drift "$fixture_field_domain" "$fixture_harness"; then
+  echo 'rubric vocabulary guard unexpectedly rejected the reference-field fixture' >&2
+  failures=1
+elif fixture_output=$(check_reference_grammar_drift "$fixture_field_domain" "$fixture_harness" 2>&1); then
+  echo 'known gap: reference-grammar guard accepts a parser-only reference-field change' >&2
+  failures=1
+elif grep -Fq 'build-review rootCause reference grammar drift: anchor.changedTest requires content-region, but SKILL.md does not state that grammar' <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard rejects the parser-only reference-field fixture'
+else
+  echo 'rubric reference-grammar guard rejected the reference-field fixture without the required diagnostic' >&2
+  echo "$fixture_output" >&2
+  failures=1
+fi
+
 if ! check_vocabulary_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
   failures=1
 fi
