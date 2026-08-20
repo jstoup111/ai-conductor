@@ -66,7 +66,16 @@ describe('live build-review effective resolver', () => {
     expect(result).toMatchObject({ ok: true, effective: {
       rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [accepted.id], unresolvedFindingIds: [],
       infrastructureFailureRubrics: ['completeness'],
-    } });
+    }, reducedCoverageEvidence: [
+      '## Reduced build-review coverage',
+      '',
+      '- Rubric: `completeness`',
+      '  Cause: `provider-error`',
+      '  Current diagnostic: provider unavailable',
+      '  Operator: operator',
+      '  Rationale: mechanical fault is covered',
+      '  Decision time: 2026-08-14T00:00:00.000Z',
+    ].join('\n') });
   });
 
   it('reports a stored superseded-contract disposition without letting it bind again', async () => {

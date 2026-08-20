@@ -17,6 +17,7 @@ import {
 import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-domain.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
+import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
@@ -32,7 +33,13 @@ export interface BuildReviewEffectiveResolverDeps {
 }
 
 export type BuildReviewEffectiveResolution =
-  | { readonly ok: true; readonly feature: BuildReviewFeatureIdentity; readonly effective: BuildReviewEffectiveVerdict }
+  | {
+      readonly ok: true;
+      readonly feature: BuildReviewFeatureIdentity;
+      readonly effective: BuildReviewEffectiveVerdict;
+      /** Exact shared section to stamp into the current lap artifact, if any. */
+      readonly reducedCoverageEvidence?: string;
+    }
   | { readonly ok: false; readonly reason: string };
 
 function sameFeature(left: BuildReviewFeatureIdentity, right: BuildReviewFeatureIdentity): boolean {
@@ -107,9 +114,19 @@ export async function resolveEffectiveBuildReviewVerdict(
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
   }
-  return effective
-    ? { ok: true, feature, effective }
-    : { ok: false, reason: 'build-review disposition state cannot resolve current findings' };
+  if (!effective) return { ok: false, reason: 'build-review disposition state cannot resolve current findings' };
+  const renderedReducedCoverage = renderBuildReviewReducedCoverageEvidence({
+    state: 'known',
+    records: reducedCoverage.records,
+    currentFailures: Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+  });
+  if (!renderedReducedCoverage.ok) return { ok: false, reason: renderedReducedCoverage.message };
+  return {
+    ok: true,
+    feature,
+    effective,
+    ...(renderedReducedCoverage.section === undefined ? {} : { reducedCoverageEvidence: renderedReducedCoverage.section }),
+  };
 }
 
 export type { BuildReviewAggregate, BuildReviewEffectiveVerdict, BuildReviewDispositionRecord, BuildReviewFeatureIdentity };

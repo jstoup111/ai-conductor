@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   appendBuildReviewAcceptedRisk,
+  appendBuildReviewReducedCoverageEvidence,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -444,6 +445,19 @@ describe('accepted build-review risk shipped projection', () => {
     expect(appended).not.toContain('2026-08-14T12:00:00.000Z');
     expect(appendBuildReviewAcceptedRisk(body, [])).toBe(body);
     expect(() => appendBuildReviewAcceptedRisk(body, [{ ...accepted, rationale: '' }])).toThrow(/unrenderable/);
+  });
+});
+
+describe('reduced build-review coverage shipped projection', () => {
+  it('carries the engine-stamped shared lap section into the shipped record unchanged', () => {
+    const section = [
+      '## Reduced build-review coverage', '', '- Rubric: `tautology`', '  Cause: `provider-error`',
+      '  Current diagnostic: provider unavailable', '  Operator: operator', '  Rationale: approved',
+      '  Decision time: 2026-08-20T00:00:00.000Z',
+    ].join('\n');
+    const body = appendBuildReviewReducedCoverageEvidence('---\nslug: feature\n---\n', section);
+    expect(body).toContain(section);
+    expect(appendBuildReviewReducedCoverageEvidence(body, undefined)).toBe(body);
   });
 });
 

@@ -26,6 +26,7 @@ import { execa } from 'execa';
 import {
   appendTimingSection,
   appendBuildReviewAcceptedRisk,
+  appendBuildReviewReducedCoverageEvidence,
   appendBuildReviewMetrics,
   specHash,
   renderShippedRecord,
@@ -34,6 +35,8 @@ import {
   writeShippedRecord,
 } from './shipped-record.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
+import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import { computeCostRollup } from './cost-rollup.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
@@ -199,6 +202,30 @@ export async function dispatchShippedRecord(
       });
       if (!dispositions.ok) throw new Error(dispositions.message);
       recordBody = appendBuildReviewAcceptedRisk(recordBody, dispositions.records);
+
+      const reducedCoverage = await new BuildReviewDispositionStore(cwd).listReducedCoverage({
+        version: 'v1', repository, feature: identity.slug,
+      });
+      if (!reducedCoverage.ok) {
+        // Unreadable state is not evidence of a decision.  The accepted-risk
+        // projection above remains the existing strict store-health gate.
+        recordBody = appendBuildReviewReducedCoverageEvidence(recordBody, undefined);
+      } else {
+        const aggregateText = await readFile(join(cwd, '.pipeline', 'build-review.json'), 'utf-8').catch(() => undefined);
+        const aggregate = aggregateText === undefined ? undefined : parseBuildReviewAggregate(JSON.parse(aggregateText));
+        if (reducedCoverage.records.length > 0 && !aggregate) {
+          throw new Error('reduced build-review coverage has no renderable current-lap evidence');
+        }
+        const rendered = renderBuildReviewReducedCoverageEvidence({
+          state: 'known',
+          records: reducedCoverage.records,
+          currentFailures: aggregate === undefined
+            ? []
+            : Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+        });
+        if (!rendered.ok) throw new Error(rendered.message);
+        recordBody = appendBuildReviewReducedCoverageEvidence(recordBody, rendered.section);
+      }
     } catch (err) {
       console.error(
         `shipped-record accepted-risk evidence failed for ${identity.slug}: ${

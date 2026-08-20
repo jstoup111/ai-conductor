@@ -1942,6 +1942,23 @@ export class DefaultStepRunner implements StepRunner {
     if (!effective.ok) {
       return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
     }
+    // The effective resolver is the only live join of current-lap mechanical
+    // faults and durable operator decisions.  Persist its shared rendering on
+    // the aggregate itself so the lap evidence and shipped-record projection
+    // cannot drift into independently formatted views.
+    if (effective.reducedCoverageEvidence !== undefined) {
+      const stampedAggregate = { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence };
+      try {
+        const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
+        await writeFile(temporaryPath, `${JSON.stringify(stampedAggregate, null, 2)}\n`, 'utf-8');
+        await rename(temporaryPath, aggregatePath);
+      } catch (error) {
+        return {
+          success: false,
+          output: `build_review reduced-coverage evidence publication failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
     // A judged finding is a completed review, even when another rubric had a
     // mechanical fault. Let the conductor route that semantic failure through
