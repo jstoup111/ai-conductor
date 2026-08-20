@@ -102,6 +102,34 @@ Read \`.docs/decisions/adr-2026-01-01-other.md\` first.
     ]);
   });
 
+  it('still rejects the foreign prose reference without a Files line', () => {
+    const plan = `### Task 18: Review the existing decision
+Read \`.docs/decisions/adr-2026-01-01-other.md\` first.
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([
+      { taskId: '18', path: '.docs/decisions/adr-2026-01-01-other.md' },
+    ]);
+  });
+
+  it('allows an own-feature story path', () => {
+    const plan = `### Task 19: Amend this feature's story
+**Files:** .docs/stories/feature.md
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([]);
+  });
+
+  it('allows tasks that name only source and validation paths', () => {
+    const plan = `### Task 20: Add validation coverage
+**Files:**
+- src/conductor/src/engine/plan-protected-targets.ts
+- .docs/validation/report.md
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([]);
+  });
+
   it('allows a declared task to cite a protected artifact as context', () => {
     const plan = `### Task 17: Implement the scanner
 **Files:** src/conductor/src/x.ts
