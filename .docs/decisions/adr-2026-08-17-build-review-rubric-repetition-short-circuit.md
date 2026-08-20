@@ -1,7 +1,7 @@
 # ADR: build_review short-circuits on a repeatedly-failing rubric, and every convergence halt names what repeated
 
 **Date:** 2026-08-17
-**Status:** WITHDRAWN (2026-08-20) — was APPROVED
+**Status:** SUPERSEDED by #1718 (2026-08-20) - was APPROVED
 
 > **Withdrawn 2026-08-20 by operator decision (#1652 → v1.1; #1718 covers the solution).**
 > Not implemented. This ADR is retained as the historical record and because other features'
