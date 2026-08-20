@@ -1890,6 +1890,9 @@ export class DefaultStepRunner implements StepRunner {
       result.kind === 'infrastructure-failure',
     );
     if (infrastructureFailure) {
+      const hasJudgedFinding = Object.values(validResults).some(
+        (result) => result.kind === 'judged' && result.findings.length > 0,
+      );
       const ledger = await readKickbackLedger(this.projectDir);
       const mechanicalFaults = bumpMechanicalFaults(ledger.gates.build_review ?? {
         count: 0,
@@ -1904,7 +1907,7 @@ export class DefaultStepRunner implements StepRunner {
         ...ledger,
         gates: { ...ledger.gates, build_review: mechanicalFaults },
       });
-      if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+      if (!hasJudgedFinding && mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         return {
           success: false,
           output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
@@ -1940,7 +1943,16 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
     }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
-    return { success: effective.effective.verdict === 'PASS', output: JSON.stringify(aggregate) };
+    // A judged finding is a completed review, even when another rubric had a
+    // mechanical fault. Let the conductor route that semantic failure through
+    // its ordinary kickback budget; only a pure mechanical lap retries here.
+    const hasJudgedFinding = Object.values(aggregate.results).some(
+      (result) => result.kind === 'judged' && result.findings.length > 0,
+    );
+    return {
+      success: effective.effective.verdict === 'PASS' || hasJudgedFinding,
+      output: JSON.stringify(aggregate),
+    };
   }
 
   private async dispatchBuildReviewRubric(
