@@ -147,7 +147,7 @@ export function resolveProviderStreamMinIntervalMs(config: ProviderStreamInterva
 export function createProviderStreamThrottle<T>(
   emit: (observation: T) => void,
   options: { minIntervalMs: number; heartbeatMs?: number; now?: () => number },
-): (observation: T) => void {
+): ((observation: T) => void) & { flush: () => void } {
   const now = options.now ?? Date.now;
   const minIntervalMs = options.minIntervalMs > 0
     ? options.minIntervalMs
@@ -155,7 +155,11 @@ export function createProviderStreamThrottle<T>(
   const heartbeatMs = options.heartbeatMs ?? minIntervalMs;
   let lastEmissionMs = Number.NEGATIVE_INFINITY;
   let lastObservation: string | undefined;
-  return (observation) => {
+  let latestObservation: T | undefined;
+  let flushed = false;
+  const throttle = (observation: T) => {
+    if (flushed) return;
+    latestObservation = observation;
     const current = now();
     if (current - lastEmissionMs < minIntervalMs) return;
     const serialized = JSON.stringify(observation);
@@ -165,6 +169,16 @@ export function createProviderStreamThrottle<T>(
     lastObservation = serialized;
     emit(observation);
   };
+  throttle.flush = () => {
+    if (flushed || latestObservation === undefined) return;
+    flushed = true;
+    try {
+      emit(latestObservation);
+    } catch {
+      // Close-boundary telemetry never changes dispatch completion.
+    }
+  };
+  return throttle;
 }
 
 // Steps where the skill design requires a back-and-forth conversation (the

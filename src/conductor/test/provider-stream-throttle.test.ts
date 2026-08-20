@@ -48,4 +48,30 @@ describe('provider stream dispatch throttle', () => {
 
     expect(emit).toHaveBeenCalledTimes(3);
   });
+
+  it('flushes the final observed state once, including an open child, and skips an empty attempt', () => {
+    const emit = vi.fn();
+    const throttle = createProviderStreamThrottle(emit, { minIntervalMs: 100, now: () => 0 });
+    const emptyAttempt = createProviderStreamThrottle(emit, { minIntervalMs: 100, now: () => 0 });
+
+    throttle({ activeChildren: 0 });
+    throttle({ activeChildren: 1 });
+    throttle.flush();
+    throttle.flush();
+    emptyAttempt.flush();
+
+    expect(emit).toHaveBeenCalledTimes(2);
+    expect(emit).toHaveBeenLastCalledWith({ activeChildren: 1 });
+  });
+
+  it('swallows a throwing close-boundary emitter', () => {
+    let calls = 0;
+    const throttle = createProviderStreamThrottle(() => {
+      calls += 1;
+      if (calls > 1) throw new Error('emit failed');
+    }, { minIntervalMs: 100, now: () => 0 });
+    throttle({ activeChildren: 1 });
+
+    expect(() => throttle.flush()).not.toThrow();
+  });
 });
