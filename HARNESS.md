@@ -121,7 +121,7 @@ or delete the original text and never create a separate amendment record:
 ```
 
 BUILD never receives that mutation as a task. A plan task must not name another feature's artifact
-under `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`; authoring checks
+under `.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`; authoring checks
 the plan with `conduct-ts plan-protected-targets <plan-path>`, and the spec land gate independently
 refuses a violating plan. A BUILD-discovered need for such an amendment returns to its owning DECIDE
 step through remediation rather than routing to BUILD or acceptance-spec work. Because DECIDE runs
