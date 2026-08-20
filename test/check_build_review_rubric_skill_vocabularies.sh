@@ -13,14 +13,43 @@ failures=0
 # `plan-task` is enforced by this helper, not by its call-site name. Pin its
 # source region so a grammar-only helper edit cannot leave the bindings and
 # provider contracts apparently aligned.
-readonly EXPECTED_PLAN_TASK_GRAMMAR_IMPLEMENTATION_SHA256='6b49982974fff5740ecfcc6932966319eab42d7d307dc9dfc531b00942277004'
+readonly EXPECTED_PLAN_TASK_GRAMMAR_IMPLEMENTATION_SHA256='9815c1d3ca5c9a91380df830b667686c90188003241cc870eb57ffb07fcb5b3f'
+
+extract_plan_task_grammar_implementation() {
+  local domain_file=$1
+  local domain_dir parser_import parser_file helper canonical_reference titled_reference task_id_pattern
+
+  domain_dir=$(dirname "$domain_file")
+  parser_import=$(sed -nE "s|^import \{[^}]*TASK_ID_PATTERN[^}]*\} from '([^']+)';$|\1|p" "$domain_file")
+  if [ "$(printf '%s\n' "$parser_import" | sed '/^$/d' | wc -l | tr -d ' ')" -ne 1 ] ||
+      [[ "$parser_import" != ./* ]] || [[ "$parser_import" == *'/'*'/'* ]]; then
+    return 1
+  fi
+  parser_file="$domain_dir/${parser_import%.js}.ts"
+
+  if [ ! -r "$parser_file" ]; then
+    return 1
+  fi
+
+  helper=$(sed -n '/^export function parseBuildReviewCanonicalPlanTaskReference/,/^}/p' "$domain_file")
+  canonical_reference=$(grep -Fx 'const CANONICAL_PLAN_TASK_REFERENCE = new RegExp(`^${TASK_ID_PATTERN}$`);' "$domain_file")
+  titled_reference=$(grep -Fx 'const TITLED_PLAN_TASK_REFERENCE = new RegExp(`^Task\\s+(${TASK_ID_PATTERN}):\\s+.+$`);' "$domain_file")
+  task_id_pattern=$(grep -Fx "export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';" "$parser_file")
+
+  if [ "$(grep -c '^export function parseBuildReviewCanonicalPlanTaskReference' "$domain_file")" -ne 1 ] ||
+      [ -z "$helper" ] ||
+      [ "$(printf '%s\n' "$canonical_reference" | wc -l | tr -d ' ')" -ne 1 ] ||
+      [ "$(printf '%s\n' "$titled_reference" | wc -l | tr -d ' ')" -ne 1 ] ||
+      [ "$(printf '%s\n' "$task_id_pattern" | wc -l | tr -d ' ')" -ne 1 ]; then
+    return 1
+  fi
+
+  printf '%s\n%s\n%s\n%s\n' \
+    "$helper" "$canonical_reference" "$titled_reference" "$task_id_pattern"
+}
 
 extract_plan_task_grammar_implementation_digest() {
-  local domain_file=$1
-
-  sed -n '/^export function parseBuildReviewCanonicalPlanTaskReference/,/^}/p' "$domain_file" \
-    | sha256sum \
-    | awk '{ print $1 }'
+  extract_plan_task_grammar_implementation "$1" | sha256sum | awk '{ print $1 }'
 }
 
 check_reference_grammar_implementation_drift() {
@@ -32,7 +61,10 @@ check_reference_grammar_implementation_drift() {
     return 1
   fi
 
-  implementation_digest=$(extract_plan_task_grammar_implementation_digest "$domain_file")
+  if ! implementation_digest=$(extract_plan_task_grammar_implementation_digest "$domain_file"); then
+    echo 'could not extract complete build-review plan-task grammar implementation sources' >&2
+    return 1
+  fi
   if [ -z "$implementation_digest" ] ||
       [ "$implementation_digest" != "$EXPECTED_PLAN_TASK_GRAMMAR_IMPLEMENTATION_SHA256" ]; then
     echo 'build-review plan-task grammar implementation drift: update the parser grammar and SKILL.md contracts together' >&2
@@ -385,8 +417,9 @@ fi
 # that enforces a declared `plan-task` reference rather than infer its grammar
 # from the helper name at the call site.
 fixture_plan_task_grammar_domain="$fixture_dir/src/conductor/src/engine/build-review-domain-plan-task-grammar.ts"
-cp "$fixture_domain" "$fixture_plan_task_grammar_domain"
-sed -i '/^function parseBuildReviewCanonicalPlanTaskReference/c\function parseBuildReviewCanonicalPlanTaskReference(value: unknown): unknown { return parseBuildReviewCanonicalPathReference(value); }' \
+cp "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$fixture_plan_task_grammar_domain"
+cp "$HARNESS_DIR/src/conductor/src/engine/plan-task-parse.ts" "$(dirname "$fixture_plan_task_grammar_domain")/plan-task-parse.ts"
+sed -i '/^export function parseBuildReviewCanonicalPlanTaskReference/,/^}/c\export function parseBuildReviewCanonicalPlanTaskReference(value: unknown): string | undefined { return parseBuildReviewCanonicalPathReference(value); }' \
   "$fixture_plan_task_grammar_domain"
 
 if ! grep -Fq 'return parseBuildReviewCanonicalPathReference(value);' "$fixture_plan_task_grammar_domain"; then
@@ -402,6 +435,55 @@ else
   echo "$fixture_output" >&2
   failures=1
 fi
+
+# Remediation Task rem-root-cause-4 fixture: each grammar input lives outside
+# the parser helper body whose digest is pinned above.  The parser binding and
+# SKILL contracts remain unchanged, so the implementation guard itself must
+# notice any constant-level drift.  These deliberately fail until the guard
+# covers CANONICAL_PLAN_TASK_REFERENCE, TITLED_PLAN_TASK_REFERENCE, and the
+# imported TASK_ID_PATTERN source as well as the helper body.
+fixture_plan_task_constants_dir="$fixture_dir/plan-task-constants"
+fixture_plan_task_constants_domain="$fixture_plan_task_constants_dir/build-review-domain.ts"
+fixture_plan_task_constants_parser="$fixture_plan_task_constants_dir/plan-task-parse-baseline.ts"
+mkdir -p "$fixture_plan_task_constants_dir"
+cp "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$fixture_plan_task_constants_domain"
+cp "$HARNESS_DIR/src/conductor/src/engine/plan-task-parse.ts" "$fixture_plan_task_constants_parser"
+
+for grammar_constant in CANONICAL_PLAN_TASK_REFERENCE TITLED_PLAN_TASK_REFERENCE TASK_ID_PATTERN; do
+  fixture_constant_domain="$fixture_plan_task_constants_dir/build-review-domain-${grammar_constant}.ts"
+  fixture_constant_parser="$fixture_plan_task_constants_dir/plan-task-parse.ts"
+  cp "$fixture_plan_task_constants_domain" "$fixture_constant_domain"
+  cp "$fixture_plan_task_constants_parser" "$fixture_constant_parser"
+
+  case "$grammar_constant" in
+    CANONICAL_PLAN_TASK_REFERENCE)
+      sed -i '/^const CANONICAL_PLAN_TASK_REFERENCE =/c\const CANONICAL_PLAN_TASK_REFERENCE = /^task-[A-Za-z0-9._-]+$/;' \
+        "$fixture_constant_domain"
+      ;;
+    TITLED_PLAN_TASK_REFERENCE)
+      sed -i 's/^const TITLED_PLAN_TASK_REFERENCE =.*/const TITLED_PLAN_TASK_REFERENCE = new RegExp(`^Plan\\s+(${TASK_ID_PATTERN}):\\s+.+$`);/' \
+        "$fixture_constant_domain"
+      ;;
+    TASK_ID_PATTERN)
+      sed -i "s/^export const TASK_ID_PATTERN =.*/export const TASK_ID_PATTERN = '[0-9]+';/" \
+        "$fixture_constant_parser"
+      ;;
+  esac
+
+  if ! check_reference_grammar_drift "$fixture_constant_domain" "$HARNESS_DIR"; then
+    echo "rubric ${grammar_constant} grammar fixture unexpectedly changed parser bindings or SKILL contracts" >&2
+    failures=1
+  elif fixture_output=$(check_reference_grammar_implementation_drift "$fixture_constant_domain" 2>&1); then
+    echo "known gap: reference-grammar guard accepts ${grammar_constant} grammar drift outside the parser helper body" >&2
+    failures=1
+  elif grep -Fq 'build-review plan-task grammar implementation drift: update the parser grammar and SKILL.md contracts together' <<<"$fixture_output"; then
+    echo "rubric reference-grammar guard rejects ${grammar_constant} grammar drift"
+  else
+    echo "rubric reference-grammar guard rejected ${grammar_constant} grammar drift without the required diagnostic" >&2
+    echo "$fixture_output" >&2
+    failures=1
+  fi
+done
 
 fixture_missing_domain="$fixture_dir/src/conductor/src/engine/missing-build-review-domain.ts"
 if fixture_output=$(check_reference_grammar_drift "$fixture_missing_domain" "$fixture_harness" 2>&1); then
