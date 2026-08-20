@@ -549,6 +549,13 @@ export interface StepRunResult {
   observedIntervals?: readonly ObservedInterval[];
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
   fullSuiteVerification?: FullSuiteVerifierResult;
+  /**
+   * Set when re-dispatching this step cannot change its inputs. The named
+   * prerequisite must complete before another attempt can make progress.
+   */
+  unretryableInputs?: {
+    retryAfterStep: StepName;
+  };
   /** Provider routing identity and ordered candidate-attempt accounting. */
   preferredProvider?: string;
   actualProvider?: string;

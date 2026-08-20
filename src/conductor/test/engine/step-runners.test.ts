@@ -3856,6 +3856,31 @@ TIER: M`,
       expect(invoke).not.toHaveBeenCalled();
     });
 
+    it('marks only a typed suite-proof assembly failure as waiting for test_suite', async () => {
+      const provider: LLMProvider = {
+        invoke: vi.fn(),
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const suiteProofRunner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        buildReviewInputOptions: {
+          inspectTestSuite: async () => ({ status: 'STALE' } as never),
+        },
+      });
+      const mergeBaseRunner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: async () => ({ exitCode: 1, stdout: '', stderr: 'no merge base' }),
+        planPath,
+        ...currentBuildReviewProof(),
+      });
+
+      const suiteProofFailure = await suiteProofRunner.run('build_review', emptyState);
+      const mergeBaseFailure = await mergeBaseRunner.run('build_review', emptyState);
+
+      expect(suiteProofFailure.unretryableInputs).toEqual({ retryAfterStep: 'test_suite' });
+      expect(mergeBaseFailure.unretryableInputs).toBeUndefined();
+    });
+
     it('ladder-exhausted (all retries fail) reports step failure, never PASS', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: false,
