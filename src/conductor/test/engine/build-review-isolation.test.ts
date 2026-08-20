@@ -308,7 +308,7 @@ describe('build_review input isolation', () => {
     );
   });
 
-  it('rejects an unparseable recorded result as malformed instead of routing it mechanically', async () => {
+  it('routes an unparseable recorded result through the mechanical-fault lane', async () => {
     const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
@@ -335,7 +335,7 @@ describe('build_review input isolation', () => {
 
     await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
       success: false,
-      output: 'build_review scope rubric result is malformed',
+      output: 'build_review mechanical fault in scope (malformed-artifact): current-lap branch artifact is malformed',
     });
     await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
   });
