@@ -280,20 +280,18 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
     for (const id of s.ids) {
       if (s.hasFilesLine) declaredTaskIds.add(id);
       hasFilesLineByTaskId.set(id, s.hasFilesLine);
-      if (!s.hasFilesLine) {
-        const references = new Set<string>();
-        BACKTICK_TOKEN.lastIndex = 0;
-        let match: RegExpExecArray | null;
-        while ((match = BACKTICK_TOKEN.exec(s.bodyLines.join('\n'))) !== null) {
-          const path = match[1].replace(/:\d+(?:-\d+)?$/, '').replace(/^\.\//, '');
-          if (PROTECTED_ARTIFACT_DIRECTORIES.some((directory) =>
-            path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
-          ) && !namesOwnFeature(path, featureDesc)) {
-            references.add(path);
-          }
+      const references = new Set<string>();
+      BACKTICK_TOKEN.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = BACKTICK_TOKEN.exec(s.bodyLines.join('\n'))) !== null) {
+        const path = match[1].replace(/:\d+(?:-\d+)?$/, '').replace(/^\.\//, '');
+        if (PROTECTED_ARTIFACT_DIRECTORIES.some((directory) =>
+          path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
+        ) && !namesOwnFeature(path, featureDesc)) {
+          references.add(path);
         }
-        foreignProtectedReferencesByTaskId.set(id, references);
       }
+      foreignProtectedReferencesByTaskId.set(id, references);
       const existing = result.get(id);
       if (existing) {
         for (const p of resolved) existing.add(p);
