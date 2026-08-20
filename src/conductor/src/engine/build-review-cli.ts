@@ -81,6 +81,21 @@ type AcceptedDisposition = {
   readonly disposition: BuildReviewDispositionRecord;
 };
 
+type ExhaustedMechanicalFault = {
+  readonly rubric: BuildReviewRubricId;
+  readonly cause: string;
+  readonly diagnostic: string;
+};
+
+/** An aggregate carrying an infrastructure result is published only after the shared retry bound. */
+function exhaustedMechanicalFaults(
+  aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
+): readonly ExhaustedMechanicalFault[] {
+  return Object.values(aggregate.results).flatMap((result) => result.kind === 'infrastructure-failure'
+    ? [{ rubric: result.rubric, cause: result.reason, diagnostic: result.detail }]
+    : []);
+}
+
 function acceptedDispositions(
   aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
   feature: BuildReviewFeatureIdentity,
@@ -107,7 +122,7 @@ function acceptedDispositions(
   });
 }
 
-function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[]): string {
+function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], faults: readonly ExhaustedMechanicalFault[]): string {
   return [
     `Build review findings: ${feature}`,
     `Lap: ${aggregate.lapId}`,
@@ -118,6 +133,10 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
+    ...(faults.length === 0 ? [] : [
+      ...(effective.unresolvedFindingIds.length === 0 ? ['Blocked by exhausted mechanical faults, not unresolved findings.'] : []),
+      ...faults.map((fault) => `Exhausted mechanical fault: ${fault.rubric}; cause: ${fault.cause}; diagnostic: ${fault.diagnostic}`),
+    ]),
   ].join('\n');
 }
 
@@ -159,8 +178,12 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records);
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
-    const output = { feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...effective, acceptedDispositions: accepted };
-    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted));
+    const faults = exhaustedMechanicalFaults(aggregate);
+    const output = {
+      feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...effective, acceptedDispositions: accepted,
+      ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
+    };
+    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, faults));
     return 0;
   } catch {
     print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}'.`);

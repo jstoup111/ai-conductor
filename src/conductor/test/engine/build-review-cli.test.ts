@@ -235,6 +235,56 @@ describe('build-review findings CLI', () => {
     ));
   });
 
+  it('reports an exhausted mechanical fault separately from unresolved findings in machine and human output', async () => {
+    const faultOnly = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+      },
+    });
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(faultOnly), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+    };
+    const machine = vi.fn();
+    const human = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, { ...deps, print: machine })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, { ...deps, print: human })).resolves.toBe(0);
+
+    expect({ machine: JSON.parse(machine.mock.calls[0]![0]), human: human.mock.calls[0]![0] }).toEqual({
+      machine: expect.objectContaining({
+        verdict: 'FAIL', unresolvedFindingIds: [],
+        exhaustedMechanicalFaults: [{ rubric: 'rootCause', cause: 'provider-error', diagnostic: 'offline' }],
+      }),
+      human: expect.stringMatching(/Blocked by exhausted mechanical faults, not unresolved findings\.[\s\S]*Exhausted mechanical fault: rootCause; cause: provider-error; diagnostic: offline/),
+    });
+  });
+
+  it('keeps a fault-free report byte-identical to the existing output', async () => {
+    const faultFree = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+      },
+    });
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(faultFree), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }), print,
+    })).resolves.toBe(0);
+
+    expect(print).toHaveBeenCalledWith(JSON.stringify({
+      feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
+      acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
+    }));
+  });
+
   it('uses the live runner canonical identity for both findings reads and acceptance writes through an alternate main root', async () => {
     const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'scope', contractVersion: 'v2' })!;
     const realpath = async (path: string) => path
