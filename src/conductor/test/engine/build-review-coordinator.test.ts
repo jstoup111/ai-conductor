@@ -9,6 +9,7 @@ import {
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
 import type { BuildReviewCacheEntry } from "../../src/engine/build-review-cache.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
+import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 import type { ResolvedBuildReviewConfig } from "../../src/engine/resolved-config.js";
 import type { ConductorEvent } from "../../src/types/events.js";
 
@@ -701,5 +702,59 @@ describe("build-review coordinator: findings-only provider payloads", () => {
         verdict, findings,
       },
     });
+  });
+});
+
+describe("build-review coordinator: engine-held rubric isolation", () => {
+  it("rejects a dispatch-time projection rubric mismatch without writing either branch artifact", async () => {
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
+    const frozenInputs = inputs();
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const projections = deriveBuildReviewRubricProjections({
+      lapId,
+      inputs: frozenInputs,
+      tautology: {
+        changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" },
+      },
+    });
+    const coordination = await coordinateBuildReviewRubrics({
+      config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
+      inputs: frozenInputs, lapId,
+      projections: { ...projections, scope: projections.rootCause as never },
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async () => ({ findings: [] }),
+      writeArtifact,
+      writeCache: async () => undefined,
+    });
+
+    expect({
+      scope: coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined,
+      artifactRubrics: writeArtifact.mock.calls.map(([artifact]) => artifact.rubric),
+    }).toEqual({
+      scope: { kind: "infrastructure-failure", rubric: "scope", reason: "projection-rubric-mismatch" },
+      artifactRubrics: ["rootCause", "completeness"],
+    });
+  });
+
+  it("writes four concurrent rubric results only under their own branch identities", async () => {
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
+    await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async () => ({ findings: [] }),
+      writeArtifact,
+      writeCache: async () => undefined,
+    });
+
+    expect(writeArtifact.mock.calls.map(([artifact]) => ({
+      artifactRubric: artifact.rubric,
+      resultRubric: artifact.result.rubric,
+      provenance: artifact.provenance.kind,
+    }))).toEqual([
+      { artifactRubric: "tautology", resultRubric: "tautology", provenance: "fresh" },
+      { artifactRubric: "scope", resultRubric: "scope", provenance: "fresh" },
+      { artifactRubric: "rootCause", resultRubric: "rootCause", provenance: "fresh" },
+      { artifactRubric: "completeness", resultRubric: "completeness", provenance: "fresh" },
+    ]);
   });
 });

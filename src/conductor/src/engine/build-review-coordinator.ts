@@ -25,6 +25,7 @@ import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import {
   deriveBuildReviewRubricProjections,
   type BuildReviewProjectionJson,
+  type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTautologyProjectionInput,
 } from "./build-review-projections.js";
@@ -94,6 +95,8 @@ export interface BuildReviewCoordinationInput {
   readonly config: ResolvedBuildReviewConfig;
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
+  /** Test seam for an engine-held projection corruption at branch settlement. */
+  readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
   readonly readCache: (
     branch: BuildReviewDispatchableRubric,
@@ -239,7 +242,7 @@ export async function coordinateBuildReviewRubrics(
       };
     }
   }
-  const projections = deriveBuildReviewRubricProjections({
+  const projections = input.projections ?? deriveBuildReviewRubricProjections({
     lapId: input.lapId,
     inputs: input.inputs,
     tautology: preflight ? preflightProjection(preflight) : {
@@ -255,6 +258,12 @@ export async function coordinateBuildReviewRubrics(
       await input.emit?.({ type: "build_review_rubric_skipped", rubric: branch.rubric, lapId: input.lapId, reason: branch.reason });
       continue;
     }
+    const projection = projections[branch.rubric];
+    if (projection.rubric !== branch.rubric) {
+      resolved.set(branch.rubric, infrastructure(branch.rubric, "projection-rubric-mismatch"));
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "projection-rubric-mismatch" });
+      continue;
+    }
     if (branch.rubric === "tautology" && preflight?.classification === "infrastructure-failure") {
       resolved.set(branch.rubric, infrastructure(branch.rubric, preflight.reason));
       await input.emit?.({
@@ -266,7 +275,6 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
-    const projection = projections[branch.rubric];
     const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
     let candidate: BuildReviewCacheEntryCandidate | undefined;
     try {
