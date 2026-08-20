@@ -28,6 +28,8 @@ import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
   KICKBACK_LEDGER_PATH,
@@ -755,13 +757,24 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     });
 
     const calls: StepName[] = [];
+    const lapId = parseBuildReviewLapId('lap-mechanical-root-cause')!;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:mechanical-halt',
+      results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:mechanical-halt', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:mechanical-halt', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'provider transport unavailable' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:mechanical-halt', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      },
+    });
     const runner: StepRunner = {
       run: async (step) => {
         calls.push(step);
         if (step === 'build_review') {
           await writeFile(
             join(repo, '.pipeline/build-review.json'),
-            JSON.stringify({ terminalMechanicalAggregate: true }),
+            JSON.stringify(aggregate),
           );
           return { success: false, output: 'scope rubric infrastructure failure' };
         }
@@ -782,8 +795,11 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     } as never).run();
 
     expect(calls.filter((step) => step === 'build_review')).toHaveLength(1);
-    expect(JSON.parse(await readFile(join(repo, '.pipeline/build-review.json'), 'utf8')))
-      .toEqual({ terminalMechanicalAggregate: true });
+    const haltBody = await readFile(join(repo, HALT_MARKER), 'utf8');
+    expect(haltBody).toMatch(
+      /build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed\.\nCurrent lap lap-mechanical-root-cause: rootCause closed cause provider-error \(provider transport unavailable\)\.\n1\. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap lap-mechanical-root-cause --rubric rootCause --rationale "<rationale>"\.\n2\. Clear the documented terminal state: rm -f \.pipeline\/HALT \.pipeline\/HALT\.class\./,
+    );
+    expect(haltBody).not.toContain('cannot converge');
     expect(await readFile(join(repo, '.pipeline/HALT.class'), 'utf8')).toBe('needs-human');
   }, 30000);
 });

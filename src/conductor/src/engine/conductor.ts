@@ -199,6 +199,7 @@ import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readKickbackLedger,
   writeKickbackLedger,
+  type KickbackGateEntry,
   type KickbackLedger,
 } from './kickback-ledger.js';
 import {
@@ -1086,6 +1087,32 @@ async function selectChangedArtifacts(
     }
   }
   return changed;
+}
+
+/**
+ * Render the operator-facing recovery for a terminal mechanical review fault.
+ * The aggregate is the current-lap authority for the rubric and closed cause;
+ * the ledger only supplies the shared allowance consumption.
+ */
+export function renderExhaustedMechanicalBuildReviewHalt(
+  entry: Pick<KickbackGateEntry, 'mechanicalFaults'>,
+  currentLap: unknown,
+): string {
+  const aggregate = parseBuildReviewAggregate(currentLap);
+  const failure = aggregate && Object.values(aggregate.results).find(
+    (result) => result.kind === 'infrastructure-failure',
+  );
+  const consumed = entry.mechanicalFaults ?? 0;
+  if (!aggregate || !failure || failure.kind !== 'infrastructure-failure') {
+    return `build_review mechanical fault allowance exhausted: ${consumed} of ` +
+      `${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed; current-lap diagnostic is unavailable`;
+  }
+  return [
+    `build_review mechanical fault allowance exhausted: ${consumed} of ${MAX_MECHANICAL_FAULTS_BUILD_REVIEW} shared faults consumed.`,
+    `Current lap ${aggregate.lapId}: ${failure.rubric} closed cause ${failure.reason} (${failure.detail}).`,
+    `1. Record a reduced-coverage decision: conduct-ts build-review record-reduced-coverage --feature <feature-slug> --lap ${aggregate.lapId} --rubric ${failure.rubric} --rationale "<rationale>".`,
+    '2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.',
+  ].join('\n');
 }
 
 function hasCompletionContract(step: StepName, config: HarnessConfig): boolean {
@@ -6739,18 +6766,25 @@ export class Conductor {
             // loop below.
             if (step.name === 'build_review') {
               const ledger = await readKickbackLedger(this.projectRoot);
-              const mechanicalFaults = ledger.gates.build_review?.mechanicalFaults ?? 0;
-              const aggregatePublished = await readFile(
+              const mechanicalEntry = ledger.gates.build_review;
+              const aggregateRaw = await readFile(
                 join(this.projectRoot, BUILD_REVIEW_VERDICT),
                 'utf-8',
-              ).then(() => true).catch(() => false);
+              ).then((content) => {
+                try {
+                  return JSON.parse(content) as unknown;
+                } catch {
+                  return undefined;
+                }
+              }).catch(() => undefined);
               if (
-                mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW &&
-                aggregatePublished
+                (mechanicalEntry?.mechanicalFaults ?? 0) >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW &&
+                aggregateRaw !== undefined
               ) {
-                const reason =
-                  `build_review mechanical fault allowance exhausted after ` +
-                  `${mechanicalFaults} fault(s); aggregate published for human review`;
+                const reason = renderExhaustedMechanicalBuildReviewHalt(
+                  mechanicalEntry ?? { mechanicalFaults: 0 },
+                  aggregateRaw,
+                );
                 state[step.name] = 'failed';
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
