@@ -5884,6 +5884,10 @@ export class Conductor {
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
         let unchangedInputNote: string | undefined;
+        // A typed runner failure whose inputs cannot change on re-dispatch.
+        // Kept separately from human-facing output so the terminal HALT is
+        // composed from the classified recovery contract, not message text.
+        let unretryableInputFailure: { failingStep: StepName; retryAfterStep: StepName } | undefined;
         // An incompatible build-review verdict is a stable schema failure,
         // not an exhausted-work retry. Keep its validator diagnostic for the
         // terminal HALT instead of replacing it with the generic fallback.
@@ -6750,7 +6754,13 @@ export class Conductor {
                 decision: retryDecision.decision,
                 ...(retryDecision.decision === 'route' ? { signal: retryDecision.signal } : {}),
               });
-              if (retryDecision.decision === 'route') break;
+              if (retryDecision.decision === 'route') {
+                unretryableInputFailure = {
+                  failingStep: step.name,
+                  retryAfterStep: result.unretryableInputs.retryAfterStep,
+                };
+                break;
+              }
             }
 
             // Preflight opt-out halt (TR-16): if a HALT marker was written by the
@@ -8467,6 +8477,9 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
+                : unretryableInputFailure
+                  ? `step '${unretryableInputFailure.failingStep}' cannot make progress: its inputs cannot change on a re-dispatch. ` +
+                    `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
                 : uncommittedPathsReason
                   ? uncommittedPathsReason
                   : acceptanceRedHealFailureReason
