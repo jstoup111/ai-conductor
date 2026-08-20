@@ -13,7 +13,7 @@
  * `rewind` command, so the first assertion fails after the spec executes. No
  * missing production symbol is statically imported and collection succeeds.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execa } from 'execa';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -116,6 +116,7 @@ describe('conduct-ts rewind recovery', () => {
     }));
 
     const dispatched: StepName[] = [];
+    const inspect = vi.fn(async () => ({ status: 'STALE' as const, reason: 'rewind requires a fresh suite run' }));
     const runner: StepRunner = {
       run: async (step) => {
         dispatched.push(step);
@@ -126,11 +127,12 @@ describe('conduct-ts rewind recovery', () => {
         throw new Error(`unexpected dispatch after rewind: ${step}`);
       },
     };
+    const conductorEvents = new ConductorEventEmitter();
     const conductor = new Conductor({
       projectRoot,
       stateFilePath,
       stepRunner: runner,
-      events: new ConductorEventEmitter(),
+      events: conductorEvents,
       resume: true,
       daemon: true,
       mode: 'default',
@@ -143,10 +145,18 @@ describe('conduct-ts rewind recovery', () => {
       git: async () => ({ stdout: '' }),
       sleepFn: async () => {},
       escalateBuildFailure: async () => ({}),
+      fullSuiteVerifier: {
+        inspect,
+        ensure: async () => {
+          dispatched.push('test_suite');
+          return { status: 'EXECUTED', evidence: {} as never } as never;
+        },
+      },
     });
 
     await conductor.run();
 
     expect(dispatched.slice(0, 2)).toEqual(['test_suite', 'build_review']);
+    expect(inspect).toHaveBeenCalled();
   });
 });
