@@ -10,6 +10,7 @@ import {
 } from '../../src/engine/shipped-record-cli.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { specHash } from '../../src/engine/shipped-record.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -177,6 +178,27 @@ describe('conduct shipped-record — record committed on the implementation bran
 
     expect(await git(['rev-parse', 'HEAD'])).toBe(firstHead);
     expect(await git(['rev-list', '--count', 'HEAD'])).toBe(firstCount);
+  });
+
+  it.each([
+    { kind: 'invalid' as const, message: 'current reduced-coverage state is invalid' },
+    { kind: 'lock' as const, message: 'reduced-coverage state lease is unavailable' },
+    { kind: 'filesystem' as const, message: 'reduced-coverage state I/O failed' },
+  ])('blocks publication when reduced-coverage state is $kind rather than omitting its evidence', async ({ kind, message }) => {
+    vi.spyOn(BuildReviewDispositionStore.prototype, 'listReducedCoverage').mockResolvedValue({
+      ok: false,
+      kind,
+      message,
+    });
+    const errors: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((message: unknown) => {
+      errors.push(String(message));
+    });
+
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(1);
+    expect(errors.join('\n')).toContain(message);
+    await expect(readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).rejects.toThrow();
+    expect(await git(['log', '--format=%s'])).not.toContain(`shipped record: ${SLUG}`);
   });
 
   // The daemon runs `dispatchShippedRecord` IN-PROCESS (finish-publication-production.ts),

@@ -207,8 +207,12 @@ export async function dispatchShippedRecord(
         version: 'v1', repository, feature: identity.slug,
       });
       if (!reducedCoverage.ok) {
-        // Unreadable state is not evidence of a decision.  The accepted-risk
-        // projection above remains the existing strict store-health gate.
+        // Only unreadable state is absence of decision evidence. Invalid
+        // identity, a lease failure, or a filesystem failure leaves the
+        // shipment's reduced-coverage contract indeterminate and must block.
+        if (reducedCoverage.kind !== 'unreadable') {
+          throw new Error(reducedCoverage.message);
+        }
         recordBody = appendBuildReviewReducedCoverageEvidence(recordBody, undefined);
       } else {
         const aggregateText = await readFile(join(cwd, '.pipeline', 'build-review.json'), 'utf-8').catch(() => undefined);
