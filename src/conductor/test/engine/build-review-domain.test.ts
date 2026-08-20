@@ -571,6 +571,20 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     }, 'scope', expected)).toContain('contradicts the findings array');
   });
 
+  it('does not fabricate a verdict contradiction for the recorded non-canonical completeness anchor', () => {
+    const rejection = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'completeness', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'missing-deliverable', summary: 'The documentation remains stale.', evidenceLocations: ['docs/x.md:648'],
+        anchor: {
+          rubric: 'completeness', planTask: 'Task 11', missingSurface: 'docs/x.md', missingOutcome: 'Documentation is current', missingKind: 'missing-deliverable',
+        },
+      }],
+    }, 'completeness', expected);
+
+    expect(rejection).not.toMatch(/\b(?:verdict|passed)\b/);
+  });
+
   it('bounds the diagnosis to a fixed number of named problems', () => {
     const findings = Array.from({ length: 10 }, () => ({}));
     const rejection = describeBuildReviewJudgedResultRejection(
