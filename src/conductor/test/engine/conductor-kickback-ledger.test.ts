@@ -352,6 +352,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const initialEntry = {
       count: 2,
       cumulative: 4,
+      mechanicalFaults: 2,
       treeHash: '0123456789abcdef0123456789abcdef01234567',
       lastReason: 'repeated semantic failure',
       priorVerdict: true,
@@ -403,7 +404,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const failEntry = await runVerdict('FAIL');
 
     expect([passEntry, failEntry]).toEqual([
-      { ...initialEntry, mechanicalFaults: 0 },
+      initialEntry,
       expect.objectContaining({ cumulative: initialEntry.cumulative + 1 }),
     ]);
   });

@@ -19,6 +19,7 @@ import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
@@ -308,7 +309,7 @@ describe('build_review input isolation', () => {
     );
   });
 
-  it('routes an unparseable recorded result through the mechanical-fault lane', async () => {
+  it('publishes an exhausted malformed artifact as the current lap mechanical failure', async () => {
     const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
@@ -333,10 +334,19 @@ describe('build_review input isolation', () => {
       }),
     });
 
-    await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
-      success: false,
-      output: 'build_review mechanical fault in scope (malformed-artifact): current-lap branch artifact is malformed',
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW - 1,
+          treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
     });
-    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).rejects.toThrow();
+
+    await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({ success: false });
+    await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
+      '"reason": "malformed-artifact"',
+    );
   });
 });

@@ -210,7 +210,7 @@ describe('conduct shipped-record — record committed on the implementation bran
 
     expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
     const record = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
-    expect(record).not.toContain('## Build Review Reduced Coverage');
+    expect(record).not.toContain('## Reduced build-review coverage');
     expect(await git(['log', '-1', '--format=%s'])).toBe(`shipped record: ${SLUG}`);
   });
 
