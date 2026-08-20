@@ -78,6 +78,14 @@ Answered from the code rather than by preference:
 - **Which paths.** The four sealed directories only — `.docs/architecture`, `.docs/plans`,
   `.docs/specs`, `.docs/stories` (`protected-artifact-seal.ts:17-22`). Not all of `.docs/`. The wider
   `classifyMutationTarget` write-guard policy is unchanged; this ban governs what a plan may *direct*.
+
+  > **Amended 2026-08-19 by #1736:** the sealed set is **five** directories, not four —
+  > `.docs/decisions` belongs with the other four and always has
+  > (`protected-artifact-seal.ts:17-22` has enumerated five throughout; the omission above was in
+  > this ADR's prose only, never in the code). The artifact at the centre of #1736 was an ADR under
+  > `.docs/decisions/`, so every normative restatement of this ban — `HARNESS.md`, `skills/plan`,
+  > `skills/remediate` — inherited the same gap and told plan authors an ADR-checkbox task was
+  > permitted. The ban's scope is, and was always intended to be, `isProtectedArtifactPath`.
 - **Whose artifacts.** Another feature's. A path whose stem names the current feature is already
   tolerated by the seal as a reported self-amendment (#1047), and `remediation-append` depends on that
   tolerance to write remediation tasks into the feature's own plan. Banning own-feature paths would
