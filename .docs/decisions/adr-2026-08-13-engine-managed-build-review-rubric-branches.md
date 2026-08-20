@@ -101,6 +101,18 @@ a skill is allowed to depend on a field, that field participates in its projecti
 The lap ID binds to the immutable input digest rather than a mutable filename timestamp. Branch
 results must repeat the lap ID and snapshot digest; a mismatch is an infrastructure-shaped failure.
 
+> **Amended 2026-08-19 by #1683:** the requirement that branch results *repeat* the lap ID and
+> snapshot digest is replaced by
+> [`adr-2026-08-19-engine-stamped-rubric-judged-result-envelope`](adr-2026-08-19-engine-stamped-rubric-judged-result-envelope.md).
+> Every branch result still carries the lap ID and snapshot digest of the projection it was judged
+> against — that property is unchanged — but the coordinator stamps them on the fresh-dispatch path
+> as it already does on the cache-hit path in §7, instead of validating a provider echo. The
+> provider's judged-result payload narrows to `findings`; `kind`, `rubric`, `contractVersion`,
+> `lapId` and `snapshotDigest` are engine-supplied. Requiring the echo discarded clean judgements as
+> `invalid-provider-result` in two repositories and terminal-halted a feature. The lap ID's binding
+> to the immutable input digest, the closed-projection principle above, and the cache identity in §7
+> are all unchanged.
+
 ### 3. Reuse green test evidence and preflight only Tautology's RED side
 
 The preceding `test_suite` gate is the authoritative proof that the current HEAD is green.
