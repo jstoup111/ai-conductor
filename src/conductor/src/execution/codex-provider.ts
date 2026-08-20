@@ -22,6 +22,7 @@ import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
+import { ProviderStreamAssembler } from './provider-stream.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -297,11 +298,34 @@ export class CodexProvider implements LLMProvider {
    */
   private wireActivityWatchdog(
     subprocess: { kill: () => void; stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null },
-    options: Pick<InvokeOptions, 'onActivity' | 'onSpawn'>,
+    options: Pick<InvokeOptions, 'onActivity' | 'onProviderStream' | 'onSpawn'>,
   ): void {
     try {
       options.onSpawn?.();
-      subprocess.stdout?.on('data', () => options.onActivity?.());
+      const streamAssembler = new ProviderStreamAssembler();
+      let uncachedInputTokens = 0;
+      let cachedInputTokens: number | undefined;
+      let outputTokens = 0;
+      subprocess.stdout?.on('data', (chunk: Buffer | string) => {
+        options.onActivity?.();
+        for (const record of streamAssembler.push(String(chunk))) {
+          const usage = parseCodexJsonl(JSON.stringify(record)).tokenUsage;
+          if (!usage) continue;
+
+          uncachedInputTokens += usage.input;
+          outputTokens += usage.output;
+          const cachedTokens = (usage.cacheRead ?? 0) + (usage.cacheCreation ?? 0);
+          if (usage.cacheRead !== undefined || usage.cacheCreation !== undefined) {
+            cachedInputTokens = (cachedInputTokens ?? 0) + cachedTokens;
+          }
+          options.onProviderStream?.({
+            childObservability: 'unsupported',
+            uncachedInputTokens,
+            ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+            outputTokens,
+          });
+        }
+      });
       subprocess.stderr?.on('data', () => options.onActivity?.());
     } catch {
       // Watchdog wiring is best-effort; never affects provider dispatch.
@@ -312,7 +336,7 @@ export class CodexProvider implements LLMProvider {
     executable: string,
     args: readonly string[],
     options: ExecaOptions,
-    watchdogOptions: Pick<InvokeOptions, 'onActivity' | 'onSpawn' | 'spawnPermit'>,
+    watchdogOptions: Pick<InvokeOptions, 'onActivity' | 'onProviderStream' | 'onSpawn' | 'spawnPermit'>,
   ): ResultPromise {
     this.assertSpawnPermitted(watchdogOptions.spawnPermit);
     const subprocess = this.subprocessFactory(executable, args, options);
