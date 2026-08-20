@@ -594,6 +594,10 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
       changedFiles: [], changedTestSelectors: ['test/widget.test.ts'],
     } as unknown as BuildReviewRubricProjection;
     const candidate = stampBuildReviewDispatchedCandidate({
+      // Every provider-owned envelope value is deliberately contradictory:
+      // the candidate must instead be stamped from the engine projection.
+      kind: 'provider-result', rubric: 'scope', contractVersion: 'v1',
+      lapId: 'provider-lap', snapshotDigest: 'sha256:provider-snapshot',
       findings: [{
         concernKind: 'source-text-mirror', summary: 'The assertion mirrors source text.', evidenceLocations: ['test/widget.test.ts:8'],
         anchor: {
@@ -604,7 +608,13 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     }, 'tautology', projection);
     const rejection = describeBuildReviewDispatchedResultRejection(candidate, 'tautology', projection);
 
+    expect(candidate).toMatchObject({
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v3',
+      lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+    });
     expect(rejection).not.toMatch(/top-level "kind"|"rubric" must be|"contractVersion" must be|"lapId" must echo|"snapshotDigest" must echo/);
+    // A string selector was accepted by the pre-v3 grammar. The v3-stamped
+    // candidate must diagnose it as the required content-region reference.
     expect(rejection).toContain('findings[0].anchor.changedTest must be a content-region reference');
   });
 
