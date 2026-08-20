@@ -177,6 +177,7 @@ describe('cumulative build-review kickback bound', () => {
       pipelineDir: join(dir, '.pipeline'),
       buildReviewEffectiveResolver: async () => ({
         ok: true,
+        feature: { version: 'v1', repository: dir, feature: 'cumulative-kickback-bound' },
         effective: {
           rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [],
           skippedRubrics: [], infrastructureFailureRubrics: ['scope'],
