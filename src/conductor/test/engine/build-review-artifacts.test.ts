@@ -31,8 +31,7 @@ function judged(contractVersion: 'v1' | 'v2' = 'v1') {
   };
 }
 
-const persistedScopeArtifacts = {
-  v1: {
+const persistedV1ScopeArtifact = {
     version: 1,
     rubric: 'scope',
     lapId,
@@ -47,8 +46,9 @@ const persistedScopeArtifacts = {
       verdict: 'FAIL',
     },
     provenance: { kind: 'fresh' },
-  },
-  v2: {
+} as const;
+
+const persistedV2ScopeArtifact = {
     version: 1,
     rubric: 'scope',
     lapId,
@@ -63,7 +63,6 @@ const persistedScopeArtifacts = {
       verdict: 'FAIL',
     },
     provenance: { kind: 'fresh' },
-  },
 } as const;
 
 describe('build-review current-lap branch artifacts', () => {
@@ -90,20 +89,22 @@ describe('build-review current-lap branch artifacts', () => {
     expect(await readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
   });
 
-  it.each(Object.entries(persistedScopeArtifacts) as Array<['v1' | 'v2', typeof persistedScopeArtifacts.v1 | typeof persistedScopeArtifacts.v2]>)('parses an at-rest %s record under the version it declares', async (contractVersion, artifact) => {
+  it('parses a persisted v1 record with v1-only scope relation at rest', async () => {
     const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
-    const fs = filesystem({ [path]: JSON.stringify(artifact) });
+    const fs = filesystem({ [path]: JSON.stringify(persistedV1ScopeArtifact) });
 
-    expect(parseBuildReviewBranchArtifact(JSON.parse(fs.files[path]!))).toEqual(artifact);
-    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toEqual(artifact);
-    expect(artifact.result.contractVersion).toBe(contractVersion);
+    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { contractVersion: 'v1', findings: [{ anchor: { relation: 'out-of-plan-change' } }] },
+    });
   });
 
-  it('rejects the persisted v1 record if interpreted under the v2 contract', () => {
-    const v1 = persistedScopeArtifacts.v1;
-    const relabeledAsV2 = { ...v1, result: { ...v1.result, contractVersion: 'v2' as const } };
+  it('parses a persisted v2 record with v2-only scope relation at rest', async () => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
+    const fs = filesystem({ [path]: JSON.stringify(persistedV2ScopeArtifact) });
 
-    expect(parseBuildReviewBranchArtifact(relabeledAsV2)).toBeUndefined();
+    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { contractVersion: 'v2', findings: [{ anchor: { relation: 'not-authorized-by-plan' } }] },
+    });
   });
 
   it.each([

@@ -231,12 +231,7 @@ describe("build-review semantic cache", () => {
     });
   });
 
-  // Task 20's "served without fresh dispatch" half is proven at the seam that
-  // actually dispatches: build-review-coordinator.test.ts asserts `dispatchModel`
-  // was never called for a cached rubric. `classifyBuildReviewCacheLookup` is a
-  // pure classifier with no dispatch seam, so a spy here could only restate the
-  // hit assertion below.
-  it("classifies a pre-change entry as a hit and excludes lap identity from its projection digest", async () => {
+  it("keeps a pre-change cache entry reusable when only lap provenance changes", async () => {
     const projection = {
       rubric: "scope",
       contractVersion: "v3",
@@ -266,9 +261,11 @@ describe("build-review semantic cache", () => {
     const fs = memoryFilesystem({ [cacheEntryPath(root, "scope")]: JSON.stringify(entry()) });
     const cache = classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "scope", fs), request);
 
-    expect(cache).toMatchObject({
+    expect(cache).toEqual({
       kind: "hit",
-      hit: { result: { lapId: "lap-current", snapshotDigest: "snapshot-current" } },
+      hit: expect.objectContaining({
+        result: expect.objectContaining({ lapId: "lap-current", snapshotDigest: "snapshot-current" }),
+      }),
     });
     expect(projectionDigest(projection as never)).toBe(projectionDigest(projectionWithCurrentLap as never));
   });

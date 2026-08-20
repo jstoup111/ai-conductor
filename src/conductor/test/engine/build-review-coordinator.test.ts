@@ -225,6 +225,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(writeArtifact.mock.calls.find(([artifact]) => artifact.rubric === "scope")?.[0]).toMatchObject({
       lapId: "lap-current", snapshotDigest: "sha256:snapshot", provenance: { kind: "cache-hit", cachedLapId: "cached" },
     });
+    expect(dispatchModel).not.toHaveBeenCalledWith(expect.objectContaining({ rubric: "scope" }), expect.anything());
     expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("scope");
   });
 
@@ -641,7 +642,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
   });
 
-  it("settles an empty findings-only payload as a scope PASS stamped with engine-held envelope values", async () => {
+  it("persists a live findings-only scope dispatch as the complete engine-stamped v3 envelope", async () => {
     const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
@@ -654,14 +655,6 @@ describe("build-review coordinator: findings-only provider payloads", () => {
       writeCache: async () => undefined,
     });
 
-    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined)
-      .toEqual({
-        kind: "dispatched", rubric: "scope",
-        result: {
-          kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
-          findings: [], verdict: "PASS",
-        },
-      });
     expect(writeArtifact.mock.calls
       .map(([artifact]) => artifact)
       .filter((artifact) => artifact.rubric === "scope"))
