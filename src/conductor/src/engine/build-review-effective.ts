@@ -101,7 +101,12 @@ export async function resolveEffectiveBuildReviewVerdict(
       });
     }
   }
-  const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, reducedCoverage.records);
+  let effective: BuildReviewEffectiveVerdict | undefined;
+  try {
+    effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, reducedCoverage.records);
+  } catch {
+    return { ok: false, reason: 'build-review disposition state is invalid' };
+  }
   return effective
     ? { ok: true, feature, effective }
     : { ok: false, reason: 'build-review disposition state cannot resolve current findings' };
