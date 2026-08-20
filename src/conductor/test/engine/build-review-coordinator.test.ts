@@ -639,4 +639,44 @@ describe("build-review coordinator: findings-only provider payloads", () => {
       },
     ]);
   });
+
+  const settleScopePayload = async (payload: Record<string, unknown>) => {
+    const coordination = await coordinateBuildReviewRubrics({
+      config: noTautology(),
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async (branch, projection) => branch.rubric === "scope"
+        ? payload
+        : judged(branch.rubric, projection),
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+    return coordination.kind === "ready"
+      ? coordination.branches.find((branch) => branch.rubric === "scope")
+      : undefined;
+  };
+
+  const scopeFinding = {
+    concernKind: "out-of-plan-change",
+    summary: "The changed source path is not authorized by the plan.",
+    evidenceLocations: ["src/a.ts:1"],
+    anchor: { rubric: "scope", path: "src/a.ts", relation: "not-authorized-by-plan" },
+  };
+
+  it.each([
+    ["status discriminator", { findings: [], status: "judged" }, "PASS", []],
+    ["type discriminator", { findings: [], type: "judged" }, "PASS", []],
+    ["omitted lap and snapshot identity", { findings: [] }, "PASS", []],
+    ["different rubric", { findings: [], rubric: "rootCause" }, "PASS", []],
+    ["v1 contract version", { findings: [scopeFinding], contractVersion: "v1" }, "FAIL", [scopeFinding]],
+    ["unrecognized top-level keys", { findings: [], extra: "ignored", source: "provider" }, "PASS", []],
+  ] as const)("settles a provider payload with %s under the engine-owned v3 envelope", async (_shape, payload, verdict, findings) => {
+    expect(await settleScopePayload(payload)).toMatchObject({
+      kind: "dispatched", rubric: "scope",
+      result: {
+        kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+        verdict, findings,
+      },
+    });
+  });
 });
