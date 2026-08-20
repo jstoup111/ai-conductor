@@ -72,6 +72,8 @@ export interface InProgressEntry {
   heartbeatAgeMs?: number;
   /** Elapsed time since the current dispatch's `step_started` event. */
   elapsedStepTimeMs?: number;
+  /** Latest live provider observation from the current dispatch only. */
+  providerStreamProgress?: import('../execution/llm-provider.js').ProviderStreamObservation;
   /** Most recent validated aggregate test outcome, when run evidence exists. */
   lastTestOutcome?: 'PASS' | 'FAIL';
   /**
@@ -393,6 +395,7 @@ async function readDispatchActivity(
     state: 'required' | 'pending' | 'satisfied' | 'rejected';
     reason?: string;
   };
+  providerStreamProgress?: import('../execution/llm-provider.js').ProviderStreamObservation;
 }> {
   let content: string;
   try {
@@ -407,6 +410,7 @@ async function readDispatchActivity(
     state: 'required' | 'pending' | 'satisfied' | 'rejected';
     reason?: string;
   } | undefined;
+  let providerStreamProgress: import('../execution/llm-provider.js').ProviderStreamObservation | undefined;
   for (const line of content.split('\n')) {
     let event: unknown;
     try {
@@ -420,6 +424,7 @@ async function readDispatchActivity(
       startedAtMs = timestamp;
       completionUnmet = false;
       acceptanceRed = undefined;
+      providerStreamProgress = undefined;
       continue;
     }
     if (startedAtMs !== undefined && event.type === 'acceptance_red' && isAcceptanceRedState(event.state)) {
@@ -429,8 +434,19 @@ async function readDispatchActivity(
       };
       completionUnmet = event.state === 'pending' || event.state === 'rejected';
     }
+    if (startedAtMs !== undefined && event.type === 'provider_stream_progress'
+      && (event.childObservability === 'observed' || event.childObservability === 'unsupported')
+      && typeof event.uncachedInputTokens === 'number' && typeof event.outputTokens === 'number') {
+      providerStreamProgress = {
+        childObservability: event.childObservability,
+        ...(typeof event.activeChildren === 'number' ? { activeChildren: event.activeChildren } : {}),
+        uncachedInputTokens: event.uncachedInputTokens,
+        ...(typeof event.cachedInputTokens === 'number' ? { cachedInputTokens: event.cachedInputTokens } : {}),
+        outputTokens: event.outputTokens,
+      };
+    }
   }
-  return { startedAtMs, completionUnmet, acceptanceRed };
+  return { startedAtMs, completionUnmet, acceptanceRed, providerStreamProgress };
 }
 
 function isAcceptanceRedState(
@@ -634,6 +650,7 @@ export async function scanInheritedState(
       if (activity.startedAtMs !== undefined) {
         entry.elapsedStepTimeMs = Math.max(0, now() - activity.startedAtMs);
       }
+      if (activity.providerStreamProgress) entry.providerStreamProgress = activity.providerStreamProgress;
       const testEvidence = await readFullSuiteEvidence(wt);
       if ('evidence' in testEvidence && testEvidence.evidence) {
         entry.lastTestOutcome = testEvidence.evidence.outcome;
