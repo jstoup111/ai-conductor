@@ -4160,6 +4160,22 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(detail).toContain('[...truncated');
   });
 
+  it.each([
+    incidentShapedOutput,
+    '```json\n{"findings":[{}]}\n```',
+    'The anchor remains flattened after the repair instruction.',
+  ])('settles a byte-identical repair without another rubric dispatch', async (replayedOutput) => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: replayedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: replayedOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'dispatch-failure', detail: expect.stringContaining('byte-identical') });
+  });
+
   it('returns undefined (not a failure report) when the provider invocation itself fails', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: false, output: 'crashed', exitCode: 1 });
     const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');

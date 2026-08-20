@@ -1996,6 +1996,11 @@ export class DefaultStepRunner implements StepRunner {
     ].join('\n\n');
     const repair = await invokeOnce(repairPrompt);
     if (repair.success && repair.output !== undefined) {
+      if (repair.output === initial.output) {
+        return makeBuildReviewDispatchFailure(
+          'judged-result repair was byte-identical to the rejected output; no further retry can act on the same payload',
+        );
+      }
       const repaired = this.validateRubricOutput(repair.output, branch.rubric, projection);
       if (repaired.result) return repaired.result;
       return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
