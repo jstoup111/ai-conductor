@@ -4349,9 +4349,35 @@ export class Conductor {
         const alreadyResolved = currentStatus === 'done' || currentStatus === 'skipped';
         const explicitlyTargeted = this.fromStep === step.name;
         if (alreadyResolved && !explicitlyTargeted) {
-          // No event — the step simply isn't re-dispatched. Dashboard renders
-          // the persisted status verbatim.
-          continue;
+          // A declared tree-attesting predicate is the authority for a
+          // persisted `done` status only when artifact verification is on.
+          // `skipped` remains an explicit scheduling decision, not evidence
+          // to re-evaluate. A stale or indeterminate predicate must fall
+          // through so the normal dispatch path can refresh it.
+          if (
+            currentStatus === 'done' &&
+            this.verifyArtifacts &&
+            step.treeAttestingCompletion
+          ) {
+            try {
+              const completion = await checkStepCompletion(
+                this.projectRoot,
+                step.name,
+                await this.completionCtx(state),
+              );
+              if (!completion.done) {
+                // Continue into the ordinary scheduling and dispatch path.
+              } else {
+                continue;
+              }
+            } catch {
+              // On doubt, dispatch rather than silently skipping a stale gate.
+            }
+          } else {
+            // No event — the step simply isn't re-dispatched. Dashboard renders
+            // the persisted status verbatim.
+            continue;
+          }
         }
 
         // Read complexity tier from state each iteration (may change after complexity step)
