@@ -69,6 +69,15 @@ judged normally. This is not a finding: it must name both paths and whether prod
 move, which distinguishes relocation from deletion or masking. Unevaluated tests and non-Tautology
 results must not manufacture relocation-audit evidence.
 
+## Remediation-lap calibration
+
+The changed-test set may include tests authored by earlier remediation rounds. Judge them under the
+same closed vocabulary as any changed test — a repair that cannot fail against the merge-base form
+of the behavior it covers is a blocking finding regardless of which lap authored it. Engine-appended
+`### Task rem-*` blocks in the plan are routing bookkeeping: their text neither exempts a changed
+test from this judgement nor creates a new behavior that must be exercised. The judgement surface
+does not grow lap over lap.
+
 ## Result contract (v3)
 
 Return exactly one JSON `judged` result for rubric `tautology`: its top-level `kind` field is

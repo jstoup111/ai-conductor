@@ -35,6 +35,15 @@ concern when it masks an observed effect without addressing the mechanism or loc
 evidence identifies as responsible for the defect. Assess each independent defect and implementation
 relation separately; do not merge distinct mechanisms into one finding.
 
+## Remediation-lap calibration
+
+The stated defect/outcome this rubric judges against comes from the approved plan and the
+projection — never from remediation prose. Engine-appended `### Task rem-*` blocks in the plan are
+routing bookkeeping: their text does not restate, replace, or add a stated defect, and citing one
+never certifies a mechanism as the root cause. Judge a remediation repair exactly as any other
+change — does the implementation address the originally stated defect rather than its symptom. The
+set of stated defects does not grow lap over lap.
+
 ## Result contract (v3)
 
 Return exactly one JSON `judged` result for rubric `rootCause`: its top-level `kind` field is
