@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type { ConductState, HarnessConfig } from '../../src/types/index.js';
 import type {
@@ -8,7 +11,7 @@ import type {
   StateMutation,
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
-import { dispatchRewindCommand, rewindState } from '../../src/engine/rewind.js';
+import { clearHaltAtomically, dispatchRewindCommand, rewindState } from '../../src/engine/rewind.js';
 
 class RecordingStateStore implements ConductStateStore<ConductState> {
   readonly batches: NamedAtomicStateMutationBatch<ConductState>[] = [];
@@ -159,6 +162,60 @@ describe('rewindState', () => {
       'rollback failed operator rewind state',
     ]);
     error.mockRestore();
+  });
+
+  it('restores both HALT markers and state when only the second staged-marker deletion fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-marker-rollback-'));
+    const state: ConductState = { ...completeState };
+    const original = { ...state };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline/conduct-state.json'), JSON.stringify(state));
+      await writeFile(join(root, '.pipeline/HALT'), 'operator action required\n');
+      await writeFile(join(root, '.pipeline/HALT.class'), 'needs-human\n');
+      let removeCount = 0;
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root, {
+        clearDerivedRecords: async (cwd) => clearHaltAtomically(cwd, {
+          rename,
+          remove: async (path, options) => {
+            removeCount += 1;
+            if (removeCount === 2) throw new Error('second staged marker cannot be removed');
+            await rm(path, options);
+          },
+          readFile: (path) => readFile(path, 'utf-8'),
+          writeFile: (path, contents) => writeFile(path, contents, 'utf-8'),
+        }),
+      })).resolves.toBe(1);
+
+      expect(await readFile(join(root, '.pipeline/HALT'), 'utf-8')).toBe('operator action required\n');
+      expect(await readFile(join(root, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human\n');
+      expect(JSON.parse(await readFile(join(root, '.pipeline/conduct-state.json'), 'utf-8'))).toEqual(original);
+    } finally {
+      error.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('writes operator rewind audit evidence through the existing audit sink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-audit-'));
+    try {
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline/conduct-state.json'), JSON.stringify(completeState));
+      await writeFile(join(root, '.pipeline/HALT'), 'operator action required\n');
+      await writeFile(join(root, '.pipeline/HALT.class'), 'needs-human\n');
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root)).resolves.toBe(0);
+
+      const records = (await readFile(join(root, '.pipeline/audit-trail/events.jsonl'), 'utf-8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toContainEqual(expect.objectContaining({
+        origin: 'operator', event: 'operator_rewind', reason: 'rewound to build',
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
   });
 });

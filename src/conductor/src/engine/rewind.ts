@@ -6,10 +6,11 @@ import { readState } from './state.js';
 import { loadConfig } from './config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
+import { AuditTrailWriter } from './audit-trail.js';
 import { HALT_CLASS_MARKER, HALT_MARKER } from './halt-marker.js';
 import { GATES_DIR } from './gate-verdicts.js';
 import { join } from 'node:path';
-import { access, rename, rm } from 'node:fs/promises';
+import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
 
 export interface RewindStateInput {
   state: ConductState;
@@ -37,27 +38,54 @@ export interface RewindCommandDependencies {
   emit?: (result: RewindStateResult) => Promise<void>;
 }
 
+export interface RewindMarkerFilesystem {
+  rename: typeof rename;
+  remove: typeof rm;
+  readFile: (path: string) => Promise<string>;
+  writeFile: (path: string, contents: string) => Promise<void>;
+}
+
+const markerFilesystem: RewindMarkerFilesystem = {
+  rename,
+  remove: rm,
+  readFile: (path) => readFile(path, 'utf-8'),
+  writeFile: (path, contents) => writeFile(path, contents, 'utf-8'),
+};
+
 export function detectRewindCommand(argv: string[]): RewindDispatch | null {
   if (argv[2] !== 'rewind' || argv[3] !== '--to') return null;
   const target = argv[4];
   return target && !target.startsWith('--') && argv.length === 5 ? { kind: 'rewind', target } : null;
 }
 
-async function clearHaltAtomically(root: string): Promise<void> {
+export async function clearHaltAtomically(
+  root: string,
+  filesystem: RewindMarkerFilesystem = markerFilesystem,
+): Promise<void> {
   const halt = join(root, HALT_MARKER);
   const haltClass = join(root, HALT_CLASS_MARKER);
+  const originals = [halt, haltClass];
   const staged = [halt, haltClass].map((path) => `${path}.rewind-clearing`);
-  const moved: Array<[string, string]> = [];
+  const contents = await Promise.all(originals.map((path) => filesystem.readFile(path)));
+  const moved: number[] = [];
+  const removed = new Set<number>();
   try {
     for (let index = 0; index < 2; index += 1) {
-      await rename([halt, haltClass][index], staged[index]);
-      moved.push([[halt, haltClass][index], staged[index]]);
+      await filesystem.rename(originals[index], staged[index]);
+      moved.push(index);
     }
-    await Promise.all(staged.map((path) => rm(path, { force: true })));
+    for (let index = 0; index < 2; index += 1) {
+      await filesystem.remove(staged[index], { force: true });
+      removed.add(index);
+    }
   } catch (error) {
-    await Promise.all(moved.reverse().map(async ([original, temporary]) => {
-      await rename(temporary, original).catch(() => {});
-    }));
+    for (const index of moved.reverse()) {
+      if (removed.has(index)) {
+        await filesystem.writeFile(originals[index], contents[index]).catch(() => {});
+      } else {
+        await filesystem.rename(staged[index], originals[index]).catch(() => {});
+      }
+    }
     throw error;
   }
 }
@@ -162,8 +190,9 @@ export async function dispatchRewindCommand(
   } else {
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
+    new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
     persister.start();
-    await events.emit({ type: 'operator_rewind', operator: process.env.USER ?? 'operator', target: result.target, demoted: result.demoted });
+    await events.emitOrThrow({ type: 'operator_rewind', operator: process.env.USER ?? 'operator', target: result.target, demoted: result.demoted });
     persister.stop();
   }
   console.log(`Rewound to ${result.target}.`);
