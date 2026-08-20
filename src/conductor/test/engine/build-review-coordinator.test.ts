@@ -555,6 +555,29 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       : undefined;
     expect(rootCause).toEqual({ kind: "infrastructure-failure", rubric: "rootCause", reason: "invalid-provider-result" });
   });
+
+  it.each([
+    ["has no JSON object", "no parseable JSON object was found in the response"],
+    ["has non-array findings", '"findings" must be an array (empty when no concern was found)'],
+    ["has one malformed finding among valid findings", "findings[1].anchor.path must be a non-empty string"],
+  ])("carries the failed requirement when a provider result %s", async (_shape, detail) => {
+    const coordination = await coordinateBuildReviewRubrics({
+      config: noTautology(),
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async (branch, projection) => branch.rubric === "scope"
+        ? { kind: "dispatch-failure", detail }
+        : {
+            kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+            contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
+          },
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+
+    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined)
+      .toEqual({ kind: "infrastructure-failure", rubric: "scope", reason: "invalid-provider-result", detail });
+  });
 });
 
 describe("build-review coordinator: findings-only provider payloads", () => {
