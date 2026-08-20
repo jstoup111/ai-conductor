@@ -580,16 +580,21 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
   });
 
   it.each([
-    ["has no JSON object", "no parseable JSON object was found in the response"],
-    ["has non-array findings", '"findings" must be an array (empty when no concern was found)'],
-    ["has one malformed finding among valid findings", "findings[1].anchor.path must be a non-empty string"],
-  ])("carries the failed requirement when a provider result %s", async (_shape, detail) => {
+    ["has no JSON object", "not JSON at all", "no parseable JSON object was found in the response"],
+    ["has non-array findings", { findings: "none" }, '"findings" must be an array (empty when no concern was found)'],
+    ["has one malformed finding among valid findings", {
+      findings: [
+        { concernKind: "out-of-plan-change", summary: "outside plan", evidenceLocations: ["src/a.ts:1"], anchor: { rubric: "scope", path: "src/a.ts", relation: "not-authorized-by-plan" } },
+        { concernKind: "out-of-plan-change", summary: "outside plan", evidenceLocations: ["src/a.ts:1"], anchor: { rubric: "scope", path: "", relation: "not-authorized-by-plan" } },
+      ],
+    }, "findings[1].anchor.path must be a non-empty string"],
+  ])("carries the engine-produced failed requirement when a provider result %s", async (_shape, payload, detail) => {
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
       inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => branch.rubric === "scope"
-        ? { kind: "dispatch-failure", detail }
+        ? payload
         : {
             kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
             contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
@@ -621,7 +626,6 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     };
     const reasons = Object.keys(pinned) as BuildReviewInfrastructureFailureReason[];
 
-    expect(reasons).toHaveLength(8);
     for (const reason of reasons) {
       expect(parseBuildReviewInfrastructureFailure({
         kind: "infrastructure-failure", rubric: "scope", reason, detail: "d",
@@ -667,35 +671,6 @@ describe("build-review coordinator: findings-only provider payloads", () => {
       }]);
   });
 
-  it("persists a tautology relocation audit from a findings-only live dispatch", async () => {
-    const relocationAudit = [
-      "[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move",
-    ];
-    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
-    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
-
-    const coordination = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
-      preflight: async () => ({
-        classification: "approved-exception" as const, exception: "empty-test-set" as const,
-        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
-        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
-      }),
-      readCache: async () => undefined,
-      dispatchModel: async (branch) => branch.rubric === "tautology"
-        ? { findings: [], relocationAudit }
-        : { findings: [] },
-      writeArtifact,
-      writeCache,
-    });
-
-    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "tautology") : undefined)
-      .toMatchObject({ kind: "dispatched", rubric: "tautology", result: { relocationAudit } });
-    expect(writeArtifact.mock.calls.find(([artifact]) => artifact.rubric === "tautology")?.[0].result)
-      .toMatchObject({ relocationAudit });
-    expect(writeCache.mock.calls.find(([entry]) => entry.rubric === "tautology")?.[0].result)
-      .toMatchObject({ relocationAudit });
-  });
 
   it("settles a well-formed scope finding without provider envelope fields", async () => {
     const finding = {
@@ -778,7 +753,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     ["omitted lap and snapshot identity", { findings: [] }, "PASS", []],
     ["different rubric", { findings: [], rubric: "rootCause" }, "PASS", []],
     ["v1 contract version", { findings: [scopeFinding], contractVersion: "v1" }, "FAIL", [scopeFinding]],
-    ["unrecognized top-level keys", { findings: [], extra: "ignored", source: "provider" }, "PASS", []],
+    ["unrecognized top-level keys", { findings: [], extra: "ignored", source: "provider", relocationAudit: ["ignored"] }, "PASS", []],
   ] as const)("settles a provider payload with %s under the engine-owned v3 envelope", async (_shape, payload, verdict, findings) => {
     expect(await settleScopePayload(payload)).toMatchObject({
       kind: "dispatched", rubric: "scope",

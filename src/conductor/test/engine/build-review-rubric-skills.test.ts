@@ -27,15 +27,7 @@ function documentedVocabulary(skill: string): string[] {
 }
 
 function expectFindingsOnlyProviderPayload(skill: string, rubric: string): void {
-  if (rubric === 'Tautology') {
-    // Tautology alone carries a second provider-owned top-level field: the
-    // audit-only relocationAudit, contract-required on fixture-relocation
-    // results, persisted in the artifact, and consumed by the aggregate.
-    expect(skill).toContain('whose only top-level fields are `findings`, an array, and');
-    expect(skill).toContain('the audit-only `relocationAudit` array');
-  } else {
-    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
-  }
+  expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
   expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
   expect(skill).toMatch(new RegExp(`empty\\s+array means (?:no ${rubric} concern was found|a PASS for this rubric)`, 'i'));
   expect(skill).not.toMatch(/Return exactly one JSON `judged` result/i);

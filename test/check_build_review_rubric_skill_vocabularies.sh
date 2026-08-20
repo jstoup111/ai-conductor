@@ -54,6 +54,7 @@ if (typeof parseAnchor !== 'function') {
   process.exit(1);
 }
 const vocabularies = (mod.BUILD_REVIEW_FINDING_VOCABULARIES ?? {}) as Record<string, unknown>;
+const parserSource = Function.prototype.toString.call(parseAnchor);
 
 const OBJ = Object.freeze({
   path: 'src/probe.ts',
@@ -73,26 +74,44 @@ function member(rubric: string, field: string, fallback: string): string {
   const anchorFields = (vocabularies[rubric] as { anchorFields?: Record<string, readonly string[]> } | undefined)?.anchorFields;
   return anchorFields?.[field]?.[0] ?? fallback;
 }
-const RUBRICS: Record<string, { referenceFields: string[]; fixed: Record<string, string> }> = {
+const RUBRICS: Record<string, { fixed: Record<string, string> }> = {
   tautology: {
-    referenceFields: ['changedTest'],
     fixed: { exercisedBehavior: 'probe behavior', violationKind: member('tautology', 'violationKind', 'source-text-mirror') },
   },
   scope: {
-    referenceFields: ['path'],
     fixed: { relation: member('scope', 'relation', 'not-authorized-by-plan') },
   },
   rootCause: {
-    referenceFields: ['locus'],
     fixed: { statedDefect: 'probe defect', relation: member('rootCause', 'relation', 'symptom-only-fix') },
   },
   completeness: {
-    referenceFields: ['planTask', 'missingSurface'],
     fixed: { missingOutcome: 'probe outcome', missingKind: member('completeness', 'missingKind', 'missing-deliverable') },
   },
 };
 const SPECIMENS: Record<string, unknown> = { OBJ, PATH, TASK, TASK_WORDY, TITLED, GARBAGE };
 const BASELINE_CANDIDATES = ['OBJ', 'PATH', 'TASK'];
+
+// Derive references from the parser's own branch body. A field is a
+// reference only where the parser sends `source.<field>` to one of its
+// reference validators. This intentionally fails closed if refactoring hides
+// the binding from the probe; an incomplete field set would make skill drift
+// undetectable.
+function parserReferenceFields(rubric: string): string[] {
+  const casePattern = new RegExp(`case\\s*["']${rubric}["']:`);
+  const matched = casePattern.exec(parserSource);
+  const start = matched?.index ?? -1;
+  const nextMatch = /case\s*["'][A-Za-z]+["']:/.exec(parserSource.slice(start + 1));
+  const next = nextMatch ? start + 1 + nextMatch.index : -1;
+  if (start < 0 || next < 0 && rubric !== 'completeness') throw new Error(`could not extract parser branch for ${rubric}`);
+  const branch = parserSource.slice(start, next < 0 ? undefined : next);
+  const fields = [...branch.matchAll(/(?:parseContentRegionReference|verifiedReference)\(source\.([A-Za-z][A-Za-z0-9]*)/g)]
+    .map((match) => match[1]!);
+  const uniqueFields = [...new Set(fields)];
+  if (uniqueFields.length === 0) {
+    throw new Error(`could not completely extract parser-enforced reference fields for ${rubric}`);
+  }
+  return uniqueFields;
+}
 
 function vocabLeaves(value: unknown, out: Set<string>): void {
   if (typeof value === 'string') out.add(value);
@@ -114,7 +133,15 @@ for (const [rubric, shape] of Object.entries(RUBRICS)) {
     }
   };
 
-  // Find an accepted baseline assignment for every reference field.
+  let referenceFields: string[];
+  try {
+    referenceFields = parserReferenceFields(rubric);
+  } catch (error) {
+    console.log(`${rubric} !reference-field-extraction-failed`);
+    continue;
+  }
+
+  // Find an accepted baseline assignment for every parser-enforced reference field.
   let baseline: Record<string, unknown> | undefined;
   const search = (fields: string[], acc: Record<string, unknown>): void => {
     if (baseline) return;
@@ -125,13 +152,13 @@ for (const [rubric, shape] of Object.entries(RUBRICS)) {
     const [head, ...rest] = fields;
     for (const name of BASELINE_CANDIDATES) search(rest, { ...acc, [head]: SPECIMENS[name] });
   };
-  search(shape.referenceFields, {});
+  search(referenceFields, {});
   if (!baseline) {
     console.log(`${rubric} !baseline-rejected`);
     continue;
   }
 
-  for (const field of shape.referenceFields) {
+  for (const field of referenceFields) {
     const test = (name: string): boolean => accepts({ ...baseline, [field]: SPECIMENS[name] });
     if (test('GARBAGE')) {
       console.log(`${rubric} ${field}!unenforced`);
@@ -233,6 +260,10 @@ check_reference_grammar_drift() {
       return 1
     fi
 
+    if grep -qE "^${rubric} !reference-field-extraction-failed$" <<<"$probe_output"; then
+      echo "build-review ${rubric} reference grammar drift: could not completely extract parser-enforced reference fields" >&2
+      return 1
+    fi
     if grep -qE "^${rubric} !baseline-rejected$" <<<"$probe_output"; then
       echo "build-review ${rubric} reference grammar drift: the parser rejected the fully-documented specimen anchor — update the anchor contract and the probe specimens together" >&2
       return 1
@@ -404,7 +435,17 @@ fixture_field="$fixture_dir/build-review-domain-reference-field.ts"
 sed 's/parseContentRegionReference(source\.locus)/parseContentRegionReference(source.changedTest)/' \
   "$fixture_domain" >"$fixture_field"
 run_drift_fixture 'a parser-only reference-field change' "$fixture_field" "$fixture_harness" \
-  'build-review rootCause reference grammar drift: the parser rejected the fully-documented specimen anchor'
+  'build-review rootCause reference grammar drift: anchor.changedTest requires content-region, but SKILL.md does not state that grammar'
+
+# A newly parser-consumed field must be discovered from the parser branch,
+# even while the existing `locus` reference remains intact. The root-cause
+# skill is deliberately not updated, so the bidirectional four-skill contract
+# comparison must reject the newly unstated `secondaryLocus` grammar.
+fixture_secondary_locus="$fixture_dir/build-review-domain-secondary-locus.ts"
+sed 's/return parseContentRegionReference(source\.locus);/return parseContentRegionReference(source.locus) \&\& parseContentRegionReference(source.secondaryLocus);/' \
+  "$fixture_domain" >"$fixture_secondary_locus"
+run_drift_fixture 'a newly parser-consumed secondaryLocus reference field' "$fixture_secondary_locus" "$fixture_harness" \
+  'build-review rootCause reference grammar drift: anchor.secondaryLocus requires content-region, but SKILL.md does not state that grammar'
 
 # Remediation Task root-cause-4 (incomplete enforcement): a branch that stops
 # routing the declared field through any grammar accepts garbage and must fail
@@ -413,7 +454,7 @@ fixture_unenforced="$fixture_dir/build-review-domain-unenforced.ts"
 sed 's/return parseContentRegionReference(source\.locus);/return source.locus;/' \
   "$fixture_domain" >"$fixture_unenforced"
 run_drift_fixture 'an unenforced reference field' "$fixture_unenforced" "$fixture_harness" \
-  'build-review rootCause reference grammar drift: anchor.locus accepts arbitrary input'
+  'build-review rootCause reference grammar drift: could not completely extract parser-enforced reference fields'
 
 # Remediation Task rem-root-cause-4: grammar drift in each CONSTANT the parser
 # builds on — never in the helper body, binding, or contract — must change

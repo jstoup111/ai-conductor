@@ -66,7 +66,7 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
   const candidate = record(value);
   if (!candidate) return undefined;
   const keys = candidate.kind === 'judged'
-    ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', ...(candidate.relocationAudit === undefined ? [] : ['relocationAudit']), 'verdict']
+    ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', 'verdict']
     : candidate.kind === 'skipped'
       ? ['kind', 'rubric', 'reason']
       : candidate.kind === 'infrastructure-failure'
@@ -98,7 +98,7 @@ function coverageFor(result: BuildReviewRubricResult): Coverage {
 
 function legacyFindingDetails(result: BuildReviewRubricResult): string[] {
   switch (result.kind) {
-    case 'judged': return [...result.findings.map((finding) => finding.concernKind), ...(result.relocationAudit ?? [])];
+    case 'judged': return result.findings.map((finding) => finding.concernKind);
     case 'skipped': return [`skipped: ${result.reason}`];
     case 'infrastructure-failure': return [`infrastructure failure: ${result.detail}`];
   }

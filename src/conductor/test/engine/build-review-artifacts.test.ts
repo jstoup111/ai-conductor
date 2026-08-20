@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { stampBuildReviewDispatchedCandidate, validateBuildReviewDispatchedResult } from '../../src/engine/build-review-coordinator.js';
 import {
   buildReviewBranchArtifactPath,
   parseBuildReviewBranchArtifact,
@@ -89,19 +90,36 @@ describe('build-review current-lap branch artifacts', () => {
     expect(await readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
   });
 
-  it('parses a persisted v1 record with v1-only scope relation at rest', async () => {
+  async function exerciseLiveV3StampBoundary(fs: BuildReviewArtifactFilesystem): Promise<void> {
+    const projection = {
+      rubric: 'scope', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
+      contentDigest: 'sha256:content', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
+      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, verifyOnlyContext: [],
+      planBody: '# Plan', repairContext: [], acceptedWidenings: [], operatorReseals: [],
+    } as never;
+    const stamped = stampBuildReviewDispatchedCandidate({ findings: [] }, 'scope', projection);
+    const result = validateBuildReviewDispatchedResult(stamped, 'scope', projection)!;
+    const artifact = await writeBuildReviewBranchArtifact('/feature', {
+      rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result, provenance: { kind: 'fresh' },
+    }, fs);
+    expect(artifact.result).toMatchObject({ contractVersion: 'v3', lapId, snapshotDigest: 'sha256:snapshot', findings: [] });
+  }
+
+  it('stamps a live v3 envelope before parsing a persisted v1-only scope relation at rest', async () => {
     const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
     const fs = filesystem({ [path]: JSON.stringify(persistedV1ScopeArtifact) });
 
+    await exerciseLiveV3StampBoundary(filesystem());
     await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
       result: { contractVersion: 'v1', findings: [{ anchor: { relation: 'out-of-plan-change' } }] },
     });
   });
 
-  it('parses a persisted v2 record with v2-only scope relation at rest', async () => {
+  it('stamps a live v3 envelope before parsing a persisted v2-only scope relation at rest', async () => {
     const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
     const fs = filesystem({ [path]: JSON.stringify(persistedV2ScopeArtifact) });
 
+    await exerciseLiveV3StampBoundary(filesystem());
     await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
       result: { contractVersion: 'v2', findings: [{ anchor: { relation: 'not-authorized-by-plan' } }] },
     });

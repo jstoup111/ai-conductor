@@ -424,21 +424,7 @@ describe('build-review domain', () => {
     })).toBeUndefined();
   });
 
-  it('retains a validated fixture-relocation audit entry on a zero-finding Tautology PASS', () => {
-    const relocationAudit = '[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move';
-
-    expect(parseBuildReviewJudgedResult({
-      kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
-      findings: [], relocationAudit: [relocationAudit],
-    })).toMatchObject({ verdict: 'PASS', relocationAudit: [relocationAudit] });
-
-    expect(parseBuildReviewJudgedResult({
-      kind: 'judged', rubric: 'tautology', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1',
-      findings: [], relocationAudit: ['[relocation-audit] EXEMPTED: old → new'],
-    })).toBeUndefined();
-  });
-
-  it('preserves omission of the optional relocation audit', () => {
+  it('derives a zero-finding PASS without a provider-owned audit field', () => {
     expect(parseBuildReviewJudgedResult({
       kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v1', findings: [],
     })).toEqual({
@@ -588,36 +574,16 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     }, 'scope', expected)).toContain('contradicts the findings array');
   });
 
-  it('preserves a provider-owned tautology relocationAudit through the engine stamp', () => {
+  it('discards relocationAudit as an unrecognized provider top-level key', () => {
     const projection = {
       rubric: 'tautology', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
       changedFiles: [], changedTestSelectors: [],
     } as unknown as BuildReviewRubricProjection;
-    const relocationAudit = ['[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move'];
-
-    // The audit is contract-required evidence on fixture-relocation results
-    // (persisted in the artifact, consumed by the aggregate). The stamp must
-    // carry it through, not silently discard it with the other provider-owned
-    // envelope fields.
     const stamped = stampBuildReviewDispatchedCandidate(
-      { findings: [], relocationAudit }, 'tautology', projection,
+      { findings: [], relocationAudit: ['ignored'] }, 'tautology', projection,
     ) as Record<string, unknown>;
-    expect(stamped.relocationAudit).toEqual(relocationAudit);
-    expect(parseBuildReviewJudgedResult(stamped)).toMatchObject({ verdict: 'PASS', relocationAudit });
-
-    // Absent stays absent — the stamp never manufactures audit evidence.
-    const bare = stampBuildReviewDispatchedCandidate(
-      { findings: [] }, 'tautology', projection,
-    ) as Record<string, unknown>;
-    expect('relocationAudit' in bare).toBe(false);
-
-    // A non-tautology payload smuggling an audit is rejected with the named
-    // problem, not silently laundered by the stamp.
-    const smuggled = stampBuildReviewDispatchedCandidate(
-      { findings: [], relocationAudit }, 'scope', projection,
-    );
-    expect(describeBuildReviewJudgedResultRejection(smuggled, 'scope', expected))
-      .toContain('"relocationAudit" must be absent or empty for rubric scope');
+    expect(stamped).not.toHaveProperty('relocationAudit');
+    expect(parseBuildReviewJudgedResult(stamped)).toMatchObject({ verdict: 'PASS' });
   });
 
   it('diagnoses a findings-only provider response under its engine-stamped v3 envelope', () => {
@@ -753,7 +719,6 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     ['anchor rubric', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), rubric: 'rootCause' } }] }), 'findings[0].anchor.rubric must be "scope"'],
     ['anchor field presence', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), path: '' } }] }), 'findings[0].anchor.path must be a non-empty string'],
     ['anchor classification vocabulary', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), relation: 'unknown' } }] }), 'findings[0].anchor.relation must be one of'],
-    ['relocation audit', () => ({ ...validScopeResult(), relocationAudit: ['unexpected'] }), '"relocationAudit" must be absent or empty for rubric scope'],
     ['verdict contradiction', () => ({ ...validScopeResult(), verdict: 'FAIL' }), 'contradicts the findings array'],
     ['passed contradiction', () => ({ ...validScopeResult(), passed: false }), 'contradicts the findings array'],
   ];
