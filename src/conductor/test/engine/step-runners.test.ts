@@ -4121,6 +4121,36 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     );
   });
 
+  it('diagnoses findings-only output through the same v3-stamped candidate it validates', async () => {
+    const findingsOnlyOutput = JSON.stringify({
+      findings: [{
+        concernKind: 'source-text-mirror',
+        summary: 'The assertion mirrors source text.',
+        evidenceLocations: ['test/engine/event-sinks.test.ts:519'],
+        anchor: {
+          rubric: 'tautology',
+          // This was valid under the old string-reference grammar.  The
+          // repair diagnosis must use the v3 candidate and its projection
+          // context, not fabricate causes for omitted provider envelope keys.
+          changedTest: 'test/engine/event-sinks.test.ts',
+          exercisedBehavior: 'EVENT_SINKS persisted routing',
+          violationKind: 'source-text-mirror',
+        },
+      }],
+    });
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: findingsOnlyOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest });
+    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
+    expect(repairPrompt).toContain('findings[0].anchor.changedTest must be a content-region reference');
+    expect(repairPrompt).not.toMatch(/top-level "kind"|"rubric" must be|"contractVersion" must be|"lapId" must echo|"snapshotDigest" must echo/);
+  });
+
   it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
     const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');

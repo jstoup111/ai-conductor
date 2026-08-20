@@ -594,10 +594,8 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
       changedFiles: [], changedTestSelectors: ['test/widget.test.ts'],
     } as unknown as BuildReviewRubricProjection;
     const candidate = stampBuildReviewDispatchedCandidate({
-      // Every provider-owned envelope value is deliberately contradictory:
-      // the candidate must instead be stamped from the engine projection.
-      kind: 'provider-result', rubric: 'scope', contractVersion: 'v1',
-      lapId: 'provider-lap', snapshotDigest: 'sha256:provider-snapshot',
+      // Providers own findings only. Missing envelope keys must be restored
+      // from the projection before both validation and diagnosis.
       findings: [{
         concernKind: 'source-text-mirror', summary: 'The assertion mirrors source text.', evidenceLocations: ['test/widget.test.ts:8'],
         anchor: {
