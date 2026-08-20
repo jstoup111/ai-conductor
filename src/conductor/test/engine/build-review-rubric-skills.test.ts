@@ -30,6 +30,8 @@ function expectFindingsOnlyProviderPayload(skill: string, rubric: string): void 
   expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
   expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
   expect(skill).toMatch(new RegExp(`empty\\s+array means (?:no ${rubric} concern was found|a PASS for this rubric)`, 'i'));
+  expect(skill).not.toMatch(/Return exactly one JSON `judged` result/i);
+  expect(skill).not.toMatch(/It echoes the projection's `lapId` and `snapshotDigest` verbatim/i);
 }
 
 describe('engine/build-review rubric skill contracts', () => {
@@ -73,9 +75,7 @@ describe('engine/build-review rubric skill contracts', () => {
     // content-free manifest (path + merge-base blob sha per file).
     expect(skill).toMatch(/reverted-production manifest/i);
 
-    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
-    expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
-    expect(skill).toMatch(/empty\s+array means no Tautology concern was found/i);
+    expectFindingsOnlyProviderPayload(skill, 'Tautology');
     expect(skill).toMatch(/concern kind/i);
     expect(skill).toMatch(/changed test/i);
     expect(skill).toMatch(/exercised behavior\/assertion/i);
@@ -118,9 +118,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/unmatched paths?.*normally/i);
     expect(skill).toMatch(/does not.*exempt/i);
 
-    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
-    expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
-    expect(skill).toMatch(/empty\s+array means no Scope concern was found/i);
+    expectFindingsOnlyProviderPayload(skill, 'Scope');
     expect(skill).toMatch(/out-of-plan path or surface/i);
     expect(skill).toMatch(/plan-scope relation/i);
     expect(skill).toMatch(/"rubric": "scope", "path": "<string>"/);
@@ -153,9 +151,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/stated defect\/outcome/i);
     expect(skill).toMatch(/symptom-only/i);
     expect(skill).toMatch(/implementation mechanism or locus/i);
-    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
-    expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
-    expect(skill).toMatch(/empty\s+array means a PASS for this rubric/i);
+    expectFindingsOnlyProviderPayload(skill, 'Root Cause');
     expect(skill).toMatch(/"rubric": "rootCause", "statedDefect":/);
     expect(skill).toMatch(/"locus": \{"path": "<repository-relative path>",/);
     expect(skill).toMatch(/typed logical anchors/i);
@@ -187,9 +183,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/plan.*diff.*whole/i);
 
     expect(skill).toMatch(/default-enabled/i);
-    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
-    expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
-    expect(skill).toMatch(/empty\s+array means no Completeness concern was found/i);
+    expectFindingsOnlyProviderPayload(skill, 'Completeness');
     expect(skill).toMatch(/engine.*explicit disablement/i);
     expect(skill).toMatch(/missing deliverable/i);
     expect(skill).toMatch(/approved plan outcome\/task/i);
