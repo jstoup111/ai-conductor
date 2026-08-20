@@ -10,6 +10,7 @@ import {
   parseBuildReviewInfrastructureFailure,
   parseBuildReviewJudgedResult,
   parseBuildReviewLapId,
+  parseBuildReviewCanonicalPathReference,
   parseBuildReviewCanonicalPlanTaskReference,
   parseBuildReviewRubricContractVersion,
   parseBuildReviewSkip,
@@ -241,6 +242,41 @@ describe('build-review domain', () => {
         completeness: { planTask: 'plan-task', missingSurface: 'path' },
       },
     });
+  });
+
+  // A scope violation frequently lives in a dot-leading repository directory —
+  // `.docs/plans/<slug>.md` is the plan itself, the artifact this rubric exists
+  // to police. Rejecting the leading dot made those findings unanchorable, so
+  // the rubric could never settle no matter how many repair turns it was given.
+  it.each([
+    '.docs/plans/a-feature.md',
+    '.github/workflows/release.yml',
+    '.pipeline/events.jsonl',
+    'src/conductor/src/engine/step-runners.ts',
+    'docs/reference/cli.md',
+  ])('accepts %s as a canonical path reference', (path) => {
+    expect(parseBuildReviewCanonicalPathReference(path)).toBe(path);
+  });
+
+  // The leading dot is admitted; a dot that means traversal, an absent segment,
+  // or trailing prose is still refused. These are what the leading-character
+  // class was doing by accident and the lookaheads do on purpose.
+  it.each([
+    ['an absolute path', '/abs/path.md'],
+    ['a parent traversal', '../escape.md'],
+    ['an interior parent traversal', 'a/../b.md'],
+    ['a trailing parent traversal', 'a/..'],
+    ['a dot-directory escape', '.docs/../etc.md'],
+    ['a leading current-directory segment', './relative.md'],
+    ['an interior current-directory segment', 'a/./b.md'],
+    ['a bare current directory', '.'],
+    ['a bare parent directory', '..'],
+    ['an empty interior segment', 'a//b.md'],
+    ['a trailing separator', 'a/'],
+    ['a path carrying prose', "src/a.ts — the close-boundary flush"],
+    ['a prose plan-task title', 'Task 15: Flush the final observation'],
+  ])('refuses %s', (_case, path) => {
+    expect(parseBuildReviewCanonicalPathReference(path)).toBeUndefined();
   });
 
   it('accepts only the typed anchors belonging to each rubric', () => {

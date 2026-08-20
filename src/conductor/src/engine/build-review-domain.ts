@@ -280,7 +280,12 @@ function parseAnchorClassification(
   return fields[field] ? parseFindingVocabularyMember(value, fields[field]) : undefined;
 }
 
-const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9][A-Za-z0-9._/@+-]*)*$/;
+// A segment may begin with a dot: `.docs/`, `.github/`, and `.pipeline/` are
+// ordinary repository directories, and `.docs/plans/<slug>.md` is the artifact
+// the scope rubric most often has to anchor to. Traversal is refused by the
+// two lookaheads, which reject `.` and `..` as whole segments, so the leading
+// character class never had to carry that job.
+const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9.][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9.][A-Za-z0-9._/@+-]*)*$/;
 const CANONICAL_PLAN_TASK_REFERENCE = new RegExp(`^${TASK_ID_PATTERN}$`);
 
 /** A stable, unformatted path/reference token suitable for a finding identity. */
