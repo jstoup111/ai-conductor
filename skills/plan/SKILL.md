@@ -147,8 +147,8 @@ per criterion, or a production-file change merely to create one. The task must s
 which criterion each disposition covers, including negative paths.
 
 **Sealed-artifact prohibition:** A task MUST NOT name another feature's artifact under
-`.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/` in its `**Files:**`
-set (including an inherited `same` set). DECIDE performs any required amendment before this plan is
+`.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/` in
+any reference that directs an amendment. DECIDE performs any required amendment before this plan is
 authored; BUILD must never receive that mutation as a task. A path naming this plan's own feature is
 not prohibited.
 
@@ -401,7 +401,8 @@ conduct-ts plan-protected-targets .docs/plans/<feature>.md
 
 This check is **blocking**. It must report no task/path violations before the plan is saved or
 committed. If it reports another feature's sealed artifact, perform the needed amendment in DECIDE
-and rewrite the task; do not waive the result or defer the mutation to BUILD.
+and rewrite the task; a `**Files:**` line does not resolve the violation. Do not waive the result or
+defer the mutation to BUILD.
 
 ### 8b. Update Architecture Diagrams
 
