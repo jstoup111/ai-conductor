@@ -118,7 +118,9 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/unmatched paths?.*normally/i);
     expect(skill).toMatch(/does not.*exempt/i);
 
-    expectFindingsOnlyProviderPayload(skill, 'Scope');
+    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
+    expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
+    expect(skill).toMatch(/empty\s+array means no Scope concern was found/i);
     expect(skill).toMatch(/out-of-plan path or surface/i);
     expect(skill).toMatch(/plan-scope relation/i);
     expect(skill).toMatch(/"rubric": "scope", "path": "<string>"/);
