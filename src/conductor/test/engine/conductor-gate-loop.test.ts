@@ -66,6 +66,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       stepRunner: runner,
       events: new ConductorEventEmitter(),
       resume: true,
+      verifyArtifacts: true,
       fullSuiteVerifier: staleSuiteVerifier(observed),
     });
 
@@ -88,11 +89,16 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       stateFilePath,
       stepRunner: runner,
       events: new ConductorEventEmitter(),
-      // Start at the preceding BUILD gate so this observes the loop boundary
-      // where a restored rebase state reaches an already-done test_suite.
-      fromStep: 'wiring_check',
+      resume: true,
+      verifyArtifacts: true,
       fullSuiteVerifier: staleSuiteVerifier(observed),
     });
+    // The persisted satisfied verdict alone cannot move resume backward; Task
+    // 9 supplies that pre-verification route. Force its resulting entry here
+    // so this test isolates Task 3's boundary behavior over the second
+    // observed on-disk fixture without making test_suite an explicit target.
+    (conductor as unknown as { findResumeIndex: () => number }).findResumeIndex = () =>
+      ALL_STEPS.findIndex((step) => step.name === 'test_suite');
 
     await conductor.run();
 
@@ -119,6 +125,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       stepRunner: runner,
       events: new ConductorEventEmitter(),
       resume: true,
+      verifyArtifacts: true,
       fullSuiteVerifier: {
         inspect,
         ensure: async () => {
@@ -267,7 +274,7 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
     const stateFilePath = await installFixture('satisfied-verdict');
     const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState;
     state.test_suite = 'skipped';
-    state.non_attesting_gate = 'done';
+    (state as Record<string, unknown>).non_attesting_gate = 'done';
     await writeFile(stateFilePath, JSON.stringify(state));
 
     const inspect = vi.fn(async () => {
