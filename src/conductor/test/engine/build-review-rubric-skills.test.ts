@@ -153,7 +153,9 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/stated defect\/outcome/i);
     expect(skill).toMatch(/symptom-only/i);
     expect(skill).toMatch(/implementation mechanism or locus/i);
-    expectFindingsOnlyProviderPayload(skill, 'Root Cause');
+    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
+    expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
+    expect(skill).toMatch(/empty\s+array means a PASS for this rubric/i);
     expect(skill).toMatch(/"rubric": "rootCause", "statedDefect":/);
     expect(skill).toMatch(/"locus": \{"path": "<repository-relative path>",/);
     expect(skill).toMatch(/typed logical anchors/i);
