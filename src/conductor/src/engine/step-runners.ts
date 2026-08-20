@@ -49,6 +49,7 @@ import {
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import {
   coordinateBuildReviewRubrics,
+  describeBuildReviewDispatchedResultRejection,
   stampBuildReviewDispatchedCandidate,
   validateBuildReviewDispatchedResult,
   type BuildReviewDispatchableRubric,
@@ -60,8 +61,6 @@ import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
-  buildReviewFindingReferenceContext,
-  describeBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   renderBuildReviewJudgedResultShape,
@@ -2035,8 +2034,7 @@ export class DefaultStepRunner implements StepRunner {
     if (result) return { result, rejection: '' };
     try {
       return {
-        rejection: describeBuildReviewJudgedResultRejection(stampedCandidate, rubric, projection,
-          buildReviewFindingReferenceContext(projection)),
+        rejection: describeBuildReviewDispatchedResultRejection(stampedCandidate, rubric, projection),
       };
     } catch {
       // Diagnosis must never turn a repairable shape failure into a thrown

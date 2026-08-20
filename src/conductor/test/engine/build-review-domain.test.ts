@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import * as buildReviewDomain from '../../src/engine/build-review-domain.js';
-import { stampBuildReviewDispatchedCandidate } from '../../src/engine/build-review-coordinator.js';
+import {
+  describeBuildReviewDispatchedResultRejection,
+  stampBuildReviewDispatchedCandidate,
+} from '../../src/engine/build-review-coordinator.js';
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   buildReviewFindingReferenceContext,
@@ -599,9 +602,7 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
         },
       }],
     }, 'tautology', projection);
-    const rejection = describeBuildReviewJudgedResultRejection(
-      candidate, 'tautology', projection, buildReviewFindingReferenceContext(projection),
-    );
+    const rejection = describeBuildReviewDispatchedResultRejection(candidate, 'tautology', projection);
 
     expect(rejection).not.toMatch(/top-level "kind"|"rubric" must be|"contractVersion" must be|"lapId" must echo|"snapshotDigest" must echo/);
     expect(rejection).toContain('findings[0].anchor.changedTest must be a content-region reference');

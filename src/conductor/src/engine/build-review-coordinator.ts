@@ -1,6 +1,7 @@
 import type { BuildReviewRubricId } from "../types/config.js";
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+  describeBuildReviewJudgedResultRejection,
   parseBuildReviewDispatchFailure,
   buildReviewFindingReferenceContext,
   parseBuildReviewJudgedResult,
@@ -211,6 +212,24 @@ export function validateBuildReviewDispatchedResult(
     rubric: result.rubric, contractVersion: result.contractVersion, ...finding,
   })));
   return result && canonical && canonical.length === result.findings.length ? result : undefined;
+}
+
+/**
+ * Diagnoses the same engine-stamped candidate that dispatch validation sees.
+ * Keeping the projection-derived reference context here prevents callers from
+ * accidentally diagnosing the raw provider envelope or a weaker parse.
+ */
+export function describeBuildReviewDispatchedResultRejection(
+  candidate: unknown,
+  rubric: BuildReviewRubricId,
+  projection: BuildReviewRubricProjection,
+): string {
+  return describeBuildReviewJudgedResultRejection(
+    candidate,
+    rubric,
+    projection,
+    buildReviewFindingReferenceContext(projection),
+  );
 }
 
 function validWrittenArtifact(
