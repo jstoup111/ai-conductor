@@ -1,4 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 import { renderDashboardLines, formatDashboardSnapshot } from '../../src/ui/dashboard-text.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
@@ -142,6 +146,85 @@ describe('renderDashboardLines', () => {
       const text = lines.join('\n');
       expect(text).not.toContain('.docs/plans/');
     });
+  });
+});
+
+describe('dashboard provider stream progress reader', () => {
+  let root: string;
+  let worktreeBase: string;
+  let processedDir: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'dashboard-stream-progress-'));
+    worktreeBase = join(root, '.worktrees');
+    processedDir = join(root, '.daemon', 'processed');
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function writeFeature(slug: string, events?: readonly object[]): Promise<void> {
+    const pipeline = join(worktreeBase, slug, '.pipeline');
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(join(pipeline, 'conduct-state.json'), JSON.stringify({ build: 'in_progress' }));
+    if (events) {
+      await writeFile(
+        join(pipeline, 'events.jsonl'),
+        `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
+      );
+    }
+  }
+
+  async function readEntry(slug: string) {
+    const state = await scanInheritedState({ worktreeBase, processedDir, discover: async () => [] });
+    return state.inProgress.find((entry) => entry.slug === slug);
+  }
+
+  it('uses the latest provider stream progress from the current step', async () => {
+    await writeFeature('latest', [
+      { type: 'step_started', step: 'build', ts: '2026-08-20T12:00:00.000Z' },
+      { type: 'provider_stream_progress', step: 'build', childObservability: 'observed', activeChildren: 1, uncachedInputTokens: 10, outputTokens: 2 },
+      { type: 'provider_stream_progress', step: 'build', childObservability: 'observed', activeChildren: 2, uncachedInputTokens: 20, cachedInputTokens: 5, outputTokens: 4 },
+    ]);
+
+    expect((await readEntry('latest'))?.providerStreamProgress).toEqual({
+      childObservability: 'observed',
+      activeChildren: 2,
+      uncachedInputTokens: 20,
+      cachedInputTokens: 5,
+      outputTokens: 4,
+    });
+  });
+
+  it('ignores progress for a different step', async () => {
+    await writeFeature('different-step', [
+      { type: 'step_started', step: 'build', ts: '2026-08-20T12:00:00.000Z' },
+      { type: 'provider_stream_progress', step: 'plan', childObservability: 'observed', activeChildren: 7, uncachedInputTokens: 70, outputTokens: 7 },
+    ]);
+
+    expect((await readEntry('different-step'))?.providerStreamProgress).toBeUndefined();
+  });
+
+  it('resets progress when a new dispatch for the same step starts', async () => {
+    await writeFeature('reset', [
+      { type: 'step_started', step: 'build', ts: '2026-08-20T12:00:00.000Z' },
+      { type: 'provider_stream_progress', step: 'build', childObservability: 'observed', activeChildren: 1, uncachedInputTokens: 10, outputTokens: 2 },
+      { type: 'step_started', step: 'build', ts: '2026-08-20T12:05:00.000Z' },
+    ]);
+
+    expect((await readEntry('reset'))?.providerStreamProgress).toBeUndefined();
+  });
+
+  it('does not throw for a missing or unreadable event ledger', async () => {
+    await writeFeature('missing');
+    await writeFeature('unreadable');
+    await mkdir(join(worktreeBase, 'unreadable', '.pipeline', 'events.jsonl'));
+
+    await expect(Promise.all([readEntry('missing'), readEntry('unreadable')])).resolves.toEqual([
+      expect.objectContaining({ slug: 'missing' }),
+      expect.objectContaining({ slug: 'unreadable' }),
+    ]);
   });
 });
 
