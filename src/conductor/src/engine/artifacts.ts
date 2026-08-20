@@ -43,8 +43,24 @@ import {
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
+import {
+  renderBuildReviewReducedCoverageEvidence as renderReducedCoverageEvidence,
+  type BuildReviewReducedCoverageEvidenceInput,
+  type BuildReviewReducedCoverageEvidenceRenderResult,
+} from './build-review-projections.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
+
+/**
+ * Evidence-facing alias for the shared retained-PR/shipped-record reduced
+ * coverage renderer.  Keeping the artifact seam here prevents a second lap
+ * formatter from drifting from the publication contract.
+ */
+export function renderBuildReviewReducedCoverageEvidence(
+  input: BuildReviewReducedCoverageEvidenceInput,
+): BuildReviewReducedCoverageEvidenceRenderResult {
+  return renderReducedCoverageEvidence(input);
+}
 
 export type FeatureArtifactIdentityStrategy =
   | { strategy: 'plan-stem' }
