@@ -794,6 +794,12 @@ function childWorkSuffix(entry: InProgressEntry): string {
   return ' (children: unknown)';
 }
 
+function tokenBurnSuffix(entry: InProgressEntry): string {
+  const progress = entry.providerStreamProgress;
+  if (!progress) return ' (tokens: unavailable)';
+  return ` (tokens: ${progress.uncachedInputTokens} in / ${progress.outputTokens} out)`;
+}
+
 function lifecycleSuffix(lifecycle?: ProviderLifecycleDiagnostic): string {
   if (!lifecycle) return '';
   const reason = lifecycle.reason ? ` — ${lifecycle.reason}` : '';
@@ -934,7 +940,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${tokenBurnSuffix(p)}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(

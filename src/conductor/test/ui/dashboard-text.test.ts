@@ -286,6 +286,20 @@ describe('dashboard child work rendering', () => {
     ]);
     expect(`${unsupported}\n${unrecognized}\n${absent}`).not.toMatch(/children: (17|99)/);
   });
+
+  it('renders live uncached input and output totals, or explicitly marks them unavailable', () => {
+    const live = renderChildSuffix({
+      childObservability: 'unsupported',
+      uncachedInputTokens: 1_200,
+      cachedInputTokens: 400,
+      outputTokens: 180,
+    });
+    const absent = renderChildSuffix();
+
+    expect(live).toContain('tokens: 1200 in / 180 out');
+    expect(absent).toContain('tokens: unavailable');
+    expect(absent).not.toContain('0 in / 0 out');
+  });
 });
 
 describe('formatDashboardSnapshot: view modes and overlays', () => {
