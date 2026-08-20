@@ -40,6 +40,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review findings anchored to dot-leading repository paths such as `.docs/plans/` are accepted, so a scope violation in a plan file can be reported instead of looping until retries are exhausted. ([implementation PR #1756](https://github.com/jstoup111/ai-conductor/pull/1756)).
 - build_review Scope no longer flags the engine's own appended remediation plan tasks as an unauthorized out-of-plan change. ([implementation PR #1757](https://github.com/jstoup111/ai-conductor/pull/1757)).
 - A Codex dispatch whose shell tool calls could not be spawned is now reported as a failed dispatch instead of a success, so a build_review rubric that could not read the diff raises an infrastructure failure rather than a hollow PASS. ([implementation PR #1758](https://github.com/jstoup111/ai-conductor/pull/1758)).
+- build_review rubrics no longer treat engine-appended remediation tasks as findings or as authority, so remediation laps converge instead of expanding their own judgement surface each round. ([implementation PR #1761](https://github.com/jstoup111/ai-conductor/pull/1761)).
 
 ## [0.103.0] - 2026-08-17
 
