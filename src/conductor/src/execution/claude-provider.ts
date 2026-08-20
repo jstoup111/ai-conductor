@@ -14,7 +14,11 @@ import {
   type ObservedInterval,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
-import { ProviderStreamAssembler } from './provider-stream.js';
+import {
+  accumulateProviderStreamTokens,
+  ProviderStreamAssembler,
+  ProviderStreamChildTracker,
+} from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
@@ -540,9 +544,9 @@ export class ClaudeProvider implements LLMProvider {
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
@@ -560,8 +564,39 @@ export class ClaudeProvider implements LLMProvider {
     // lifecycle authority and never affect provider dispatch.
     try {
       onSpawn?.();
-      subprocess.stdout?.on('data', () => onActivity?.());
-      subprocess.stderr?.on('data', () => onActivity?.());
+      const streamAssembler = new ProviderStreamAssembler();
+      const childTracker = new ProviderStreamChildTracker();
+      let uncachedInputTokens = 0;
+      let cachedInputTokens = 0;
+      let outputTokens = 0;
+      subprocess.stdout?.on('data', (chunk: Buffer | string) => {
+        try {
+          onActivity?.();
+          for (const record of streamAssembler.push(String(chunk))) {
+            childTracker.observe(record);
+            const tokenTotals = accumulateProviderStreamTokens([record]);
+            uncachedInputTokens += tokenTotals.uncachedInputTokens;
+            cachedInputTokens += tokenTotals.cachedInputTokens;
+            outputTokens += tokenTotals.outputTokens;
+            onProviderStream?.({
+              childObservability: childTracker.childObservability,
+              activeChildren: childTracker.activeChildren,
+              uncachedInputTokens,
+              cachedInputTokens,
+              outputTokens,
+            });
+          }
+        } catch {
+          // Stream callbacks are observational; dispatch keeps its authority.
+        }
+      });
+      subprocess.stderr?.on('data', () => {
+        try {
+          onActivity?.();
+        } catch {
+          // Stream callbacks are observational; dispatch keeps its authority.
+        }
+      });
     } catch {
       // Watchdog wiring is best-effort; never affects provider dispatch.
     }
@@ -617,6 +652,7 @@ export class ClaudeProvider implements LLMProvider {
           cwd: options.cwd,
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
+          onProviderStream: options.onProviderStream,
           onSpawn: options.onSpawn,
           selfHost: options.selfHost,
           spawnPermit: options.spawnPermit,
@@ -628,6 +664,7 @@ export class ClaudeProvider implements LLMProvider {
           cwd: options.cwd,
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
+          onProviderStream: options.onProviderStream,
           onSpawn: options.onSpawn,
           selfHost: options.selfHost,
           spawnPermit: options.spawnPermit,
