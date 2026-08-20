@@ -6719,6 +6719,40 @@ export class Conductor {
               graderDispatchFailureReason = `step '${step.name}' grader could not be dispatched: ${lastError}`;
             }
 
+            // A runner can classify its own inputs as unretryable before it
+            // ever reaches a completion predicate. Route that typed failure
+            // on attempt one rather than spending the ordinary retry budget.
+            // Keep `build` outside this classifier: its progress accounting
+            // owns its retry policy.
+            const retryRoutingEnabled =
+              this.config.retry_routing?.enabled ?? RETRY_ROUTING_DEFAULTS.enabled;
+            const isVerdictStep =
+              step.name === 'architecture_review_as_built' ||
+              step.name === 'prd_audit' ||
+              step.name === 'build_review';
+            if (
+              this.daemon &&
+              retryRoutingEnabled &&
+              isVerdictStep &&
+              result.unretryableInputs !== undefined
+            ) {
+              const retryDecision = classifyRetryDecision({
+                step: step.name,
+                completion: { done: false },
+                attempt,
+                inputsUnchanged: false,
+                unretryableInputs: result.unretryableInputs,
+              });
+              await emitTracked({
+                type: 'retry_decision',
+                step: step.name,
+                attempt,
+                decision: retryDecision.decision,
+                ...(retryDecision.decision === 'route' ? { signal: retryDecision.signal } : {}),
+              });
+              if (retryDecision.decision === 'route') break;
+            }
+
             // Preflight opt-out halt (TR-16): if a HALT marker was written by the
             // preflight credentials check, exit immediately without retrying. This
             // preserves the credentials-specific HALT reason instead of allowing the

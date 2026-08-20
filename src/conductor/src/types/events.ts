@@ -313,7 +313,7 @@ export type ConductorEvent =
       step: StepName;
       attempt: number;
       decision: 'rerun' | 'route';
-      signal?: 'named-route' | 'identical-repeat';
+      signal?: 'named-route' | 'identical-repeat' | 'unretryable-inputs';
       unchangedInput?: string;
     }
   | { type: 'checkpoint_reached'; step: StepName }

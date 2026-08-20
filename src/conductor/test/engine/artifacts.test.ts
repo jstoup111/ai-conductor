@@ -3530,6 +3530,28 @@ describe('engine/artifacts', () => {
       expect(r).toEqual({ decision: 'rerun' });
     });
 
+    it('routes a typed unretryable input failure on attempt 1', () => {
+      const r = classifyRetryDecision({
+        step: 'build_review',
+        completion: completion('absent'),
+        attempt: 1,
+        inputsUnchanged: false,
+        unretryableInputs: { retryAfterStep: 'test_suite' },
+      });
+      expect(r).toEqual({ decision: 'route', signal: 'unretryable-inputs' });
+    });
+
+    it('never classifies build from an unretryable input facet', () => {
+      const r = classifyRetryDecision({
+        step: 'build',
+        completion: completion('absent'),
+        attempt: 1,
+        inputsUnchanged: false,
+        unretryableInputs: { retryAfterStep: 'test_suite' },
+      });
+      expect(r).toEqual({ decision: 'rerun' });
+    });
+
     it('prd_audit with prdAuditNonClean:true routes named-route on attempt 1', () => {
       const r = classifyRetryDecision({
         step: 'prd_audit',

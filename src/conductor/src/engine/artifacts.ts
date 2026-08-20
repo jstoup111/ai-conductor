@@ -3806,7 +3806,7 @@ const RETRY_CLASSIFY_STEPS: ReadonlySet<StepName> = new Set<StepName>([
 
 export type RetryDecision =
   | { decision: 'rerun' }
-  | { decision: 'route'; signal: 'named-route' | 'identical-repeat' };
+  | { decision: 'route'; signal: 'named-route' | 'identical-repeat' | 'unretryable-inputs' };
 
 /**
  * Pure, synchronous rerun-vs-route classifier for the SHIP-tail verdict steps
@@ -3817,7 +3817,9 @@ export type RetryDecision =
  * number. Signal (b) "identical-repeat" fires only when the retry has already
  * happened once (`attempt >= 2`) and produced the exact same reason on inputs
  * that provably haven't changed. The conductor computes `inputsUnchanged` and
- * `prdAuditNonClean` and passes them in; this helper does no I/O.
+ * `prdAuditNonClean` and passes them in. Signal (c) "unretryable-inputs"
+ * fires on the first attempt when the runner reports inputs that only another
+ * step can change. This helper does no I/O.
  */
 export function classifyRetryDecision(input: {
   step: StepName;
@@ -3826,9 +3828,12 @@ export function classifyRetryDecision(input: {
   priorReason?: string;
   inputsUnchanged: boolean;
   prdAuditNonClean?: boolean;
+  unretryableInputs?: { retryAfterStep: StepName };
 }): RetryDecision {
-  const { step, completion, attempt, priorReason, inputsUnchanged, prdAuditNonClean } = input;
+  const { step, completion, attempt, priorReason, inputsUnchanged, prdAuditNonClean, unretryableInputs } = input;
   if (!RETRY_CLASSIFY_STEPS.has(step)) return { decision: 'rerun' };
+
+  if (unretryableInputs) return { decision: 'route', signal: 'unretryable-inputs' };
 
   const namedRoute = step === 'prd_audit' ? prdAuditNonClean === true : completion.routeClass === 'named-route';
   if (namedRoute) return { decision: 'route', signal: 'named-route' };
