@@ -33,19 +33,45 @@ extract_current_engine_reference_grammars() {
     !in_parser { next }
     $0 ~ "case '\''" rubric "'\'':" { in_rubric = 1; next }
     in_rubric && /^[[:space:]]*case '\''/ { exit }
-    in_rubric && /^  }$/ { exit }
     !in_rubric { next }
 
     {
+      # v3 content-region references use a ternary whose other arm preserves
+      # the pre-v3 path grammar.  The skill contracts describe v3, so consume
+      # only the v3 arm and never mistake the legacy fallback for current
+      # grammar.
+      if ($0 ~ /contractVersion === '\''v3'\''/) {
+        v3_arm = 1;
+        next;
+      }
+      if ($0 ~ /if \(contractVersion !== '\''v3'\''\)/) {
+        skipping_legacy_block = $0 !~ /}/;
+        next;
+      }
+      if (skipping_legacy_block) {
+        if ($0 ~ /}/) skipping_legacy_block = 0;
+        next;
+      }
+      if (v3_arm && $0 ~ /^[[:space:]]*\?/) {
+        v3_arm = 0;
+        legacy_arm = 1;
+      } else if (legacy_arm && $0 ~ /^[[:space:]]*:/) {
+        legacy_arm = 0;
+        next;
+      }
+
       if (match($0, /parseContentRegionReference\(source\.[A-Za-z][A-Za-z0-9]*/)) {
         field = substr($0, RSTART + length("parseContentRegionReference(source."), RLENGTH - length("parseContentRegionReference(source."));
         print field "=content-region";
-        seen[field] = 1;
         next;
       }
-      if (match($0, /source\.[A-Za-z][A-Za-z0-9]*/)) {
-        candidate = substr($0, RSTART + length("source."), RLENGTH - length("source."));
-        field = seen[candidate] ? "" : candidate;
+      if (match($0, /verifiedReference\(source\.[A-Za-z][A-Za-z0-9]*/)) {
+        field = substr($0, RSTART + length("verifiedReference(source."), RLENGTH - length("verifiedReference(source."));
+      } else if ($0 ~ /verifiedReference\(/) {
+        awaiting_verified_field = 1;
+      } else if (awaiting_verified_field && match($0, /source\.[A-Za-z][A-Za-z0-9]*/)) {
+        field = substr($0, RSTART + length("source."), RLENGTH - length("source."));
+        awaiting_verified_field = 0;
       }
       if (field != "" && /parseBuildReviewCanonicalPlanTaskReference/) {
         print field "=plan-task";
@@ -237,6 +263,36 @@ elif grep -Fq 'build-review completeness reference grammar drift: anchor.planTas
   echo 'rubric reference-grammar guard rejects the parser-only grammar fixture'
 else
   echo 'rubric reference-grammar guard rejected the fixture without the required diagnostic' >&2
+  echo "$fixture_output" >&2
+  failures=1
+fi
+
+# The legacy grammar appears first in this fixture.  A declaration-driven (or
+# order-insensitive) scan accepts the stale content-region contract, whereas
+# the parser accepts a path for v3 and must make the guard fail.
+fixture_v3_domain="$fixture_dir/src/conductor/src/engine/build-review-domain-v3-grammar.ts"
+fixture_v3_harness="$fixture_dir/harness-v3-grammar"
+cp "$fixture_domain" "$fixture_v3_domain"
+cp -R "$fixture_harness" "$fixture_v3_harness"
+sed -i "/const source = value;/a\\  const contractVersion = 'v3';" "$fixture_v3_domain"
+sed -i "/case 'completeness':/a\\      if (contractVersion !== 'v3') { return parseContentRegionReference(source.planTask); }" "$fixture_v3_domain"
+sed -i 's/`anchor.planTask` is a `plan-task` reference/`anchor.planTask` is a `content-region` reference/' \
+  "$fixture_v3_harness/skills/build-review-completeness/SKILL.md"
+
+if ! grep -q "if (contractVersion !== 'v3') { return parseContentRegionReference(source.planTask); }" "$fixture_v3_domain" \
+    || ! grep -q '`anchor.planTask` is a `content-region` reference' "$fixture_v3_harness/skills/build-review-completeness/SKILL.md"; then
+  echo 'rubric v3 parser-precedence fixture is malformed' >&2
+  failures=1
+elif ! check_vocabulary_drift "$fixture_v3_domain" "$fixture_v3_harness"; then
+  echo 'rubric vocabulary guard unexpectedly rejected the v3 parser-precedence fixture' >&2
+  failures=1
+elif fixture_output=$(check_reference_grammar_drift "$fixture_v3_domain" "$fixture_v3_harness" 2>&1); then
+  echo 'known gap: reference-grammar guard accepts a legacy-first parser grammar' >&2
+  failures=1
+elif grep -Fq 'build-review completeness reference grammar drift: anchor.planTask requires path, but SKILL.md does not state that grammar' <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard rejects the legacy-first parser grammar fixture'
+else
+  echo 'rubric reference-grammar guard rejected the legacy-first fixture without the required diagnostic' >&2
   echo "$fixture_output" >&2
   failures=1
 fi
