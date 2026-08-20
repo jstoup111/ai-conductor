@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import {
   gateSatisfied,
@@ -8,6 +8,13 @@ import {
 } from '../../src/engine/selector.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { GateVerdict } from '../../src/engine/gate-verdicts.js';
+
+const readFile = vi.hoisted(() => vi.fn());
+
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+  readFile,
+}));
 
 // Front-half steps that the linear flow produces before the loop engages.
 function frontDone(): ConductState {
@@ -281,6 +288,30 @@ describe('engine/selector — gateSatisfied', () => {
 
   it('stale overrides a stale satisfied verdict (kickback cascade re-opens it)', () => {
     expect(gateSatisfied('build', { build: 'stale' }, { build: VSAT })).toBe(false);
+  });
+
+  it('and the resume clamp select solely from supplied state and verdicts', () => {
+    const state: ConductState = {
+      ...frontDone(),
+      build: 'done',
+      wiring_check: 'done',
+      test_suite: 'done',
+      build_review: 'failed',
+    };
+    const verdicts: Partial<Record<StepName, GateVerdict>> = {
+      build: VSAT,
+      test_suite: { satisfied: false, checkedAt: 1, reason: 'stale proof' },
+    };
+
+    expect(gateSatisfied('test_suite', state, verdicts)).toBe(false);
+    expect(earliestUnsatisfiedGateIndex({
+      steps: ALL_STEPS,
+      state,
+      verdicts,
+      regionStart: 'build',
+      loopGatesOnly: true,
+    })).toBe(ALL_STEPS.findIndex((step) => step.name === 'test_suite'));
+    expect(readFile).not.toHaveBeenCalled();
   });
 });
 
