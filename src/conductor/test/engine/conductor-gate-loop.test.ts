@@ -192,4 +192,111 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
     expect(inspect).not.toHaveBeenCalled();
     expect(ensure).not.toHaveBeenCalled();
   });
+
+  it('preserves a scheduling skip without evaluating the test-suite predicate', async () => {
+    const stateFilePath = await installFixture('satisfied-verdict');
+    const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState;
+    // Represents a prior tier/track/bootstrap scheduling decision: it is not
+    // completion evidence for the boundary to second-guess.
+    state.test_suite = 'skipped';
+    await writeFile(stateFilePath, JSON.stringify(state));
+
+    const inspect = vi.fn(async () => {
+      throw new Error('skipped test_suite must not inspect');
+    });
+    const observed: StepName[] = [];
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: {
+        run: async (step) => {
+          observed.push(step);
+          throw new Error('stop after skipped-suite proof');
+        },
+      },
+      events: new ConductorEventEmitter(),
+      fromStep: 'wiring_check',
+      verifyArtifacts: true,
+      fullSuiteVerifier: { inspect, ensure: vi.fn() },
+    });
+
+    await conductor.run();
+
+    expect(observed).toEqual(['build_review']);
+    expect(inspect).not.toHaveBeenCalled();
+    expect((JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState).test_suite).toBe('skipped');
+  });
+
+  it('dispatches test_suite when its tree-attesting predicate throws', async () => {
+    const stateFilePath = await installFixture('unsatisfied-verdict');
+    const observed: StepName[] = [];
+    const inspect = vi.fn(async () => {
+      if (inspect.mock.calls.length === 1) throw new Error('inspection unavailable');
+      return { status: 'STALE' as const, reason: 'fingerprint_mismatch' } as never;
+    });
+    const ensure = vi.fn(async () => {
+      observed.push('test_suite');
+      throw new Error('stop after native suite dispatch');
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: {
+        run: async (step) => {
+          observed.push(step);
+          throw new Error(`unexpected dispatch: ${step}`);
+        },
+      },
+      events: new ConductorEventEmitter(),
+      resume: true,
+      verifyArtifacts: true,
+      fullSuiteVerifier: { inspect, ensure },
+    });
+
+    await expect(conductor.run()).resolves.toBeUndefined();
+
+    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(observed).toEqual(['test_suite']);
+  });
+
+  it('leaves a completed step without the tree-attesting declaration untouched', async () => {
+    const stateFilePath = await installFixture('satisfied-verdict');
+    const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState;
+    state.test_suite = 'skipped';
+    state.non_attesting_gate = 'done';
+    await writeFile(stateFilePath, JSON.stringify(state));
+
+    const inspect = vi.fn(async () => {
+      throw new Error('non-attesting completion must not inspect');
+    });
+    const observed: StepName[] = [];
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: {
+        run: async (step) => {
+          observed.push(step);
+          throw new Error('stop after non-attesting fast-forward');
+        },
+      },
+      events: new ConductorEventEmitter(),
+      fromStep: 'wiring_check',
+      verifyArtifacts: true,
+      config: {
+        steps: {
+          non_attesting_gate: {
+            after: 'wiring_check',
+            skill: 'skills/test/SKILL.md',
+          },
+        },
+      } as never,
+      fullSuiteVerifier: { inspect, ensure: vi.fn() },
+    });
+
+    await conductor.run();
+
+    expect(observed).toEqual(['build_review']);
+    expect(inspect).not.toHaveBeenCalled();
+  });
 });
