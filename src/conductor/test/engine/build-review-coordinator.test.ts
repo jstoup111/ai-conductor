@@ -667,6 +667,36 @@ describe("build-review coordinator: findings-only provider payloads", () => {
       }]);
   });
 
+  it("persists a tautology relocation audit from a findings-only live dispatch", async () => {
+    const relocationAudit = [
+      "[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move",
+    ];
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
+    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
+
+    const coordination = await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: async () => ({
+        classification: "approved-exception" as const, exception: "empty-test-set" as const,
+        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
+        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
+      }),
+      readCache: async () => undefined,
+      dispatchModel: async (branch) => branch.rubric === "tautology"
+        ? { findings: [], relocationAudit }
+        : { findings: [] },
+      writeArtifact,
+      writeCache,
+    });
+
+    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "tautology") : undefined)
+      .toMatchObject({ kind: "dispatched", rubric: "tautology", result: { relocationAudit } });
+    expect(writeArtifact.mock.calls.find(([artifact]) => artifact.rubric === "tautology")?.[0].result)
+      .toMatchObject({ relocationAudit });
+    expect(writeCache.mock.calls.find(([entry]) => entry.rubric === "tautology")?.[0].result)
+      .toMatchObject({ relocationAudit });
+  });
+
   it("settles a well-formed scope finding without provider envelope fields", async () => {
     const finding = {
       concernKind: "out-of-plan-change",
