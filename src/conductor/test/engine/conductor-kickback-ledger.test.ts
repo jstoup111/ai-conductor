@@ -403,7 +403,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     const failEntry = await runVerdict('FAIL');
 
     expect([passEntry, failEntry]).toEqual([
-      initialEntry,
+      { ...initialEntry, mechanicalFaults: 0 },
       expect.objectContaining({ cumulative: initialEntry.cumulative + 1 }),
     ]);
   });

@@ -6914,6 +6914,24 @@ export class Conductor {
               }
             }
 
+            // A build-review infrastructure fault owns a separate retry
+            // allowance from ordinary step retries.  Let that lane consume
+            // its bounded ledger allowance even when this conductor was
+            // configured with fewer generic retries; its final attempt
+            // materializes the aggregate needed for the operator recovery.
+            if (step.name === 'build_review') {
+              const mechanicalFaults = (await readKickbackLedger(this.projectRoot))
+                .gates.build_review?.mechanicalFaults ?? 0;
+              if (
+                result.output?.startsWith('build_review mechanical fault') &&
+                mechanicalFaults > 0 &&
+                mechanicalFaults < MAX_MECHANICAL_FAULTS_BUILD_REVIEW
+              ) {
+                attempt--;
+                continue;
+              }
+            }
+
             if (attempt < stepMaxRetries) {
               // #188: carry the (model, effort) the NEXT attempt will use so
               // retro Part C can measure how far up the ladder the step climbed.

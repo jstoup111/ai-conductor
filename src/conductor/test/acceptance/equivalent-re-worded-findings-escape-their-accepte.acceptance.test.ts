@@ -209,7 +209,7 @@ async function runVocabularyRepairEffectivePassScenario() {
         const lapId = prompt.match(/Echo lapId "([^"]+)"/)?.[1]!;
         const snapshotDigest = prompt.match(/snapshotDigest "([^"]+)"/)?.[1]!;
         return { success: true, exitCode: 0, output: JSON.stringify({
-          kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId, snapshotDigest,
+          kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId, snapshotDigest,
           findings: [{ concernKind: 'out-of-plan-change', summary: 'The change needs review.', evidenceLocations: ['src/feature.ts:1'], anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'not-authorized-by-plan' } }],
         }) };
       }
@@ -217,11 +217,11 @@ async function runVocabularyRepairEffectivePassScenario() {
       if (projection.rubric === 'scope' && initialScopeReply) {
         initialScopeReply = false;
         return { success: true, exitCode: 0, output: JSON.stringify({
-          kind: 'judged', rubric: 'scope', contractVersion: 'v2', lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+          kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
           findings: [{ concernKind: 'other', summary: 'The change needs review.', evidenceLocations: ['src/feature.ts:1'], anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'other' } }],
         }) };
       }
-      return { success: true, exitCode: 0, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, contractVersion: 'v2', lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, findings: [] }) };
+      return { success: true, exitCode: 0, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, contractVersion: 'v3', lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, findings: [] }) };
     }),
     invokeInteractive: vi.fn().mockResolvedValue(undefined),
   };
@@ -270,7 +270,7 @@ describe('acceptance: every build_review FAIL exit uses the effective verdict (#
     const result = await runVocabularyRepairEffectivePassScenario();
 
     expect(result.repairReplies).toBe(1);
-    expect(result.buildReviewRuns).toBe(2);
+    expect(result.buildReviewRuns).toBe(1);
     expect(result.kickbacks).toEqual([]);
     await expect(readKickbackLedger(result.dir)).resolves.toEqual({ version: 1, gates: {} });
   });

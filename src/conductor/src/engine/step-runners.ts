@@ -1875,9 +1875,16 @@ export class DefaultStepRunner implements StepRunner {
       result.kind === 'malformed',
     );
     if (malformedResult) {
-      return {
-        success: false,
-        output: `build_review ${malformedResult.rubric} rubric result is malformed`,
+      // Branch evidence which cannot be parsed is a mechanical failure, not a
+      // reviewer verdict.  It must still join the current lap's aggregate:
+      // the bounded mechanical lane and its operator recovery both depend on
+      // that aggregate being present.  Returning here would leave neither
+      // diagnostic nor recoverable state after consuming an allowance.
+      results[malformedResult.rubric] = {
+        kind: 'infrastructure-failure',
+        rubric: malformedResult.rubric,
+        reason: 'malformed-artifact',
+        detail: 'current-lap branch artifact is malformed',
       };
     }
     const validResults = results as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult>;
