@@ -149,6 +149,8 @@ export const ALL_STEPS: StepDefinition[] = [
     isCheckpoint: true,
     skillName: 'pipeline',
     loopGate: true,
+    // Re-derives the Task-trailer union from current git history.
+    treeAttestingCompletion: true,
   },
   {
     // Deprecated topology-compatibility no-op. build_review owns wiring
@@ -174,6 +176,8 @@ export const ALL_STEPS: StepDefinition[] = [
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,
+    // Content fingerprint re-verifies the declared inputs of the current tree.
+    treeAttestingCompletion: true,
   },
   {
     // Judgement begins only after the deterministic BUILD group joins, so a
