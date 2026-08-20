@@ -26,4 +26,26 @@ describe('provider stream dispatch throttle', () => {
       resolveProviderStreamMinIntervalMs({ provider_stream: { min_interval_ms: -1 } }),
     ]).toEqual([DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS, DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS, DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS]);
   });
+
+  it('emits changed observations at the next admissible point and unchanged observations on the slow heartbeat', () => {
+    let current = 0;
+    const emit = vi.fn();
+    const throttle = createProviderStreamThrottle(emit, {
+      now: () => current,
+      minIntervalMs: 100,
+      heartbeatMs: 1_000,
+    });
+
+    throttle({ activeChildren: 0 });
+    current = 50;
+    throttle({ activeChildren: 1 });
+    current = 100;
+    throttle({ activeChildren: 1 });
+    current = 200;
+    throttle({ activeChildren: 1 });
+    current = 1_100;
+    throttle({ activeChildren: 1 });
+
+    expect(emit).toHaveBeenCalledTimes(3);
+  });
 });

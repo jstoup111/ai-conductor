@@ -146,17 +146,23 @@ export function resolveProviderStreamMinIntervalMs(config: ProviderStreamInterva
 
 export function createProviderStreamThrottle<T>(
   emit: (observation: T) => void,
-  options: { minIntervalMs: number; now?: () => number },
+  options: { minIntervalMs: number; heartbeatMs?: number; now?: () => number },
 ): (observation: T) => void {
   const now = options.now ?? Date.now;
   const minIntervalMs = options.minIntervalMs > 0
     ? options.minIntervalMs
     : DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS;
+  const heartbeatMs = options.heartbeatMs ?? minIntervalMs;
   let lastEmissionMs = Number.NEGATIVE_INFINITY;
+  let lastObservation: string | undefined;
   return (observation) => {
     const current = now();
     if (current - lastEmissionMs < minIntervalMs) return;
+    const serialized = JSON.stringify(observation);
+    const changed = serialized !== lastObservation;
+    if (!changed && current - lastEmissionMs < heartbeatMs) return;
     lastEmissionMs = current;
+    lastObservation = serialized;
     emit(observation);
   };
 }
