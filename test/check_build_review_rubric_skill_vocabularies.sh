@@ -29,14 +29,33 @@ extract_current_engine_reference_grammars() {
   local rubric=$2
 
   awk -v rubric="$rubric" '
-    /^export const BUILD_REVIEW_FINDING_REFERENCE_BINDINGS = Object\.freeze\(\{$/ { in_bindings = 1; next }
-    in_bindings && $0 ~ "^  " rubric ": Object\\.freeze\\(\\{" { in_rubric = 1 }
-    in_rubric { print }
-    in_rubric && /\}\),$/ { exit }
-  ' "$domain_file" \
-    | grep -oE "[A-Za-z][A-Za-z0-9]*: '[a-z-]+'" \
-    | sed "s/: '/=/; s/'$//" \
-    | sort -u
+    /^export function parseBuildReviewFindingAnchor\(/ { in_parser = 1; next }
+    !in_parser { next }
+    $0 ~ "case '\''" rubric "'\'':" { in_rubric = 1; next }
+    in_rubric && /^[[:space:]]*case '\''/ { exit }
+    in_rubric && /^  }$/ { exit }
+    !in_rubric { next }
+
+    {
+      if (match($0, /parseContentRegionReference\(source\.[A-Za-z][A-Za-z0-9]*/)) {
+        field = substr($0, RSTART + length("parseContentRegionReference(source."), RLENGTH - length("parseContentRegionReference(source."));
+        print field "=content-region";
+        seen[field] = 1;
+        next;
+      }
+      if (match($0, /source\.[A-Za-z][A-Za-z0-9]*/)) {
+        candidate = substr($0, RSTART + length("source."), RLENGTH - length("source."));
+        field = seen[candidate] ? "" : candidate;
+      }
+      if (field != "" && /parseBuildReviewCanonicalPlanTaskReference/) {
+        print field "=plan-task";
+        field = "";
+      } else if (field != "" && /parseBuildReviewCanonicalPathReference/) {
+        print field "=path";
+        field = "";
+      }
+    }
+  ' "$domain_file" | sort -u
 }
 
 check_vocabulary_drift() {
@@ -133,10 +152,9 @@ fixture_domain="$fixture_dir/src/conductor/src/engine/build-review-domain.ts"
 fixture_harness="$fixture_dir/harness"
 mkdir -p "$(dirname "$fixture_domain")" "$fixture_harness/skills"
 
-# #1696 fixture: a parser-enforced plan-task grammar has no matching statement
-# in the completeness rubric contract. The current guard compares only closed
-# vocabularies, so it incorrectly accepts this fixture. Task 14 turns that
-# expected-zero result into a rejection.
+# Task 14 fixture: the parser accepts `anchor.planTask` as a path despite both
+# the manually maintained binding and the SKILL.md contract still naming it a
+# plan-task. The guard must observe the parser, not the redundant declaration.
 cat >"$fixture_domain" <<'EOF'
 export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
   tautology: Object.freeze({
@@ -161,6 +179,27 @@ export const BUILD_REVIEW_FINDING_REFERENCE_BINDINGS = Object.freeze({
   rootCause: Object.freeze({ locus: 'content-region' }),
   completeness: Object.freeze({ planTask: 'plan-task', missingSurface: 'path' }),
 });
+
+function parseContentRegionReference(value: unknown): unknown { return value; }
+function parseBuildReviewCanonicalPathReference(value: unknown): unknown { return value; }
+function parseBuildReviewCanonicalPlanTaskReference(value: unknown): unknown { return value; }
+function verifiedReference(value: unknown, parser: (candidate: unknown) => unknown): unknown { return parser(value); }
+
+export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): unknown {
+  const source = value;
+  switch (source.rubric) {
+    case 'tautology':
+      return parseContentRegionReference(source.changedTest);
+    case 'scope':
+      return verifiedReference(source.path, parseBuildReviewCanonicalPathReference);
+    case 'rootCause':
+      return parseContentRegionReference(source.locus);
+    case 'completeness':
+      // Deliberately parser-only drift: the binding above remains plan-task.
+      const planTask = verifiedReference(source.planTask, parseBuildReviewCanonicalPathReference);
+      return verifiedReference(source.missingSurface, parseBuildReviewCanonicalPathReference) && planTask;
+  }
+}
 EOF
 
 for rubric in tautology scope root-cause completeness; do
@@ -181,21 +220,21 @@ printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` ref
   >>"$fixture_harness/skills/build-review-root-cause/SKILL.md"
 printf '%s\n' '**Closed vocabulary:** `missing-deliverable`' \
   >"$fixture_harness/skills/build-review-completeness/SKILL.md"
-printf '\n%s\n' '**Reference grammar:** `anchor.missingSurface` is a `path` reference.' \
+printf '\n%s\n' '**Reference grammar:** `anchor.planTask` is a `plan-task` reference; `anchor.missingSurface` is a `path` reference.' \
   >>"$fixture_harness/skills/build-review-completeness/SKILL.md"
 
-if ! grep -q 'CANONICAL_PLAN_TASK_REFERENCE' "$fixture_domain" \
-    || grep -q 'Task \[1-9\]' "$fixture_harness/skills/build-review-completeness/SKILL.md"; then
+if ! grep -q "planTask: 'plan-task'" "$fixture_domain" \
+    || ! grep -q 'parseBuildReviewCanonicalPathReference);' "$fixture_domain"; then
   echo 'rubric reference-grammar fixture is malformed' >&2
   failures=1
 elif ! check_vocabulary_drift "$fixture_domain" "$fixture_harness"; then
   echo 'rubric vocabulary guard unexpectedly rejected the reference-grammar fixture' >&2
   failures=1
 elif fixture_output=$(check_reference_grammar_drift "$fixture_domain" "$fixture_harness" 2>&1); then
-  echo 'known gap: reference-grammar guard accepts an unstated plan-task grammar fixture' >&2
+  echo 'known gap: reference-grammar guard accepts a parser-only grammar change' >&2
   failures=1
-elif grep -Fq 'build-review completeness reference grammar drift: anchor.planTask requires plan-task, but SKILL.md does not state that grammar' <<<"$fixture_output"; then
-  echo 'rubric reference-grammar guard rejects the unstated plan-task grammar fixture'
+elif grep -Fq 'build-review completeness reference grammar drift: anchor.planTask requires path, but SKILL.md does not state that grammar' <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard rejects the parser-only grammar fixture'
 else
   echo 'rubric reference-grammar guard rejected the fixture without the required diagnostic' >&2
   echo "$fixture_output" >&2
