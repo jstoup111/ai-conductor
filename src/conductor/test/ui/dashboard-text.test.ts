@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { scanInheritedState } from '../../src/engine/daemon-dashboard.js';
+import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 import { renderDashboardLines, formatDashboardSnapshot } from '../../src/ui/dashboard-text.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
@@ -225,6 +225,66 @@ describe('dashboard provider stream progress reader', () => {
       expect.objectContaining({ slug: 'missing' }),
       expect.objectContaining({ slug: 'unreadable' }),
     ]);
+  });
+});
+
+describe('dashboard child work rendering', () => {
+  function renderChildSuffix(providerStreamProgress?: unknown): string {
+    return renderDashboard({
+      halted: [],
+      inProgress: [{
+        slug: 'live-progress',
+        step: 'build',
+        ...(providerStreamProgress === undefined ? {} : { providerStreamProgress }),
+      }],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    } as Parameters<typeof renderDashboard>[0]).split('\n').find((line) => line.includes('live-progress')) ?? '';
+  }
+
+  it('renders only observed numeric child counts and keeps all unobserved states unknown', () => {
+    const observed = renderChildSuffix({
+      childObservability: 'observed',
+      activeChildren: 3,
+      uncachedInputTokens: 10,
+      outputTokens: 2,
+    });
+    const zero = renderChildSuffix({
+      childObservability: 'observed',
+      activeChildren: 0,
+      uncachedInputTokens: 10,
+      outputTokens: 2,
+    });
+    const missing = renderChildSuffix({
+      childObservability: 'observed',
+      uncachedInputTokens: 10,
+      outputTokens: 2,
+    });
+    const unsupported = renderChildSuffix({
+      childObservability: 'unsupported',
+      activeChildren: 17,
+      uncachedInputTokens: 10,
+      outputTokens: 2,
+    });
+    const unrecognized = renderChildSuffix({
+      childObservability: 'future-provider',
+      activeChildren: 99,
+      uncachedInputTokens: 10,
+      outputTokens: 2,
+    });
+    const absent = renderChildSuffix();
+
+    expect(observed).toContain('children: 3');
+    expect(zero).toContain('children: 0');
+    expect(missing).toContain('children: unknown');
+    expect(missing).not.toBe(zero);
+    expect([unsupported, unrecognized, absent]).toEqual([
+      expect.stringContaining('children: unknown'),
+      expect.stringContaining('children: unknown'),
+      expect.stringContaining('children: unknown'),
+    ]);
+    expect(`${unsupported}\n${unrecognized}\n${absent}`).not.toMatch(/children: (17|99)/);
   });
 });
 

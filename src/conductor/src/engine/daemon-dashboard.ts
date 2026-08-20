@@ -783,9 +783,14 @@ function activityStateSuffix(entry: InProgressEntry): string {
   return redState ? ` (${redState})` : '';
 }
 
-function childWorkSuffix(): string {
-  // The provider layer cannot observe child work; do not fabricate a zero count (#1441).
-  // See jstoup111/ai-conductor#1441.
+function childWorkSuffix(entry: InProgressEntry): string {
+  const progress = entry.providerStreamProgress;
+  if (
+    progress?.childObservability === 'observed'
+    && typeof progress.activeChildren === 'number'
+  ) {
+    return ` (children: ${progress.activeChildren})`;
+  }
   return ' (children: unknown)';
 }
 
@@ -929,7 +934,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix()}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${activityStateSuffix(p)}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${elapsedStepTimeSuffix(p.elapsedStepTimeMs)}${lastTestOutcomeSuffix(p.lastTestOutcome)}${childWorkSuffix(p)}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(
