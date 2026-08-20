@@ -287,6 +287,7 @@ function parseAnchorClassification(
 // character class never had to carry that job.
 const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9.][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9.][A-Za-z0-9._/@+-]*)*$/;
 const CANONICAL_PLAN_TASK_REFERENCE = new RegExp(`^${TASK_ID_PATTERN}$`);
+const TITLED_PLAN_TASK_REFERENCE = new RegExp(`^Task\\s+(${TASK_ID_PATTERN}):\\s+.+$`);
 
 /** A stable, unformatted path/reference token suitable for a finding identity. */
 export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined {
@@ -294,7 +295,9 @@ export function parseBuildReviewCanonicalPathReference(value: unknown): string |
 }
 
 export function parseBuildReviewCanonicalPlanTaskReference(value: unknown): string | undefined {
-  return typeof value === 'string' && CANONICAL_PLAN_TASK_REFERENCE.test(value) ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  return value.match(TITLED_PLAN_TASK_REFERENCE)?.[1] ??
+    (CANONICAL_PLAN_TASK_REFERENCE.test(value) ? value : undefined);
 }
 
 function verifiedReference(value: unknown, allowed: readonly string[] | undefined, parser: (value: unknown) => string | undefined): string | undefined {
@@ -586,8 +589,18 @@ export function describeBuildReviewJudgedResultRejection(
       ? '"relocationAudit" entries must match "[relocation-audit] (EXEMPTED|MEASURED): old → new; production hunk(s) (do|do not) force the move"'
       : `"relocationAudit" must be absent or empty for rubric ${rubric}`);
   }
-  if (problems.length === 0 && parseBuildReviewJudgedResult(source) === undefined) {
+  const derivedVerdict = Array.isArray(source.findings)
+    ? (source.findings.length === 0 ? 'PASS' : 'FAIL')
+    : undefined;
+  const hasVerdictContradiction = derivedVerdict !== undefined && (
+    (source.verdict !== undefined && source.verdict !== derivedVerdict) ||
+    (source.passed !== undefined && source.passed !== (derivedVerdict === 'PASS'))
+  );
+  if (problems.length === 0 && hasVerdictContradiction) {
     problems.push('a supplied "verdict"/"passed" field contradicts the findings array — omit both; the engine derives the verdict');
+  }
+  if (problems.length === 0 && parseBuildReviewJudgedResult(source) === undefined) {
+    problems.push('the result did not satisfy the judged contract and no enumerated check explains why');
   }
   if (problems.length === 0) return 'the result parsed but did not satisfy the judged contract (duplicate finding identities are rejected)';
   const shown = problems.slice(0, MAX_REJECTION_PROBLEMS);
