@@ -604,8 +604,14 @@ async function workspaceProtectedArtifacts(
  * `rebase.ts`); keep both in sync. Absent/invalid state → no ids → no
  * engine-append tolerance, matching that reader's fail-open shape while
  * keeping this gate fail-closed.
+ *
+ * Exported so every consumer of the engine-append rule reads the SAME
+ * recorded ids this seal reads: `build-review-inputs.ts` pairs it with
+ * `isEngineAppendedRemediationAmendment` to keep the engine's own plan
+ * append out of the graded diff. One notion, one reader — never a second
+ * rule that can drift from this one.
  */
-async function readRecordedAppendedRemediationTaskIds(projectRoot: string): Promise<string[]> {
+export async function readRecordedAppendedRemediationTaskIds(projectRoot: string): Promise<string[]> {
   try {
     const raw = await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf-8');
     const parsed = JSON.parse(raw) as Record<string, unknown>;

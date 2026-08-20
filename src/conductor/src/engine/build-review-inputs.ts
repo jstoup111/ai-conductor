@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import {
   readBaseAdvanceHistory,
@@ -9,7 +9,12 @@ import {
 } from './test-suite-remediation.js';
 import type { AcceptedScopeWidening } from './per-task-commit-floor.js';
 import { deriveBuildReviewRemovals, type BuildReviewRemovalContext } from './build-review-removals.js';
-import { readOperatorReseals, type OperatorReseal } from './protected-artifact-seal.js';
+import {
+  isEngineAppendedRemediationAmendment,
+  readOperatorReseals,
+  readRecordedAppendedRemediationTaskIds,
+  type OperatorReseal,
+} from './protected-artifact-seal.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskVerifyOnly } from './autoheal.js';
@@ -186,6 +191,52 @@ export class TestSuiteProofError extends Error {
     super(`build_review requires CURRENT test_suite proof (got ${inspection.status})`);
     this.name = 'TestSuiteProofError';
   }
+}
+
+/**
+ * The graded-diff pathspec exclusion for the feature's own plan, present only
+ * when the plan's divergence from the graded base is EXACTLY the engine's own
+ * recorded remediation-task append.
+ *
+ * The engine appends `### Task rem-*` blocks to the approved plan during
+ * remediation and commits them as feature commits, so the graded diff showed
+ * them as an amendment to an approved DECIDE artifact and Scope failed them as
+ * an out-of-plan change — a finding no authority can grant and the feature
+ * cannot remove, because the engine requires the blocks. The protected-artifact
+ * seal already tolerates exactly this case; this reuses that same rule
+ * (`isEngineAppendedRemediationAmendment` over the same recorded ids) rather
+ * than inventing a second, drift-prone notion of "the engine wrote it".
+ *
+ * When the rule holds, the plan diff is by construction nothing but those
+ * recorded blocks, so excluding the path removes engine bookkeeping and no
+ * reviewable work. Any other amendment — an edited earlier line, an
+ * unrecorded task id, prose — fails the rule and stays fully graded.
+ * Fail-closed everywhere else: no recorded ids, or either side unreadable at
+ * its commit, means no exclusion.
+ */
+async function engineAppendedPlanExclusion(
+  git: GitRunner,
+  mergeBaseSha: string,
+  projectRoot: string,
+  planPath: string,
+): Promise<readonly string[]> {
+  const recorded = await readRecordedAppendedRemediationTaskIds(projectRoot);
+  if (recorded.length === 0) return [];
+  const pathspec = relative(projectRoot, planPath);
+  if (pathspec === '' || pathspec.startsWith('..')) return [];
+  // Both ends of the graded diff exactly: `<mergeBase>..HEAD`.
+  const [base, head] = await Promise.all([
+    git(['show', `${mergeBaseSha}:${pathspec}`]),
+    git(['show', `HEAD:${pathspec}`]),
+  ]);
+  if (base.exitCode !== 0 || head.exitCode !== 0) return [];
+  return isEngineAppendedRemediationAmendment(
+    Buffer.from(base.stdout, 'utf-8'),
+    Buffer.from(head.stdout, 'utf-8'),
+    recorded,
+  )
+    ? [`:(exclude)${pathspec}`]
+    : [];
 }
 
 function projectRootForPlan(planPath: string): string {
@@ -454,12 +505,20 @@ export async function assembleBuildReviewInputs(
     );
   }
 
+  const planExclusion = await engineAppendedPlanExclusion(
+    git,
+    mergeBaseSha,
+    projectRootForPlan(planPath),
+    planPath,
+  );
+
   const diffResult = await git([
     'diff',
     `${mergeBaseSha}..HEAD`,
     '--',
     '.',
     ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
+    ...planExclusion,
   ]);
   if (diffResult.exitCode !== 0) {
     throw new MergeBaseError(
