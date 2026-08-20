@@ -268,6 +268,44 @@ else
   failures=1
 fi
 
+# Remediation Task root-cause-4 fixture: a parser branch that no longer routes
+# the declared root-cause field through a recognized canonical grammar is an
+# incomplete source extraction. A non-empty binding declaration must never
+# mask that missing parser evidence.
+fixture_incomplete_domain="$fixture_dir/src/conductor/src/engine/build-review-domain-incomplete-parser.ts"
+cp "$fixture_domain" "$fixture_incomplete_domain"
+sed -i 's/return parseContentRegionReference(source\.locus);/return source.locus;/' "$fixture_incomplete_domain"
+
+if ! grep -q "rootCause: Object.freeze({ locus: 'content-region' })" "$fixture_incomplete_domain" \
+    || ! grep -q 'return source.locus;' "$fixture_incomplete_domain"; then
+  echo 'rubric incomplete-parser fixture is malformed' >&2
+  failures=1
+elif ! check_vocabulary_drift "$fixture_incomplete_domain" "$fixture_harness"; then
+  echo 'rubric vocabulary guard unexpectedly rejected the incomplete-parser fixture' >&2
+  failures=1
+elif fixture_output=$(check_reference_grammar_drift "$fixture_incomplete_domain" "$fixture_harness" 2>&1); then
+  echo 'known gap: reference-grammar guard accepts incomplete parser extraction' >&2
+  failures=1
+elif grep -Fq 'could not extract build-review rootCause reference grammar bindings from' <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard fails closed on incomplete parser extraction'
+else
+  echo 'rubric reference-grammar guard rejected incomplete parser extraction without the required diagnostic' >&2
+  echo "$fixture_output" >&2
+  failures=1
+fi
+
+fixture_missing_domain="$fixture_dir/src/conductor/src/engine/missing-build-review-domain.ts"
+if fixture_output=$(check_reference_grammar_drift "$fixture_missing_domain" "$fixture_harness" 2>&1); then
+  echo 'known gap: reference-grammar guard accepts an unreadable parser source' >&2
+  failures=1
+elif grep -Fq "could not read build-review reference grammar source: $fixture_missing_domain" <<<"$fixture_output"; then
+  echo 'rubric reference-grammar guard fails closed on an unreadable parser source'
+else
+  echo 'rubric reference-grammar guard rejected unreadable parser source without the required diagnostic' >&2
+  echo "$fixture_output" >&2
+  failures=1
+fi
+
 if ! check_vocabulary_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
   failures=1
 fi
