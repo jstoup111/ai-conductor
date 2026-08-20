@@ -247,7 +247,9 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
         codexStream([{ input_tokens: 12, cached_input_tokens: 4, output_tokens: 7 }]),
       );
 
-      expect(parsed.tokenUsage).toMatchObject({ input: 12, output: 7, cacheRead: 4 });
+      // input is fresh-only: Codex's raw input_tokens (12) minus its cached
+      // share (4); the cached volume stays in cacheRead.
+      expect(parsed.tokenUsage).toMatchObject({ input: 8, output: 7, cacheRead: 4 });
 
       await writeEventsLedger([
         {
@@ -258,7 +260,7 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
       expect(await shipRecord()).toBe(0);
 
       const block = await committedCostBlock();
-      expect(block).toMatch(/^input: 12$/m);
+      expect(block).toMatch(/^input: 8$/m);
       expect(block).toMatch(/^output: 7$/m);
       expect(block).toMatch(/^cache_read: 4$/m);
     });
@@ -307,7 +309,7 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
         ]),
       );
 
-      expect(parsed.tokenUsage).toMatchObject({ input: 1000, output: 40, cacheRead: 250 });
+      expect(parsed.tokenUsage).toMatchObject({ input: 750, output: 40, cacheRead: 250 });
       expect(parsed.tokenUsage).toHaveProperty('cacheCreation', 77);
       expect(parsed.tokenUsage).toHaveProperty('reasoningOutput', 15);
 
@@ -807,15 +809,30 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
       }
     });
 
-    it('Story 6 HP-2: the artifacts.md "Known limitation" note is removed, and the other #1008 notes stay', async () => {
+    it('Story 6 HP-2: documentation names halt consumers without promising --report halt or kickback tables', async () => {
       const artifacts = await readFile(join(REPO_ROOT, 'docs/reference/artifacts.md'), 'utf-8');
+      const stalledRunbook = await readFile(join(REPO_ROOT, 'docs/runbooks/stalled-or-stuck-feature.md'), 'utf-8');
 
       // Tested as booleans, not whole-file regex matches, so a failure prints
       // the claim rather than the entire document.
       expect(/Six of the ten parsed fields/.test(artifacts)).toBe(false);
       expect(/per-provider cost sub-block written into every shipped record has no parser/.test(artifacts)).toBe(false);
-      // The other three #1008 notes remain true and stay in place.
-      expect(artifacts.match(/issues\/1008/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+      // Two unrelated #1008 notes remain. The former third note was corrected when
+      // halt events became persisted, so it no longer truthfully tracks #1008.
+      expect(artifacts.match(/issues\/1008/g)?.length ?? 0).toBe(2);
+
+      for (const consumer of [
+        'cost-rollup.halts',
+        "shipped records' `## Cost` blocks",
+        '`conduct-ts kpi`',
+        'engineer-loop signal assembler',
+      ]) {
+        expect(artifacts).toContain(consumer);
+      }
+      expect(artifacts).toContain('renders neither halt nor kickback tables');
+      expect(stalledRunbook).toContain('renders neither halt nor kickback tables');
+      expect(artifacts).not.toMatch(/`aggregateHalts` always returns/);
+      expect(artifacts).not.toMatch(/kickback table do reflect real/);
     });
 
     it('Story 6 NP-1: an older record with no providers: sub-block renders top-level totals without error', async () => {

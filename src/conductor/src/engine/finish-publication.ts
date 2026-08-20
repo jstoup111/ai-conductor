@@ -87,6 +87,8 @@ export type PublicationPullRequest =
       identity: 'one';
       url: string;
       prose: 'accepted' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      /** A machine-readable `needs-remediation` signal, distinct from prose judgment. */
+      halted?: true;
       ready: boolean;
     }
   | { identity: 'none' }
@@ -124,6 +126,8 @@ export type PullRequestObservation =
       state: 'one';
       url: string;
       prose: 'accepted' | 'stale' | 'placeholder' | 'halt';
+      /** The observer found a `needs-remediation` title, label, or body marker. */
+      halted?: true;
       ready: boolean;
     }
   | { state: 'missing' }
@@ -282,6 +286,7 @@ function mapPullRequest(
         identity: 'one',
         url: observation.url,
         prose: observation.prose,
+        ...(observation.halted === true ? { halted: true } : {}),
         ready: observation.ready,
       };
     case 'missing':
@@ -340,6 +345,32 @@ function validatePublicationSnapshot(
 }
 
 export type PublicationTransition = FinishPublicationTransition;
+
+/**
+ * The snapshot dimension each publication transition is responsible for
+ * advancing. `establish_pr` owns the PR identity and push evidence together:
+ * a pull request without its branch, or a pushed branch without its PR, is
+ * not an established publication.
+ */
+export type PublicationTransitionDimensions = Record<
+  PublicationTransition,
+  | 'pr.identity + branchPushed'
+  | 'releaseReadiness'
+  | 'pr.prose'
+  | 'shippedRecord'
+  | 'pr.ready'
+  | 'outcomeRecord'
+>;
+
+export const PUBLICATION_TRANSITION_DIMENSIONS: PublicationTransitionDimensions = {
+  establish_pr: 'pr.identity + branchPushed',
+  verify_release_readiness: 'releaseReadiness',
+  author_pr_prose: 'pr.prose',
+  judge_pr_prose: 'pr.prose',
+  write_shipped_record: 'shippedRecord',
+  ready_pr: 'pr.ready',
+  record_outcome: 'outcomeRecord',
+};
 
 /**
  * A FINISH execution may observe every transition twice before a non-converging
@@ -402,6 +433,8 @@ export function nextFinishPublicationTransition(
 export type HumanRequiredReason =
   | 'judgment_refused'
   | 'judgment_halt_prose'
+  | 'halt_state_pr'
+  | 'publication_transition_unmoved'
   | 'ambiguous_pr_identity'
   | 'invalid_shipped_record'
   | 'interactive_intent_deferred'
@@ -475,6 +508,14 @@ export const HUMAN_REQUIRED_REASONS = {
     message: 'The PR contains halt prose that must not be overwritten automatically.',
     nextAction: 'Review the halt prose and resolve its stated blocker.',
   },
+  halt_state_pr: {
+    message: 'The PR still carries a remediation halt signal and cannot be published automatically.',
+    nextAction: 'Resolve the stated blocker and clear the remediation signal before retrying FINISH.',
+  },
+  publication_transition_unmoved: {
+    message: 'A FINISH publication transition did not change the state it owns.',
+    nextAction: 'Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH.',
+  },
   ambiguous_pr_identity: {
     message: 'More than one pull request matches this feature, so FINISH cannot select one safely.',
     nextAction: 'Identify the correct pull request and resolve the duplicate matches.',
@@ -511,6 +552,7 @@ export const HUMAN_REQUIRED_REASONS = {
 
 const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]> = {
   establish_pr: [
+    'publication_transition_indeterminate',
     'draft_pr_effect_unavailable',
     'draft_pr_skipped',
     'draft_pr_no-commits',
@@ -524,8 +566,9 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'pr_url_persistence_failed',
     'pr_identity_not_verified_after_establish',
   ],
-  verify_release_readiness: [],
+  verify_release_readiness: ['publication_transition_indeterminate'],
   author_pr_prose: [
+    'publication_transition_indeterminate',
     'authoring_effect_unavailable',
     'authoring_dispatch_failed',
     'authoring_not_verified_after_pass',
@@ -535,11 +578,13 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'authoring_required_after_judgment',
   ],
   write_shipped_record: [
+    'publication_transition_indeterminate',
     'shipped_record_effect_unavailable',
     'shipped_record_write_failed',
     'shipped_record_not_verified_after_write',
   ],
   judge_pr_prose: [
+    'publication_transition_indeterminate',
     'judgment_timed_out',
     'judgment_provider_unavailable',
     'judgment_dispatch_failed',
@@ -551,11 +596,13 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'judgment_completed_reobserve',
   ],
   ready_pr: [
+    'publication_transition_indeterminate',
     'presentation_repair_effect_unavailable',
     'presentation_repair_failed',
     'presentation_not_verified_after_repair',
   ],
   record_outcome: [
+    'publication_transition_indeterminate',
     'outcome_record_effect_unavailable',
     'outcome_record_write_failed',
     'outcome_record_not_verified_after_write',
@@ -654,23 +701,10 @@ export function routeFinishPublicationDisposition(
     case 'publication_progress':
       return { kind: 'progress_finish', transition: disposition.transition };
     case 'publication_retry':
-      if (
-        'condition' in disposition &&
-        (disposition.condition.code === 'implementation_evidence_invalid' ||
-          disposition.condition.code === 'implementation_evidence_indeterminate' ||
-          disposition.condition.code === 'ship_evidence_invalid' ||
-          disposition.condition.code === 'ship_evidence_indeterminate')
-      ) {
-        return {
-          kind: 'halt',
-          reason:
-            'FINISH evidence-invalid disposition requires its dedicated BUILD routing rule: ' +
-            disposition.condition.code,
-        };
-      }
+      if ('condition' in disposition) return PUBLICATION_CONDITION_ROUTES[disposition.condition.code];
       return {
         kind: 'retry_finish',
-        reason: 'reason' in disposition ? disposition.reason : disposition.condition.code,
+        reason: disposition.reason,
       };
     case 'implementation_invalid':
       return {
@@ -807,6 +841,33 @@ export type PublicationCondition =
       message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.';
       nextAction: 'restore_release_readiness_observation';
     };
+
+/** Exhaustive routing for every condition emitted by FINISH observation. */
+const PUBLICATION_CONDITION_ROUTES: {
+  [Code in PublicationCondition['code']]: FinishPublicationRoute;
+} = {
+  publication_snapshot_incoherent: { kind: 'retry_finish', reason: 'publication_snapshot_incoherent' },
+  publication_snapshot_indeterminate: { kind: 'retry_finish', reason: 'publication_snapshot_indeterminate' },
+  implementation_evidence_invalid: {
+    kind: 'halt',
+    reason: 'Implementation evidence is invalid and must be re-established before FINISH can continue.',
+  },
+  implementation_evidence_indeterminate: {
+    kind: 'halt',
+    reason: 'Implementation evidence could not be determined; restore its observer before FINISH can continue.',
+  },
+  ship_evidence_invalid: {
+    kind: 'halt',
+    reason: 'SHIP evidence is invalid and must be re-established before FINISH can continue.',
+  },
+  ship_evidence_indeterminate: {
+    kind: 'halt',
+    reason: 'SHIP evidence could not be determined; restore its observer before FINISH can continue.',
+  },
+  release_readiness_missing: { kind: 'retry_finish', reason: 'release_readiness_missing' },
+  release_readiness_invalid: { kind: 'retry_finish', reason: 'release_readiness_invalid' },
+  release_readiness_indeterminate: { kind: 'retry_finish', reason: 'release_readiness_indeterminate' },
+};
 
 export type PublicationPreflightResult =
   | { kind: 'ready_for_judgment' }
@@ -1086,11 +1147,15 @@ export type AdvanceFinishPublicationResult =
     }
   | {
       kind: 'human_required';
-      reason: 'ambiguous_pr_identity' | 'invalid_shipped_record';
+      reason:
+        | 'publication_transition_unmoved'
+        | 'ambiguous_pr_identity'
+        | 'invalid_shipped_record';
+      detail?: string;
     }
   | {
       kind: 'human_required';
-      reason: 'judgment_halt_prose' | 'judgment_refused';
+      reason: 'halt_state_pr' | 'judgment_halt_prose' | 'judgment_refused';
       detail?: string;
     };
 
@@ -1188,6 +1253,55 @@ function mapPrProseJudgmentResult(
   }
 }
 
+/**
+ * A retry must name the transition a fresh authoritative observation would
+ * actually dispatch. Otherwise re-entering FINISH cannot perform the work the
+ * retry promises and would only consume its bounded retry allowance.
+ */
+async function reconcileSelectablePublicationRetry(
+  retry: Extract<AdvanceFinishPublicationResult, { kind: 'publication_retry' }> & {
+    transition: PublicationTransition;
+  },
+  observe: AdvanceFinishPublicationInput['observe'],
+): Promise<AdvanceFinishPublicationResult> {
+  const freshSnapshot = await observe();
+  // An unavailable observer cannot prove that the retry's named transition
+  // became unselectable. Preserve the original retry so FINISH consumes its
+  // bounded retry allowance only after a determinate observation.
+  if (hasIndeterminatePublicationEvidence(freshSnapshot)) return retry;
+
+  // This is the same deterministic guard that prevents the judgment dispatch
+  // below. A PR can acquire a halt signal between a failed judgment dispatch
+  // and its reconciliation observation; in that case `judge_pr_prose` is no
+  // longer an executable retry even though the generic ordering selector would
+  // otherwise name it from its prose value alone.
+  if (freshSnapshot.pr.identity === 'one' && freshSnapshot.pr.halted === true) {
+    return { kind: 'human_required', reason: 'halt_state_pr' };
+  }
+
+  const selectedTransition = nextFinishPublicationTransition(freshSnapshot);
+  if (selectedTransition === retry.transition) return retry;
+
+  return {
+    kind: 'human_required',
+    reason: 'publication_transition_unmoved',
+    detail:
+      `The ${retry.transition} retry cannot run because the fresh publication ` +
+      `observation selects ${selectedTransition}.`,
+  };
+}
+
+function hasIndeterminatePublicationEvidence(snapshot: PublicationSnapshot): boolean {
+  return snapshot.implementationEvidence === 'indeterminate' ||
+    snapshot.shipEvidence === 'indeterminate' ||
+    snapshot.releaseReadiness === 'indeterminate' ||
+    snapshot.branchPushed === 'indeterminate' ||
+    snapshot.shippedRecord === 'indeterminate' ||
+    snapshot.outcomeRecord === 'indeterminate' ||
+    snapshot.pr.identity === 'indeterminate' ||
+    (snapshot.pr.identity === 'one' && snapshot.pr.prose === 'indeterminate');
+}
+
 async function emitPublicationEvent(
   emit: PublicationEventEmitter | undefined,
   event: FinishPublicationEvent,
@@ -1199,14 +1313,104 @@ async function emitPublicationEvent(
   }
 }
 
-async function advancedPublicationTransition(
+export async function advancedPublicationTransition(
   emit: PublicationEventEmitter | undefined,
   transition: PublicationTransition,
-): Promise<Extract<AdvanceFinishPublicationResult, { kind: 'advanced' }>> {
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+): Promise<
+  Extract<
+    AdvanceFinishPublicationResult,
+    { kind: 'advanced' | 'human_required' | 'publication_retry' }
+  >
+> {
+  const movement = publicationTransitionDimensionMovement(transition, before, after);
+  // The post-effect observation is the authority for this guard. An
+  // indeterminate result cannot establish either advancement or a stuck
+  // transition, so it follows the ordinary bounded retry path.
+  if (movement === 'indeterminate') {
+    return {
+      kind: 'publication_retry',
+      transition,
+      reason: 'publication_transition_indeterminate',
+    };
+  }
+  if (movement === 'unmoved') {
+    const dimension = PUBLICATION_TRANSITION_DIMENSIONS[transition];
+    const value = publicationTransitionDimensionValue(dimension, after);
+    return {
+      kind: 'human_required',
+      reason: 'publication_transition_unmoved',
+      detail: `The ${transition} transition left ${dimension} unchanged at ${String(value)}.`,
+    };
+  }
+
   await emitPublicationEvent(emit, {
     type: 'finish_publication_transition', phase: 'completed', transition,
   });
   return { kind: 'advanced', transition };
+}
+
+function publicationTransitionDimensionMovement(
+  transition: PublicationTransition,
+  before: PublicationSnapshot,
+  after: PublicationSnapshot,
+): 'moved' | 'unmoved' | 'indeterminate' {
+  const dimension = PUBLICATION_TRANSITION_DIMENSIONS[transition];
+  const afterValue = publicationTransitionDimensionValue(dimension, after);
+  if (afterValue === undefined) return 'indeterminate';
+
+  return publicationTransitionDimensionValue(dimension, before) === afterValue
+    ? 'unmoved'
+    : 'moved';
+}
+
+function publicationTransitionDimensionValue(
+  dimension: PublicationTransitionDimensions[PublicationTransition],
+  snapshot: PublicationSnapshot,
+): string | boolean | undefined {
+  switch (dimension) {
+    case 'pr.identity + branchPushed':
+      if (snapshot.pr.identity === 'indeterminate' || snapshot.branchPushed === 'indeterminate') {
+        return undefined;
+      }
+      return snapshot.pr.identity === 'one' && snapshot.branchPushed === 'valid';
+    case 'releaseReadiness':
+      return snapshot.releaseReadiness === 'indeterminate'
+        ? undefined
+        : snapshot.releaseReadiness;
+    case 'pr.prose':
+      return publicationPrProse(snapshot);
+    case 'shippedRecord':
+      return snapshot.shippedRecord === 'indeterminate' ? undefined : snapshot.shippedRecord;
+    case 'pr.ready':
+      return publicationPrReady(snapshot);
+    case 'outcomeRecord':
+      return snapshot.outcomeRecord === 'indeterminate' ? undefined : snapshot.outcomeRecord;
+  }
+}
+
+function publicationPrProse(snapshot: PublicationSnapshot):
+  | PublicationPullRequest['identity']
+  | 'accepted'
+  | 'stale'
+  | 'placeholder'
+  | 'halt'
+  | undefined {
+  if (snapshot.pr.identity === 'indeterminate') return undefined;
+  return snapshot.pr.identity === 'one' && snapshot.pr.prose === 'indeterminate'
+    ? undefined
+    : snapshot.pr.identity === 'one'
+      ? snapshot.pr.prose
+      : snapshot.pr.identity;
+}
+
+function publicationPrReady(snapshot: PublicationSnapshot): PublicationPullRequest['identity'] | boolean | undefined {
+  return snapshot.pr.identity === 'indeterminate'
+    ? undefined
+    : snapshot.pr.identity === 'one'
+      ? snapshot.pr.ready
+      : snapshot.pr.identity;
 }
 
 /**
@@ -1214,6 +1418,20 @@ async function advancedPublicationTransition(
  * blockers, and only then cross the injected judgment boundary.
  */
 export async function advanceFinishPublication(
+  input: AdvanceFinishPublicationInput,
+): Promise<AdvanceFinishPublicationResult> {
+  const result = await advanceFinishPublicationUnreconciled(input);
+  // An indeterminate post-effect observation cannot establish its owned
+  // dimension. It remains a bounded retry rather than proof that the named
+  // transition is no longer selectable.
+  return result.kind === 'publication_retry' &&
+    'transition' in result &&
+    result.reason !== 'publication_transition_indeterminate'
+    ? reconcileSelectablePublicationRetry(result, input.observe)
+    : result;
+}
+
+async function advanceFinishPublicationUnreconciled(
   input: AdvanceFinishPublicationInput,
 ): Promise<AdvanceFinishPublicationResult> {
   const snapshot = await input.observe();
@@ -1251,6 +1469,13 @@ export async function advanceFinishPublication(
       });
 
       const draftPr = await openShipDraftPr(input.effects.establishPr);
+      if (draftPr.outcome !== 'published') {
+        return {
+          kind: 'publication_retry',
+          transition: 'establish_pr',
+          reason: `draft_pr_${draftPr.outcome}`,
+        };
+      }
       if (draftPr.outcome === 'published' && input.effects.persistEstablishedPrUrl) {
         try {
           await input.effects.persistEstablishedPrUrl(draftPr.prUrl);
@@ -1263,11 +1488,18 @@ export async function advanceFinishPublication(
         }
       }
       const observedAfterEstablish = await input.observe();
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'establish_pr',
+        snapshot,
+        observedAfterEstablish,
+      );
+      if (transition) return transition;
       if (
         observedAfterEstablish.pr.identity === 'one' &&
         observedAfterEstablish.branchPushed === 'valid'
       ) {
-        return advancedPublicationTransition(input.emit, 'establish_pr');
+        return { kind: 'advanced', transition: 'establish_pr' };
       }
       if (observedAfterEstablish.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
@@ -1276,10 +1508,7 @@ export async function advanceFinishPublication(
       return {
         kind: 'publication_retry',
         transition: 'establish_pr',
-        reason:
-          draftPr.outcome === 'published'
-            ? 'pr_identity_not_verified_after_establish'
-            : `draft_pr_${draftPr.outcome}`,
+        reason: 'pr_identity_not_verified_after_establish',
       };
     });
   }
@@ -1311,22 +1540,57 @@ export async function advanceFinishPublication(
       if (observedAfterAuthoring.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
       }
+
+      // A lost authoring response is not evidence that the completed pass
+      // left prose unmoved. Re-observation still wins: accept any observed
+      // change, but preserve the transient retry when the placeholder remains.
+      // The fixed-point guard below applies only once the authoring pass itself
+      // completed successfully and therefore claimed to have made progress.
+      if (dispatchFailure) {
+        if (
+          observedAfterAuthoring.pr.identity === 'one' &&
+          observedAfterAuthoring.pr.prose !== 'placeholder' &&
+          observedAfterAuthoring.pr.prose !== 'indeterminate'
+        ) {
+          return advancedPublicationTransition(
+            input.emit,
+            'author_pr_prose',
+            snapshot,
+            observedAfterAuthoring,
+          );
+        }
+        return {
+          kind: 'publication_retry',
+          transition: 'author_pr_prose',
+          reason: 'authoring_dispatch_failed',
+        };
+      }
+
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'author_pr_prose',
+        snapshot,
+        observedAfterAuthoring,
+      );
+      if (transition) return transition;
       if (
         observedAfterAuthoring.pr.identity === 'one' &&
         observedAfterAuthoring.pr.prose !== 'placeholder' &&
         observedAfterAuthoring.pr.prose !== 'indeterminate'
       ) {
-        return advancedPublicationTransition(input.emit, 'author_pr_prose');
+        return { kind: 'advanced', transition: 'author_pr_prose' };
       }
 
       return {
         kind: 'publication_retry',
         transition: 'author_pr_prose',
-        reason: dispatchFailure
-          ? 'authoring_dispatch_failed'
-          : 'authoring_not_verified_after_pass',
+        reason: 'authoring_not_verified_after_pass',
       };
     });
+  }
+
+  if (snapshot.pr.identity === 'one' && snapshot.pr.halted === true) {
+    return { kind: 'human_required', reason: 'halt_state_pr' };
   }
 
   if (isPrProseJudgmentNeeded(snapshot.pr)) {
@@ -1335,23 +1599,38 @@ export async function advanceFinishPublication(
       type: 'finish_publication_transition', phase: 'started', transition: 'judge_pr_prose',
     });
     return coalescePublicationEffect(input.effects, 'judge_pr_prose', async () => {
+      let result: AdvanceFinishPublicationResult;
       try {
-        const result = mapPrProseJudgmentResult(
+        result = mapPrProseJudgmentResult(
           await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
         );
-        return result.kind === 'advanced'
-          ? advancedPublicationTransition(input.emit, 'judge_pr_prose')
-          : result;
       } catch {
         // The dispatcher can lose its response after the provider has returned.
-        // Re-observation on the next FINISH pass is authoritative, so retain the
-        // already verified PR effects and retry only judgment.
+        // A fresh observation determines whether judgment is still the stage
+        // that can run before this attempt is allowed to retry it.
         return {
           kind: 'publication_retry',
           transition: 'judge_pr_prose',
           reason: 'judgment_dispatch_failed',
         };
       }
+
+      if (result.kind === 'publication_retry' && 'transition' in result) {
+        return result;
+      }
+      if (result.kind !== 'advanced') return result;
+
+      const observedAfterJudgment = await input.observe();
+      return (await advancedPublicationTransition(
+        input.emit,
+        'judge_pr_prose',
+        snapshot,
+        observedAfterJudgment,
+      )) ?? {
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_dispatch_failed',
+      };
     });
   }
 
@@ -1385,8 +1664,33 @@ export async function advanceFinishPublication(
       }
 
       const observedAfterWrite = await input.observe();
+      if (writeFailure) {
+        if (observedAfterWrite.shippedRecord === 'valid') {
+          return advancedPublicationTransition(
+            input.emit,
+            'write_shipped_record',
+            snapshot,
+            observedAfterWrite,
+          );
+        }
+        if (observedAfterWrite.shippedRecord === 'invalid') {
+          return { kind: 'human_required', reason: 'invalid_shipped_record' };
+        }
+        return {
+          kind: 'publication_retry',
+          transition: 'write_shipped_record',
+          reason: 'shipped_record_write_failed',
+        };
+      }
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'write_shipped_record',
+        snapshot,
+        observedAfterWrite,
+      );
+      if (transition) return transition;
       if (observedAfterWrite.shippedRecord === 'valid') {
-        return advancedPublicationTransition(input.emit, 'write_shipped_record');
+        return { kind: 'advanced', transition: 'write_shipped_record' };
       }
       if (observedAfterWrite.shippedRecord === 'invalid') {
         return { kind: 'human_required', reason: 'invalid_shipped_record' };
@@ -1394,9 +1698,7 @@ export async function advanceFinishPublication(
       return {
         kind: 'publication_retry',
         transition: 'write_shipped_record',
-        reason: writeFailure
-          ? 'shipped_record_write_failed'
-          : 'shipped_record_not_verified_after_write',
+        reason: 'shipped_record_not_verified_after_write',
       };
     });
   }
@@ -1428,12 +1730,19 @@ export async function advanceFinishPublication(
       if (observedAfterPresentationRepair.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
       }
+      const transition = await advancedPublicationTransition(
+        input.emit,
+        'ready_pr',
+        snapshot,
+        observedAfterPresentationRepair,
+      );
+      if (transition) return transition;
       if (
         observedAfterPresentationRepair.pr.identity === 'one' &&
         observedAfterPresentationRepair.pr.prose === 'accepted' &&
         observedAfterPresentationRepair.pr.ready
       ) {
-        return advancedPublicationTransition(input.emit, 'ready_pr');
+        return { kind: 'advanced', transition: 'ready_pr' };
       }
 
       return {
@@ -1490,16 +1799,36 @@ export async function advanceFinishPublication(
       }
 
       const observedAfterRecord = await input.observe();
+      if (writeFailure) {
+        if (observedAfterRecord.outcomeRecord === 'valid') {
+          const advanced = await advancedPublicationTransition(
+            input.emit,
+            'record_outcome',
+            snapshot,
+            observedAfterRecord,
+          );
+          return advanced.kind === 'advanced' ? { kind: 'complete' } : advanced;
+        }
+        return {
+          kind: 'publication_retry',
+          transition: 'record_outcome',
+          reason: 'outcome_record_write_failed',
+        };
+      }
       const observedPreflight = preflightFinishPublication(observedAfterRecord);
       if (
         observedPreflight.kind === 'ready_for_judgment' &&
-        nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome' &&
-        observedAfterRecord.outcomeRecord === 'valid'
+        nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome'
       ) {
-        await emitPublicationEvent(input.emit, {
-          type: 'finish_publication_transition', phase: 'completed', transition: 'record_outcome',
-        });
-        return { kind: 'complete' };
+        const advanced = await advancedPublicationTransition(
+          input.emit,
+          'record_outcome',
+          snapshot,
+          observedAfterRecord,
+        );
+        if (advanced.kind === 'human_required') return advanced;
+        if (advanced.kind === 'advanced') return { kind: 'complete' };
+        return advanced;
       }
 
       return {

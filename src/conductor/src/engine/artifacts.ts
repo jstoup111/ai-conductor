@@ -34,6 +34,15 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
+import {
+  deriveEffectiveBuildReviewVerdict,
+  parseBuildReviewAggregate,
+  type BuildReviewEffectiveVerdict,
+} from './build-review-aggregate.js';
+import {
+  resolveEffectiveBuildReviewVerdict,
+  type BuildReviewEffectiveResolution,
+} from './build-review-effective.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -537,6 +546,56 @@ export async function resolveArtifactFiles(
  *    Callers fail closed (the build gate reports an actionable reason rather
  *    than evaluating someone else's task list).
  */
+/**
+ * Record engine-appended remediation task ids in .pipeline/engine-state.json
+ * (cumulative union across remediation rounds). The build completion
+ * predicate reads this list back and refuses completion while any recorded
+ * id's `### Task <id>` heading is missing from the plan — closing the hole
+ * where a builder deletes the appended task instead of delivering it.
+ */
+export async function recordAppendedRemediationTaskIds(
+  projectRoot: string,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  const pipelineDir = join(projectRoot, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+  const engineStatePath = join(pipelineDir, 'engine-state.json');
+
+  let engineState: Record<string, unknown> = {};
+  try {
+    const existing = await readFile(engineStatePath, 'utf-8');
+    engineState = JSON.parse(existing) as Record<string, unknown>;
+  } catch {
+    engineState = {};
+  }
+
+  const prior = Array.isArray(engineState.appendedRemediationTaskIds)
+    ? engineState.appendedRemediationTaskIds.filter((v): v is string => typeof v === 'string')
+    : [];
+  engineState.appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
+
+  await writeFile(engineStatePath, JSON.stringify(engineState, null, 2) + '\n');
+}
+
+/**
+ * Read the recorded engine-appended remediation task ids (empty when the
+ * engine-state file is absent or carries none — fail-open by design: a
+ * recreated worktree loses .pipeline and simply disarms the removal guard).
+ */
+export async function readAppendedRemediationTaskIds(projectRoot: string): Promise<string[]> {
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf-8');
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (Array.isArray(parsed?.appendedRemediationTaskIds)) {
+      return parsed.appendedRemediationTaskIds.filter((v: unknown): v is string => typeof v === 'string');
+    }
+  } catch {
+    // absent/invalid → no recorded ids
+  }
+  return [];
+}
+
 export async function resolveFeaturePlanPath(
   projectRoot: string,
   featureDesc: string | undefined,
@@ -608,21 +667,26 @@ export async function resolveFeaturePrdPaths(
   const prdFiles = (await matchGlob(projectRoot, '.docs/specs/*.md')).filter(
     (path) => !basename(path).startsWith('SUPERSEDED-'),
   );
-  const matchesStem = (stem: string): string[] =>
-    prdFiles.filter((path) => planStem(path) === stem);
+  const prdIdentity = STEP_ARTIFACT_CONTRACTS.prd[0].identity;
+  const matchesIdentity = (identity: string): string[] =>
+    prdFiles.filter((path) =>
+      artifactMatchesFeatureIdentity(path, identity, prdIdentity),
+    );
 
   if (context.activePlanPath) {
-    const matches = matchesStem(planStem(context.activePlanPath));
+    const matches = matchesIdentity(planStem(context.activePlanPath));
     if (matches.length > 0) return matches;
   }
 
   if (context.featureDesc) {
-    const matches = matchesStem(slugify(context.featureDesc));
+    const matches = matchesIdentity(slugify(context.featureDesc));
     if (matches.length > 0) return matches;
   }
 
   return prdFiles.filter((path) =>
-    context.featureIdentities.includes(planStem(path)),
+    context.featureIdentities.some((identity) =>
+      artifactMatchesFeatureIdentity(path, identity, prdIdentity),
+    ),
   );
 }
 
@@ -1022,6 +1086,14 @@ export interface CompletionContext {
    * so real callers need not wire this; tests inject a scratch-repo runner.
    */
   git?: GitRunner;
+  /**
+   * Resolves the current feature's accepted-risk state for a strict fan-out
+   * build-review aggregate. Scalar legacy verdicts never call this seam.
+   */
+  buildReviewEffectiveResolver?: (
+    projectRoot: string,
+    aggregate: unknown,
+  ) => Promise<BuildReviewEffectiveResolution>;
 }
 
 /**
@@ -1262,7 +1334,8 @@ export interface AcceptanceRedRemediationException {
   attribution: string;
 }
 
-export interface AcceptanceRedEvidence {
+export interface AcceptanceSpecsGeneratedEvidence {
+  outcome: 'specs-generated';
   /** The exact test command run (for the audit trail / reason messages). */
   command: string;
   /** The feature's own spec files/nodeids that this run targeted. */
@@ -1285,6 +1358,29 @@ export interface AcceptanceRedEvidence {
   summary?: string;
 }
 
+export interface AcceptanceDispositionOnlyEvidence {
+  outcome: 'disposition-only';
+  dispositions: AcceptanceCriterionDisposition[];
+}
+
+export type AcceptanceCriterionDisposition =
+  | {
+      criterion: string;
+      disposition: 'existing-sufficient-test';
+      citation: string;
+    }
+  | {
+      criterion: string;
+      disposition: 'planned-lower-layer-test';
+      citation: string;
+      owningTask: string;
+      layer: string;
+    };
+
+export type AcceptanceRedEvidence =
+  | AcceptanceSpecsGeneratedEvidence
+  | AcceptanceDispositionOnlyEvidence;
+
 /**
  * Validate a parsed acceptance-specs RED evidence object. RED is only
  * "established" when the feature's own specs actually executed and failed:
@@ -1304,6 +1400,23 @@ export function validateAcceptanceRedEvidence(
     };
   }
   const e = ev as Record<string, unknown>;
+  if (e.outcome === 'disposition-only') {
+    return validateDispositionOnlyEvidence(e);
+  }
+  if (e.outcome !== 'specs-generated') {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} must record an "outcome" of "specs-generated" or "disposition-only"`,
+    };
+  }
+  if ('dispositions' in e) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} specs-generated evidence cannot include disposition-only records`,
+    };
+  }
   const num = (k: string): number | null =>
     typeof e[k] === 'number' && Number.isFinite(e[k]) ? (e[k] as number) : null;
   const failed = num('failed');
@@ -1405,6 +1518,253 @@ export function validateAcceptanceRedEvidence(
   return { ok: true };
 }
 
+function validateDispositionOnlyEvidence(
+  e: Record<string, unknown>,
+): { ok: true } | { ok: false; reason: string; class: 'shape' } {
+  if (Object.keys(e).some((key) => key !== 'outcome' && key !== 'dispositions')) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} disposition-only evidence cannot include RED-run fields`,
+    };
+  }
+  if (!Array.isArray(e.dispositions) || e.dispositions.length === 0) {
+    return {
+      ok: false,
+      class: 'shape',
+      reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} disposition-only evidence must list every happy and negative criterion`,
+    };
+  }
+  const criteria = new Set<string>();
+  for (const record of e.dispositions) {
+    if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+      return invalidDispositionRecord();
+    }
+    const disposition = record as Record<string, unknown>;
+    const criterion = disposition.criterion;
+    const citation = disposition.citation;
+    if (
+      typeof criterion !== 'string' || criterion.trim() === '' ||
+      typeof citation !== 'string' || !isVerifiableCitation(citation) ||
+      criteria.has(criterion)
+    ) {
+      return invalidDispositionRecord();
+    }
+    criteria.add(criterion);
+    if (disposition.disposition === 'existing-sufficient-test') {
+      if (!hasOnlyKeys(disposition, ['criterion', 'disposition', 'citation'])) return invalidDispositionRecord();
+      continue;
+    }
+    if (
+      disposition.disposition !== 'planned-lower-layer-test' ||
+      !hasOnlyKeys(disposition, ['criterion', 'disposition', 'citation', 'owningTask', 'layer']) ||
+      typeof disposition.owningTask !== 'string' || disposition.owningTask.trim() === '' ||
+      typeof disposition.layer !== 'string' || disposition.layer.trim() === ''
+    ) {
+      return invalidDispositionRecord();
+    }
+  }
+  return { ok: true };
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function isVerifiableCitation(value: string): boolean {
+  return /\S+:\d+(?::\d+)?$/.test(value.trim());
+}
+
+function invalidDispositionRecord(): { ok: false; reason: string; class: 'shape' } {
+  return {
+    ok: false,
+    class: 'shape',
+    reason: `${ACCEPTANCE_SPECS_RED_EVIDENCE} disposition-only records must use exactly existing-sufficient-test with a test citation or planned-lower-layer-test with citation, owningTask, and layer`,
+  };
+}
+
+/**
+ * Filename stem of an acceptance spec, with test-framework suffixes stripped
+ * (e.g. `my-feature.acceptance.test.ts` → `my-feature`), so the stem can be
+ * compared against a feature identity via `artifactMatchesFeatureIdentity`.
+ */
+function acceptanceSpecStem(file: string): string {
+  return basename(file)
+    .replace(/\.[A-Za-z0-9]+$/, '')
+    .replace(/[._-](test|spec)$/i, '')
+    .replace(/[._-](acceptance|system|e2e|integration|request)$/i, '');
+}
+
+function dispositionGroundingRefusal(reason: string): CompletionResult {
+  return { done: false, acceptanceRedRefusalClass: 'shape', reason };
+}
+
+function escapeDispositionRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Ground disposition-only evidence in the feature's authoritative artifacts
+ * (rem-build-review-root-cause-2). Two checks, both fail-closed:
+ *
+ * 1. Exhaustiveness — the records must cover every active story's happy AND
+ *    negative criteria, read from the feature's stories doc, not merely be
+ *    non-empty. A record covers a story-path unit when its criterion names
+ *    the path type and (for multi-story docs) references `Story <id>`.
+ * 2. Citation resolution — an `existing-sufficient-test` citation must point
+ *    at a test file that exists on disk; a `planned-lower-layer-test` must
+ *    name an owning task that exists in the feature's plan.
+ *
+ * Returns a refusing CompletionResult, or null when the evidence is grounded.
+ */
+async function groundDispositionOnlyEvidence(
+  dir: string,
+  ctx: CompletionContext,
+  evidence: AcceptanceDispositionOnlyEvidence,
+): Promise<CompletionResult | null> {
+  const storiesPath = await resolveFeatureStoriesPath(dir, ctx.featureDesc);
+  if (!storiesPath) {
+    const desc = ctx.featureDesc ? ` for feature "${ctx.featureDesc}"` : '';
+    return dispositionGroundingRefusal(
+      `disposition-only evidence cannot be validated: cannot resolve this feature's stories doc${desc} — the records must be checked against the active story criteria`,
+    );
+  }
+  let storiesText: string;
+  try {
+    storiesText = await readFile(storiesPath, 'utf-8');
+  } catch {
+    return dispositionGroundingRefusal(
+      `disposition-only evidence cannot be validated: cannot read this feature's stories doc at ${relative(dir, storiesPath)}`,
+    );
+  }
+
+  // Callers without a feature identity are legacy predicate users. They have
+  // no authoritative feature artifact to bind, so retain their established
+  // shape-only behavior rather than guessing which stories document applies.
+  if (!ctx.featureDesc && !ctx.planPath && !ctx.artifactResolution) return null;
+
+  const authoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
+  const authoritativeSet = new Set(authoritativeCriteria);
+  const recordedCriteria = evidence.dispositions.map((entry) =>
+    canonicalizeDispositionCriterion(entry.criterion, authoritativeCriteria),
+  );
+  const recordedSet = new Set(recordedCriteria);
+  const unexpected = recordedCriteria.filter((criterion) => !authoritativeSet.has(criterion));
+  const omitted = authoritativeCriteria.filter((criterion) => !recordedSet.has(criterion));
+  if (unexpected.length > 0 || omitted.length > 0) {
+    const differences = [
+      unexpected.length > 0 ? `invented: ${unexpected.join(', ')}` : '',
+      omitted.length > 0 ? `omitted: ${omitted.join(', ')}` : '',
+    ].filter(Boolean);
+    return dispositionGroundingRefusal(
+      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — ${differences.join('; ')}`,
+    );
+  }
+
+  let planTaskIds: Set<string> | null = null;
+  for (const entry of evidence.dispositions) {
+    const citationFailure = await resolveDispositionCitation(dir, entry.citation);
+    if (citationFailure) return dispositionGroundingRefusal(citationFailure);
+    if (entry.disposition === 'existing-sufficient-test') continue;
+    if (planTaskIds === null) {
+      const planPath = ctx.planPath ?? (await resolveFeaturePlanPath(dir, ctx.featureDesc));
+      if (!planPath) {
+        const desc = ctx.featureDesc ? ` for feature "${ctx.featureDesc}"` : '';
+        return dispositionGroundingRefusal(
+          `disposition-only evidence cannot be validated: cannot resolve this feature's plan${desc} to verify planned-lower-layer-test owning tasks`,
+        );
+      }
+      let planText: string;
+      try {
+        planText = await readFile(isAbsolute(planPath) ? planPath : join(dir, planPath), 'utf-8');
+      } catch {
+        return dispositionGroundingRefusal(
+          `disposition-only evidence cannot be validated: cannot read this feature's plan to verify planned-lower-layer-test owning tasks`,
+        );
+      }
+      const { parsePlanTaskPaths } = await import('./plan-task-parse.js');
+      planTaskIds = new Set(parsePlanTaskPaths(planText).keys());
+    }
+    const trimmedTask = entry.owningTask.trim();
+    const normalizedTask = trimmedTask.replace(/^task\s+/i, '');
+    if (!planTaskIds.has(normalizedTask) && !planTaskIds.has(trimmedTask)) {
+      return dispositionGroundingRefusal(
+        `disposition-only owning task "${entry.owningTask}" does not exist in the plan — a planned-lower-layer-test must name a real plan task`,
+      );
+    }
+  }
+  return null;
+}
+
+function extractAuthoritativeStoryCriteria(storiesText: string): string[] {
+  const criteria: string[] = [];
+  for (const block of splitStoryBlocks(storiesText)) {
+    for (const type of ['happy', 'negative'] as const) {
+      const body = sectionBody(
+        block.text,
+        type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
+      );
+      if (body === null) continue;
+      const prefix = `${block.id ? `Story ${block.id} ` : ''}${type}: `;
+      for (const line of body.split('\n')) {
+        const match = line.match(/^\s*(?:[-*+] |\d+[.)] )(.+?)\s*$/);
+        if (!match || !/\bgiven\b/i.test(match[1]) || !/\bthen\b/i.test(match[1])) continue;
+        criteria.push(`${prefix}${match[1]}`);
+      }
+    }
+  }
+  return criteria;
+}
+
+function canonicalizeDispositionCriterion(criterion: string, authoritativeCriteria: string[]): string {
+  const exact = criterion.trim();
+  if (authoritativeCriteria.includes(exact)) return exact;
+
+  // Prior evidence used `Story <id> happy path: <outcome>` shorthand. It is
+  // unambiguous only when that story/path has one actual G/W/T criterion; a
+  // multi-criterion path must use the exact authoritative statement.
+  const legacy = exact.match(/^(?:(Story\s+[A-Za-z0-9.\-]+)\s+)?(happy|negative)\s+path:\s*(.+)$/i);
+  if (!legacy) return exact;
+  const [, storyLabel, type, summary] = legacy;
+  const prefix = `${storyLabel ? `${storyLabel} ` : ''}${type.toLowerCase()}: `;
+  const candidates = authoritativeCriteria.filter((candidate) =>
+    candidate.toLowerCase().startsWith(prefix.toLowerCase()),
+  );
+  if (candidates.length !== 1 || !criterionSummaryOccursIn(candidates[0], summary)) return exact;
+  return candidates[0];
+}
+
+function criterionSummaryOccursIn(criterion: string, summary: string): boolean {
+  const words = summary.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  return words.length > 0 && words.every((word) => criterion.toLowerCase().includes(word));
+}
+
+async function resolveDispositionCitation(dir: string, citation: string): Promise<string | null> {
+  const match = citation.trim().match(/^(.*\S):(\d+)(?::(\d+))?$/);
+  if (!match) {
+    return `disposition-only citation does not resolve: "${citation}" — citations must name an existing file and in-range line`;
+  }
+  const [, citedPath, startText, endText] = match;
+  const start = Number(startText);
+  const end = endText === undefined ? start : Number(endText);
+  const path = isAbsolute(citedPath) ? citedPath : join(dir, citedPath);
+  let citedText: string;
+  try {
+    citedText = await readFile(path, 'utf-8');
+  } catch {
+    return `disposition-only citation does not resolve: "${citation}" — cited file does not exist`;
+  }
+  const lineCount = citedText.split('\n').length;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end > lineCount) {
+    return `disposition-only citation does not resolve: "${citation}" — cited line is outside the file`;
+  }
+  return null;
+}
+
+function isDispositionOnlyEvidence(ev: unknown): ev is AcceptanceDispositionOnlyEvidence {
+  return typeof ev === 'object' && ev !== null && (ev as Record<string, unknown>).outcome === 'disposition-only';
+}
+
 function hasRecordedRemediationException(exception: unknown): boolean {
   if (typeof exception !== 'object' || exception === null) return false;
   const candidate = exception as Record<string, unknown>;
@@ -1418,10 +1778,10 @@ function hasRecordedRemediationException(exception: unknown): boolean {
 }
 
 /**
- * Path to the build_review judgement gate's verdict artifact. Written by the
- * grader dispatched between `build` and `manual_test`; read back by the
- * completion predicate (Task 8) to decide PASS (advance) vs FAIL (kickback to
- * `build`). Gitignored run evidence, not a committed design artifact.
+ * Path to the build_review judgement gate's verdict artifact. The grader
+ * writes its judgement here and the engine replaces that temporary shape with
+ * the canonical public verdict before the completion predicate reads it.
+ * Gitignored run evidence, not a committed design artifact.
  */
 export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
 
@@ -1456,8 +1816,6 @@ export interface BuildReviewRubric {
   rootCause: boolean;
   /** Implementation addresses only part of the task's declared scope. */
   completeness: boolean;
-  /** Configured entry points do not reach the delivered behavior. */
-  wiring: boolean;
 }
 
 /**
@@ -1487,6 +1845,13 @@ export interface BuildReviewVerdict {
   codeStamp?: string | null;
 }
 
+const BUILD_REVIEW_RUBRIC_NAMES = [
+  'tautology',
+  'scope',
+  'rootCause',
+  'completeness',
+] as const;
+
 /**
  * Flatten a verdict's legacy summaries and structured findings for every
  * existing consumer that needs actionable build-review feedback. Keeping the
@@ -1494,10 +1859,32 @@ export interface BuildReviewVerdict {
  */
 export function buildReviewFailureDetails(verdict: Pick<BuildReviewVerdict, 'reasons' | 'findings'>): string[] {
   const details = [...(verdict.reasons ?? [])];
-  for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
+  for (const rubric of BUILD_REVIEW_RUBRIC_NAMES) {
     for (const finding of verdict.findings?.[rubric] ?? []) {
       details.push(`[${rubric}] ${finding}`);
     }
+  }
+  return details;
+}
+
+/**
+ * Completion feedback is derived from the same effective reducer used by the
+ * live runner. Accepted findings remain in the raw artifact for inspection,
+ * but only unresolved findings and infrastructure failures route back to
+ * build.
+ */
+function effectiveBuildReviewFailureDetails(
+  effective: BuildReviewEffectiveVerdict,
+): string[] {
+  const details: string[] = [];
+  if (effective.unresolvedFindingIds.length > 0) {
+    details.push(`unresolved findings: ${effective.unresolvedFindingIds.join(', ')}`);
+  }
+  if (effective.infrastructureFailureRubrics.length > 0) {
+    details.push(`infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ')}`);
+  }
+  if (details.length === 0) {
+    details.push('no judged rubric result is available');
   }
   return details;
 }
@@ -1528,6 +1915,12 @@ export function validateBuildReviewVerdict(
     return { ok: false, reason: `${BUILD_REVIEW_VERDICT} is not a JSON object` };
   }
   const e = ev as Record<string, unknown>;
+  // New fan-out aggregates carry a stricter raw-results envelope in addition
+  // to the legacy top-level verdict projection. A malformed envelope must not
+  // be ignored merely because its compatibility fields happen to look valid.
+  if (e.aggregateVersion !== undefined && (!parseBuildReviewAggregate(e) || !deriveEffectiveBuildReviewVerdict(e))) {
+    return { ok: false, reason: `${BUILD_REVIEW_VERDICT} aggregate is incomplete, malformed, or identity-mismatched` };
+  }
   if (e.verdict !== 'PASS' && e.verdict !== 'FAIL') {
     return {
       ok: false,
@@ -1542,7 +1935,7 @@ export function validateBuildReviewVerdict(
   }
   const rubricSrc = e.rubric as Record<string, unknown>;
   const rubric = {} as BuildReviewRubric;
-  for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
+  for (const rubricName of BUILD_REVIEW_RUBRIC_NAMES) {
     if (typeof rubricSrc[rubricName] !== 'boolean') {
       return {
         ok: false,
@@ -1559,7 +1952,7 @@ export function validateBuildReviewVerdict(
     }
     const source = e.findings as Record<string, unknown>;
     findings = {};
-    for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness', 'wiring'] as const) {
+    for (const rubricName of BUILD_REVIEW_RUBRIC_NAMES) {
       const candidate = source[rubricName];
       if (candidate === undefined) continue;
       if (!Array.isArray(candidate) || candidate.some((finding) => typeof finding !== 'string')) {
@@ -1572,15 +1965,8 @@ export function validateBuildReviewVerdict(
     }
   }
 
-  if (rubric.wiring === true && (findings?.wiring?.length ?? 0) === 0) {
-    return {
-      ok: false,
-      reason: `${BUILD_REVIEW_VERDICT} "findings.wiring" must be a non-empty string array when rubric.wiring is true`,
-    };
-  }
-
-  const failedRubrics = ['tautology', 'scope', 'rootCause', 'completeness', 'wiring']
-    .filter((name) => rubric[name as keyof BuildReviewRubric] === true);
+  const failedRubrics = BUILD_REVIEW_RUBRIC_NAMES
+    .filter((name) => rubric[name] === true);
   if (e.verdict === 'PASS' && failedRubrics.length > 0) {
     return {
       ok: false,
@@ -1614,6 +2000,97 @@ export function validateBuildReviewVerdict(
     result.codeStamp = e.codeStamp;
   }
   return result;
+}
+
+/**
+ * Convert the grader-owned judgement contract into the canonical public
+ * build-review verdict. The grader names failures explicitly; the engine
+ * owns the otherwise error-prone conversion to legacy `true means failed`
+ * rubric booleans. Canonical legacy artifacts remain accepted so in-flight
+ * providers and redispatches retain their existing fail-closed behavior.
+ */
+export function canonicalizeBuildReviewGraderVerdict(
+  ev: unknown,
+): ReturnType<typeof validateBuildReviewVerdict> {
+  if (typeof ev !== 'object' || ev === null || Array.isArray(ev)) {
+    return validateBuildReviewVerdict(ev);
+  }
+  const source = ev as Record<string, unknown>;
+  if (!Object.hasOwn(source, 'failedRubrics')) {
+    return validateBuildReviewVerdict(ev);
+  }
+  if (source.rubric !== undefined) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} grader output must not include both "failedRubrics" and "rubric"`,
+    };
+  }
+  if (source.verdict !== undefined) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} grader output must not include "verdict"; the engine derives it from failedRubrics`,
+    };
+  }
+  if (!Array.isArray(source.failedRubrics)) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "failedRubrics" must be an array`,
+    };
+  }
+  const allowed = new Set<string>(BUILD_REVIEW_RUBRIC_NAMES);
+  const failedRubrics = source.failedRubrics;
+  if (failedRubrics.some((name) => typeof name !== 'string' || !allowed.has(name))) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "failedRubrics" contains an unknown rubric`,
+    };
+  }
+  if (new Set(failedRubrics).size !== failedRubrics.length) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "failedRubrics" must not contain duplicates`,
+    };
+  }
+  const failures = new Set(failedRubrics);
+  if (typeof source.findings === 'object' && source.findings !== null && !Array.isArray(source.findings)) {
+    const findings = source.findings as Record<string, unknown>;
+    const unknownFinding = Object.keys(findings).find((name) => !allowed.has(name));
+    if (unknownFinding !== undefined) {
+      return {
+        ok: false,
+        reason: `${BUILD_REVIEW_VERDICT} "findings" contains unknown rubric ${JSON.stringify(unknownFinding)}`,
+      };
+    }
+    for (const name of BUILD_REVIEW_RUBRIC_NAMES) {
+      const candidate = findings[name];
+      if (Array.isArray(candidate) && candidate.length > 0 && !failures.has(name)) {
+        return {
+          ok: false,
+          reason: `${BUILD_REVIEW_VERDICT} "findings.${name}" is non-empty but ${name} is not named in failedRubrics`,
+        };
+      }
+      if (failures.has(name) && (!Array.isArray(candidate) || candidate.length === 0)) {
+        return {
+          ok: false,
+          reason: `${BUILD_REVIEW_VERDICT} "findings.${name}" must be non-empty when ${name} is named in failedRubrics`,
+        };
+      }
+    }
+  } else if (failedRubrics.length > 0) {
+    return {
+      ok: false,
+      reason: `${BUILD_REVIEW_VERDICT} "findings" must name every failed rubric`,
+    };
+  }
+  const rubric = Object.fromEntries(
+    BUILD_REVIEW_RUBRIC_NAMES.map((name) => [name, failures.has(name)]),
+  ) as unknown as BuildReviewRubric;
+  const { failedRubrics: _failedRubrics, ...canonical } = source;
+  return validateBuildReviewVerdict({
+    ...canonical,
+    verdict: failedRubrics.length === 0 ? 'PASS' : 'FAIL',
+    rubric,
+  });
 }
 
 /**
@@ -1831,6 +2308,27 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return { done: false, reason: 'no tasks in plan' };
       }
 
+      // Engine-appended remediation tasks must not be deleted from the plan.
+      // Task ids are derived from plan text, so removing a `### Task rem-*`
+      // heading would silently drop the task from this predicate — letting a
+      // builder "complete" a remediation round by deleting its work item.
+      // The engine records every id it appends (engine-state.json); any
+      // recorded id missing from the plan blocks completion until the
+      // heading is restored. Fail-open when nothing was recorded (absent
+      // engine-state — e.g. a recreated worktree — simply disarms the guard).
+      {
+        const recorded = await readAppendedRemediationTaskIds(ctx.projectRoot);
+        const removed = recorded.filter((id) => !planTaskIds.includes(id));
+        if (removed.length > 0) {
+          const names = removed.slice(0, 3).join(', ');
+          const more = removed.length > 3 ? ` (+${removed.length - 3} more)` : '';
+          return {
+            done: false,
+            reason: `engine-appended remediation task heading(s) removed from plan: ${names}${more} — restore the ### Task heading(s); deleting a remediation task never completes it`,
+          };
+        }
+      }
+
       const statusPath = join(ctx.projectRoot, '.pipeline/task-status.json');
       let raw: string;
       try {
@@ -1906,28 +2404,16 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     return { done: true };
   },
 
-  // Acceptance-specs is "done" only when (a) at least one spec file exists AND
-  // (b) a RED execution-evidence file proves the feature's own specs actually
-  // RAN and FAILED — not that they were skipped/deselected/collection-errored.
-  // The step previously had only a file-existence glob, so a generated spec that
-  // never executed (an integration spec `importorskip`-ed away for want of a
-  // testcontainer, or a suite scoped to a unit-only dir) satisfied the gate; the
-  // daemon then declared GREEN and opened a PR whose own acceptance specs failed
-  // in CI. Evidence is written by the writing-system-tests skill from the real
-  // RED run (gitignored run evidence, not a committed design artifact).
+  // Acceptance specs have two explicit outcomes. Generated specs require their
+  // existing genuine-RED proof; a disposition-only outcome proves every
+  // criterion below this layer and therefore must have no spec files or RED-run
+  // contract. Both shapes are validated before completion.
   acceptance_specs: async (dir, ctx): Promise<CompletionResult> => {
     const files = await findArtifactFiles(
       dir,
       'acceptance_specs',
       extraArtifactGlobs('acceptance_specs', ctx.config),
     );
-    if (files.length === 0) {
-      return {
-        done: false,
-        reason:
-          'no acceptance spec files present — the writing-system-tests skill must generate failing specs',
-      };
-    }
     const evidencePath = join(dir, ACCEPTANCE_SPECS_RED_EVIDENCE);
     let raw: string;
     try {
@@ -1952,6 +2438,69 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const verdict = validateAcceptanceRedEvidence(parsed);
     if (!verdict.ok) {
       return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
+    }
+    if (isDispositionOnlyEvidence(parsed)) {
+      // rem-build-review-task13-1: the zero-spec check counts only the
+      // FEATURE's own acceptance specs — the acceptance corpus is
+      // repository-scoped by design, so unrelated pre-existing tests must
+      // not refuse a legitimate disposition-only completion. Attribution
+      // follows resolveArtifactFiles' feature association: a spec belongs
+      // to the feature when it is among the feature's changed paths or its
+      // filename stem matches a feature identity. With no attribution
+      // context at all (legacy callers), fall back fail-closed to the
+      // whole corpus, exactly as before.
+      const featureIdentities = [
+        ...(ctx.artifactResolution?.featureIdentities ?? []),
+        ctx.planPath ? planStem(ctx.planPath) : undefined,
+        ctx.featureDesc ? slugify(ctx.featureDesc) : undefined,
+      ].filter((identity): identity is string => Boolean(identity));
+      const changedPaths = ctx.artifactResolution?.changedPaths ?? new Set<string>();
+      const hasAttributionContext = featureIdentities.length > 0 || changedPaths.size > 0;
+      const featureSpecFiles = hasAttributionContext
+        ? files.filter((file) => {
+            const repoPath = relative(dir, file).replaceAll('\\', '/');
+            return (
+              changedPaths.has(repoPath) ||
+              featureIdentities.some((identity) =>
+                artifactMatchesFeatureIdentity(acceptanceSpecStem(file), identity, {
+                  strategy: 'normalized-stem',
+                  stripDatePrefix: true,
+                }),
+              )
+            );
+          })
+        : files;
+      if (featureSpecFiles.length > 0) {
+        const named = featureSpecFiles
+          .slice(0, 3)
+          .map((file) => relative(dir, file).replaceAll('\\', '/'))
+          .join(', ');
+        return {
+          done: false,
+          acceptanceRedRefusalClass: 'shape',
+          reason: `disposition-only acceptance evidence requires zero acceptance spec files for this feature (found: ${named})`,
+        };
+      }
+      try {
+        await access(join(dir, '.pipeline/acceptance-specs-run.json'));
+        return {
+          done: false,
+          acceptanceRedRefusalClass: 'shape',
+          reason: 'disposition-only acceptance evidence cannot include an acceptance run contract',
+        };
+      } catch {
+        // A disposition-only outcome intentionally has no acceptance run.
+      }
+      const grounding = await groundDispositionOnlyEvidence(dir, ctx, parsed);
+      if (grounding) return grounding;
+      return { done: true, viaException: false };
+    }
+    if (files.length === 0) {
+      return {
+        done: false,
+        reason:
+          'no acceptance spec files present — specs-generated evidence requires failing specs',
+      };
     }
     return {
       done: true,
@@ -2395,6 +2944,29 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           const git = ctx.git ?? makeGitRunner(dir);
           const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'build_review', preCheck.codeStamp);
           if (validity === 'preserve') {
+            // A strict aggregate still has one authoritative effective
+            // verdict. Code-stamp preservation skips only the mtime check;
+            // it must not bypass an unavailable or failing state resolver.
+            const aggregate = parseBuildReviewAggregate(parsed);
+            if (aggregate) {
+              const effectiveResolution = await (
+                ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+              )(dir, aggregate);
+              if (!effectiveResolution.ok) {
+                return {
+                  done: false,
+                  reason: `build_review disposition resolution failed: ${effectiveResolution.reason}`,
+                  routeClass: 'named-route',
+                };
+              }
+              if (effectiveResolution.effective.verdict === 'FAIL') {
+                return {
+                  done: false,
+                  reason: `build_review effective FAILed: ${effectiveBuildReviewFailureDetails(effectiveResolution.effective).join('; ')} — fix in build, then the gate re-runs build_review`,
+                  routeClass: 'named-route',
+                };
+              }
+            }
             return {
               done: true,
               verdictFreshness: await verdictFreshnessFor(path, ctx, 'preserved_surface_miss'),
@@ -2451,6 +3023,34 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const result = validateBuildReviewVerdict(parsed);
     if (!result.ok) {
       return { done: false, reason: result.reason, routeClass: 'absent' };
+    }
+    // Fan-out evidence has a strict raw envelope. Once the existing freshness
+    // and code-stamp checks above establish that this is current evidence,
+    // completion must use the same accepted-risk reducer as the live runner.
+    // Legacy scalar verdicts intentionally retain their historical predicate.
+    const aggregate = parseBuildReviewAggregate(parsed);
+    if (aggregate) {
+      const effectiveResolution = await (
+        ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+      )(dir, aggregate);
+      if (!effectiveResolution.ok) {
+        return {
+          done: false,
+          reason: `build_review disposition resolution failed: ${effectiveResolution.reason}`,
+          routeClass: 'named-route',
+        };
+      }
+      if (effectiveResolution.effective.verdict === 'FAIL') {
+        return {
+          done: false,
+          reason: `build_review effective FAILed: ${effectiveBuildReviewFailureDetails(effectiveResolution.effective).join('; ')} — fix in build, then the gate re-runs build_review`,
+          routeClass: 'named-route',
+        };
+      }
+      return {
+        done: true,
+        verdictFreshness: await verdictFreshnessFor(path, ctx, 'rewritten'),
+      };
     }
     if (result.verdict === 'FAIL') {
       const details = buildReviewFailureDetails(result);

@@ -32,10 +32,13 @@ import {
 } from './engine/resolved-config.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
+import { sweepFeatureWorktreeScratch } from './engine/self-host/provider-scratch.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { withRegisteredVisualizers } from './engine/visualizer-lifecycle.js';
 import { ConductorEventEmitter } from './ui/events.js';
+import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
+import { ALL_STEPS } from './engine/steps.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
@@ -746,6 +749,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // Conductors running in daemon mode (daemon:true) will register their
   // AbortControllers here instead of installing per-conductor handlers.
   const allWaitSignals = new Set<AbortController>();
+  const activeConductors = new Set<Conductor>();
+  let shutdownRequested = false;
 
   // Task 22 / #561: Install ONE process-level SIGTERM handler (not N
   // per-conductor). When SIGTERM fires, abort all in-flight waits so they
@@ -755,11 +760,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // releases the lock. No direct process.exit here: the only force-exit
   // path is the teardown's bounded onForceRelease backstop above.
   const daemonSigtermHandler = async () => {
+    shutdownRequested = true;
     // Abort all in-flight rate-limit waits across all conductors
     for (const controller of allWaitSignals) {
       controller.abort();
     }
-    // Note: State saves are handled by individual conductors' exit handlers.
+    // Daemon conductors intentionally have no per-conductor SIGTERM listener.
+    // Close their real lifecycle ledgers before the scheduler drain can release
+    // this process; each closure joins an in-flight terminal if one exists.
+    await Promise.all(
+      [...activeConductors].map((conductor) => conductor.closeOpenExecutionsForShutdown()),
+    );
     // Request the drain — runDaemon observes shouldStop() at its next loop
     // boundary and stops with stoppedReason 'signal_teardown'; the normal
     // completion path below then releases the lock and exits.
@@ -849,6 +860,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // This global subscriber renders anything emitted directly on the
   // daemon-wide bus (untagged) so those events keep reaching daemon.log
   // exactly as they did before per-feature tagging was introduced.
+  const rendererOpts: TerminalRendererOptions = {
+    stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+    steps: ALL_STEPS,
+    readStateFn: readState,
+    projectRoot,
+  };
   const subscriber = registerBuiltins(registry, events, (event) => {
     // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
     // are already rendered, tagged, by that feature's own listeners
@@ -857,7 +874,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // untagged.
     if (isForwardedFromFeature(event)) return;
     renderDaemonEvent(event, log);
-  }, undefined, config?.codex_doctor_timeout_seconds);
+  }, rendererOpts, config?.codex_doctor_timeout_seconds);
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
@@ -993,6 +1010,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         modelPolicy: selectedRuntime.policy,
         mode: 'auto',
         providerExecution,
+        events: featureEvents,
         log: featureLog,
       },
     );
@@ -1064,6 +1082,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       registerAbortController: (controller) => allWaitSignals.add(controller),
     });
 
+    activeConductors.add(conductor);
+    try {
+
     // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate
     // the advanced base FIRST — run 9.0's rebase-onto-latest BEFORE the conductor
     // resumes the pending gate, so a gate halt (e.g. prd-audit) re-verifies on the
@@ -1110,6 +1131,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     }
 
+    if (shutdownRequested) return;
     const conductorTermination = await conductor.run();
     if (conductorTermination) {
       return conductorTermination;
@@ -1130,6 +1152,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       slug: item.slug,
       log: featureLog,
     });
+    } finally {
+      activeConductors.delete(conductor);
+    }
 
   };
 
@@ -1469,6 +1494,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     {
       discoverBacklog: discoverTick,
       isHalted: (slug) => isHalted(worktreeBase, slug),
+      sweepProviderScratch: () => sweepFeatureWorktreeScratch({
+        worktreeBase,
+        events,
+        log,
+        startFeatureEventScope: (worktreePath) => startFeatureEventPersistence(worktreePath, events),
+      }),
       // Task 14: wire the filesystem watcher for HALT marker removal.
       // When watch is false, the watcher is undefined and the daemon falls
       // back to polling alone. Otherwise, the daemon uses event-driven re-kick
@@ -2070,6 +2101,14 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'contained_live_checkout_drift':
+      log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
+      break;
+    case 'self_host_containment_verdict':
+      log(`${dot} ${chalk.dim(event.contained
+        ? `self-host containment verified: ${event.evidence}`
+        : `self-host containment unavailable: ${event.reason}`)}`);
+      break;
     case 'step_started':
       log(`${dot} ${chalk.cyan('▶')} ${event.step}`);
       break;
@@ -2154,6 +2193,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // to answer by summing a hundred log lines by hand.
       log(`${dot}   ${chalk.dim(formatFeatureUsageTotal(event))}`);
       break;
+    case 'scratch_cleanup_reclaimed':
+      log(`${dot} ${chalk.green('✓')} scratch reclaimed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      break;
+    case 'scratch_cleanup_retained':
+      log(`${dot} ${chalk.yellow('↷')} scratch retained ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      break;
+    case 'scratch_cleanup_failed':
+      log(`${dot} ${chalk.red('✗')} scratch cleanup failed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      break;
     case 'provider_fallback':
       log(
         chalk.bold.yellow(
@@ -2186,6 +2234,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'loop_halt':
       log(`${dot} ${chalk.red('✋')} ${chalk.red(`loop halted: ${event.reason}`)}`);
       break;
+    case 'halt_marker_write_failed':
+      log(`${dot} ${chalk.red('✋')} ${chalk.red(`halt marker write failed: ${event.path} — ${event.reason}`)}`);
+      break;
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;
@@ -2201,13 +2252,20 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'rebase_conflict_halt':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(
+          `rebase conflict halted: ${event.reason} (${event.conflicts.join(', ')})`,
+        )}`,
+      );
+      break;
     case 'ci_failed':
       log(
         `${dot} ${chalk.red('✋')} ${chalk.red(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`)}`,
       );
       break;
     case 'rate_limit':
-      log(`${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`rate limited: waiting ${event.waitSeconds}s`)}`);
+      log(`${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`${event.reason === 'usage-exhausted' ? 'usage exhausted' : 'rate limited'}: waiting ${event.waitSeconds}s`)}`);
       break;
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
@@ -2326,9 +2384,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const excludedBaseAheadPaths = event.excludedBaseAheadPaths?.length
         ? `; excluded base-ahead paths: ${event.excludedBaseAheadPaths.join(', ')}`
         : '';
+      const excludedOperatorResealedPaths = event.excludedOperatorResealedPaths?.length
+        ? `; kept operator-resealed paths: ${event.excludedOperatorResealedPaths.join(', ')}`
+        : '';
       log(
         `${dot} ${chalk.dim(
-          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)${excludedBaseAheadPaths}`,
+          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)`
+          + `${excludedBaseAheadPaths}${excludedOperatorResealedPaths}`,
         )}`,
       );
       break;

@@ -7,7 +7,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { reportRouted, reportDone } from '../../../../src/engine/engineer/intake/writeback.js';
 import type { IntakePort, EnvelopeStatus, ReportMeta } from '../../../../src/engine/engineer/intake/port.js';
-import type { Ledger, LedgerStatus } from '../../../../src/engine/engineer/intake/ledger.js';
+import { CorruptLedgerError, type Ledger, type LedgerStatus } from '../../../../src/engine/engineer/intake/ledger.js';
 
 function fakePort(): { port: IntakePort; calls: Array<{ sourceRef: string; status: EnvelopeStatus; meta?: ReportMeta }> } {
   const calls: Array<{ sourceRef: string; status: EnvelopeStatus; meta?: ReportMeta }> = [];
@@ -70,6 +70,25 @@ describe('reportRouted', () => {
     await expect(
       reportRouted({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'target-repo'),
     ).resolves.toBeUndefined();
+  });
+
+  it('propagates a corrupt ledger instead of treating it as advisory', async () => {
+    const { port } = fakePort();
+    const error = new CorruptLedgerError('/tmp/ledger.json', 'invalid JSON', '/tmp/ledger.json.corrupt-1');
+    const ledger: Ledger = {
+      known: async () => false,
+      record: async () => {},
+      transition: vi.fn().mockRejectedValue(error),
+      get: async () => undefined,
+      forget: async () => {},
+      list: async () => [],
+      reopen: async () => {},
+      requeueClaimed: async () => ({ acted: false }),
+    };
+
+    await expect(
+      reportRouted({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'target-repo'),
+    ).rejects.toBe(error);
   });
 
   it('works with no port and no ledger (pure no-op)', async () => {
@@ -156,5 +175,24 @@ describe('reportDone', () => {
     await expect(
       reportDone({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'https://x/pull/9'),
     ).resolves.toBeUndefined();
+  });
+
+  it('propagates a corrupt ledger instead of treating it as advisory', async () => {
+    const { port } = fakePort();
+    const error = new CorruptLedgerError('/tmp/ledger.json', 'invalid JSON', '/tmp/ledger.json.corrupt-1');
+    const ledger: Ledger = {
+      known: async () => true,
+      record: async () => {},
+      transition: vi.fn().mockRejectedValue(error),
+      get: async () => undefined,
+      forget: async () => {},
+      list: async () => [],
+      reopen: async () => {},
+      requeueClaimed: async () => ({ acted: false }),
+    };
+
+    await expect(
+      reportDone({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'https://x/pull/9'),
+    ).rejects.toBe(error);
   });
 });

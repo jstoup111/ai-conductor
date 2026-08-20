@@ -176,6 +176,9 @@ export async function dispatchIntakeLoop(
   });
 
   const deps: IntakeLoopDeps = {
+    probeLedger: async () => {
+      await ledger.list();
+    },
     poll: () => adapter.poll(),
     enqueue: (envelope) => queue.enqueue(envelope),
     notify: (ideas) => notifier.notify(ideas),

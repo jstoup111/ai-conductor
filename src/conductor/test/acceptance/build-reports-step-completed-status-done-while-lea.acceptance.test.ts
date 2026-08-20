@@ -44,6 +44,7 @@ async function seedArtifacts(dir: string): Promise<void> {
     [
       '.pipeline/acceptance-specs-red.json',
       JSON.stringify({
+        outcome: 'specs-generated',
         command: 'bundle exec rspec spec/acceptance/feature_spec.rb',
         targetSpecs: ['spec/acceptance/feature_spec.rb'],
         executed: 1,

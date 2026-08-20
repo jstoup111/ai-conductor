@@ -60,7 +60,11 @@ describe('appendRemediationTasks under a real ESM loader (no CommonJS require)',
     });
 
     const reported = run.stdout.split('RESULT:')[1];
-    expect(`${run.exitCode}:${reported}`).toBe('0:{"success":true}');
+    expect(run.exitCode).toBe(0);
+    expect(JSON.parse(reported)).toMatchObject({
+      success: true,
+      appendedIds: ['rem-test-1', 'rem-test-2'],
+    });
 
     const content = await readFile(planPath, 'utf-8');
     expect(content).toContain('### Task rem-test-1: Restore the failing suite');

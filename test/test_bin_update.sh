@@ -161,6 +161,39 @@ EOF
   echo "$dir"
 }
 
+# run_identity_resolver <repo_dir>
+# Calls the real shared-library binary against a disposable local Git checkout.
+# The resolver's tab-separated contract is: kind, identity, baseline, distance,
+# source.  Keep its invocation separate from bin/update so these tests pin the
+# checkout-derived identity rule before any caller starts consuming it.
+run_identity_resolver() {
+  local repo=$1
+  set +e
+  RESOLVER_OUT=$(cd "$repo" && bash -c 'set -euo pipefail; source "$1"; resolve_harness_identity "$2"' \
+    _ "$repo/bin/lib/harness-common.sh" "$repo" 2>&1)
+  RESOLVER_CODE=$?
+  set -e
+}
+
+# assert_resolved_identity <description> <kind> <identity> <baseline> <distance> <source>
+assert_resolved_identity() {
+  local desc=$1 expected_kind=$2 expected_identity=$3 expected_baseline=$4
+  local expected_distance=$5 expected_source=$6
+  local kind identity baseline distance source
+
+  kind=$(printf '%s\n' "$RESOLVER_OUT" | cut -f1)
+  identity=$(printf '%s\n' "$RESOLVER_OUT" | cut -f2)
+  baseline=$(printf '%s\n' "$RESOLVER_OUT" | cut -f3)
+  distance=$(printf '%s\n' "$RESOLVER_OUT" | cut -f4)
+  source=$(printf '%s\n' "$RESOLVER_OUT" | cut -f5)
+  assert "$desc: exits 0" "$([ "$RESOLVER_CODE" -eq 0 ] && echo 0 || echo 1)"
+  assert "$desc: kind is $expected_kind" "$([ "$kind" = "$expected_kind" ] && echo 0 || echo 1)"
+  assert "$desc: identity is $expected_identity" "$([ "$identity" = "$expected_identity" ] && echo 0 || echo 1)"
+  assert "$desc: baseline is $expected_baseline" "$([ "$baseline" = "$expected_baseline" ] && echo 0 || echo 1)"
+  assert "$desc: distance is $expected_distance" "$([ "$distance" = "$expected_distance" ] && echo 0 || echo 1)"
+  assert "$desc: source is $expected_source" "$([ "$source" = "$expected_source" ] && echo 0 || echo 1)"
+}
+
 # make_isolated_home
 # A throwaway HOME so tests never read/write the operator's real
 # ~/.ai-conductor/config.yml.
@@ -239,19 +272,26 @@ run_conductor_cfg_accessors() {
       _ "$HARNESS_DIR/bin/lib/harness-common.sh" "$field" "$value" "$default"
 }
 
-# run_install_configure_conductor <home> <update_mode>
+# run_install_configure_conductor <home> <update_mode> [identity_fixture]
 # Loads the installer through its public configuration boundary, with the real
 # shared accessor library available beside the copied script.  The conduct-ts
 # fake persists the same scalar YAML fields that the production CLI owns.
+# `off-tag` and `exact-tag` create local Git checkouts whose release tag and
+# VERSION deliberately disagree, so installer identity must come from checkout
+# state rather than the fixture's VERSION file.
 run_install_configure_conductor() {
-  local home=$1 update_mode=$2 installer_dir fragment stubs
+  local home=$1 update_mode=$2 requested_fixture=${3:-} identity_fixture=${3:-exact-tag} installer_dir fragment stubs
   installer_dir="$TMP_ROOT/install-configure-${RANDOM}"
   fragment="$installer_dir/bin/install-configure-test"
   stubs="$installer_dir/stubs"
   mkdir -p "$installer_dir/bin/lib"
   ln -s "$HARNESS_DIR/skills" "$installer_dir/skills"
   ln -s "$HARNESS_DIR/HARNESS.md" "$installer_dir/HARNESS.md"
-  cp "$HARNESS_DIR/VERSION" "$installer_dir/VERSION"
+  if [ -n "$requested_fixture" ]; then
+    printf '9.9.9\n' > "$installer_dir/VERSION"
+  else
+    cp "$HARNESS_DIR/VERSION" "$installer_dir/VERSION"
+  fi
   cp "$HARNESS_DIR/bin/install" "$installer_dir/bin/install"
   cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$installer_dir/bin/lib/harness-common.sh"
   mkdir -p "$stubs"
@@ -293,6 +333,18 @@ EOF
   awk '/^# ─── Main /{exit} {print}' "$installer_dir/bin/install" > "$fragment"
   printf '%s\n' "UPDATE_MODE=$update_mode" 'configure_conductor' >> "$fragment"
   chmod +x "$fragment"
+  (
+    cd "$installer_dir"
+    git init -q -b installer-fixture
+    git config user.email "test@test.com"
+    git config user.name "Test"
+    git add -A
+    git commit -q -m "release v1.2.3"
+    git tag v1.2.3
+    if [ "$identity_fixture" = "off-tag" ]; then
+      git commit -q --allow-empty -m "post-release fixture commit"
+    fi
+  )
   : > "$home/install-config-calls"
 
   set +e
@@ -323,6 +375,18 @@ run_update_without_conduct() {
   set -e
 }
 
+# run_conduct_update <repo> <home> — exercise bin/conduct's retained update
+# path through its public --update entry point.
+run_conduct_update() {
+  local repo=$1 home=$2
+  cp "$HARNESS_DIR/bin/conduct" "$repo/bin/conduct"
+  chmod +x "$repo/bin/conduct"
+  set +e
+  OUT=$(cd "$repo" && HOME="$home" PATH="$repo/bin:$TEST_PATH" "$repo/bin/conduct" --update < /dev/null 2>&1)
+  CODE=$?
+  set -e
+}
+
 # run_update_tty <repo> <home> <answer> [args...] — pty-backed stdin via
 # `script`, feeding <answer> so `[ -t 0 ]` checks see a real terminal
 # (Stories 3/4's interactive prompts can't be exercised over a pipe).
@@ -334,6 +398,18 @@ run_update_tty() {
   OUT=$(cd "$repo" && printf '%s\n' "$answer" | HOME="$home" PATH="$repo/bin:$TEST_PATH" script -qec "$repo/bin/update $*" "$log" 2>&1)
   CODE=$?
   set -e
+}
+
+# Task 6's operator-facing contract is deliberately a single, stable line.
+# The structured resolver supplies the identity and its source; this boundary
+# assertion keeps every tagged decision outcome accountable for rendering both.
+assert_update_identity_line() {
+  local desc=$1 output=$2 identity=$3 source=$4 expected count identity_count
+  expected="Update identity: ${identity} (source: ${source})"
+  count=$(printf '%s\n' "$output" | grep -Fxc "$expected" || true)
+  identity_count=$(printf '%s\n' "$output" | grep -Fc 'Update identity:' || true)
+  assert "$desc: prints exactly one identity line naming identity and source" \
+    "$( [ "$count" -eq 1 ] && [ "$identity_count" -eq 1 ] && echo 0 || echo 1)"
 }
 
 if [ ! -f "$UPDATE_SRC" ]; then
@@ -361,6 +437,100 @@ if [ ! -f "$UPDATE_SRC" ]; then
   echo -e "${BOLD}Summary: ${PASS}/${TOTAL} passed${NC}"
   exit 1
 fi
+
+# ─── Checkout-derived identity resolver (Task 1 RED) ───────────────────────
+
+echo ""
+echo -e "${BOLD}Checkout-derived identity resolver${NC}"
+
+REPO=$(make_repo "resolver-exact-tag")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+run_identity_resolver "$REPO"
+assert_resolved_identity "exact release tag" release v0.4.0 v0.4.0 0 "checked-out tag"
+
+REPO=$(make_repo "resolver-three-commits-post-tag")
+for commit_number in 1 2 3; do
+  git -C "$REPO" commit -q --allow-empty -m "post-release ${commit_number}"
+done
+run_identity_resolver "$REPO"
+assert_resolved_identity "three commits past a release" post-release v0.3.0+3 v0.3.0 3 checkout
+
+# The stable release tag exists in the repository, but an orphan checkout can
+# reach only a release candidate.  This is a genuine undeterminable identity,
+# rather than a missing config record on a checkout with a stable ancestor.
+REPO=$(make_repo "resolver-orphan-no-reachable-stable-tag")
+git -C "$REPO" checkout -q --orphan no-release-history
+git -C "$REPO" rm -qrf --cached .
+git -C "$REPO" clean -qfd -e bin/lib/harness-common.sh
+printf 'orphan checkout\n' > "$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m "orphan checkout"
+git -C "$REPO" tag v0.4.0-rc1
+run_identity_resolver "$REPO"
+assert_resolved_identity "checkout without a reachable stable release" undeterminable unknown "" "" none
+assert "checkout without a reachable stable release: leaks no diagnostic" \
+  "$([ "$RESOLVER_OUT" = $'undeterminable\tunknown\t\t\tnone' ] && echo 0 || echo 1)"
+
+# A real Git query failure has the same fail-closed contract as an empty
+# result.  Keep the library present while making only its checkout argument
+# non-Git, so a source/cd failure cannot accidentally stand in for the query.
+REPO="$TMP_ROOT/resolver-git-query-failure"
+mkdir -p "$REPO/bin/lib"
+cp "$HARNESS_DIR/bin/lib/harness-common.sh" "$REPO/bin/lib/harness-common.sh"
+run_identity_resolver "$REPO"
+assert_resolved_identity "failed Git tag query" undeterminable unknown "" "" none
+assert "failed Git tag query: leaks no Git diagnostic" \
+  "$([ "$RESOLVER_OUT" = $'undeterminable\tunknown\t\t\tnone' ] && echo 0 || echo 1)"
+
+# v0.4.0 is one commit from HEAD while the higher reachable v0.5.0 is two.
+# A nearest-tag implementation therefore chooses v0.4.0; the resolver must
+# deliberately select the higher reachable release instead.
+REPO=$(make_repo "resolver-highest-reachable-not-nearest")
+git -C "$REPO" commit -q --allow-empty -m "v0.5.0"
+git -C "$REPO" tag v0.5.0
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" commit -q --allow-empty -m "post-release head"
+run_identity_resolver "$REPO"
+assert_resolved_identity "highest reachable release beats nearest release" post-release v0.5.0+2 v0.5.0 2 checkout
+
+# `git describe` silently considers only ten candidates by default.  Exercise
+# more than twice that many reachable releases to pin the unbounded lookup.
+REPO=$(make_repo "resolver-twenty-two-reachable-tags")
+for tag_number in $(seq 1 22); do
+  git -C "$REPO" commit -q --allow-empty -m "v0.4.${tag_number}"
+  git -C "$REPO" tag "v0.4.${tag_number}"
+done
+git -C "$REPO" commit -q --allow-empty -m "post twenty-second release"
+run_identity_resolver "$REPO"
+assert_resolved_identity "twenty-two reachable release tags" post-release v0.4.22+1 v0.4.22 1 checkout
+
+# Long lightweight refs exercise the resolver's real Git pipeline without
+# thousands of commits.  The roughly 170 KiB output reliably reaches the
+# evaluator's broken-pipe path while keeping this fixture quick to construct.
+REPO=$(make_repo "resolver-large-tag-output")
+HEAD_SHA=$(git -C "$REPO" rev-parse HEAD)
+TAG_SUFFIX=""
+for suffix_component in $(seq 1 80); do
+  TAG_SUFFIX="${TAG_SUFFIX}0."
+done
+for tag_number in $(seq 1 1024); do
+  printf 'create refs/tags/v1.%s.%s0 %s\n' "$tag_number" "$TAG_SUFFIX" "$HEAD_SHA"
+done | git -C "$REPO" update-ref --stdin
+EXPECTED_LARGE_TAG="v1.1024.${TAG_SUFFIX}0"
+run_identity_resolver "$REPO"
+assert_resolved_identity "large reachable-tag output" release "$EXPECTED_LARGE_TAG" "$EXPECTED_LARGE_TAG" 0 "checked-out tag"
+assert "large reachable-tag output: leaks no pipeline diagnostic" \
+  "$([ "$RESOLVER_OUT" = "release"$'\t'"$EXPECTED_LARGE_TAG"$'\t'"$EXPECTED_LARGE_TAG"$'\t0\tchecked-out tag' ] && echo 0 || echo 1)"
+
+# Prerelease tags are not release baselines.  They must not displace the last
+# stable release even though the basic Git glob can match their names.
+REPO=$(make_repo "resolver-excludes-release-candidate")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0-rc1"
+git -C "$REPO" tag v0.4.0-rc1
+run_identity_resolver "$REPO"
+assert_resolved_identity "release candidate tag is excluded" post-release v0.3.0+1 v0.3.0 1 checkout
 
 # ─── Update config accessors: canonical conductor YAML ownership ───────────
 
@@ -490,11 +660,27 @@ echo -e "${BOLD}Installer update config — conductor YAML${NC}"
 HOME_DIR=$(make_isolated_home)
 run_install_configure_conductor "$HOME_DIR" false
 assert "installer first run writes conductor YAML through shared accessors" \
-  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "tagged" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "true" ] && [ -n "$(cfg_get "$HOME_DIR" currentVersion)" ] && [ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "stable" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "true" ] && [ -n "$(cfg_get "$HOME_DIR" currentVersion)" ] && [ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
 assert "installer first run calls shared conductor accessors" \
-  "$( grep -qx 'config set conductor.update_channel tagged' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.auto_check true' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 4 ] && echo 0 || echo 1)"
+  "$( grep -qx 'config set conductor.update_channel stable' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.auto_check true' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 4 ] && echo 0 || echo 1)"
 assert "installer first run creates no legacy JSON config" \
   "$( [ ! -e "$HOME_DIR/.claude/ai-conductor.config.json" ] && echo 0 || echo 1)"
+
+# A tagged-channel install that is one commit beyond its release tag must not
+# cache VERSION as though it described the installed checkout. The resolver
+# records the reachable v1.2.3 baseline; the fixture's deliberately different
+# VERSION makes that regression visible without a remote or external service.
+HOME_DIR=$(make_isolated_home)
+run_install_configure_conductor "$HOME_DIR" false off-tag
+assert "installer off-tag tagged-channel install persists its resolver baseline" \
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v1.2.3" ] && echo 0 || echo 1)"
+
+# Conversely, a checkout exactly at a release tag must retain that tag as the
+# persisted tagged-channel identity even when VERSION says something else.
+HOME_DIR=$(make_isolated_home)
+run_install_configure_conductor "$HOME_DIR" false exact-tag
+assert "installer exact-tag install persists its exact release tag" \
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v1.2.3" ] && echo 0 || echo 1)"
 
 # A legacy-only installation must seed before first-run detection. Otherwise,
 # the initial default writes would overwrite its channel and auto-check choice.
@@ -509,7 +695,7 @@ cat > "$HOME_DIR/.claude/ai-conductor.config.json" <<'EOF'
 EOF
 run_install_configure_conductor "$HOME_DIR" false
 assert "installer preserves seeded legacy preferences before first-run setup" \
-  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.100.0" ] && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1)"
+  "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && case "$(cfg_get "$HOME_DIR" currentVersion)" in main@*) true;; *) false;; esac && [ -f "$HOME_DIR/.claude/ai-conductor.config.json.migrated" ] && echo 0 || echo 1)"
 
 # Update mode owns only the current version and check timestamp; it must retain
 # a user's selected channel and auto-check preference in the same YAML block.
@@ -521,8 +707,8 @@ set_conductor_cfg "$HOME_DIR" lastCheckedAt stale-time
 run_install_configure_conductor "$HOME_DIR" true
 assert "installer update refreshes version and timestamp while preserving preferences" \
   "$( [ "$INSTALL_CONFIG_CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "main" ] && [ "$(cfg_get "$HOME_DIR" autoCheck)" = "false" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" != "stale-version" ] && [ "$(cfg_get "$HOME_DIR" lastCheckedAt)" != "stale-time" ] && echo 0 || echo 1)"
-assert "installer update calls only refresh accessors" \
-  "$( grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 2 ] && echo 0 || echo 1)"
+assert "installer update reads the channel before calling refresh accessors" \
+  "$( grep -qx 'config read conductor.update_channel' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.current_version .*' "$HOME_DIR/install-config-calls" && grep -qx 'config set conductor.last_checked_at .*' "$HOME_DIR/install-config-calls" && [ "$(wc -l < "$HOME_DIR/install-config-calls")" -eq 3 ] && echo 0 || echo 1)"
 
 # ─── ST-1400-2: one-time legacy JSON seed ─────────────────────────────────
 
@@ -851,6 +1037,10 @@ run_update "$REPO" "$HOME_DIR" --set-channel tagged
 assert "--set-channel tagged exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "--set-channel tagged persists updateChannel=tagged" "$([ "$(cfg_get "$HOME_DIR" updateChannel)" = "tagged" ] && echo 0 || echo 1)"
 
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+assert "--set-channel stable exits 0 and persists updateChannel=stable" \
+  "$([ "$CODE" -eq 0 ] && [ "$(cfg_get "$HOME_DIR" updateChannel)" = "stable" ] && echo 0 || echo 1)"
+
 run_update "$REPO" "$HOME_DIR" --set-channel bogus
 assert "--set-channel bogus exits 2" "$([ "$CODE" -eq 2 ] && echo 0 || echo 1)"
 assert "--set-channel bogus names valid channels" "$(case "$OUT" in *"tagged"*"main"*|*"main"*"tagged"*) echo 0;; *) echo 1;; esac)"
@@ -944,6 +1134,38 @@ assert "no update prompt on first-run seed" "$(case "$OUT" in *"Update to"*) ech
 echo ""
 echo -e "${BOLD}#1005 — tagged install identity${NC}"
 
+# An exact checkout must be resolved by the shared resolver, rather than the
+# old exact-match `git describe` branch. Make that legacy probe unavailable
+# while leaving the resolver's `git tag --merged` and `git rev-list` calls
+# intact; a stale forward-looking cache must not affect the result.
+REPO=$(make_repo "i17-resolver-exact-tag")
+OLD_RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$OLD_RELEASE_SHA"
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.4.0
+GIT_DESCRIBE_BLOCKER="$TMP_ROOT/git-describe-blocker"
+mkdir -p "$GIT_DESCRIBE_BLOCKER"
+cat > "$GIT_DESCRIBE_BLOCKER/git" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "-C" ]; then
+  shift 2
+fi
+if [ "$1" = "describe" ]; then
+  exit 1
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$GIT_DESCRIBE_BLOCKER/git"
+REAL_GIT="$(command -v git)"
+set +e
+OUT=$(cd "$REPO" && HOME="$HOME_DIR" REAL_GIT="$REAL_GIT" PATH="$GIT_DESCRIBE_BLOCKER:$REPO/bin:$TEST_PATH" "$REPO/bin/update" < /dev/null 2>&1)
+CODE=$?
+set -e
+assert "resolver-derived exact tag offers v0.3.0 → v0.4.0 and repairs the cache" \
+  "$( [ "$CODE" -eq 0 ] && case "$OUT" in *"v0.3.0 → v0.4.0"*) true;; *) false;; esac && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
 # The post-release VERSION is intentionally ahead of the installed v0.3.0
 # checkout. A stale forward-looking config must not suppress the v0.4.0
 # update: the exact checked-out tag is the authority for tagged installs.
@@ -959,9 +1181,75 @@ run_update "$REPO" "$HOME_DIR"
 assert "checked-out tag wins over forward-looking recorded version" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
 assert "checked-out tag repairs recorded tagged identity" "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
 
-# A checkout between release tags with neither an exact tag nor a previously
-# recorded tagged identity cannot safely compare releases. It must report that
-# status as unverifiable instead of seeding from the latest remote tag.
+# A checkout that has advanced past the newest released tag must report that
+# drift, without offering to change the checkout or prompting for consent.
+REPO=$(make_repo "i17-post-release-newest")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" commit -q --allow-empty -m "post-release one"
+git -C "$REPO" commit -q --allow-empty -m "post-release two"
+HOME_DIR=$(make_isolated_home)
+
+run_update "$REPO" "$HOME_DIR"
+assert "post-release newest tag: reports distance and baseline without prompting" \
+  "$([ "$CODE" -eq 0 ] && [ -n "$OUT" ] && case "$OUT" in *"2 commits past v0.4.0"*) true;; *) false;; esac && case "$OUT" in *"Update to"*) false;; *) true;; esac && echo 0 || echo 1)"
+assert "post-release newest tag: stamps lastCheckedAt" "$([ -n "$(cfg_get "$HOME_DIR" lastCheckedAt)" ] && echo 0 || echo 1)"
+
+# bin/conduct retains its own update implementation. Its public --update path
+# must report a checkout that has advanced past the newest release instead of
+# silently treating it as current.
+HOME_DIR=$(make_isolated_home)
+run_conduct_update "$REPO" "$HOME_DIR"
+assert "bin/conduct post-release newest tag: reports distance and baseline" \
+  "$( [ "$CODE" -eq 0 ] && case "$OUT" in *"2 commits past v0.4.0"*) true;; *) false;; esac && echo 0 || echo 1)"
+
+# The checkout-derived baseline is a write-only migration cache. A
+# post-release display identity must never leak its +distance suffix into
+# currentVersion, and cache state must not influence the update decision.
+REPO=$(make_repo "t7-1-post-release-cache")
+for commit_number in 1 2 3; do
+  git -C "$REPO" commit -q --allow-empty -m "post-release ${commit_number}"
+done
+POST_RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$POST_RELEASE_SHA"
+
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+ABSENT_CACHE_OUT=$OUT
+assert "post-release cache: absent config records the bare baseline" \
+  "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$(cfg_get "$HOME_DIR" currentVersion)" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' && echo 0 || echo 1)"
+
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v9.9.9
+run_update "$REPO" "$HOME_DIR"
+assert "post-release cache: contradictory record cannot change the decision" \
+  "$([ "$OUT" = "$ABSENT_CACHE_OUT" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" not-a-version
+run_update "$REPO" "$HOME_DIR"
+assert "post-release cache: malformed recorded version does not fail or change the decision" \
+  "$([ "$CODE" -eq 0 ] && [ "$OUT" = "$ABSENT_CACHE_OUT" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
+# A checkout one commit past v0.3.0 remains a tagged install even though it is
+# off-tag. With v0.4.0 reachable as the newest release, it must identify that
+# drift and still offer the release to an interactive operator.
+REPO=$(make_repo "i17-post-release-offer-newer")
+git -C "$REPO" commit -q --allow-empty -m "post-release after v0.3.0"
+DRIFT_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$DRIFT_SHA"
+HOME_DIR=$(make_isolated_home)
+
+run_update_tty "$REPO" "$HOME_DIR" n
+assert "post-release before newer tag: reports identity and offers v0.3.0 → v0.4.0" \
+  "$( [ "$CODE" -eq 0 ] && case "$OUT" in *"1 commit past v0.3.0"*) true;; *) false;; esac && case "$OUT" in *"v0.3.0 → v0.4.0"*) true;; *) false;; esac && echo 0 || echo 1)"
+
+# A checkout between release tags still has a reachable v0.3.0 baseline, so it
+# has a determinable post-release identity even without a recorded cache.
 REPO=$(make_repo "i17-unknown-identity")
 git -C "$REPO" commit -q --allow-empty -m "between releases"
 BETWEEN_RELEASES_SHA=$(git -C "$REPO" rev-parse HEAD)
@@ -971,23 +1259,130 @@ git -C "$REPO" checkout -q "$BETWEEN_RELEASES_SHA"
 HOME_DIR=$(make_isolated_home)
 
 run_update "$REPO" "$HOME_DIR"
-assert "unknown tagged identity does not offer an update" "$(case "$OUT" in *"Harness update available"*) echo 1;; *) echo 0;; esac)"
-assert "unknown tagged identity reports an unverifiable installed version" "$(case "$OUT" in *"unverifiable"*) echo 0;; *) echo 1;; esac)"
-assert "unknown tagged identity does not record the latest tag" "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
+# See .docs/decisions/adr-2026-08-09-unverifiable-trigger-is-no-reachable-tag.md.
+assert "between-releases checkout offers v0.3.0 → v0.4.0" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
+# See .docs/decisions/adr-2026-08-09-unverifiable-trigger-is-no-reachable-tag.md.
+assert "between-releases checkout reports its post-release identity and source" \
+  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: v0.3.0+1 (source: checkout)' && echo 0 || echo 1)"
+# See .docs/decisions/adr-2026-08-09-unverifiable-trigger-is-no-reachable-tag.md.
+assert "between-releases checkout records its v0.3.0 baseline, not v0.4.0" \
+  "$( [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" != "v0.4.0" ] && echo 0 || echo 1)"
 
-# A non-exact checkout can still be a tagged install when its prior successful
-# update recorded the tag. That record is the fallback authority.
-REPO=$(make_repo "i17-recorded-tag")
-git -C "$REPO" commit -q --allow-empty -m "between releases"
-BETWEEN_RELEASES_SHA=$(git -C "$REPO" rev-parse HEAD)
+# ─── Task 6: tagged decision identity line ─────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Task 6 — tagged decision identity line${NC}"
+
+# The matrix covers both update offers and nominal decisions. Each tagged
+# result must emit the same single identity/source line before its
+# outcome-specific text.
+REPO=$(make_repo "t6-release-update")
+RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
 git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
 git -C "$REPO" tag v0.4.0
-git -C "$REPO" checkout -q "$BETWEEN_RELEASES_SHA"
+git -C "$REPO" checkout -q "$RELEASE_SHA"
 HOME_DIR=$(make_isolated_home)
-set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "release before newer tag" "$OUT" "v0.3.0" "checked-out tag"
+
+REPO=$(make_repo "t6-release-current")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "release at newest tag (up to date)" "$OUT" "v0.4.0" "checked-out tag"
+
+REPO=$(make_repo "t6-post-release-update")
+git -C "$REPO" commit -q --allow-empty -m "one commit past v0.3.0"
+POST_RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$POST_RELEASE_SHA"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "post-release before newer tag" "$OUT" "v0.3.0+1" "checkout"
+
+REPO=$(make_repo "t6-post-release-current")
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" commit -q --allow-empty -m "one commit past v0.4.0"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "post-release with no newer tag" "$OUT" "v0.4.0+1" "checkout"
+
+# A tag elsewhere in the repository does not make an orphan checkout
+# determinable. Keep update and its shared resolver untracked but available.
+REPO=$(make_repo "t6-undeterminable")
+git -C "$REPO" checkout -q --orphan no-release-history
+git -C "$REPO" reset -q
+printf 'orphan checkout\n' > "$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m "orphan checkout"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert_update_identity_line "undeterminable checkout" "$OUT" "unverifiable" "none"
+
+# ─── Task 7: undeterminable tagged identity ────────────────────────────────
+
+echo ""
+echo -e "${BOLD}Task 7 — undeterminable tagged identity${NC}"
+
+# No release tag is reachable from this orphan checkout, even though the
+# repository holds v0.3.0 elsewhere. The tagged check must report that it is
+# unverifiable, decline to offer an update, and never invent a cache value.
+REPO=$(make_repo "t7-undeterminable-no-record")
+git -C "$REPO" checkout -q --orphan no-release-history
+git -C "$REPO" reset -q
+printf 'orphan checkout\n' > "$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m "orphan checkout"
+HOME_DIR=$(make_isolated_home)
 
 run_update "$REPO" "$HOME_DIR"
-assert "recorded tagged identity remains update authority off-tag" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
+assert "undeterminable checkout: identity line names it unverifiable" \
+  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
+assert "undeterminable checkout: offers no update" \
+  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
+# A stale cache is deliberately not an identity source. It must remain
+# untouched and must not turn an undeterminable checkout into an update offer.
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR"
+assert "undeterminable checkout: stale record does not resurrect an offer" \
+  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
+assert "undeterminable checkout: leaves pre-existing currentVersion untouched" \
+  "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
+# ─── Remediation completeness 2: tagless repository ───────────────────────
+
+echo ""
+echo -e "${BOLD}Remediation completeness 2 — tagless repository${NC}"
+
+# Unlike the orphan fixtures above, this repository contains no release tag in
+# any ref. This pins the no-release-tag early-return regression independently
+# of reachability from a repository that happens to hold tags elsewhere.
+REPO=$(make_repo "rem-completeness-2-tagless")
+git -C "$REPO" tag -d v0.3.0 >/dev/null
+assert "tagless fixture: contains no v*.*.* release tags anywhere" \
+  "$([ -z "$(git -C "$REPO" tag -l 'v*.*.*')" ] && echo 0 || echo 1)"
+
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR"
+assert "tagless bin/update: reports an unverifiable identity" \
+  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
+assert "tagless bin/update: offers no update" \
+  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
+assert "tagless bin/update: writes no currentVersion" \
+  "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
+
+HOME_DIR=$(make_isolated_home)
+run_conduct_update "$REPO" "$HOME_DIR"
+assert "tagless bin/conduct: reports an unverifiable identity" \
+  "$(printf '%s\n' "$OUT" | grep -Fqx 'Update identity: unverifiable (source: none)' && echo 0 || echo 1)"
+assert "tagless bin/conduct: offers no update" \
+  "$(case "$OUT" in *"Harness update available"*|*"Update to "*) echo 1;; *) echo 0;; esac)"
+assert "tagless bin/conduct: writes no currentVersion" \
+  "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
 
 # ─── Story 5: no-TTY guidance ───────────────────────────────────────────────
 
@@ -1084,6 +1479,17 @@ make_main_repo() {
   echo "$clone|$origin"
 }
 
+# Task 8: a level main checkout must report its identity rather than returning
+# silently before the existing update-offer path.
+PAIR=$(make_main_repo "t8-main-current")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+HOME_DIR=$(make_isolated_home)
+run_update "$REPO" "$HOME_DIR" --set-channel main
+run_update "$REPO" "$HOME_DIR"
+MAIN_SHA=$(git -C "$REPO" rev-parse --short HEAD)
+assert "main current: prints exactly one identity with sha, branch, and behind count" \
+  "$( [ "$(printf '%s\n' "$OUT" | grep -Fxc "Update identity: main@${MAIN_SHA} (branch: main; behind: 0)" || true)" -eq 1 ] && [ "$(printf '%s\n' "$OUT" | grep -Fc 'Update identity:' || true)" -eq 1 ] && echo 0 || echo 1)"
+
 PAIR=$(make_main_repo "s4-accept")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 HOME_DIR=$(make_isolated_home)
@@ -1101,6 +1507,176 @@ run_update_tty "$REPO" "$HOME_DIR" y
 assert "main accept: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "main accept: invokes bin/migrate" "$([ -f "$REPO/.migrate-calls" ] && echo 0 || echo 1)"
 assert "main accept: currentVersion is main@<sha>" "$(case "$(cfg_get "$HOME_DIR" currentVersion)" in main@*) echo 0;; *) echo 1;; esac)"
+
+PAIR=$(make_main_repo "stable-accept")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+
+WORK="$TMP_ROOT/stable-accept-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+STABLE_RELEASE_SHA=$(git -C "$WORK" rev-parse HEAD)
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable accept: remains on stable, fast-forwards to the tagged release, migrates, and records its version" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_RELEASE_SHA" ] && [ "$(git -C "$REPO" rev-parse origin/stable)" = "$STABLE_RELEASE_SHA" ] && [ -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-atomic-target")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-atomic-target-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+STABLE_APPROVED_SHA=$(git -C "$WORK" rev-parse HEAD)
+git -C "$WORK" commit -q --allow-empty -m "later untagged stable advance"
+STABLE_LATER_SHA=$(git -C "$WORK" rev-parse HEAD)
+
+RACE_GIT_DIR="$TMP_ROOT/stable-atomic-git-wrapper"
+RACE_MARKER="$TMP_ROOT/stable-atomic-race-fired"
+REAL_GIT_BIN=$(command -v git)
+mkdir -p "$RACE_GIT_DIR"
+cat > "$RACE_GIT_DIR/git" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+case " \$* " in
+  *" merge "*|*" pull "*)
+    if [ ! -f "\$RACE_MARKER" ]; then
+      : > "\$RACE_MARKER"
+      "$REAL_GIT_BIN" -C "\$RACE_WORK" push -q origin stable
+      "$REAL_GIT_BIN" fetch -q origin stable
+    fi
+    ;;
+esac
+exec "$REAL_GIT_BIN" "\$@"
+EOF
+chmod +x "$RACE_GIT_DIR/git"
+export RACE_WORK="$WORK" RACE_MARKER
+TEST_PATH_BEFORE_RACE=$TEST_PATH
+TEST_PATH="$RACE_GIT_DIR:$TEST_PATH"
+run_update_tty "$REPO" "$HOME_DIR" y
+TEST_PATH=$TEST_PATH_BEFORE_RACE
+unset RACE_WORK RACE_MARKER
+assert "stable atomic target: ignores a later untagged remote advance after approving the tagged SHA" \
+  "$( [ "$CODE" -eq 0 ] && [ -f "$TMP_ROOT/stable-atomic-race-fired" ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_APPROVED_SHA" ] && [ "$(git -C "$REPO" rev-parse HEAD)" != "$STABLE_ORIGINAL_SHA" ] && [ "$(git -C "$REPO" rev-parse HEAD)" != "$STABLE_LATER_SHA" ] && [ "$(wc -l < "$REPO/.migrate-calls")" -eq 1 ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-untagged")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-untagged-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "untagged stable advance"
+git -C "$WORK" push -q origin stable
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable untagged: rejects the advance without moving, migrating, or changing version identity" \
+  "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -Eqi 'exact[- ]semver' && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-migrate-failure")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+cat > "$REPO/bin/migrate" <<EOF
+#!/usr/bin/env bash
+conduct-ts config set conductor.current_version v0.4.0
+echo invoked >> "$REPO/.migrate-calls"
+exit 1
+EOF
+chmod +x "$REPO/bin/migrate"
+git -C "$REPO" add bin/migrate
+git -C "$REPO" commit -q -m "install failing migrate fixture"
+git -C "$REPO" push -q origin stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-migrate-failure-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+
+run_update_tty "$REPO" "$HOME_DIR" y
+assert "stable migrate failure: restores the stable checkout and original version identity" \
+  "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-dirty")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-dirty-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+printf 'local dirty change\n' >> "$REPO/CHANGELOG.md"
+
+run_update "$REPO" "$HOME_DIR"
+assert "stable dirty: refuses the tagged fast-forward without mutating checkout or version" \
+  "$( [ "$CODE" -ne 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && printf '%s\n' "$OUT" | grep -Eqi 'clean|dirty|uncommitted' && echo 0 || echo 1)"
+
+PAIR=$(make_main_repo "stable-diverged")
+REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
+git -C "$REPO" checkout -q -b stable
+git -C "$REPO" push -q -u origin stable
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+run_update "$REPO" "$HOME_DIR" --set-channel stable
+git -C "$REPO" commit -q --allow-empty -m "local stable divergence"
+STABLE_ORIGINAL_SHA=$(git -C "$REPO" rev-parse HEAD)
+
+WORK="$TMP_ROOT/stable-diverged-push"
+git clone -q "$ORIGIN" "$WORK"
+git -C "$WORK" config user.email t@t.com
+git -C "$WORK" config user.name T
+git -C "$WORK" checkout -q stable
+git -C "$WORK" commit -q --allow-empty -m "v0.4.0"
+git -C "$WORK" tag v0.4.0
+git -C "$WORK" push -q origin stable v0.4.0
+
+run_update "$REPO" "$HOME_DIR"
+assert "stable diverged: refuses the remote release without mutating checkout or version" \
+  "$( [ "$CODE" -eq 0 ] && [ "$(git -C "$REPO" branch --show-current)" = "stable" ] && [ "$(git -C "$REPO" rev-parse HEAD)" = "$STABLE_ORIGINAL_SHA" ] && [ ! -f "$REPO/.migrate-calls" ] && [ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
 
 PAIR=$(make_main_repo "s4-diverged")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"

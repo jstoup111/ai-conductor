@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -8,7 +8,15 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
-import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
+import {
+  advanceFinishPublication,
+  routeFinishPublicationDisposition,
+  type AdvanceFinishPublicationResult,
+  type PublicationDisposition,
+  type PublicationSnapshot,
+} from '../../src/engine/finish-publication.js';
+import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
+import { readAllVerdicts, writeVerdict } from '../../src/engine/gate-verdicts.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -16,6 +24,32 @@ vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
 }));
 
 const ROUTED_SENTINEL = new Error('stop after first FINISH publication route');
+
+const PASS_EVIDENCE: FullSuitePassEvidence = {
+  version: 3,
+  outcome: 'PASS',
+  reason: 'exit_zero',
+  fingerprint: 'sha256:current-test-inputs',
+  categoryFingerprints: {
+    additional_inputs: 'sha256:additional-inputs',
+    dependencies: 'sha256:dependencies',
+    environment: 'sha256:environment',
+    migrations: 'sha256:migrations',
+    project_config: 'sha256:project-config',
+    source: 'sha256:source',
+    test_infrastructure: 'sha256:test-infrastructure',
+    tests: 'sha256:tests',
+  },
+  provenanceHeadSha: '0123456789abcdef',
+  command: 'npm test',
+  workingDirectory: 'src/conductor',
+  startedAt: '2026-08-15T00:00:00.000Z',
+  endedAt: '2026-08-15T00:00:01.000Z',
+  durationMs: 1_000,
+  exitCode: 0,
+  stdout: 'all tests passed\\n',
+  stderr: '',
+};
 
 describe('Conductor FINISH publication routing', () => {
   let dir: string;
@@ -26,6 +60,7 @@ describe('Conductor FINISH publication routing', () => {
     statePath = join(dir, 'conduct-state.json');
     const state: Record<string, unknown> = {
       complexity_tier: 'S',
+      track: 'technical',
       feature_desc: 'finish-publication',
     };
     for (const step of [
@@ -48,7 +83,6 @@ describe('Conductor FINISH publication routing', () => {
     { name: 'interactive', mode: 'interactive' as const, daemon: false },
     { name: 'default foreground', mode: 'default' as const, daemon: false },
     { name: 'foreground auto', mode: 'auto' as const, daemon: false },
-    { name: 'daemon', mode: 'auto' as const, daemon: true },
   ])('starts at FINISH and lets the coordinator bound %s judgment dispatches', async ({ mode, daemon }) => {
     const calls: StepName[] = [];
     const dispositions: string[] = [];
@@ -95,6 +129,288 @@ describe('Conductor FINISH publication routing', () => {
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  it('keeps the FINISH fence disabled for a non-daemon mocked dispatch even with non-green evidence', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n',
+    );
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      daemon: false,
+      verifyArtifacts: false,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(advance).toHaveBeenCalledOnce();
+    expect(kickbacks).toEqual([]);
+  });
+
+  it('keeps a done manual_test with FAIL rows non-green before the coordinator can publish', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n',
+    );
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M',
+      architecture_review: 'skipped',
+      manual_test: 'done',
+    });
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    const gateVerdicts: Array<{ step: StepName; reason?: string }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    events.on('gate_verdict', (event) => {
+      if (event.type === 'gate_verdict') gateVerdicts.push({ step: event.step, reason: event.reason });
+    });
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'manual_test') throw ROUTED_SENTINEL;
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance }, events,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(advance).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
+    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+    expect(gateVerdicts).toEqual([{
+      step: 'manual_test',
+      reason: 'manual test evidence contains FAIL rows',
+    }]);
+  });
+
+  it('redirects several non-green validators to the earliest one without demoting a green sibling', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', track: 'product', architecture_review: 'done',
+      manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'done',
+    });
+    const architectureEvidence = join(dir, '.pipeline', 'architecture-review-as-built.md');
+    await writeFile(architectureEvidence, '# As-Built Review\n\nVerdict: APPROVED\n');
+    const freshMtime = new Date(Date.now() + 5_000);
+    await utimes(architectureEvidence, freshMtime, freshMtime);
+    await writeVerdict(dir, 'architecture_review_as_built', { satisfied: true, checkedAt: 1 });
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'prd_audit') throw ROUTED_SENTINEL;
+        return { success: true };
+      }),
+    };
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      finishPublication: { advance },
+      events,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    const after = await readState(statePath);
+    const verdicts = await readAllVerdicts(dir);
+    expect(advance).not.toHaveBeenCalled();
+    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+    expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
+    expect(after.ok && after.value.finish).not.toBe('in_progress');
+    expect(after.ok && after.value.architecture_review_as_built).toBe('done');
+    expect(verdicts.architecture_review_as_built).toMatchObject({ satisfied: true });
+    await expect(readFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), 'utf8')).resolves.toContain('APPROVED');
+  });
+
+  it('preserves green validator evidence across repeated docs-only FINISH laps without rerunning test_suite', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 1 — 2026-08-16T00:00:00Z\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
+    await writeFile(join(dir, '.pipeline', 'manual-test-fail-evidence.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeFile(
+      join(dir, '.pipeline', 'prd-audit.md'),
+      '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | test.ts:1 | — |\n',
+    );
+    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built.md'), '# As-Built Review\n\nVerdict: APPROVED\n');
+    await writeFile(join(dir, '.pipeline', 'prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M',
+      track: 'technical',
+      architecture_review: 'skipped',
+      manual_test: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
+    });
+    for (const step of ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const) {
+      await writeVerdict(dir, step, { satisfied: true, checkedAt: Date.now() });
+    }
+    const ensure = vi.fn(async () => ({ status: 'REUSED' as const, evidence: PASS_EVIDENCE }));
+    const inspect = vi.fn(async () => ({ status: 'CURRENT' as const, evidence: PASS_EVIDENCE }));
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    const runnerRun = vi.fn(async (step: StepName) => {
+      if (step === 'finish') {
+        return { success: true };
+      }
+      if (step === 'manual_test') throw ROUTED_SENTINEL;
+      return { success: true };
+    });
+    const runner: StepRunner = {
+      run: runnerRun,
+    };
+    const finishPublication = {
+      advance: vi.fn(async ({ dispatchJudgment }) => {
+        await dispatchJudgment({
+          kind: 'finish_pr_prose_quality',
+          pullRequestUrl: 'https://example.test/pr/17',
+          qualityScope: ['title', 'body'],
+          maximumPasses: 1,
+        });
+        return { kind: 'complete' } as const;
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      finishPublication,
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      daemon: true,
+      fullSuiteVerifier: { ensure, inspect },
+      git: async (args) => ({
+        stdout: args[0] === 'diff' ? 'docs/notes.md\n' : '',
+        exitCode: 0,
+      }),
+      gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+
+    const firstLapState = await readState(statePath);
+    if (!firstLapState.ok) throw new Error('test fixture state must be readable');
+    const finishFence = conductor as unknown as {
+      nonGreenFinishValidators(state: ConductState): Promise<unknown[]>;
+      runFinishPublication(state: ConductState, options: never): Promise<{ success: boolean }>;
+    };
+    const firstLap = await finishFence.nonGreenFinishValidators(firstLapState.value);
+    const firstFinish = await finishFence.runFinishPublication(firstLapState.value, {} as never);
+    const secondLapState = await readState(statePath);
+    if (!secondLapState.ok) throw new Error('test fixture state must be readable');
+    const secondLap = await finishFence.nonGreenFinishValidators(secondLapState.value);
+    const secondFinish = await finishFence.runFinishPublication(secondLapState.value, {} as never);
+
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 2 — 2026-08-16T00:00:00Z\n\n| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n',
+    );
+    const failedLapState = await readState(statePath);
+    if (!failedLapState.ok) throw new Error('test fixture state must be readable');
+    const failedLap = await finishFence.nonGreenFinishValidators(failedLapState.value);
+    await conductor.run();
+
+    const verdicts = await readAllVerdicts(dir);
+    const after = await readState(statePath);
+    expect(firstLap).toEqual([]);
+    expect(secondLap).toEqual([]);
+    expect(failedLap).toEqual([expect.objectContaining({
+      name: 'manual_test',
+      reason: 'manual test evidence contains FAIL rows',
+    })]);
+    expect(firstFinish.success).toBe(true);
+    expect(secondFinish.success).toBe(true);
+    expect(runnerRun.mock.calls.map(([step]) => step)).toEqual(['finish', 'finish', 'manual_test']);
+    expect(finishPublication.advance).toHaveBeenCalledTimes(2);
+    expect(ensure).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+    expect(after.ok && [after.value.manual_test, after.value.prd_audit, after.value.architecture_review_as_built]).toEqual(['in_progress', 'done', 'done']);
+    expect(verdicts.manual_test).toMatchObject({ satisfied: false });
+    for (const step of ['prd_audit', 'architecture_review_as_built'] as const) {
+      expect(verdicts[step]).toMatchObject({ satisfied: true });
+    }
+    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+  });
+
+  it('treats malformed validator evidence as non-green without deleting prior evidence', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const evidencePath = join(dir, '.pipeline', 'manual-test-results.md');
+    await writeFile(evidencePath, '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 1 | MAYBE |\n');
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', architecture_review: 'skipped', manual_test: 'done',
+    });
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+    });
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'manual_test') throw ROUTED_SENTINEL;
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance }, events,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(advance).not.toHaveBeenCalled();
+    expect(kickbacks).toEqual([{ from: 'finish', to: 'manual_test' }]);
+    await expect(readFile(evidencePath, 'utf8')).resolves.toContain('MAYBE');
+    const verdict = await readAllVerdicts(dir);
+    expect(verdict.manual_test).toMatchObject({ satisfied: false });
   });
 
   it('retries a publication-only result at FINISH without dispatching BUILD or remediation', async () => {
@@ -175,7 +491,11 @@ describe('Conductor FINISH publication routing', () => {
       finish: state.ok ? state.value.finish : undefined,
       publicationAdvances: advance.mock.calls.length,
       stepRetries,
-    }).toEqual({ finish: 'done', publicationAdvances: 2, stepRetries: [] });
+    }).toEqual({
+      finish: 'done',
+      publicationAdvances: 2,
+      stepRetries: [],
+    });
   });
 
   it('keeps the full retry allowance after five publication advances', async () => {
@@ -393,6 +713,10 @@ describe('Conductor FINISH publication routing', () => {
     await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
     const state: Record<string, unknown> = {
       complexity_tier: 'S',
+      // This focused coordinator fixture has no product or architecture
+      // evidence. Declare its real SHIP membership instead of leaving the
+      // daemon fence to redispatch absent validators forever.
+      track: 'technical',
       feature_desc: 'finish-publication',
       worktree_branch: 'feat/finish-publication',
       pr_url: prUrl,
@@ -400,10 +724,14 @@ describe('Conductor FINISH publication routing', () => {
     for (const step of [
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
-      'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+      'worktree', 'acceptance_specs', 'build', 'build_review',
       'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
+    // A technical feature with no approved architecture decision has no
+    // as-built review to run; its downstream validator is skipped by the
+    // ordinary upstream-skip rule.
+    state.architecture_review = 'skipped';
     await writeState(productionStatePath, state as ConductState);
     const runner: StepRunner = {
       run: vi.fn(async () => {
@@ -450,7 +778,9 @@ describe('Conductor FINISH publication routing', () => {
 
     await conductor.run();
 
-    expect(runner.run).toHaveBeenCalledOnce();
+    // Placeholder prose requires authoring. Its resulting retained-PR
+    // title/body is accepted by the GitHub observation without another pass.
+    expect(runner.run).toHaveBeenCalledTimes(1);
     expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
@@ -484,10 +814,13 @@ describe('Conductor FINISH publication routing', () => {
     for (const step of [
       'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
       'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
-      'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+      'worktree', 'acceptance_specs', 'build', 'build_review',
       'wiring_check', 'test_suite', 'architecture_review_as_built', 'retro', 'rebase',
     ] satisfies StepName[]) state[step] = 'done';
-    // The two steps a technical-track feature legitimately skips.
+    // This feature has no approved architecture decision, so its as-built
+    // validator is legitimately skipped through the upstream-skip rule.
+    state.architecture_review = 'skipped';
+    // The two other SHIP validators a technical-track feature legitimately skips.
     state.manual_test = 'skipped';
     state.prd_audit = 'skipped';
     await writeState(productionStatePath, state as ConductState);
@@ -601,6 +934,84 @@ describe('Conductor FINISH publication routing', () => {
     );
   });
 
+  it.each([
+    ['failed', 'failed' as const],
+    ['stale', 'stale' as const],
+    ['missing', undefined],
+  ])(
+    'replays BUILD verification after implementation-invalid FINISH when prior verification state is %s',
+    async (_caseName, priorStatus) => {
+      const timeline: StepName[] = [];
+      let verificationStatesAtBuild: Pick<ConductState, 'test_suite' | 'build_review'> | undefined;
+      const ensure = vi.fn(async () => {
+        timeline.push('test_suite');
+        return {
+          status: 'REUSED',
+          evidence: PASS_EVIDENCE,
+        } as const;
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step, state) => {
+          timeline.push(step);
+          if (step === 'build') {
+            verificationStatesAtBuild = {
+              test_suite: state.test_suite,
+              build_review: state.build_review,
+            };
+          }
+          if (step === 'finish') {
+            return {
+              success: false,
+              publicationDisposition: {
+                kind: 'implementation_invalid',
+                evidence: 'implementation_evidence_invalid',
+              },
+            };
+          }
+          if (step === 'build_review') throw ROUTED_SENTINEL;
+          return { success: true };
+        }),
+      };
+      const persisted = await readState(statePath);
+      if (!persisted.ok) throw new Error('test fixture state must be readable');
+      const retryState = { ...persisted.value } as Record<string, unknown>;
+      for (const step of ['test_suite', 'build_review']) {
+        if (priorStatus === undefined) delete retryState[step];
+        else retryState[step] = priorStatus;
+      }
+      await writeState(statePath, retryState as ConductState);
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        projectRoot: dir,
+        fromStep: 'finish',
+        mode: 'auto',
+        maxRetries: 1,
+        fullSuiteVerifier: {
+          ensure,
+          inspect: async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE } as const),
+        },
+        git: async () => ({ stdout: '' }),
+        gh: async () => ({ stdout: '' }),
+        runGh: async () => ({ stdout: '' }),
+      });
+
+      await conductor.run();
+
+      expect(timeline).toEqual(['finish', 'build', 'test_suite', 'build_review']);
+      expect(ensure).toHaveBeenCalledOnce();
+      expect(verificationStatesAtBuild).toEqual({
+        test_suite: 'stale',
+        build_review: 'stale',
+      });
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+        ROUTED_SENTINEL.message,
+      );
+    },
+  );
+
   it('does not route a publication error without implementation evidence to BUILD', async () => {
     const calls: StepName[] = [];
     const runner: StepRunner = {
@@ -635,6 +1046,198 @@ describe('Conductor FINISH publication routing', () => {
     expect(calls).toEqual(['finish']);
     expect(calls).not.toContain('build');
     expect(calls).not.toContain('remediate');
+  });
+
+  it('halts a completed but non-advancing publication transition without spending FINISH budget', async () => {
+    const stepRetries: StepName[] = [];
+    const loopHalts: string[] = [];
+    const dispositions: string[] = [];
+    const publicationDispositions: AdvanceFinishPublicationResult[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') stepRetries.push(event.step);
+    });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push(event.reason);
+    });
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const unchangedJudgmentSnapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      shippedRecord: 'valid',
+      outcomeRecord: 'missing',
+      pr: {
+        identity: 'one',
+        url: 'https://example.test/pr/27',
+        prose: 'halt',
+        ready: false,
+      },
+    } as const satisfies PublicationSnapshot;
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const disposition = await advanceFinishPublication({
+        observe: async () => unchangedJudgmentSnapshot,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      });
+      publicationDispositions.push(disposition);
+      return disposition.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: disposition.transition }
+        : disposition;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    // A completed effect whose owned dimension remains unchanged is a terminal
+    // human decision, not either a FINISH retry or a progress-loop tick.
+    // These are Conductor-owned observations: a human-required disposition
+    // terminates the FINISH retry loop before either counter can advance.
+    expect(stepRetries).not.toContain('finish');
+    expect(dispositions).toEqual(['human_required']);
+    expect(publicationDispositions).toEqual([expect.objectContaining({ kind: 'human_required' })]);
+    expect(loopHalts).toHaveLength(1);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('failed');
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.not.toContain(
+      'judgment_dispatch_failed',
+    );
+  });
+
+  it('halts an unselectable judgment retry without spending the Conductor FINISH attempt', async () => {
+    const snapshot = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      shippedRecord: 'valid',
+      outcomeRecord: 'missing',
+      pr: {
+        identity: 'one',
+        url: 'https://example.test/pr/unselectable',
+        prose: 'stale',
+        ready: false,
+      },
+    } as const satisfies PublicationSnapshot;
+    const events = new ConductorEventEmitter();
+    const retries: StepName[] = [];
+    const dispositions: string[] = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') retries.push(event.step);
+    });
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const result = await advanceFinishPublication({
+        observe: async () => snapshot,
+        effects: {
+          dispatchJudgment: async () => ({
+            kind: 'revision_required',
+            reason: 'placeholder',
+            detail: 'The title and body are placeholders.',
+          }),
+        },
+      });
+      return result.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: result.transition }
+        : result;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    // The absence of a Conductor retry event is the observable proof that its
+    // FINISH attempt budget remained intact; coordinator call counts are not
+    // that counter.
+    expect(retries).not.toContain('finish');
+    expect(dispositions).toEqual(['human_required']);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('failed');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'author_pr_prose retry cannot run',
+    );
+  });
+
+  it('halts a newly halted judgment retry without spending the Conductor FINISH attempt', async () => {
+    const initial = {
+      mode: 'daemon',
+      intent: { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } },
+      implementationEvidence: 'valid', shipEvidence: 'valid', releaseReadiness: 'valid',
+      branchPushed: 'valid', shippedRecord: 'valid', outcomeRecord: 'missing',
+      pr: { identity: 'one', url: 'https://example.test/pr/newly-halted', prose: 'stale', ready: false },
+    } as const satisfies PublicationSnapshot;
+    const newlyHalted = {
+      ...initial,
+      pr: { ...initial.pr, prose: 'halt' as const, halted: true as const },
+    } as const satisfies PublicationSnapshot;
+    const events = new ConductorEventEmitter();
+    const retries: StepName[] = [];
+    const dispositions: string[] = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') retries.push(event.step);
+    });
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const observe = vi.fn<() => Promise<PublicationSnapshot>>()
+        .mockResolvedValueOnce(initial)
+        .mockResolvedValueOnce(newlyHalted);
+      const result = await advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => { throw new Error('response lost'); } },
+      });
+      return result.kind === 'advanced'
+        ? { kind: 'publication_progress', transition: result.transition }
+        : result;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance }, events, projectRoot: dir, fromStep: 'finish',
+      mode: 'default', maxRetries: 3,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(retries).not.toContain('finish');
+    expect(dispositions).toEqual(['human_required']);
+    expect(advance).toHaveBeenCalledTimes(1);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('failed');
   });
 
   it.each([

@@ -350,6 +350,12 @@ removal work stops paying a review tax without weakening the gate.
       followed by a statement that a changed test qualifying under neither is measured normally. A
       test asserts the closing statement is present. (Conflict-check Conflict 2, Option 1.)
 
+> **Amended 2026-08-15 by #1579:** the closed list has since grown — fixture relocation (third)
+> and verify-only maintenance (fourth, `adr-2026-08-15-verify-only-anchored-tautology-exemption.md`).
+> The list remains explicitly enumerated and closed with the same measured-normally closing
+> statement; only the entry count changed.
+
+
 ---
 
 > **Note on scope.** The documentation updates this change owes — `docs/explanation/gates.md` and

@@ -19,11 +19,24 @@ Markdown skills directly.
 ## Install
 
 ```bash
-git clone git@github.com:jstoup111/ai-conductor.git
+git clone --branch stable --single-branch git@github.com:jstoup111/ai-conductor.git
 cd ai-conductor
 ./bin/install
 export PATH="$HOME/.local/bin:$PATH"   # the installer warns; it never edits your profile
 ./bin/install --check                  # 0 clean · 1 drift · 2 build-auth
+```
+
+`stable` advances only after release CI has published the matching semver tag and GitHub Release, so
+the default install path never checks out in-flight work from `main`. Existing tag-pinned checkouts
+remain pinned unless their owner explicitly changes channel or version.
+
+To move an existing branch-based installation to this channel deliberately:
+
+```bash
+git fetch origin stable:refs/remotes/origin/stable
+git switch --track origin/stable
+bin/update --set-channel stable
+bin/migrate
 ```
 
 This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and `~/.agents/skills/`
@@ -114,6 +127,7 @@ owns that call.
 - [Emergency-stop a running feature](docs/runbooks/emergency-stop-a-running-feature.md)
 - [Stalled or stuck feature](docs/runbooks/stalled-or-stuck-feature.md)
 - [Worktree and evidence recovery](docs/runbooks/worktree-and-evidence-recovery.md)
+- [Corrupt intake ledger or stuck ledger lease](docs/runbooks/corrupt-intake-ledger.md)
 - [Daemon recovery](docs/runbooks/daemon-recovery.md)
 - [Shipped-record reconciliation](docs/runbooks/shipped-record-reconciliation.md)
 
@@ -131,7 +145,7 @@ Behavioral rules for projects using this harness live in [HARNESS.md](HARNESS.md
 
 1. **One skill, one responsibility** — skills have singular focus
 2. **Artifacts are the interface** — skills communicate via files in `.docs/`, not internal orchestration
-3. **Deterministic where possible, LLM only where necessary** — if machinery can enforce it, machinery does
+3. **Machinery by default, judgement where needed** — machinery enforces what it can; inherently judgement-shaped questions get an LLM judgement, not a rigid mechanical proxy
 4. **Negative paths are mandatory** — every story carries concrete failure scenarios
 5. **Evaluator sees fresh context** — no shared state with the generator prevents confirmation bias
 6. **Dry business logic, not dry code** — extract shared behavior, not shared shape

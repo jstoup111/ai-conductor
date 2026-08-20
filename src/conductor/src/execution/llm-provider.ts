@@ -1,6 +1,12 @@
 import type { ObservedInterval } from './observed-interval.js';
 
 export interface TokenUsage {
+  /**
+   * Fresh (non-cached) input tokens. Every adapter normalizes to this
+   * semantic: cached prompt volume is carried separately in `cacheRead` /
+   * `cacheCreation`, never folded into `input` (Codex's raw `input_tokens`
+   * includes its cached share and is normalized at the adapter).
+   */
   input: number;
   output: number;
   reasoningOutput?: number;
@@ -123,7 +129,7 @@ export interface SelfHostAuthPreparation {
 }
 
 export interface SelfHostAuthContext {
-  provider: 'codex';
+  provider: 'claude' | 'codex';
   homeDir: string;
 }
 
@@ -154,6 +160,8 @@ export interface InvokeResult {
   /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */
   observedIntervals?: readonly ObservedInterval[];
   rateLimited?: boolean;
+  /** The failure is a hard usage-cap exhaustion, not a transient throttle. */
+  usageExhausted?: boolean;
   waitSeconds?: number;
   /**
    * Task 18: Parsed absolute deadline (milliseconds since epoch) from rate-limit message.
@@ -211,6 +219,16 @@ export interface InvokeOptions {
   systemPrompt?: string;
   sessionId: string;
   resume: boolean;
+  /**
+   * Explicit override valve for the adapter-boundary fresh-session
+   * enforcement (`enforceFreshSessionOptions`). Provider session reuse was
+   * removed from this harness by design — every invocation gets a freshly
+   * minted session id and `resume: false` at the adapter entry. Nothing in
+   * production sets this field and no config key enables it; it exists only
+   * so a test can prove the enforcement valve itself. Default: permanently
+   * off.
+   */
+  dangerouslyReuseSession?: boolean;
   interactive?: boolean;
   dangerouslySkipPermissions?: boolean;
   stepCooldown?: number;

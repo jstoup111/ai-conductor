@@ -47,6 +47,21 @@ check. Concentrating that time on the leg with a proven auth pattern
 retained precisely so the Codex leg is one entry plus one credential var when someone dispatches the
 Claude leg successfully and wants the second.
 
+> **Amended 2026-08-12 by #1264:** the final sentence's expectation — that the retained matrix
+> shape makes the Codex leg "one entry plus one credential var" — did not hold when the second leg
+> was actually built. Verified against the tree on 2026-08-12: `matrix: provider` is never consumed
+> (every leg runs the same `npm run smoke`, and the credential-check step reads only
+> `CLAUDE_CODE_OAUTH_TOKEN`), so adding `codex` to the list would have run the Claude leg twice; the
+> `credentialed` smoke capability is hardcoded to `CLAUDE_CODE_OAUTH_TOKEN` in both advisory and gate
+> resolution, so a second provider has no way to declare its own credential; and
+> `daemon-e2e-live.smoke.test.ts` hardcodes `ClaudeProvider`, `which claude`, `executable: 'claude'`,
+> and `providerKey: 'claude'`. The provider-neutral part of the expectation was correct and did hold:
+> `provider-home.ts` already maps `codex → CODEX_HOME`, and `CodexProvider` already implements
+> `prepareSelfHostAuth`, `readiness`, and `resolveSelfHostExecutable`. See
+> `adr-2026-08-12-per-provider-live-smoke-legs` for the shape the second leg actually takes, and
+> `adr-2026-08-12-live-provider-coverage-from-plugin-registry` for the check that replaces this
+> retained-intent mechanism.
+
 **Out of scope:** wiring this workflow into `release.yml`. That belongs to #1259 and depends on the
 changelog/unreleased-issue implementation landing first. This ADR only guarantees the seam exists so
 that wiring is a caller change, not a rewrite.

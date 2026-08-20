@@ -154,6 +154,51 @@ describe('conduct-state lease', () => {
     if (recovered.ok) await expect(recovered.handle.release()).resolves.toEqual({ ok: true });
   });
 
+  it('names a labelled store in acquire failures and recovery diagnostics', async () => {
+    const statePath = '/worktree/ledger/.pipeline/ledger.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    const diagnostics: unknown[] = [];
+
+    const recovered = await createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      pid: 202,
+      newToken: () => 'recovered-owner',
+      processIsLive: () => false,
+      onRecoveryDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }).acquire();
+
+    expect(recovered).toMatchObject({ ok: true });
+    expect(diagnostics).toEqual([{
+      kind: 'recovered',
+      statePath,
+      ownerPid: 101,
+      storeLabel: 'intake ledger',
+    }]);
+    if (recovered.ok) await recovered.handle.release();
+
+    const failedFilesystem: ConductStateLeaseFilesystem = {
+      ...filesystem,
+      acquireDirectory: async () => {
+        throw new Error('disk unavailable');
+      },
+    };
+    await expect(createConductStateLease(statePath, {
+      filesystem: failedFilesystem,
+      label: 'intake ledger',
+    }).acquire()).resolves.toMatchObject({
+      ok: false,
+      kind: 'filesystem',
+      message: 'Unable to acquire intake ledger lease: disk unavailable',
+    });
+  });
+
   it.each([
     ['corrupt', '{not json', 'invalid_owner_metadata'],
     ['ambiguous', JSON.stringify({ version: 1, pid: 101, token: 'owner', acquiredAt: 'not-a-date' }), 'invalid_owner_metadata'],

@@ -107,7 +107,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
         /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE"/,
       );
       expect(COMMIT_MSG_HOOK).toMatch(
-        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "2" \]\]; then\n\s+exit 1\n\s+fi/,
+        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "3" \]\]; then\n\s+echo "commit-msg: scope-check recorded ambiguity \(exit 3\); allowing commit" >&2\n\s+elif \[\[ "\$rc" != "0" \]\]; then\n\s+echo "commit-msg: scope-check abstained \(exit \$rc\); allowing commit" >&2/,
       );
     });
   });
@@ -724,11 +724,20 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(result.stderr).toContain(`scope-check abstained (exit ${exitCode})`);
     });
 
-    it('refuses an out-of-scope commit only when scope-check returns 2', async () => {
+    it('allows an out-of-scope commit when scope-check returns 2', async () => {
       const env = await writeScopeCheck(2);
       const result = await commitOutsideScope('outside.ts', 'feat: confirmed violation\n\nTask: 1', env);
 
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(0);
+      expect(result.stderr).toContain('scope-check abstained (exit 2); allowing commit');
+    });
+
+    it('labels an unresolvable scope-check as a recorded ambiguity without blocking the commit', async () => {
+      const env = await writeScopeCheck(3);
+      const result = await commitOutsideScope('unresolved.ts', 'feat: unresolved containment\n\nTask: 1', env);
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toContain('scope-check recorded ambiguity (exit 3); allowing commit');
     });
 
     it('exempts merge, amend, rebase replay, engine commits, and commits with no Task trailer', async () => {

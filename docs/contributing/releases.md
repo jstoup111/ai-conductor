@@ -89,9 +89,9 @@ the run rather than proposing a release that under-reports what shipped.
 1. `classify` reads the release-PR provenance, audit, and committed artifacts, then exposes whether the
    commit is publishable. It performs no publication mutation.
 2. `smoke` runs only for a publishable classification. It calls the reusable live-daemon E2E workflow with
-   inherited secrets and `require_credentials: true`, which runs the complete smoke tier
-   (`npm run smoke`) in fail-closed gate mode — see [testing](testing.md#smoke-tests) — not just the
-   daemon E2E case.
+   inherited secrets and `require_credentials: true`. That workflow runs one complete fail-closed smoke-tier
+   gate (`SMOKE_MODE=gate npm run smoke`) and independent selected-file Claude and Codex legs for provider
+   reporting — see [testing](testing.md#smoke-tests).
 3. `publish` runs only when the classification remains publishable and the smoke job concludes `success`.
    Cancelled, timed-out, skipped, and failed smoke jobs do not authorize publication.
 
@@ -104,10 +104,14 @@ publisher still re-derives all release authority immediately before mutation:
 3. The merged files must contain a matching `VERSION` and non-empty versioned `CHANGELOG.md` section.
 4. Existing tag and GitHub Release state must match the approved artifact; retries create only a missing tag
    or release.
+5. After both publication artifacts exist, `refs/heads/stable` is created or fast-forwarded to the same
+   release commit. The update is non-forced and a failure fails the publish job; retrying the workflow
+   verifies the existing artifacts and safely retries only the stable-branch advance.
 
 The publisher creates the annotated tag and GitHub Release through GitHub APIs. It never rewrites
-`CHANGELOG.md`, bumps `VERSION`, creates a release commit, or pushes `main`. An ordinary merge or an empty
-candidate set is ignored and produces no release.
+`CHANGELOG.md`, bumps `VERSION`, creates a release commit, or pushes `main`. `stable` therefore never points
+at an ordinary implementation merge or a release that has not completed publication. An ordinary merge or
+an empty candidate set is ignored and produces no release.
 
 ## The self-host release gate
 

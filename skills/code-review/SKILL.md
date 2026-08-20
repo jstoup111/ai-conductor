@@ -41,6 +41,10 @@ Gather what the evaluator needs:
 - The implementation plan task (from `.docs/plans/`)
 - The relevant affected-test result set
 - Tech-context review checklist if loaded in session
+- A focused **current-HEAD pattern basis**, when the task supplies one: current-checkout paths
+  for the relevant target and exemplar, stable symbol or role hints, the semantic traits to
+  preserve or change, and allowed variation. It complements the task criteria and affected-test
+  results; it does not expand review context to the full plan, unrelated stories, or history.
 
 For batch reviews, use the provided `BATCH_AFFECTED_TESTS` result set; require a full-suite result only when the batch scope was indeterminate.
 
@@ -63,6 +67,11 @@ Provide the evaluator with:
 - **Impacted test file paths** — for batch reviews, the provided `BATCH_AFFECTED_TESTS` union;
   otherwise, spec files changed in the diff plus specs corresponding to changed source files.
   The evaluator will run these before reviewing.
+- The focused **current-HEAD pattern basis**, when present alongside the task criteria and affected
+  tests. Read the named files at current HEAD; paths and symbols are locating aids, not frozen
+  coordinates or source text. If an exemplar moved, locate and verify its semantic equivalent. If
+  no current equivalent can be verified and that uncertainty makes conformance indeterminate,
+  request the specific context needed rather than guessing or blocking on stale coordinates.
 
 ### 3. Three-Stage Review
 
@@ -72,7 +81,10 @@ The evaluator runs three stages in order. Failures in earlier stages block later
 - Does the code implement what the story asks for?
 - Are ALL acceptance criteria met (happy AND negative paths)?
 - Is anything implemented that wasn't asked for?
-- Are there acceptance criteria with no corresponding test?
+- For each criterion, is there sufficient behavioral coverage at the lowest suitable layer? Map it
+  to the affected-test evidence, an existing sufficient test, or a focused new test, and confirm
+  that its assertions actually prove the behavior. Compatible criteria may share coverage; do not
+  require one corresponding new test per criterion.
 
 #### Stage 2: Code Quality
 - Is the code clear and readable?
@@ -81,6 +93,11 @@ The evaluator runs three stages in order. Failures in earlier stages block later
 - Are there duplicated patterns that should be extracted?
 - Does error handling follow consistent patterns?
 - If tech-context loaded: stack-specific checks (N+1, security, performance)
+- When a pattern basis is present, flag only a concrete, material departure from its relevant
+  semantic traits that creates a correctness, security, or meaningful maintenance risk. Accept
+  documented allowed variation and immaterial implementation differences. Do not block solely for
+  the reviewer's preferred abstraction or naming, exact textual copying, or stale file/line
+  coordinates.
 
 #### Stage 3: Domain Integrity
 - Are domain types used appropriately?
@@ -97,6 +114,10 @@ The evaluator is prompted to be **genuinely critical, not performative**:
 - Don't flag things that are intentional trade-offs documented in the plan
 - Do flag things that seem intentional but are actually wrong
 - Verify claims by running tests, not by trusting the generator's report
+- Treat pattern conformance as semantic judgment: explain the applicable trait, the observed
+  departure, and the material consequence. If the supplied basis cannot be connected to a current
+  equivalent, request context; do not infer an exact-copy requirement or manufacture a blocking
+  finding from an immaterial difference.
 
 ### 5. Review Verdict
 
@@ -147,6 +168,10 @@ Skip if: all findings were standard quality issues (naming, complexity) with no 
 - [ ] Evaluator dispatched with fresh context (no shared state with generator)
 - [ ] All three stages reviewed in order
 - [ ] Spec compliance checked against ALL acceptance criteria (happy + negative)
+- [ ] Each acceptance criterion has sufficient behavioral coverage evidence; no one-test-per-
+  criterion rule was imposed
+- [ ] Focused current-HEAD pattern basis applied when present; indeterminate conformance requested
+  context rather than relying on stale coordinates
 - [ ] Tech-context review checklist applied if available
 - [ ] Findings include file:line references
 - [ ] Critical/Important issues addressed before proceeding

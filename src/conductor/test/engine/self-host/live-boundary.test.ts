@@ -9,6 +9,180 @@ import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine
 const execFileAsync = promisify(execFile);
 
 describe('live self-host boundary', () => {
+  it('accepts a non-contained verdict when the live boundary has not changed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-non-contained-clean-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('ignores a plugin lock marker a concurrent provider process drops into its home', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-in-use-marker-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const plugin = join(provider, 'plugins', 'cache', 'claude-plugins-official', 'skill-creator', 'unknown');
+    await Promise.all([mkdir(live), mkdir(plugin, { recursive: true })]);
+    await writeFile(join(plugin, 'SKILL.md'), 'installed plugin content\n');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await mkdir(join(plugin, '.in_use'));
+    await writeFile(join(plugin, '.in_use', '1001617'), 'claude-plugins-official/skill-creator\n');
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' })).toEqual({ ok: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('still halts when installed plugin content beside the lock markers changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-plugin-content-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const plugin = join(provider, 'plugins', 'cache', 'claude-plugins-official', 'skill-creator', 'unknown');
+    await Promise.all([mkdir(live), mkdir(join(plugin, '.in_use'), { recursive: true })]);
+    await writeFile(join(plugin, 'SKILL.md'), 'installed plugin content\n');
+    await writeFile(join(plugin, '.in_use', '1001617'), 'claude-plugins-official/skill-creator\n');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(plugin, 'SKILL.md'), 'rewritten by the self-host process\n');
+    try {
+      const result = await verifyLiveBoundary(baseline, { contained: false, reason: 'per-step verification' });
+      expect(result).toMatchObject({ ok: false });
+      expect(result.reason).toContain('provider state changed during self-host execution');
+      expect(result.reason).toContain('SKILL.md');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('names every unproven-containment reason in an unexplained live-checkout halt', async () => {
+    const containmentReasons = [
+      'containment unavailable: bwrap not found',
+      'probe found /live writable',
+      'containment unavailable: probe failed — Operation not permitted',
+      'containment disabled by configuration',
+    ];
+    for (const containmentReason of containmentReasons) {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-unproven-reason-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      await writeFile(join(live, 'escaped.txt'), 'unexplained');
+      try {
+        const result = await verifyLiveBoundary(baseline, { contained: false, reason: containmentReason });
+        expect(result).toMatchObject({ ok: false });
+        expect(result.reason).toContain('live checkout changed during self-host execution');
+        expect(result.reason).toContain('1 added, 0 removed, 0 changed');
+        expect(result.reason).toContain('added escaped.txt');
+        expect(result.reason).toContain(containmentReason);
+      } finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
+  it('preserves tracked live-checkout edit amnesty when containment is unproven', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-unproven-tracked-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'README.md'), 'before');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'README.md'), 'after');
+    try {
+      expect(await verifyLiveBoundary(baseline, {
+        contained: false,
+        reason: 'containment unavailable: bwrap not found',
+      })).toEqual({ ok: true });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('halts an untracked live-checkout dispatch leak when containment is unproven', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-unproven-leak-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'dispatch-leak.txt'), 'unexplained');
+    try {
+      const result = await verifyLiveBoundary(baseline, {
+        contained: false,
+        reason: 'containment unavailable: bwrap not found',
+      });
+      expect(result).toMatchObject({ ok: false });
+      expect(result.reason).toContain('added dispatch-leak.txt');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('attributes a git-ignored live-checkout change after a contained dispatch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-ignored-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await writeFile(join(live, '.gitignore'), '.claude/settings.local.json\n');
+    await mkdir(join(live, '.claude'));
+    await writeFile(join(live, '.claude', 'settings.local.json'), 'before');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, '.claude', 'settings.local.json'), 'after');
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toEqual({
+        ok: true,
+        containedDrift: {
+          evidence: 'sandboxed',
+          summary: '0 added, 0 removed, 1 changed: changed .claude/settings.local.json',
+        },
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('attributes an untracked live-checkout addition after a contained dispatch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-untracked-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'escaped.txt'), 'untracked');
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toEqual({
+        ok: true,
+        containedDrift: {
+          evidence: 'sandboxed',
+          summary: '1 added, 0 removed, 0 changed: added escaped.txt',
+        },
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('still rejects provider-state drift after a contained dispatch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-provider-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'settings.json'), 'before');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(provider, 'settings.json'), 'after');
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('provider state changed'),
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('does not let contained live-checkout drift mask later provider-state drift', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-contained-both-surfaces-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await writeFile(join(provider, 'settings.json'), 'before');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await Promise.all([
+      writeFile(join(live, 'operator-edit.txt'), 'concurrent operator'),
+      writeFile(join(provider, 'settings.json'), 'after'),
+    ]);
+    try {
+      expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('provider state changed'),
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts an operator edit to a tracked live-checkout file during the build', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-tracked-edit-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');

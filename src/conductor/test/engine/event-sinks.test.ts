@@ -21,6 +21,9 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_completed',
   'step_failed',
   'provider_attempt',
+  'scratch_cleanup_reclaimed',
+  'scratch_cleanup_retained',
+  'scratch_cleanup_failed',
   'feature_usage_total',
   'provider_fallback',
   'session_policy',
@@ -68,6 +71,7 @@ const RESEAL_EVENT_TYPES = [
 
 const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
+  'containment_check_unresolved',
   ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
   'verdict_freshness',
   'operator_park_boundary',
@@ -81,6 +85,41 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'finish_publication_disposition',
   'kickback',
   'deprecated_step',
+  'rebase_changed',
+  'rebase_gate_invalidated',
+  'build_review_repair_context',
+  'build_review_rubric_started',
+  'build_review_rubric_prompt',
+  'build_review_rubric_result',
+  'build_review_rubric_skipped',
+  'build_review_cache_hit',
+  'build_review_rubric_infrastructure_failure',
+  'build_review_disposition_version_invalidated',
+  'build_review_outer_verdict',
+  'loop_halt',
+  'halt_marker_write_failed',
+  'rebase_conflict_halt',
+] satisfies Array<ConductorEvent['type']>;
+
+// This is deliberately an exact set rather than a volume count: a newly-persisted
+// non-halt event must update this contract explicitly.
+const PINNED_PERSISTED_EVENT_TYPES = [
+  ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
+  ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
+  'contained_live_checkout_drift',
+  'self_host_containment_verdict',
+] satisfies Array<ConductorEvent['type']>;
+
+const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
+  'rebase_noop',
+  'rebase_mergeable_skip',
+  'rebase_gate_reverified',
+  'rebase_gate_preserved',
+  'rebase_citation_residue',
+  'rebase_resolution_attempt',
+  'rebase_resolution_succeeded',
+  'rebase_resolution_failed',
+  'rebase_resolution_exhausted',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -97,6 +136,8 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
+  'contained_live_checkout_drift',
+  'self_host_containment_verdict',
   'step_started',
   'step_completed',
   'step_failed',
@@ -110,6 +151,9 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_stall',
   'pipeline_closeout',
   'provider_attempt',
+  'scratch_cleanup_reclaimed',
+  'scratch_cleanup_retained',
+  'scratch_cleanup_failed',
   'feature_usage_total',
   'provider_fallback',
   'session_policy',
@@ -118,6 +162,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'navigation_back',
   'loop_halt',
   'loop_converged',
+  'rebase_conflict_halt',
   'ci_failed',
   'build_review_base',
   'build_review_stale_mirage_regrade',
@@ -180,6 +225,79 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('persists engine-owned build-review occurrences through the shared ledger exactly once', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-review-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'build_review_outer_verdict' as const,
+      lapId: 'lap-current', rawVerdict: 'FAIL' as const, effectiveVerdict: 'PASS' as const,
+    };
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists loop_halt events through the emitter into the pipeline ledger', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'loop-halt-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+
+    try {
+      persister.start();
+      expect(persistedEventTypes()).toContain('loop_halt');
+      await events.emit({ type: 'loop_halt', reason: 'kickback cap exceeded' });
+      persister.stop();
+
+      expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8'))).toMatchObject({
+        type: 'loop_halt',
+        reason: 'kickback cap exceeded',
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists and renders rebase conflict halts with their conflict details', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'rebase-conflict-halt-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const halt = {
+      type: 'rebase_conflict_halt' as const,
+      reason: 'manual resolution required',
+      conflicts: ['src/engine/rebase.ts'],
+    };
+
+    try {
+      persister.start();
+      await events.emit(halt);
+      persister.stop();
+
+      expect({
+        persisted: persistedEventTypes().includes(halt.type),
+        rendered: renderedEventTypes().includes(halt.type),
+        ledger: JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')),
+      }).toMatchObject({
+        persisted: true,
+        rendered: true,
+        ledger: { ...halt, ts: expect.any(String) },
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('persists a kickback to the event ledger without changing its audit record', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'kickback-event-sinks-'));
     const events = new ConductorEventEmitter();
@@ -268,6 +386,27 @@ describe('event sink subscriptions', () => {
     });
   });
 
+  it('keeps externally-owned build-review dispositions off the engine ledger', () => {
+    expect({
+      accepted: EVENT_SINKS.build_review_disposition_accepted,
+      refused: EVENT_SINKS.build_review_disposition_refused,
+      persisted: persistedEventTypes(),
+    }).toEqual({
+      accepted: { render: false, persist: false, audit: false },
+      refused: { render: false, persist: false, audit: false },
+      persisted: expect.not.arrayContaining([
+        'build_review_disposition_accepted',
+        'build_review_disposition_refused',
+      ]),
+    });
+  });
+
+  it('audits engine-reported non-binding build-review dispositions', () => {
+    expect(EVENT_SINKS.build_review_disposition_version_invalidated).toEqual({
+      render: false, persist: true, audit: true,
+    });
+  });
+
   it('defines provider-neutral operator park boundary telemetry without completion authority', () => {
     const boundaries = [
       { kind: 'step', name: 'memory' },
@@ -297,9 +436,38 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 74 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(74);
+  it('defines and persists the three closed build-review repair-context provenance cases', () => {
+    const provenance = [
+      {
+        type: 'build_review_repair_context',
+        disposition: 'context_available',
+        repairCount: 2,
+      },
+      {
+        type: 'build_review_repair_context',
+        disposition: 'none_warranted',
+      },
+      {
+        type: 'build_review_repair_context',
+        disposition: 'no_join',
+      },
+    ] satisfies ConductorEvent[];
+
+    expect({
+      provenance,
+      sink: EVENT_SINKS.build_review_repair_context,
+      persisted: persistedEventTypes().includes('build_review_repair_context'),
+    }).toEqual({
+      provenance,
+      sink: { render: false, persist: true, audit: false },
+      persisted: true,
+    });
   });
+
+  // There is deliberately no total-count assertion here. EVENT_SINKS is typed
+  // Record<ConductorEvent['type'], SinkDeclaration>, so tsc already rejects a
+  // missing or unknown key — the @ts-expect-error probe above proves it. A runtime
+  // count only duplicates the compiler and breaks on every added event variant.
 
   it('routes verdict_freshness to every sink', () => {
     expect(EVENT_SINKS.verdict_freshness).toEqual({
@@ -343,26 +511,40 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('keeps persisted routing equivalent over pre-settle types while including settle decisions', () => {
-    const persisted = persistedEventTypes();
+  it('pins the exact persisted event set to halt-class additions', () => {
+    expect(new Set(persistedEventTypes())).toEqual(new Set(PINNED_PERSISTED_EVENT_TYPES));
+  });
 
-    expect(new Set(persisted.filter((type) =>
-      !buildMemberSettleDecisionEventTypes.has(type),
-    ))).toEqual(new Set(PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES));
-    expect(persisted).toEqual(expect.arrayContaining(BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES));
-    expect(persisted).not.toEqual(Object.keys(EVENT_SINKS));
+  it('keeps non-halt lifecycle events out of the persisted set', () => {
+    const neverPersisted = [
+      'loop_converged',
+      'build_review_base',
+      'pipeline_closeout',
+      'retry_decision',
+      'group_member_step',
+      'test_suite_verification',
+      ...NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES,
+    ] satisfies Array<ConductorEvent['type']>;
+
+    expect(Object.fromEntries(neverPersisted.map((type) => [type, EVENT_SINKS[type].persist])))
+      .toEqual(Object.fromEntries(neverPersisted.map((type) => [type, false])));
   });
 
   it('derives the audited set without changing prior routing', () => {
     expect(new Set(auditedEventTypes())).toEqual(new Set([
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
       'verdict_freshness',
+      'halt_marker_write_failed',
+      'build_review_disposition_version_invalidated',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));
   });
 
   it('derives the daemon-rendered set from the switch-handled event types', () => {
-    expect(new Set(renderedEventTypes())).toEqual(new Set(DAEMON_SWITCH_HANDLED_EVENT_TYPES));
+    expect(new Set(renderedEventTypes())).toEqual(new Set([
+      ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
+      'halt_marker_write_failed',
+    ]));
   });
 });

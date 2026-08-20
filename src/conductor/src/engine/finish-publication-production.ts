@@ -6,18 +6,16 @@
  * `finish-publication.ts`; this module is deliberately only its real-boundary
  * adapter.
  */
-import { access, lstat, readFile } from 'node:fs/promises';
+import { access, lstat, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './conductor.js';
-import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from './pr-labels.js';
+import { type GhRunner, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
-import {
-  NEEDS_REMEDIATION_TITLE_PREFIX,
-  PR_BODY_FLOOR_MARKER,
-} from './halt-pr-rehabilitation.js';
+import { PR_BODY_FLOOR_MARKER, hasHaltSignal } from './halt-pr-rehabilitation.js';
 import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import {
   dispatchFinishRecord,
@@ -35,6 +33,9 @@ import {
   type PrProseJudgmentResult,
 } from './finish-publication.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
+import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
+import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -76,11 +77,28 @@ export interface ProductionFinishPublicationDeps {
    * coordinator never silently reduces it to a `gh pr ready` flip.
    */
   repairPresentation?: (input: { prUrl: string; state: ConductState }) => Promise<void>;
+  /** Task 38 seams: overridable in tests; production defaults resolve the real worktree identity and store. */
+  resolveFeatureIdentity?: (projectRoot: string) => Promise<BuildReviewFeatureIdentity | undefined>;
+  createDispositionStore?: (projectRoot: string) => Pick<BuildReviewDispositionStore, 'list'>;
 }
 
 export interface ProductionReleaseReadinessObserverInput {
   projectRoot: string;
   config?: HarnessConfig;
+}
+
+/** Applies the authoritative accepted-risk section to one already-retained PR. */
+export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
+  prUrl: string;
+  body: string;
+  records: readonly BuildReviewDispositionRecord[];
+  gh: GhRunner;
+  cwd: string;
+}): Promise<{ readonly ok: true; readonly changed: boolean } | { readonly ok: false; readonly message: string }> {
+  const upserted = upsertBuildReviewAcceptedRisk(input.body, input.records);
+  if (!upserted.ok) return upserted;
+  if (upserted.changed) await input.gh(['pr', 'edit', input.prUrl, '--body', upserted.body], { cwd: input.cwd });
+  return { ok: true, changed: upserted.changed };
 }
 
 /**
@@ -117,19 +135,34 @@ async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
 }
 
-function prProse(title: unknown, body: unknown): 'accepted' | 'stale' | 'placeholder' | 'halt' {
+function prHaltState(title: unknown, body: unknown, rawLabels: unknown): boolean {
+  const prTitle = typeof title === 'string' ? title : '';
+  const prBody = typeof body === 'string' ? body : '';
+  const labels = Array.isArray(rawLabels)
+    ? rawLabels.map((label) => String((label as { name?: unknown } | null)?.name ?? ''))
+    : [];
+  return hasHaltSignal({ title: prTitle, body: prBody, labels, isDraft: false });
+}
+
+function prProse(
+  title: unknown,
+  body: unknown,
+  halted: boolean,
+  acceptedRevision: boolean,
+): 'accepted' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
   const text = `${prTitle}\n${prBody}`.trim();
   if (!text) return 'placeholder';
-  if (
-    prTitle.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
-    prBody.includes(HALT_PR_BANNER_SENTINEL)
-  ) return 'halt';
+  if (halted) return 'halt';
   if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
-  return 'accepted';
+  // Existing prose is a judgment candidate until this coordinator either
+  // authored that exact revision or received an accepted judgment for it.
+  // The PR remains the observation authority; this cache only records the
+  // bounded provider work performed by this coordinator lifetime.
+  return acceptedRevision ? 'accepted' : 'stale';
 }
 
 /**
@@ -153,10 +186,77 @@ export function createProductionFinishPublicationCoordinator(
   // session, while an unchanged deficient one cannot burn retries.
   const proseRevisionByPr = new Map<string, string>();
   const judgmentByRevision = new Map<string, PrProseJudgmentResult>();
+  // The retained verdicts must survive the coordinator: the daemon builds a
+  // fresh coordinator per dispatch, and losing the map made an already-judged,
+  // unchanged revision pay a new judgment session on every resume — the exact
+  // extra attempt Outcome-style convergence guarantees forbid. Verdicts are
+  // keyed by a digest of the revision (never raw title/body bytes) in a
+  // .pipeline verdict artifact, the same durability pattern as the gate
+  // verdicts. Persistence is best-effort: an unreadable or unwritable store
+  // degrades to the old per-process behavior, never to a failed judgment.
+  const judgmentStorePath = join(pipelineDir, 'prose-judgment.json');
+  const revisionDigest = (revision: string): string =>
+    createHash('sha256').update(revision, 'utf8').digest('hex');
+  let judgmentStoreSeeded: Promise<void> | undefined;
+  const seedJudgmentStore = (): Promise<void> =>
+    (judgmentStoreSeeded ??= (async () => {
+      try {
+        const parsed: unknown = JSON.parse(await readFile(judgmentStorePath, 'utf8'));
+        const records = (parsed as { records?: Record<string, PrProseJudgmentResult> }).records;
+        if (records && typeof records === 'object') {
+          for (const [digest, result] of Object.entries(records)) {
+            if (result && typeof result.kind === 'string') judgmentByRevision.set(digest, result);
+          }
+        }
+      } catch {
+        // Missing or malformed store: start empty, exactly as before.
+      }
+    })());
+  const persistJudgmentStore = async (): Promise<void> => {
+    try {
+      await writeFile(
+        judgmentStorePath,
+        JSON.stringify({ version: 1, records: Object.fromEntries(judgmentByRevision) }, null, 2),
+        'utf8',
+      );
+    } catch {
+      // Best-effort durability; the in-memory verdict still bounds this run.
+    }
+  };
+  // A successful coordinator authoring pass owns exactly one mandatory
+  // re-observation. Its revision is accepted without a redundant judgment;
+  // independently observed authored prose remains stale and is judged.
+  const acceptedProseRevisionByPr = new Map<string, string>();
+  const authoredProsePendingByPr = new Set<string>();
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
   let attendedRequestedOutcome: Promise<unknown> | undefined;
+  // Task 38: the retained PR is the durable projection surface for accepted
+  // build-review risk. Every retained-PR maintenance effect applies the
+  // authoritative upsert, and an unrenderable or unwritable projection blocks
+  // the effect instead of letting an accepted finding silently disappear.
+  const projectAcceptedRiskToRetainedPr = async (prUrl: string) => {
+    const feature = await (deps.resolveFeatureIdentity ?? resolveBuildReviewFeatureIdentity)(deps.projectRoot);
+    // No feature identity means no feature-scoped disposition state can exist
+    // (a non-worktree FINISH): there is nothing to project. Everything past
+    // this point fails closed — an unreadable store or unrenderable section
+    // blocks the effect instead of letting accepted risk disappear.
+    if (!feature) return;
+    const listed = await (deps.createDispositionStore
+      ?? ((root: string) => new BuildReviewDispositionStore(root)))(deps.projectRoot).list(feature);
+    if (!listed.ok) throw new Error(`accepted-risk projection: ${listed.message}`);
+    const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });
+    const body = (JSON.parse(stdout) as { body?: unknown }).body;
+    const published = await publishAcceptedBuildReviewRiskToRetainedPr({
+      prUrl,
+      body: typeof body === 'string' ? body : '',
+      records: listed.records,
+      gh: deps.gh,
+      cwd: deps.projectRoot,
+    });
+    if (!published.ok) throw new Error(`accepted-risk projection: ${published.message}`);
+  };
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
@@ -231,16 +331,48 @@ export function createProductionFinishPublicationCoordinator(
               if (!state.pr_url) return { state: 'missing' };
               try {
                 const { stdout } = await deps.gh(
-                  ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft'],
+                  ['pr', 'view', state.pr_url, '--json', 'url,title,body,isDraft,labels'],
                   { cwd: deps.projectRoot },
                 );
-                const pr = JSON.parse(stdout) as { url?: unknown; title?: unknown; body?: unknown; isDraft?: unknown };
+                const pr = JSON.parse(stdout) as {
+                  url?: unknown;
+                  title?: unknown;
+                  body?: unknown;
+                  isDraft?: unknown;
+                  labels?: unknown;
+                };
                 if (typeof pr.url === 'string') {
-                  proseRevisionByPr.set(pr.url, `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`);
+                  const halted = prHaltState(pr.title, pr.body, pr.labels);
+                  const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
+                  proseRevisionByPr.set(pr.url, revision);
+                  await seedJudgmentStore();
+                  if (authoredProsePendingByPr.delete(pr.url) && !halted) {
+                    const observedProse = prProse(pr.title, pr.body, false, false);
+                    if (observedProse !== 'placeholder') {
+                      // The authoring pass, not an independently observed
+                      // reader-facing revision, owns this exact replacement.
+                      // Retain the result across the next daemon dispatch so
+                      // a healthy placeholder path does not pay a redundant
+                      // judgment provider pass.
+                      acceptedProseRevisionByPr.set(pr.url, revision);
+                      judgmentByRevision.set(revisionDigest(revision), { kind: 'accepted' });
+                      await persistJudgmentStore();
+                    }
+                  }
+                  if (judgmentByRevision.get(revisionDigest(revision))?.kind === 'accepted') {
+                    acceptedProseRevisionByPr.set(pr.url, revision);
+                  }
+                  const prose = prProse(
+                    pr.title,
+                    pr.body,
+                    halted,
+                    acceptedProseRevisionByPr.get(pr.url) === revision,
+                  );
                   return {
                       state: 'one' as const,
                       url: pr.url,
-                      prose: prProse(pr.title, pr.body),
+                      prose,
+                      ...(halted ? { halted: true as const } : {}),
                       ready: !pr.isDraft,
                     };
                 }
@@ -282,16 +414,31 @@ export function createProductionFinishPublicationCoordinator(
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
                   await dispatchAuthoring(request);
+                  authoredProsePendingByPr.add(request.pullRequestUrl);
                 },
               }
             : {}),
           dispatchJudgment: async (request) => {
+            await seedJudgmentStore();
             const revision = proseRevisionByPr.get(request.pullRequestUrl);
-            const cached = revision === undefined ? undefined : judgmentByRevision.get(revision);
-            if (cached) return cached;
+            const digest = revision === undefined ? undefined : revisionDigest(revision);
+            const cached = digest === undefined ? undefined : judgmentByRevision.get(digest);
+            if (cached) {
+              // A persisted acceptance must also restore the prose-state
+              // tracking a fresh coordinator lost, or the re-observed verdict
+              // says "accepted" while classification still reads stale.
+              if (cached.kind === 'accepted' && revision !== undefined) {
+                acceptedProseRevisionByPr.set(request.pullRequestUrl, revision);
+              }
+              return cached;
+            }
             const result = decodePrProseJudgment(await dispatchJudgment(request));
-            if (revision !== undefined && (result.kind === 'accepted' || result.kind === 'revision_required' || result.kind === 'refused')) {
-              judgmentByRevision.set(revision, result);
+            if (revision !== undefined && result.kind === 'accepted') {
+              acceptedProseRevisionByPr.set(request.pullRequestUrl, revision);
+            }
+            if (digest !== undefined && (result.kind === 'accepted' || result.kind === 'revision_required' || result.kind === 'refused')) {
+              judgmentByRevision.set(digest, result);
+              await persistJudgmentStore();
             }
             return result;
           },
@@ -331,10 +478,12 @@ export function createProductionFinishPublicationCoordinator(
           },
           createShippedRecord: async () => {
             if (!state.feature_desc || !state.pr_url) throw new Error('missing shipment identity');
-            await writeShippedRecord({ kind: 'write', slug: state.feature_desc, pr: state.pr_url }, deps.projectRoot);
+            const status = await writeShippedRecord({ kind: 'write', slug: state.feature_desc, pr: state.pr_url }, deps.projectRoot);
+            if (status !== 0) throw new Error('required shipped-record accepted-risk evidence could not be published');
           },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');
+            await projectAcceptedRiskToRetainedPr(state.pr_url);
             if (deps.repairPresentation) {
               await deps.repairPresentation({ prUrl: state.pr_url, state });
               return;
@@ -342,6 +491,7 @@ export function createProductionFinishPublicationCoordinator(
             await deps.gh(['pr', 'ready', state.pr_url], { cwd: deps.projectRoot });
           },
           recordOutcome: async (request) => {
+            if (request.choice === 'pr') await projectAcceptedRiskToRetainedPr(request.prUrl);
             await recordFinish(
               request.choice === 'pr'
                 ? { kind: 'record', choice: 'pr', prUrl: request.prUrl, pipelineDir }

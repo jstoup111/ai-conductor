@@ -113,6 +113,7 @@ function recordingRunner(onStep?: (step: StepName) => void | Promise<void>): {
 } {
   const seen: Array<{ step: StepName; configDir: string | undefined }> = [];
   const runner: StepRunner = {
+    selfHostRunId: () => 'self-host-wiring-run',
     run: vi.fn(async (step: StepName) => {
       seen.push({ step, configDir: process.env.CLAUDE_CONFIG_DIR });
       await onStep?.(step);
@@ -489,6 +490,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
 
     let buildEnvAtThrow: string | undefined;
     const runner: StepRunner = {
+      selfHostRunId: () => 'self-host-wiring-run',
       run: vi.fn(async (step: StepName) => {
         if (step === 'build') {
           buildEnvAtThrow = process.env.CLAUDE_CONFIG_DIR;

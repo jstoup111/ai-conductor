@@ -170,6 +170,12 @@ export class AuditTrailWriter {
           reason: event.reason || 'step retry',
           attempt: event.attempt,
         };
+      case 'build_review_disposition_version_invalidated':
+        return {
+          origin: 'build',
+          event: event.type,
+          reason: `${event.rubric} disposition ${event.findingId} uses superseded ${event.contractVersion}`,
+        };
       case 'kickback':
         return {
           origin: event.to,
@@ -178,7 +184,14 @@ export class AuditTrailWriter {
           ...(event.kickback_outcome ? { kickback_outcome: event.kickback_outcome } : {}),
         };
       case 'loop_halt':
-        return { origin: 'build', event: 'intervention', cause: event.reason };
+        return { origin: event.step ?? 'build', event: 'intervention', cause: event.reason };
+      case 'halt_marker_write_failed':
+        return {
+          origin: 'build',
+          event: event.type,
+          path: event.path,
+          reason: event.reason,
+        };
       case 'halt_cleared':
         return {
           origin: event.step ?? 'build',

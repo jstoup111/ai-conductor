@@ -96,6 +96,42 @@ describe('EventPersister', () => {
     expect(line.waitSeconds).toBe(30);
   });
 
+  it('persists a step-scoped loop halt without closing the active step interval', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(1_000, 1_025));
+    persister.start();
+
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({
+      type: 'loop_halt',
+      step: 'bootstrap',
+      reason: 'gate loop did not converge',
+    } satisfies ConductorEvent);
+    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const { ts: _ts, ...record } = JSON.parse(line);
+        return record;
+      });
+    expect(records).toEqual([
+      { type: 'step_started', step: 'bootstrap', index: 0 },
+      {
+        type: 'loop_halt',
+        step: 'bootstrap',
+        reason: 'gate loop did not converge',
+      },
+      {
+        type: 'step_completed',
+        step: 'bootstrap',
+        status: 'done',
+        activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+      },
+    ]);
+  });
+
   it('persists BUILD member settle decisions declared for operator observability', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();

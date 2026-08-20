@@ -65,6 +65,35 @@ describe('ClaudeProvider', () => {
       expect(onSpawn.mock.calls).toEqual([[]]);
     });
 
+    it('launches wrapped self-host invocations through bwrap with the Claude command after the bind set', async () => {
+      const bindSet = ['--dev-bind', '/', '/', '--ro-bind', '/live-checkout', '/live-checkout'];
+      mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({
+        ...baseOptions,
+        selfHost: {
+          executable: 'bwrap',
+          env: { CLAUDE_CONFIG_DIR: '/isolated/claude-home' },
+          args: [...bindSet, '--', 'claude'],
+          teardown: async () => {},
+        },
+      });
+
+      expect(mockExeca.mock.calls[0].slice(0, 2)).toEqual([
+        'bwrap',
+        [
+          ...bindSet,
+          '--',
+          'claude',
+          '--session-id',
+          expect.any(String),
+          '--print',
+          '--output-format',
+          'json',
+        ],
+      ]);
+    });
+
     it('checks a current permit immediately before the injected subprocess factory', async () => {
       const callOrder: string[] = [];
       const subprocessFactory = vi.fn(() => {
@@ -242,7 +271,11 @@ describe('ClaudeProvider', () => {
         await provider.invoke({ ...baseOptions, dangerouslySkipPermissions: true });
         const [command, , options] = mockExeca.mock.calls[0] as [string, string[], any];
         expect(command).toBe('claude');
-        expect(options.env?.CODEX_HOME).toBeUndefined();
+        // Claude adds no Codex-specific overlay of its own: the child env is
+        // exactly the inherited parent env (which may carry CODEX_HOME) plus
+        // the daemon-session marker — same inheritance as the pre-marker
+        // behavior where env was left undefined for execa to inherit.
+        expect(options.env).toEqual({ ...process.env, CONDUCT_DAEMON_SESSION: '1' });
       } finally {
         if (priorHome === undefined) delete process.env.CODEX_HOME;
         else process.env.CODEX_HOME = priorHome;
@@ -276,8 +309,14 @@ describe('ClaudeProvider', () => {
       expect(mockExeca).toHaveBeenCalledOnce();
       const [cmd, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(cmd).toBe('claude');
-      expect(args).toContain('--session-id');
-      expect(args).toContain('abc-123');
+      const sessionIndex = args.indexOf('--session-id');
+      expect(sessionIndex).toBeGreaterThanOrEqual(0);
+      // Boundary enforcement mints a fresh session id; the caller-supplied id
+      // never reaches the CLI (session reuse was removed by design).
+      expect(args[sessionIndex + 1]).not.toBe('abc-123');
+      expect(args[sessionIndex + 1]).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
       expect(args).not.toContain('--resume');
     });
 
@@ -341,7 +380,9 @@ describe('ClaudeProvider', () => {
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).toContain('--session-id');
       expect(args).not.toContain('--resume');
-      expect(args).toContain('abc-123');
+      // resume: true is suppressed AND the supplied id is replaced with a
+      // fresh one, so the CLI cannot resurrect the prior conversation.
+      expect(args).not.toContain('abc-123');
     });
 
     it('includes --dangerously-skip-permissions when specified', async () => {
@@ -1157,13 +1198,18 @@ describe('ClaudeProvider', () => {
       expect(opts.env.CLAUDE_CODE_EFFORT_LEVEL).toBe('xhigh');
     });
 
-    it('omits env overlay when effort is not set (inherits parent env)', async () => {
+    it('passes only the parent env plus the daemon-session marker when effort is not set', async () => {
       mockExeca.mockResolvedValue({ stdout: '', exitCode: 0, failed: false } as any);
 
       await provider.invoke({ ...baseOptions });
 
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
-      expect(opts.env).toBeUndefined();
+      // The env is always passed now (it carries CONDUCT_DAEMON_SESSION=1 for
+      // the conduct-ts entry guard) but adds no effort override: parent env
+      // plus exactly the marker.
+      expect(opts.env.CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined();
+      expect(opts.env.CONDUCT_DAEMON_SESSION).toBe('1');
+      expect(opts.env).toEqual({ ...process.env, CONDUCT_DAEMON_SESSION: '1' });
     });
 
     it('invokeInteractive also forwards the effort env var', async () => {

@@ -199,8 +199,13 @@ necessarily the repo default.
   dispatch. `grep ' via '` over the log answers "which provider ran this step" without inspecting
   process argv. A provider skipped from a cached availability result dispatches no process and is
   not logged; a fallback between providers still prints its own `⚠ PROVIDER FALLBACK` line.
-- **`·   finish: total usage — <dispatches>, <cost>, <in>→<out> tok, <n> unmetered`** is logged once,
-  when the feature's `finish` step completes. It is the sum of every dispatch that feature recorded
+- **`·   finish: total usage — <dispatches>, <cost>, <fresh> fresh + <cached> cached→<out> tok, <n> unmetered`**
+  is logged once,
+  when the feature's `finish` step completes. `<fresh>` counts non-cached input tokens; `<cached>`
+  counts prompt-cache reads and creation — the conversation an agentic dispatch resubmits on every
+  internal tool call, billed at a fraction of fresh input (the `+ <cached> cached` part is omitted
+  when no cache volume was tracked). Per-dispatch provider lines qualify the same way with a
+  `(N% cached)` suffix. It is the sum of every dispatch that feature recorded
   in its own `.pipeline/events.jsonl` — so it spans the whole build, including steps run in earlier
   daemon dispatches, not just the session that happened to reach `finish`. After finish usage is
   persisted, the engine refreshes the committed `.docs/shipped/<slug>.md` `## Cost` block from the
@@ -632,6 +637,11 @@ Each of these encodes a failure that has already corrupted daemon state.
 4. **A manual PR is not a harness finish.** Opening a PR by hand tells the daemon nothing, so it
    re-dispatches the feature forever and parking is the only stopgap. Record the ship instead —
    see the next section.
+5. **Dispatched sessions cannot run `conduct-ts`.** Every session the daemon dispatches carries
+   `CONDUCT_DAEMON_SESSION=1`, and `conduct-ts` refuses to run under it (exit 1) except for the
+   session-sanctioned worker commands its skills mandate — so a maker session can never park,
+   unpark, restart, or reseal the daemon that dispatched it. See the
+   [CLI reference](../reference/cli.md#daemon-session-refusal).
 
 ## Record a manual finish
 
@@ -927,6 +937,10 @@ lock before respawning.
 **The daemon keeps re-dispatching a feature you already shipped by hand.** You are missing the
 shipped record. Park it, then run `conduct-ts shipped-record`. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md).
+
+**An intake command reports a corrupt ledger or a `ledger.json.lease` timeout.** Do not bypass the
+dedup failure. Follow [corrupt intake ledger or stuck ledger lease](../runbooks/corrupt-intake-ledger.md)
+to inspect the quarantine copy, repair or replace the ledger, and safely clear an orphaned lease.
 
 A feature the daemon itself finished is deduped from both sides: discovery skips it once the shipped
 record is on the base branch (post-merge) *and* once the record is committed on the feature's own

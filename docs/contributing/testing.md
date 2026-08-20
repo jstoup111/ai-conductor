@@ -75,50 +75,41 @@ invocation runs it and reports through `ci-gate`.
 
 ### Live-provider daemon E2E smoke
 
-`test/engine/daemon-e2e-live.smoke.test.ts` is the opt-in real-provider layer
-over that deterministic fixture. Before dispatch it provisions an isolated
-Claude home from `test/fixtures/live-provider-home.ts` (skills copied from the
-checkout under test, never the operator's own `~/.claude`) and preflights
-every registry-rendered step command against that home via
-`test/fixtures/step-command-preflight.ts`; an unresolved skill fails the run
-before any provider dispatch or token spend. It then dispatches the real
-Claude provider through that provisioned home, asserts a successful terminal
-state (`DONE`, with no `HALT` or park marker), a new commit, the declared
-fixture change, and a `Task: 1` trailer, and asserts the run was genuinely
-credentialed: at least one dispatch occurred, reported turns and tokens are
-both above zero, and no result came back unmetered. On failure it uses the
-deterministic fixture's shared `dumpPipelineDiagnostics` helper to print the
-daemon log, halt reason, task status, task evidence, and park markers. A
-provider result carrying `commandUnresolved` (the dispatched slash command is
-absent from the provisioned skill catalog) stays distinct from an ordinary
-outcome failure in these diagnostics.
+`test/engine/daemon-e2e-live-claude.smoke.test.ts` and
+`test/engine/daemon-e2e-live-codex.smoke.test.ts` are the opt-in real-provider
+legs over that deterministic fixture. They select provider descriptors and
+share one run body in `test/fixtures/live-e2e-run-body.ts`. Before dispatch,
+that body provisions an isolated provider home from
+`test/fixtures/live-provider-home.ts` (skills copied from the checkout under
+test, never operator state) and preflights every registry-rendered step command
+via `test/fixtures/step-command-preflight.ts`. An unresolved skill fails before
+any provider dispatch or token spend. Each leg asserts the same successful
+terminal state (`DONE`, with no `HALT` or park marker), fixture commit, and
+`Task: 1` trailer, and reports its observed spend under the shared
+`DAEMON_E2E_LIVE_TOKEN_CAP` (default `100000`). On failure, both use the shared
+`dumpPipelineDiagnostics` helper to print the daemon log, halt reason, task
+status, task evidence, and park markers.
 
-It needs the `claude` binary and the `CLAUDE_CODE_OAUTH_TOKEN` secret; set
-`SMOKE_FORCE_SKIP=capability:credentialed` to disable an otherwise credentialed
-local run (see [Smoke tests](#smoke-tests) — the override skips in advisory mode
-and fails in gate mode, so it can never turn a release gate green). Its
-token meter defaults `DAEMON_E2E_LIVE_TOKEN_CAP` to `100000`; lower that value
-when running the smoke manually. A separate always-on case asserts the
-uncredentialed path skips before provisioning any home at all — set
-`DAEMON_E2E_LIVE_ADVISORY_PROBE=1` to run only that probe in a child process
-(used internally by the case itself; you should not need to set it by hand).
-Run it directly from `src/conductor`:
+Each leg needs its matching binary and credential: `claude` with
+`CLAUDE_CODE_OAUTH_TOKEN`, or `codex` with `CODEX_API_KEY`. Set
+`SMOKE_FORCE_SKIP=capability:credentialed:claude` or
+`SMOKE_FORCE_SKIP=capability:credentialed:codex` to skip one local provider
+leg. An absent credential is a named non-gating skip; a present credential
+makes that provider leg gate-enforced. Run either leg directly from
+`src/conductor`:
 
 ```bash
-npx vitest run --config vitest.live-smoke.config.ts test/engine/daemon-e2e-live.smoke.test.ts
+npx vitest run --config vitest.smoke.config.ts test/engine/daemon-e2e-live-claude.smoke.test.ts
 ```
 
 The reusable [Live daemon E2E workflow](../../.github/workflows/live-daemon-e2e.yml)
-runs the **complete** smoke tier — `npm run smoke`, every file in
-[Smoke tests](#smoke-tests), not just this one — through the same runner
-described there. It sets `SMOKE_MODE=gate` when the caller passes
-`require_credentials: true` and `SMOKE_MODE=advisory` otherwise: gate mode
-fails closed on any unmet capability and requires at least one credentialed
-file to have actually run; advisory mode skips a file whose capability is
-unmet and never fails the job for that reason. Claude is the single current
-matrix entry. To add a provider, expand that matrix in this workflow, wire its
-credential into the job environment, and extend the smoke's provider setup and
-assertions in the same change; do not create a parallel live-E2E workflow.
+runs one matrix leg per provider, selecting only that provider's smoke file.
+An absent matrix credential records a provider-named non-gating skip, while a
+credential-present leg remains gate-enforced. The separate
+`require-live-provider-credential` job requires at least one provider
+credential overall. To add a provider, add its descriptor, its provider-specific
+smoke file, and its matrix entry in the same change; do not create a parallel
+live-E2E workflow.
 
 ## Linters
 
@@ -351,28 +342,32 @@ glob-discovered smoke tier from `src/conductor`:
 npm run smoke
 ```
 
-The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers nine
+The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers ten
 files. Each declares exactly one required capability beside the test:
 
 | Capability | Current files | Requirement |
 | --- | --- | --- |
 | `hermetic` | `finish-record`, `surgical-finish-retry` | No external binary or credential. |
 | `toolchain` | `publish-interrupted`, `backlog-priority`, `codex-provider`, `daemon-tmux` | A local toolchain or network-backed setup. |
-| `credentialed` | `claude-provider`, `build-token-auth`, `daemon-e2e-live` | A live provider credential. |
+| `credentialed:claude` | `claude-provider`, `build-token-auth`, `daemon-e2e-live-claude` | `CLAUDE_CODE_OAUTH_TOKEN`. |
+| `credentialed:codex` | `daemon-e2e-live-codex` | `CODEX_API_KEY`. |
 
 `publish-interrupted.smoke.test.ts` is `toolchain`, not hermetic: it creates a worktree and runs the
-real `bin/setup`, which may install dependencies. `npm run smoke` runs in advisory mode by default
-(`SMOKE_MODE` unset or anything but `gate`): a file whose capability is unmet — no toolchain binary,
-no `CLAUDE_CODE_OAUTH_TOKEN` — is skipped, not failed, and a run that executed zero smoke assertions
-for a file still fails that file. Set `SMOKE_MODE=gate` for the fail-closed release variant: every
-unmet capability fails its file outright, and the whole run fails if no `credentialed` file actually
-executed — an all-skipped credentialed tier can never pass a gate run. `SMOKE_FORCE_SKIP` (comma-
+real `bin/setup`, which may install dependencies. Select one production smoke file with
+`npm run smoke -- <smoke_file>`. `npm run smoke` runs in advisory mode by default
+(`SMOKE_MODE` unset or anything but `gate`): a file whose capability is unmet — no toolchain binary
+or that provider's credential — is skipped, not failed, and a run that executed zero smoke assertions
+for a file still fails that file. Set `SMOKE_MODE=gate` for the fail-closed release variant: a complete-tier
+run fails when any required capability is unmet, and it requires at least one executed
+`credentialed:claude` or `credentialed:codex` file — an all-skipped credentialed tier can never pass.
+A selected credentialed file whose credential is absent is instead a passing non-gating skip; when its
+credential is present, that selected leg must execute and remains gate-enforced. `SMOKE_FORCE_SKIP` (comma-
 separated `capability:<name>` or `file:<path>` entries) forces an operator override in either mode;
 in gate mode a forced skip still counts as a failure. Every run ends with one `smoke ledger:` line per
 file naming its capability and outcome (`ran`, `skipped (unmet: …)`, or `failed (evidence: …)`).
 
-For a single case, invoke Vitest with `vitest.smoke.config.ts` and the case path. Keep the normal
-`vitest.config.ts` exclusions intact: ordinary unit and integration runs must never execute smoke tests.
+Keep the normal `vitest.config.ts` exclusions intact: ordinary unit and integration runs must never
+execute smoke tests.
 
 ## Bash test scripts
 

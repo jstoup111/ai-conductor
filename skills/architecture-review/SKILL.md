@@ -48,16 +48,17 @@ Only a genuine structural gap (a missing component/seam/boundary) may re-open ar
 story-phrasing nit or a coverage gap. The conductor caps re-openings and HALTs for a human on excess.
 
 **Accepted-artifact amendment:** When this review concludes that an accepted DECIDE assertion is
-falsified, amend that artifact during the DECIDE pass; do not instruct a later phase to make the
-change. Add this note beside the original assertion:
+falsified, amend that non-story artifact during the DECIDE pass; do not instruct a later phase to
+make the change. Add this note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-The note is additive: the original assertion remains preserved; never rewrite or delete it, and create
-no separate record. The amended artifact is then part of the spec-branch baseline before
-BUILD begins.
+For every non-story artifact, the note is additive: the original assertion remains preserved; never
+rewrite or delete it, and create no separate record. Story artifacts under `.docs/stories/` are the
+exception: replace superseded assertions in place without an amendment record. The amended artifact is
+then part of the spec-branch baseline before BUILD begins.
 
 ### Lightweight Mode (Medium Complexity Tier)
 
@@ -91,9 +92,32 @@ Read in order of authority (higher overrides lower):
 4. `.memory/decisions/` — Prior architectural decisions
 5. Existing code structure — `config/routes.rb`, model relationships, directory layout
 
-**Convention over precedent:** Written decisions override observed patterns. Existing code that
-violates a documented decision is tech debt, not precedent. Never downgrade a finding because
-"the codebase already does it this way."
+**Approved decisions first; convention over precedent:** Applicable APPROVED decisions override
+observed patterns. Existing code that conflicts with a documented decision is tech debt and must
+be rejected as precedent. Never downgrade a finding because "the codebase already does it this
+way."
+
+**Focused local pattern basis (when applicable):** When a concrete local precedent matters to a
+feature concern that approved decisions do not already settle, record it in the review's ordinary
+prose. Keep the basis bounded to that concern and include:
+
+- the precedent's role;
+- the material semantic traits the new work should preserve;
+- why that precedent applies to this concern;
+- the variation that remains allowed; and
+- path and stable-symbol hints that help BUILD rediscover an equivalent on its current HEAD.
+
+Hints are rediscovery seeds, not authoring-time snapshots: never anchor this basis to line numbers
+or require the original exemplar to remain at a fixed coordinate. BUILD must resolve the traits
+against its checkout at implementation time. A selected pattern does not establish a project-wide
+convention or configuration rule, and it does not replace the separate exact-replication
+`Pattern-source` / `Rename-map` contract.
+
+When no suitable precedent can be verified, record that verified no-fit in the ordinary review
+prose rather than inventing an exemplar. When the in-scope approach requires departing from an
+otherwise applicable pattern, record the operator-authorized bounded departure, its reason, and
+its boundary before handing the approach to BUILD. Do not add this optional basis when no local
+precedent affects the approach.
 
 ### 2. Technical Feasibility
 
@@ -361,12 +385,13 @@ runs; in interactive runs it runs serially, after `/prd-audit` and before `/retr
 it does **no** new design, creates no new feasibility/complexity assessment, and reuses the drift
 logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
 
-**Relationship to BUILD-time judgement:** [ADR: Wiring reachability becomes a
-`build_review` rubric item](../../.docs/decisions/adr-2026-08-11-wiring-judged-in-build-review.md)
-moves the static reachability judgement to the every-tier BUILD gate. This §12 sweep is
-unchanged: when it runs at SHIP, it independently verifies the approved architecture against
-the shipped source and remains authoritative for the SHIP compliance verdict. It does not rely
-on BUILD proof as authority.
+**Relationship to BUILD-time judgement:** [ADR: The build_review wiring rubric is
+retired](../../.docs/decisions/adr-2026-08-14-retire-build-review-wiring-rubric.md) removes static
+reachability from the BUILD gate, superseding the relocation made by
+[adr-2026-08-11](../../.docs/decisions/adr-2026-08-11-wiring-judged-in-build-review.md). BUILD no
+longer judges reachability at all. This §12 sweep is unchanged: when it runs at SHIP, it
+independently verifies the approved architecture against the shipped source and remains
+authoritative for the SHIP compliance verdict. It never relied on BUILD proof as authority.
 
 **Scope (only this):**
 - Load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`) and the approved

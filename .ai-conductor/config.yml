@@ -43,22 +43,41 @@ attribution_audit_sample_pct: 10
 build_progress_halt:
   enabled: true
 
-# Build-review wiring contract. `entry_points` is supplied verbatim to the
-# build_review grader prompt as the declared production entry-point surface it
-# must judge; it is not an import-graph probe configuration.
-wiring:
-  entry_points:
-    - src/conductor/src/index.ts
-    - src/conductor/src/daemon-cli.ts
-    - src/conductor/src/intake-loop-cli.ts
-    - src/conductor/src/engine/engineer-cli.ts
+# Per-rubric build-review routing: the judgement-heavy pair runs on Claude
+# opus, the mechanical pair on Codex, halving review load per provider and
+# putting counterfactual/plan-holistic judgement on the strongest reasoner.
+# rootCause inherits the engine's medium-effort default (narrowest rubric).
+build_review:
+  # Enable this repository's advisory containment recordings. The shipped
+  # default remains false, so consumer repositories must opt in explicitly.
+  scopeContainmentEnforced: true
+  rubrics:
+    # tautology is opt-in engine-wide (#1682: its scoped-run preflight only
+    # recognizes Vitest/pytest output); this repo runs Vitest, so enable it.
+    tautology:
+      enabled: true
+      llm_provider: claude
+      model: opus
+      effort: high
+    completeness:
+      llm_provider: claude
+      model: opus
+      effort: high
+    scope:
+      llm_provider: codex
+      model: gpt-5.6-sol
+    rootCause:
+      llm_provider: codex
+      model: gpt-5.6-sol
 
 # Native pre-SHIP aggregate verification. The project-owned npm script runs
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
 # in one operation. Harness integrity remains a separate self-host gate.
 test_suite:
   command: npm test
-  scoped_command: npx vitest run {selectors}
+  # The detached counterfactual checkout materializes this ignored dependency
+  # installation at its root before the scoped command runs.
+  scoped_command: './node_modules/.bin/vitest run {selectors}'
   working_directory: src/conductor
   timeout_seconds: 1800
 

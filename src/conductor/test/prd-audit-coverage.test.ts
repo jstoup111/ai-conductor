@@ -56,6 +56,15 @@ describe('resolveFeaturePrdPaths', () => {
       resolveFeaturePrdPaths(root, context({ featureIdentities: ['missing-feature'] })),
     ).resolves.toEqual([]);
   });
+
+  it('matches a dated PRD from the bare feature identity in a multi-PRD corpus', async () => {
+    await writeFile(join(root, '.docs/specs/2026-08-09-csv-export-single-account.md'), '# PRD');
+    await writeFile(join(root, '.docs/specs/other-feature.md'), '# PRD');
+
+    await expect(
+      resolveFeaturePrdPaths(root, context({ featureIdentities: ['csv-export-single-account'] })),
+    ).resolves.toEqual([join(root, '.docs/specs/2026-08-09-csv-export-single-account.md')]);
+  });
 });
 
 describe('findFrIdsWithoutRows', () => {

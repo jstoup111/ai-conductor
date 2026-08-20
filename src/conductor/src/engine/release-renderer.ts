@@ -76,8 +76,35 @@ export function renderReleaseCandidate(input: ReleaseRenderInput): RenderedRelea
 
   return {
     version,
-    changelog: insertReleaseSection(input.changelog, releaseSection),
+    changelog: insertReleaseSection(
+      stripSectionsAboveVersion(input.changelog, input.currentVersion),
+      releaseSection,
+    ),
   };
+}
+
+/**
+ * Remove changelog sections for versions ABOVE the base version. Those are
+ * renders of releases that merged but never published (a failed publish
+ * gate); their candidates are still inside the since-last-tag window, so the
+ * fresh section re-covers their content and keeping them would both consume
+ * version numbers (0.102.0 → 0.103.0 on 2026-08-16) and later collide with
+ * the real tag's section. Published history at or below the base version is
+ * retained byte-for-byte.
+ */
+function stripSectionsAboveVersion(changelog: string, baseVersion: string): string {
+  const baseParts = baseVersion.split('.').map(Number);
+  const isAbove = (version: string): boolean => {
+    const parts = version.split('.').map(Number);
+    for (let index = 0; index < 3; index += 1) {
+      if ((parts[index] ?? 0) !== (baseParts[index] ?? 0)) return (parts[index] ?? 0) > (baseParts[index] ?? 0);
+    }
+    return false;
+  };
+  return changelog.replace(
+    /^## \[(\d+\.\d+\.\d+)\][^\n]*\n(?:(?!^## ).*\n?)*/gm,
+    (section, version: string) => (isAbove(version) ? '' : section),
+  );
 }
 
 /** Render every candidate for PR review while the changelog stays reader-facing. */

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -34,6 +35,9 @@ import {
 } from './task-attribution.js';
 import { evaluateSafetyBoundary, type SafetyDiagnosticGap, type SafetyProtection } from './safety-boundary.js';
 import { redactSafetyText } from './safety-diagnostics.js';
+import { ModelAvailability } from './model-availability.js';
+import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
+import type { HaltMarkerWriteResult } from './halt-marker.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -47,6 +51,8 @@ export interface ProviderCandidateFailureClassification {
 
 export interface ProviderAttemptMetadata {
   provider: string;
+  /** Auxiliary member that selected this candidate; never a lifecycle step. */
+  auxiliaryMember?: string;
   /** Validated task-local telemetry; never an authorization input. */
   taskId?: string;
   /** Sanitized invalid-attribution classification; diagnostics only. */
@@ -75,6 +81,8 @@ export interface ProviderExecutionResult extends InvokeResult, ProviderAttributi
   resolvedModel?: string;
   resolvedEffort?: EffortLevel;
   attempts: ProviderAttemptMetadata[];
+  /** Lifecycle-supervisor marker outcome, when preparation recovery was exhausted. */
+  haltMarkerWrite?: HaltMarkerWriteResult;
 }
 
 export type ProviderTransitionWarning =
@@ -176,6 +184,7 @@ export function createCandidateSafetyBoundary(options: {
 export type PrepareCandidateSelfHost = (
   candidate: ProviderCandidate,
   runtime: ProviderRuntime,
+  identity?: { readonly runId: string | undefined; readonly attempt: number },
 ) => Promise<SelfHostInvocation | undefined>;
 
 export interface ExecuteProviderCandidatesInput {
@@ -187,9 +196,15 @@ export interface ExecuteProviderCandidatesInput {
   config?: HarnessConfig;
   tier?: ComplexityTier;
   attempt?: number;
+  /** Run identity held by the enclosing step runner for self-host scratch homes. */
+  runId?: string;
   escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
+  /** A caller-owned native model ladder, used by isolated auxiliary branches. */
+  modelFallbackLadder?: readonly string[];
+  /** Attribution label for an auxiliary branch; does not manufacture a StepName. */
+  auxiliaryMember?: string;
   /** Task-local telemetry to validate before any candidate/session invocation. */
   taskAttribution?: TaskAttributionInput;
   onAttempt?: (
@@ -389,9 +404,18 @@ export function resolveProviderCandidateNativeConfig({
 export interface InvokeProviderCandidateInput {
   providerKey: string;
   runtime: ProviderRuntime;
+  /**
+   * Retained for caller API stability and step-scoped diagnostics keying, but
+   * its ids are deliberately NEVER threaded into invocations. Provider session
+   * reuse was removed by design (fresh session per invocation): on 2026-08-14
+   * store-derived ids resurrected a ~1.28M-token resumed conversation shared
+   * across all four build_review rubric branches. Every invocation attempt —
+   * including each model-fallback-ladder attempt — mints its own randomUUID().
+   */
   sessions: Pick<ProviderSessionScope, 'prepare'>;
   resolved: ResolvedProviderNativeStepConfig;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+  modelFallbackLadder?: readonly string[];
 }
 
 interface SessionPolicySuppression {
@@ -406,27 +430,38 @@ const sessionPolicyDiagnostics = new WeakMap<object, Set<string>>();
 export async function invokeProviderCandidate({
   providerKey,
   runtime,
-  sessions,
   resolved,
   options,
+  modelFallbackLadder,
 }: InvokeProviderCandidateInput): Promise<{
   result: InvokeResult;
   invokedModel?: string;
   sessionPolicySuppression?: SessionPolicySuppression;
 }> {
-  const session = await sessions.prepare(providerKey);
   const suppressForUnsupportedCapability =
     runtime.provider.supportsSessionResume !== true;
-  const invocation = await invokeRuntimeResolved(runtime, {
+  // Fresh session per invocation, never a store-derived id. Session reuse was
+  // removed by design; the 2026-08-14 incident (rubric branches appending to a
+  // shared ~1.28M-token conversation) proved a reused id resumes the prior
+  // conversation regardless of `resume: false`. The adapter boundary enforces
+  // the same invariant (enforceFreshSessionOptions); minting here keeps this
+  // caller honest too.
+  const invocationOptions = {
     ...options,
-    sessionId: session.id,
+    sessionId: randomUUID(),
     resume: false,
     model: resolved.model,
     effort: resolved.effort,
-  }, async () => {
-    const next = await sessions.prepare(providerKey);
-    return { sessionId: next.id, resume: next.resume };
-  });
+  };
+  // Each model-fallback-ladder attempt also gets its own fresh session.
+  const prepareFallback = async () => ({ sessionId: randomUUID(), resume: false });
+  const invocation = modelFallbackLadder
+    ? await new ModelAvailability(modelFallbackLadder).invokeWithLadderResolved(
+        runtime.provider,
+        invocationOptions,
+        prepareFallback,
+      )
+    : await invokeRuntimeResolved(runtime, invocationOptions, prepareFallback);
   return {
     result: invocation.result,
     invokedModel: invocation.model,
@@ -450,6 +485,7 @@ export interface BuildProviderAttemptMetadataInput {
   invokedModel?: string;
   unavailable?: ProviderCandidateFailureClassification;
   nextProvider?: string;
+  auxiliaryMember?: string;
 }
 
 /** Construct event-boundary metadata for exactly one candidate result. */
@@ -462,11 +498,13 @@ export function buildProviderAttemptMetadata({
   invokedModel,
   unavailable,
   nextProvider,
+  auxiliaryMember,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
   const invoked = result.providerInvocationSkipped !== true;
   const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
   return {
     provider: providerKey,
+    ...(auxiliaryMember ? { auxiliaryMember } : {}),
     ...(taskId ? { taskId } : {}),
     ...(taskAttributionDiagnostic ? { taskAttributionDiagnostic } : {}),
     ...(result.authentication ? { authenticationSource: result.authentication.source } : {}),
@@ -505,9 +543,12 @@ export async function executeProviderCandidates({
   config,
   tier,
   attempt = 1,
+  runId,
   escalate = true,
   modelOverride,
   effortOverride,
+  modelFallbackLadder,
+  auxiliaryMember,
   taskAttribution: attributionInput,
   onAttempt,
   onTelemetryError,
@@ -572,7 +613,10 @@ export async function executeProviderCandidates({
         model: resolved.model,
         effort: resolved.effort,
       };
-      const selfHost = await prepareCandidateSelfHost?.(candidate, runtime);
+      const selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
+        runId,
+        attempt: index,
+      });
       try {
         invocation = await invokeProviderCandidate({
           providerKey,
@@ -580,6 +624,7 @@ export async function executeProviderCandidates({
           sessions,
           resolved,
           options: selfHost ? { ...candidateOptions, selfHost } : candidateOptions,
+          modelFallbackLadder,
         });
         return invocation.result;
       } finally {
@@ -633,6 +678,7 @@ export async function executeProviderCandidates({
       invokedModel,
       unavailable,
       nextProvider,
+      auxiliaryMember,
     });
     attempts.push(attemptMetadata);
     const observedIntervals = attempts.flatMap(
@@ -691,4 +737,48 @@ export async function executeProviderCandidates({
   }
 
   throw new Error('Provider candidate resolution produced no candidates');
+}
+
+/**
+ * Provider-aware executor for a non-lifecycle auxiliary member. It retains
+ * the enclosing lifecycle step only for supervision/telemetry while the
+ * member label carries the actual rubric attribution.
+ */
+export interface ExecuteAuxiliaryProviderCandidatesInput<MemberId extends string>
+  extends Omit<ExecuteProviderCandidatesInput,
+    'configuredProviders' | 'preferredProvider' | 'attempt' | 'escalate' |
+    'modelOverride' | 'effortOverride' | 'modelFallbackLadder' | 'auxiliaryMember'> {
+  memberId: MemberId;
+  policy: ResolvedBuildReviewRubricPolicy;
+}
+
+export async function executeAuxiliaryProviderCandidates<MemberId extends string>(
+  input: ExecuteAuxiliaryProviderCandidatesInput<MemberId>,
+): Promise<ProviderExecutionResult> {
+  const configuredProviders = Array.isArray(input.policy.llm_provider)
+    ? input.policy.llm_provider
+    : [input.policy.llm_provider];
+  let last: ProviderExecutionResult | undefined;
+  for (let attempt = 1; attempt <= input.policy.max_retries; attempt += 1) {
+    const result = await executeProviderCandidates({
+      ...input,
+      configuredProviders,
+      preferredProvider: input.policy.llm_provider,
+      attempt,
+      escalate: input.policy.escalate,
+      modelOverride: input.policy.model,
+      effortOverride: input.policy.effort,
+      modelFallbackLadder: input.policy.model_fallback_ladder,
+      auxiliaryMember: input.memberId,
+    });
+    if (result.success) return result;
+    last = result;
+  }
+  return last ?? {
+    success: false,
+    output: `Auxiliary member ${input.memberId} had no provider attempts.`,
+    exitCode: 1,
+    preferredProvider: configuredProviders[0] ?? 'unknown',
+    attempts: [],
+  };
 }

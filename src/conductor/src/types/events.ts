@@ -12,6 +12,10 @@ import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Identity is deliberately explicit when a retention decision has no readable lease. */
+type ScratchCleanupIdentityValue = string | 'unknown';
+type ScratchCleanupAttempt = number | 'unknown';
+
 /** Closed, credential-safe FINISH publication observability vocabulary. */
 export type FinishPublicationTransition =
   | 'establish_pr'
@@ -138,7 +142,53 @@ export interface ProviderAttemptEvent {
 }
 
 export type ConductorEvent =
+  | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
+  | {
+      /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
+      type: 'contained_live_checkout_drift';
+      evidence: string;
+      attribution: 'concurrent-operator';
+      summary: string;
+    }
+  | {
+      /** The containment verdict for one completed self-host dispatch verification closure. */
+      type: 'self_host_containment_verdict';
+      contained: true;
+      evidence: string;
+    }
+  | {
+      /** The containment verdict for one completed self-host dispatch verification closure. */
+      type: 'self_host_containment_verdict';
+      contained: false;
+      reason: string;
+    }
+  /** Serialized rubric-prompt size at dispatch — regression visibility for projection bloat. */
+  | { type: 'build_review_rubric_prompt'; rubric: string; lapId: string; promptBytes: number }
+  | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }
+  | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
+  | { type: 'build_review_cache_hit'; rubric: string; lapId: string }
+  | { type: 'build_review_rubric_infrastructure_failure'; rubric: string; lapId: string; reason: string; excerpt?: string }
+  | { type: 'build_review_disposition_accepted'; feature: string; lapId: string; findingId: string; operator: string }
+  | { type: 'build_review_disposition_refused'; feature: string; reason: string }
+  | { type: 'build_review_disposition_version_invalidated'; feature: string; findingId: string; rubric: string; contractVersion: string }
+  | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }
   | { type: 'step_started'; step: StepName; index: number }
+  | {
+      /** A hook-owned containment check could not reach a verdict. */
+      type: 'containment_check_unresolved';
+      /** Closed classification of the failed containment-check boundary. */
+      failure:
+        | 'commit-message-unreadable'
+        | 'task-status-unreadable'
+        | 'task-status-malformed'
+        | 'evaluation-failed';
+      /** Present once the commit message yielded a resolvable Task trailer. */
+      taskId?: string;
+      /** Raw commit message, retained when the hook read it before failing. */
+      commitMessage?: string;
+      /** Epoch milliseconds when the hook recorded the unresolved check. */
+      ts: number;
+    }
   | {
       /** A retained compatibility step ran as a deprecated no-op. */
       type: 'deprecated_step';
@@ -171,6 +221,36 @@ export type ConductorEvent =
     }
   | ProviderAttemptEvent
   | {
+      /** A provider scratch home was removed during a daemon sweep or legacy collection. */
+      type: 'scratch_cleanup_reclaimed';
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
+      path: string;
+      reason: 'dead-owner' | 'legacy-preexisting';
+    }
+  | {
+      /** A provider scratch home was retained during a daemon sweep. */
+      type: 'scratch_cleanup_retained';
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
+      path: string;
+      reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition' | 'legacy-nonmatching' | 'legacy-not-directory' | 'legacy-mtime-unavailable' | 'legacy-newer-than-process-start' | 'legacy-unreadable-lease' | 'legacy-live-owner' | 'legacy-unknown-owner';
+    }
+  | {
+      /** A provider scratch home could not be removed during a daemon sweep or legacy collection. */
+      type: 'scratch_cleanup_failed';
+      repository: ScratchCleanupIdentityValue;
+      featureSlug: ScratchCleanupIdentityValue;
+      runId: ScratchCleanupIdentityValue;
+      attempt: ScratchCleanupAttempt;
+      path: string;
+      reason: string;
+    }
+  | {
       /**
        * Whole-feature provider usage, emitted once when `finish` completes.
        *
@@ -186,8 +266,11 @@ export type ConductorEvent =
       meteredDispatches: number;
       unmeteredDispatches: number;
       costUsd: number;
+      /** Fresh (non-cached) input tokens — TokenUsage.input semantics. */
       inputTokens: number;
       outputTokens: number;
+      /** Cached prompt volume (cache reads + creation), when tracked. */
+      cachedInputTokens?: number;
     }
   | {
       /** A visible transition from an unavailable provider to the next candidate. */
@@ -239,7 +322,7 @@ export type ConductorEvent =
   | { type: 'tier_skip'; step: StepName; tier: ComplexityTier }
   | { type: 'config_skip'; step: StepName }
   | { type: 'navigation_back'; from: StepName; to: StepName }
-  | { type: 'rate_limit'; waitSeconds: number }
+  | { type: 'rate_limit'; waitSeconds: number; reason?: 'usage-exhausted' }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
   | {
@@ -260,6 +343,10 @@ export type ConductorEvent =
       paths: string[];
       /** Base-ahead paths excluded after provenance proved they were not feature-authored. */
       excludedBaseAheadPaths?: string[];
+      /** Feature-authored paths excluded because an operator reseal already approved their sealed content. */
+      excludedOperatorResealedPaths?: string[];
+      /** Authored paths accepted because their divergence is exactly the engine's recorded remediation-task append. */
+      includedEngineAppendedPaths?: string[];
     }
   | {
       type: 'protected_artifact_rebaseline_refused';
@@ -351,6 +438,17 @@ export type ConductorEvent =
       mergeBase: string;
       regradeCount: number;
     }
+  | ({
+      /**
+       * Durable provenance for a build_review grading's engine-recorded
+       * rebase-repair context. This records the closed reason the context was
+       * present or absent without changing the grading outcome.
+       */
+      type: 'build_review_repair_context';
+    } & (
+      | { disposition: 'context_available'; repairCount: number }
+      | { disposition: 'none_warranted' | 'no_join'; repairCount?: never }
+    ))
   | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
   | {
       type: 'build_stall';
@@ -443,6 +541,8 @@ export type ConductorEvent =
       step: StepName;
       branch: string;
       error: string;
+      /** False when an advisory branch failed but the group remains open. */
+      terminal?: boolean;
     }
   | {
       /**
@@ -518,6 +618,12 @@ export type ConductorEvent =
       evidence?: string;
       /** How many times this gate has been re-opened this feature. */
       count: number;
+      /** Total build-review laps across progress resets; absent for other kickback sources. */
+      cumulativeCount?: number;
+      /** A rebase invalidation credited this gate's convergence laps. */
+      convergenceCredit?: {
+        gate: 'build_review';
+      };
       /**
        * #647 D3 (adr-2026-07-13-kickback-build-no-op-escalation): audit
        * discriminator distinguishing a kickback that produced real build
@@ -531,6 +637,7 @@ export type ConductorEvent =
   | {
       /** The gate loop stopped without converging (kickback/stuck cap). */
       type: 'loop_halt';
+      step?: StepName;
       reason: string;
       /**
        * URL of the auto-opened needs-remediation draft PR, when the conductor
@@ -539,6 +646,12 @@ export type ConductorEvent =
        * not create a PR (zero commits, push failure, gh error).
        */
       prUrl?: string;
+    }
+  | {
+      /** Writing the durable HALT marker failed, so the feature may not be parked. */
+      type: 'halt_marker_write_failed';
+      path: string;
+      reason: string;
     }
   | {
       /** The gate loop reached a fully-satisfied state (.pipeline/DONE). */
@@ -563,6 +676,8 @@ export type ConductorEvent =
       /** A clean rebase changed code/test paths → downstream re-verification. */
       type: 'rebase_changed';
       changedPaths: string[];
+      /** Complete unfiltered delta, distinct from the gate-invalidation path set. */
+      allChangedPaths?: string[];
     }
   | {
       /** A gate was re-verified post-rebase in gate-first mode. */
@@ -593,6 +708,7 @@ export type ConductorEvent =
   | {
       /** A non-trivial/mixed conflict parked the feature (FR-8). */
       type: 'rebase_conflict_halt';
+      step?: StepName;
       reason: string;
       conflicts: string[];
     }

@@ -7,9 +7,21 @@ import {
   detectInline,
   renderFullHelp,
   renderDaemonHelp,
+  detectBuildReviewFindingsCommand,
+  detectBuildReviewAcceptCommand,
 } from '../../src/cli.js';
 
 describe('CLI', () => {
+  it('detects only the explicit read-only build-review findings grammar', () => {
+    expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings', '--feature', 'review-rubrics', '--json']))
+      .toEqual({ kind: 'findings', feature: 'review-rubrics', format: 'json' });
+    expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings'])).toBeNull();
+  });
+  it('requires exact accept identity inputs and never accepts an operator override', () => {
+    expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'known risk']))
+      .toEqual({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: 'sha256:abc', rationale: 'known risk' });
+    expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'risk', '--operator', 'forged'])).toBeNull();
+  });
   it('parses feature description as positional arg', () => {
     const opts = parseArgs(['node', 'conduct', 'URL shortener']);
     expect(opts.featureDesc).toBe('URL shortener');
@@ -186,10 +198,10 @@ describe('CLI', () => {
   // not just the bare-pipeline flags. Regression — `--help` rendered the base
   // program (no Commands section), so register/create/engineer/daemon were
   // invisible. createProgram() is the program index.ts routes top-level help to.
-  it('--help lists all subcommands (inline, register, create, engineer, daemon)', () => {
+  it('--help lists all subcommands including build-review', () => {
     const help = createProgram().helpInformation();
     expect(help).toMatch(/^Commands:/m);
-    for (const cmd of ['inline', 'register', 'create', 'engineer', 'daemon']) {
+    for (const cmd of ['inline', 'register', 'create', 'engineer', 'daemon', 'build-review']) {
       expect(help).toContain(cmd);
     }
   });
@@ -206,6 +218,9 @@ describe('CLI', () => {
         'conduct create',
         'conduct engineer',
         'conduct daemon',
+        'conduct build-review',
+        'conduct build-review findings',
+        'conduct build-review accept',
       ]) {
         expect(help).toContain(path);
       }

@@ -13,6 +13,7 @@ import {
   isCodeOrTestPath,
   filterCodeOrTestPaths,
   writeHalt,
+  writeSealHalt,
   applyRebaseVerdicts,
   recordRebaseStepCompletion,
   emitRebaseEvent,
@@ -51,7 +52,7 @@ function fakeGit(
 }
 
 describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
-  it('returns mergeable_skip without starting a rebase when a behind feature can merge cleanly', async () => {
+  it('takes both branches of the markdown classifier: docs/base-only.txt skips, while root base-only.txt rebases', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-'));
     try {
       const { git, calls } = fakeGit([
@@ -86,12 +87,26 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         },
         startedRebase: false,
       });
+
+      const rootRuntime = fakeGit([
+        { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
+        { match: ['diff', '--name-only', '--diff-filter=U'], result: {} },
+        { match: ['remote'], result: { stdout: '' } },
+        { match: ['rev-list', '--count', 'HEAD..main'], result: { stdout: '1\n' } },
+        { match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'], result: { exitCode: 0 } },
+        { match: ['merge-base', 'HEAD', 'main'], result: { stdout: 'bbbb111\n' } },
+        { match: ['diff', '--name-only', 'bbbb111', 'main'], result: { stdout: 'base-only.txt\n' } },
+        { match: ['rebase', '--autostash', 'main'], result: {} },
+      ]);
+      const rootOutcome = await performRebase(rootRuntime.git, root, 'main', { finishMergeabilityCheck: true });
+      expect(rootOutcome.kind).not.toBe('mergeable_skip');
+      expect(rootRuntime.calls.some((args) => args[0] === 'rebase')).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('cleanly skips a behind feature without mutating its Git state (Task 3, real git)', async () => {
+  it('rebases a behind feature when the base advance is a root runtime path (Task 3, real git)', async () => {
     const repo = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-readonly-'));
     const g = (args: string[]) => execa('git', args, { cwd: repo });
     try {
@@ -148,22 +163,17 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         translateAfterRebase,
       });
 
-      expect({
-        outcome,
-        after: await snapshot(),
-        translationCalls: translateAfterRebase.mock.calls.length,
-        sealAfter: await readFile(sealPath, 'utf8'),
-      }).toEqual({
-        outcome: {
-          kind: 'mergeable_skip',
-          baseRef: 'main',
-          baseSha: expect.stringMatching(/^[0-9a-f]{40}$/),
-          baseKind: 'local',
-        },
-        after: before,
-        translationCalls: 0,
-        sealAfter: sealBefore,
+      const after = await snapshot();
+      expect(outcome).toMatchObject({
+        kind: 'changed',
+        changedCodePaths: ['base-only.txt'],
+        allChangedPaths: ['base-only.txt'],
       });
+      expect(after.featureRef).not.toBe(before.featureRef);
+      expect(after.worktreeDiff).toBe(before.worktreeDiff);
+      expect(after.cachedDiff).toBe(before.cachedDiff);
+      expect(translateAfterRebase).toHaveBeenCalledTimes(1);
+      expect(await readFile(sealPath, 'utf8')).toBe(sealBefore);
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
@@ -603,6 +613,19 @@ describe('engine/rebase — path classifier (FR-5)', () => {
     expect(isCodeOrTestPath('docs/guide.md')).toBe(false);
   });
 
+  it('treats harness markdown outside the documentation paths as code/test', () => {
+    expect(
+      [
+        'agents/planner.md',
+        'skills/tdd/SKILL.md',
+        'tech-context/x.md',
+        'templates/y.md',
+        'HARNESS.md',
+        'AGENT_INSTRUCTIONS.md',
+      ].every(isCodeOrTestPath),
+    ).toBe(true);
+  });
+
   it('filterCodeOrTestPaths keeps only invalidating paths', () => {
     expect(
       filterCodeOrTestPaths(['CHANGELOG.md', 'src/a.ts', 'README.md', 'test/b.ts']),
@@ -621,7 +644,7 @@ describe('engine/rebase — HALT (FR-8)', () => {
   });
 
   it('writes .pipeline/HALT listing conflicted files + resume steps', async () => {
-    await writeHalt(dir, ['src/feature.ts']);
+    expect(await writeHalt(dir, ['src/feature.ts'])).toEqual({ status: 'written' });
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
     const note = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
     expect(note).toContain('src/feature.ts');
@@ -633,6 +656,10 @@ describe('engine/rebase — HALT (FR-8)', () => {
     await writeHalt(dir, ['src/feature.ts']);
     const cls = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
     expect(cls).toBe('needs-human');
+  });
+
+  it('returns the marker write result for seal HALTs without an emitter', async () => {
+    expect(await writeSealHalt(dir, 'protected artifact changed')).toEqual({ status: 'written' });
   });
 
   it('leaves a CHANGELOG conflict paused for the generic resolver', async () => {
@@ -1324,13 +1351,17 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
   it('emits the matching event per outcome', async () => {
     const events = new ConductorEventEmitter();
     const seen: string[] = [];
+    let conflictHalt: { step?: string } | undefined;
     for (const t of [
       'rebase_noop',
       'rebase_mergeable_skip',
       'rebase_changed',
       'rebase_conflict_halt',
     ] as const) {
-      events.on(t, (e) => { seen.push(e.type); });
+      events.on(t, (e) => {
+        seen.push(e.type);
+        if (e.type === 'rebase_conflict_halt') conflictHalt = e;
+      });
     }
     await emitRebaseEvent(events, { kind: 'noop' });
     await emitRebaseEvent(events, {
@@ -1347,6 +1378,7 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_changed',
       'rebase_conflict_halt',
     ]);
+    expect(conflictHalt).toMatchObject({ step: 'rebase' });
   });
 
   it('best-effort: emission failure does not throw', async () => {
@@ -1598,6 +1630,30 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     }
   }, 20000);
 
+  it('Task 2: retains the complete unfiltered delta on a changed outcome while keeping changedCodePaths filtered', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'feature.ts'), 'feature\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: feature']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'source advance\n');
+    await mkdir(join(repo, '.docs'), { recursive: true });
+    await writeFile(join(repo, '.docs', 'base-note.md'), 'excluded advance\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: mixed advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      changedCodePaths: ['unrelated.ts'],
+      allChangedPaths: ['.docs/base-note.md', 'unrelated.ts'],
+    });
+  }, 20000);
+
   it('Task 5: carries the feature claimed surface F (changedPathsBetween(mergeBase, preTree)) on the `changed` outcome', async () => {
     const { performRebase, makeGitRunner, changedPathsBetween } = await import(
       '../../src/engine/rebase.js'
@@ -1627,12 +1683,10 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     }
   }, 20000);
 
-  // Story 9 (amended, FR-9 remediation): classifyClean's `noop` is a code-path
-  // heuristic for downstream re-verification, NOT the translation gate. A clean
-  // rebase over a docs-only base advance reports `noop` yet still rewrites every
-  // replayed commit's sha — skipping translation there is the exact #535
-  // dangling-citation defect (rebase.ts:436-440).
-  it('STILL invokes translateAfterRebase when a clean rebase moved HEAD but classifyClean reports `noop` (docs-only base advance), with no residue on a pure replay', async () => {
+  // Story 9 (amended, FR-9 remediation): translation is independent of the
+  // reclassification heuristic. A clean rebase rewrites replayed commit shas,
+  // so it must translate sha-anchored evidence (#535).
+  it('invokes translateAfterRebase when a clean rebase moves HEAD for a root markdown base advance, with no residue on a pure replay', async () => {
     const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
     const { translateAfterRebase: realTranslate } = await import(
       '../../src/engine/rebase-translate.js'
@@ -1644,10 +1698,8 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     await g(['commit', '-q', '-m', 'feat: a1']);
     const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
 
-    // The base advances with a DOCS-ONLY commit: post-rebase, diff(preTree,
-    // HEAD) contains only this .md path (the feature commit is in both trees),
-    // so classifyClean reports `noop` — yet the replay gives feat's commit a
-    // new parent and therefore a new sha.
+    // The root markdown base advance is runtime source. The replay gives the
+    // feature commit a new parent and therefore a new sha.
     await g(['checkout', '-q', 'main']);
     await writeFile(join(repo, 'docs-note.md'), 'docs only\n');
     await g(['add', '.']);
@@ -1686,8 +1738,7 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     const git = makeGitRunner(repo);
     const outcome = await performRebase(git, repo, 'main', { translateAfterRebase });
 
-    // The heuristic outcome is `noop`…
-    expect(outcome.kind).toBe('noop');
+    expect(outcome.kind).toBe('changed');
     // …but the rebase genuinely moved HEAD (shas rewritten)…
     const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
     expect(newHead).not.toBe(origHead);
@@ -1715,6 +1766,57 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
 
     // …and NO residue is written.
     await expect(access(join(repo, '.pipeline/rebase-residue.json'))).rejects.toThrow();
+  }, 20000);
+
+  it('classifies the same clean replay as changed when docs-note.md is root runtime source', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'docs-note.md'), 'root markdown source\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: root markdown advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      changedCodePaths: ['docs-note.md'],
+      allChangedPaths: ['docs-note.md'],
+    });
+  }, 20000);
+
+  it('proves the complete-versus-runtime delta split, then keeps the established gate set for a mixed source/test/docs rebase', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'base.ts'), 'base\nfeature-owned append\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: source']);
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'base.ts'), 'base advance\nbase\n');
+    await writeFile(join(repo, 'base.test.ts'), 'test advance\n');
+    await mkdir(join(repo, 'docs'), { recursive: true });
+    await writeFile(join(repo, 'docs/note.md'), 'excluded\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: mixed advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    const outcome = await performRebase(makeGitRunner(repo), repo, 'main');
+
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      changedCodePaths: ['base.test.ts', 'base.ts'],
+      allChangedPaths: ['base.test.ts', 'base.ts', 'docs/note.md'],
+    });
+    if (outcome.kind === 'changed' && outcome.featureSurface) {
+      expect(classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, true)).toEqual({
+        invalidated: ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
+        preserved: [],
+      });
+    }
   }, 20000);
 });
 
@@ -1906,7 +2008,18 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
     // an uncomputable F.
     expect(outcome?.kind).toBe('changed');
     if (outcome?.kind === 'changed') {
+      expect(outcome.allChangedPaths).toBeUndefined();
       expect(outcome.featureSurface).toBeUndefined();
+    }
+
+    // Contrast: the SAME rebase with a computable D carries the unfiltered
+    // delta — proving the undefined above is the fail-closed withholding of
+    // an otherwise-populated field, not a field that never exists.
+    await g(['reset', '-q', '--hard', preTree]);
+    const computable = await performRebase(real, repo, 'main');
+    expect(computable.kind).toBe('changed');
+    if (computable.kind === 'changed') {
+      expect(computable.allChangedPaths).toEqual(['unrelated.ts']);
     }
 
     const pdir = await mkdtemp(join(tmpdir(), 'rebase-verdict-d11-'));

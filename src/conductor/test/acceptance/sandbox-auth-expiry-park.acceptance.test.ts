@@ -59,6 +59,7 @@ const READY_STATE: ConductState = {
 
 const BUILD_ONLY_READY_STATE: ConductState = {
   ...READY_STATE,
+  feature_desc: 'sandbox-auth-expiry-park',
   build_review: 'done',
   wiring_check: 'done',
   manual_test: 'done',
@@ -154,6 +155,7 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
 
     let buildCalls = 0;
     const runner: StepRunner = {
+      selfHostRunId: () => 'sandbox-auth-expiry-park-run',
       run: vi.fn(async (step): Promise<StepRunResult> => {
         if (step !== 'build') return { success: true };
         buildCalls++;
@@ -205,6 +207,7 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     await writeOperatorCreds(operatorDir, Date.now() - 1000); // expired
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'sandbox-auth-expiry-park-run',
       run: vi.fn(async (step): Promise<StepRunResult> => {
         if (step !== 'build') return { success: true };
         return { success: true };
@@ -253,6 +256,7 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     await seed();
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'sandbox-auth-expiry-park-run',
       run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })),
     };
     const sleepFn = vi.fn(async () => {});
@@ -294,6 +298,7 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
 
     try {
       const runner: StepRunner = {
+        selfHostRunId: () => 'sandbox-auth-expiry-park-run',
         run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })),
       };
       const guardrails = makeGuardrails();
@@ -334,6 +339,7 @@ describe('acceptance: sandbox auth-expiry park-and-poll (sandbox-auth-expiry-par
     await writeOperatorCreds(operatorDir, expiresAt);
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'sandbox-auth-expiry-park-run',
       run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })),
     };
     const sleepFn = vi.fn(async () => {});

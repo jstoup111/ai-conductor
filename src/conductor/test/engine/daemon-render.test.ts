@@ -156,7 +156,22 @@ describe('renderDaemonEvent', () => {
 
   it('renders halt and convergence', () => {
     expect(lines({ type: 'loop_halt', reason: 'cap' })).toEqual(['· ✋ loop halted: cap']);
+    expect(lines({
+      type: 'halt_marker_write_failed',
+      path: '.pipeline/HALT',
+      reason: 'permission denied',
+    })).toEqual(['· ✋ halt marker write failed: .pipeline/HALT — permission denied']);
     expect(lines({ type: 'loop_converged' })).toEqual(['· ✓ gate loop converged']);
+  });
+
+  it('renders a rebase conflict halt with the bounded conflict summary', () => {
+    expect(lines({
+      type: 'rebase_conflict_halt',
+      reason: 'conflict requires human resolution',
+      conflicts: ['src/a.ts', 'src/b.ts'],
+    })).toEqual([
+      '· ✋ rebase conflict halted: conflict requires human resolution (src/a.ts, src/b.ts)',
+    ]);
   });
 
   it('renders closed FINISH publication progress and dispositions without raw evidence', () => {
@@ -405,6 +420,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'gate_verdict', step: 'build', satisfied: false, reason: 'unsatisfied' },
       { type: 'kickback', from: 'prd_audit', to: 'build', count: 1 },
       { type: 'loop_halt', reason: 'stuck' },
+      { type: 'halt_marker_write_failed', path: '.pipeline/HALT', reason: 'permission denied' },
       { type: 'loop_converged' },
       { type: 'rebase_noop' },
       { type: 'rebase_mergeable_skip' } as unknown as ConductorEvent,
@@ -451,6 +467,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'gate_verdict',
       'kickback',
       'loop_halt',
+      'halt_marker_write_failed',
       'loop_converged',
       'rate_limit',
       'session_reset',
@@ -466,6 +483,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'parallel_started',
       'parallel_completed',
       'rebase_mergeable_skip',
+      'rebase_conflict_halt',
       'operator_park_boundary',
       'finish_publication_transition',
       'finish_publication_blocked',

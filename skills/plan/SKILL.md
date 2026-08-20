@@ -29,6 +29,19 @@ Open with a short **Technical Approach** (a paragraph or few bullets: the design
 key modules/files, and sequencing) before the task list, so `build` has the shape of the work
 before the steps.
 
+When the approach relies on a local implementation or test pattern, capture only the focused
+context an implementer needs: the relevant traits, why they fit this work, allowed variation, and
+search hints for finding comparable code or tests. This is semantic author guidance, not a new
+header or parser contract. An implementation task affected by that pattern repeats its relevant
+subset in its own steps, because isolated implementers do not receive the full plan. Do not anchor
+the guidance to line numbers or snapshots. If the local pattern does not fit, or a departure would
+change that task's approach, record the verified no-fit result or the authorized departure in that
+task before BUILD begins.
+
+Keep this focused pattern context distinct from the exact-copy declaration: use the existing paired
+`**Pattern-source:**` and `**Rename-map:**` headers only when the plan replicates a source pattern,
+and preserve their existing separate semantics and grammar.
+
 Read the `Scope boundary:` from `.docs/track/<slug>.md` as binding; preserve the confirmed narrow/comprehensive breadth outcome; do not permit a materially broader expansion beyond it unless the operator confirms before it enters the artifact.
 
 ### Documentation boundary
@@ -102,6 +115,8 @@ repo-relative paths corroborate precisely and never collide.
 
 **Verify-only:** [yes, or omit — see 3b below]
 
+**Preserves:** [optional behavior or contract whose coverage must not regress — see 3c below]
+
 **Dependencies:** [Task N that must complete first, or "none"]
 ```
 
@@ -112,6 +127,18 @@ it. `same` inherits the previous task's set, `same as Task N` inherits task
 N's, and `none` means the task's commit trailer alone corroborates. Backticked
 file names elsewhere in the task (Steps prose) are only used when no Files
 line exists.
+
+When a task is affected by local pattern context from Technical Approach, repeat the applicable
+traits, rationale, allowed variation, and search hints in that task's Steps prose. Do not add a
+new task header, parser grammar, line-number anchor, or snapshot reference for this context. Where
+the task cannot follow the pattern and that changes its approach, its Steps must state either the
+verified no-fit result or the authorized departure.
+
+For test-owning tasks, map every covered acceptance criterion to a concrete, lowest-sufficient test
+disposition: name the test layer and the assertion or existing coverage that proves it. Several
+compatible criteria may be covered together by one focused test; do not prescribe a distinct test
+per criterion, or a production-file change merely to create one. The task must still make clear
+which criterion each disposition covers, including negative paths.
 
 **Sealed-artifact prohibition:** A task MUST NOT name another feature's artifact under
 `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/` in its `**Files:**`
@@ -144,6 +171,11 @@ expected to prove existing behavior already satisfies its acceptance criteria, r
 than land new code. The match is exact (case-insensitive) on the literal value `yes`;
 any other value, or the line's absence, means the task is NOT verify-only.
 
+Use `**Verify-only:** yes` (or `**Type:** verification`) for a task that verifies or
+documents behavior that may already exist. This marker is review-load-bearing evidence
+for the Tautology and Completeness reviews. Never mark a task that delivers new or
+changed behavior: over-marking widens the exemption and is forbidden.
+
 Verify-only tasks preferably complete via an empty commit rather than a code commit:
 carry a `Task: <id>` trailer and an `Evidence: skipped <reason>` trailer (see
 `skills/tdd/SKILL.md`'s "Commit-less Completions: Evidence Trailers" section for the
@@ -156,6 +188,20 @@ work-happened floor that flags any plan task with no `Task:`-trailered commit as
 (warning only, never a HALT). If you're authoring a task you know will legitimately produce
 no commit of its own, mark it `**Verify-only:** yes` here so the floor recognizes it and
 doesn't flag it.
+
+### 3c. `Preserves:` Marker
+
+A task block MAY include an optional, non-empty `**Preserves:** <behavior>` line to name a
+behavior or contract whose coverage must not regress. State the behavior-level boundary, not its
+current carrier: never name a test case, file, or `it(...)` title.
+
+For example, `**Preserves:** the TokenMeter wrapper reports its metric transparently` names a
+behavior. Reject `confirm the file's existing ungated self-check cases pass unchanged`: it names
+file-local test cases rather than a behavior or contract, so it is not a valid preservation
+declaration.
+
+An absent or empty `**Preserves:**` value grants no preservation; ordinary holistic judgment
+applies unchanged.
 
 ### 4. Task Ordering Rules
 

@@ -218,7 +218,7 @@ describe('acceptance_specs provenance and RED lifecycle use the real Conductor s
       'satisfied',
     ]);
     expect(redEvents.find((event) => event.state === 'rejected')?.reason).toMatch(
-      /failingTests|ranAt|intentRationale/,
+      /outcome/,
     );
   });
 
@@ -313,6 +313,7 @@ describe('acceptance_specs provenance and RED lifecycle use the real Conductor s
     await writeFile(
       join(root, '.pipeline', 'acceptance-specs-red.json'),
       JSON.stringify({
+        outcome: 'specs-generated',
         command: 'npm test -- test/acceptance/feature.acceptance.test.ts',
         targetSpecs: [FEATURE_SPEC],
         executed: 1,

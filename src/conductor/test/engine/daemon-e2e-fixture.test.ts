@@ -18,6 +18,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createCodexProviderFake } from '../fixtures/codex-provider-fake.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
@@ -32,24 +33,29 @@ const fixtureTouchedPath = fileURLToPath(
   new URL('../fixtures/daemon-e2e/touched.txt', import.meta.url),
 );
 
-export async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
+// Returns the dump so callers can embed it in a thrown error's message —
+// CI smoke reporters keep failureMessages but drop console output (#1656's
+// release-gate failure was undiagnosable from the job log).
+export async function dumpPipelineDiagnostics(worktreeDir: string): Promise<string> {
+  const lines: string[] = [];
+  const emit = (line: string): void => { lines.push(line); };
   const logPath = join(worktreeDir, '.daemon/daemon.log');
   const daemonLog = await readFile(logPath, 'utf-8').catch(() => null);
 
   if (daemonLog === null) {
-    console.error(`daemon log not found at ${logPath}`);
+    emit(`daemon log not found at ${logPath}`);
   } else {
-    console.error(`daemon log tail from ${logPath}`);
-    console.error(daemonLog.split('\n').slice(-50).join('\n'));
+    emit(`daemon log tail from ${logPath}`);
+    emit(daemonLog.split('\n').slice(-50).join('\n'));
   }
 
   const haltPath = join(worktreeDir, '.pipeline/HALT');
   const haltReason = await readFile(haltPath, 'utf-8').catch(() => null);
   if (haltReason === null) {
-    console.error(`halt marker not found at ${haltPath}`);
+    emit(`halt marker not found at ${haltPath}`);
   } else {
-    console.error(`halt marker at ${haltPath}`);
-    console.error(haltReason);
+    emit(`halt marker at ${haltPath}`);
+    emit(haltReason);
   }
 
   for (const [label, path] of [
@@ -58,26 +64,29 @@ export async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void
   ]) {
     const contents = await readFile(path, 'utf-8').catch(() => null);
     if (contents === null) {
-      console.error(`${label} not found at ${path}`);
+      emit(`${label} not found at ${path}`);
     } else {
-      console.error(`${label} at ${path}`);
-      console.error(contents);
+      emit(`${label} at ${path}`);
+      emit(contents);
     }
   }
 
   const parkedDir = join(worktreeDir, '.daemon/parked');
   const parkedEntries = await readdir(parkedDir).catch(() => []);
   if (parkedEntries.length === 0) {
-    console.error(`park markers not found in ${parkedDir}`);
+    emit(`park markers not found in ${parkedDir}`);
   }
   for (const entry of parkedEntries) {
     const markerPath = join(parkedDir, entry);
     const reason = await readFile(markerPath, 'utf-8').catch(() => null);
     if (reason !== null) {
-      console.error(`park marker at ${markerPath}`);
-      console.error(reason);
+      emit(`park marker at ${markerPath}`);
+      emit(reason);
     }
   }
+  const dump = lines.join('\n');
+  console.error(dump);
+  return dump;
 }
 
 describe('daemon E2E diagnostics', () => {
@@ -129,27 +138,18 @@ function createFixtureAgentFake(
   fixtureOptions: {
     omitTaskTrailer?: boolean;
     touchUnrelatedPath?: boolean;
+    includeBuildReviewProduction?: boolean;
   } = {},
 ) {
   return createCodexProviderFake((options) => {
-    if (options.prompt.includes('.pipeline/build-review.json')) {
-      mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
-      writeFileSync(
-        join(worktreeDir, '.pipeline/build-review.json'),
-        JSON.stringify({
-          verdict: 'PASS',
-          reasons: [],
-          rubric: {
-            tautology: false,
-            scope: false,
-            rootCause: false,
-            completeness: false, wiring: false },
-        }),
-        'utf-8',
-      );
+    if (options.prompt.includes('Build Review ') && options.prompt.includes('"rubric"')) {
+      const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
       return {
         success: true,
-        output: 'fixture build review passed',
+        output: JSON.stringify({
+          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [], verdict: 'PASS',
+        }),
         exitCode: 0,
       };
     }
@@ -181,7 +181,13 @@ function createFixtureAgentFake(
       : 'test/fixtures/daemon-e2e/touched.txt';
     mkdirSync(join(worktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
     writeFileSync(join(worktreeDir, touchedPath), `fixture task ${taskId}\n`, 'utf-8');
-    execFileSync('git', ['add', touchedPath], { cwd: worktreeDir });
+    if (fixtureOptions.includeBuildReviewProduction) {
+      mkdirSync(join(worktreeDir, 'src'), { recursive: true });
+      writeFileSync(join(worktreeDir, 'src/fixture-build-review.ts'), `export const task = '${taskId}';\n`, 'utf-8');
+      execFileSync('git', ['add', touchedPath, 'src/fixture-build-review.ts'], { cwd: worktreeDir });
+    } else {
+      execFileSync('git', ['add', touchedPath], { cwd: worktreeDir });
+    }
     try {
       execFileSync('git', ['diff', '--cached', '--quiet'], { cwd: worktreeDir });
     } catch {
@@ -287,6 +293,8 @@ describe('daemon E2E fixture', () => {
         fixtureTouchedPath,
         join(worktreeDir, 'test/fixtures/daemon-e2e/touched.txt'),
       );
+      await mkdir(join(worktreeDir, 'src'), { recursive: true });
+      await writeFile(join(worktreeDir, 'src/fixture-build-review.ts'), "export const task = 'seed';\n");
       await execa('git', ['add', '-A'], { cwd: worktreeDir });
       await execa(
         'git',
@@ -317,7 +325,13 @@ describe('daemon E2E fixture', () => {
         }),
       );
 
-      const fake = createFixtureAgentFake(worktreeDir);
+      const fake = createFixtureAgentFake(worktreeDir, { includeBuildReviewProduction: true });
+      const buildReviewEffectiveResolver = async (_root: string, aggregate: unknown) => {
+        const effective = deriveEffectiveBuildReviewVerdict(aggregate);
+        return effective
+          ? { ok: true as const, feature: { version: 'v1' as const, repository: worktreeDir, feature: slug }, effective }
+          : { ok: false as const, reason: 'fixture aggregate is invalid' };
+      };
       const runner = new DefaultStepRunner(
         fake.provider,
         'fixture-build-session',
@@ -327,6 +341,16 @@ describe('daemon E2E fixture', () => {
           pipelineDir,
           planPath,
           providerKey: 'codex',
+          // This fixture has no runnable scoped-test command in its isolated
+          // temporary repository. Disable only the tautology branch; the
+          // other three fan-out branches still exercise the daemon join.
+          config: { build_review: { maxParallel: 4, rubrics: { tautology: { enabled: false } } } },
+          buildReviewInputOptions: {
+            inspectTestSuite: async () => ({
+              status: 'CURRENT', evidence: { provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: worktreeDir })).stdout.trim(), outcome: 'PASS' },
+            } as never),
+          },
+          buildReviewEffectiveResolver,
         },
       );
       let claimed = false;
@@ -354,6 +378,7 @@ describe('daemon E2E fixture', () => {
               mode: 'auto',
               daemon: true,
               verifyArtifacts: false,
+              buildReviewEffectiveResolver,
               fullSuiteVerifier: {
                 ensure: async () => ({
                   status: 'REUSED',
@@ -398,7 +423,7 @@ describe('daemon E2E fixture', () => {
       }).toEqual({
         claimed: true,
         processed: [slug],
-        providerCalls: 3,
+        providerCalls: 5,
         build: 'done',
         buildReview: 'done',
         finish: 'done',

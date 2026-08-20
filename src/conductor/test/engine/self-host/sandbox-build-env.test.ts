@@ -10,6 +10,7 @@ import {
   type SandboxFs,
   withSandboxBuildEnv,
 } from '../../../src/engine/self-host/sandbox-build-env.js';
+import { verifyTokenLiveness } from '../../../src/engine/self-host/token-liveness.js';
 
 describe('minimal Claude self-host sandbox', () => {
   let root: string;
@@ -176,6 +177,76 @@ describe('minimal Claude self-host sandbox', () => {
     await expect(provisionSandboxBuildEnv(options())).rejects.toBeInstanceOf(SandboxProvisionError);
     expect(await readdir(base)).toEqual([]);
   });
+
+  it('keeps Claude sandbox state in worktree scratch while token liveness uses and removes OS temp state', async () => {
+    const { baseDir: _explicitBaseDir, ...defaulted } = options();
+    const scratchRoot = join(worktree, '.daemon', 'scratch', 'run-12', '1-claude');
+    const sandbox = await provisionSandboxBuildEnv({
+      ...defaulted,
+      repository: 'owner/repository',
+      featureSlug: 'sandbox-build-env',
+      runId: 'run-12',
+      attempt: 1,
+    });
+    try {
+      expect([sandbox.configDir, sandbox.childEnv().CLAUDE_CONFIG_DIR]).toEqual([
+        expect.stringMatching(new RegExp(`^${scratchRoot}`)),
+        expect.stringMatching(new RegExp(`^${scratchRoot}`)),
+      ]);
+      const lease = JSON.parse(await readFile(join(scratchRoot, 'owner.json'), 'utf8'));
+      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'sandbox-build-env', runId: 'run-12', attempt: 1, ownerPid: process.pid });
+      expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
+
+      let livenessConfigDir = '';
+      await verifyTokenLiveness({
+        token: 'test-token',
+        spawner: async (_argv, env) => {
+          livenessConfigDir = env.CLAUDE_CONFIG_DIR!;
+          return { exitCode: 0, stdout: JSON.stringify({ is_error: false }), timedOut: false };
+        },
+      });
+      expect(livenessConfigDir.startsWith(`${tmpdir()}/`)).toBe(true);
+      expect(livenessConfigDir.startsWith(`${scratchRoot}/`)).toBe(false);
+      await expect(access(livenessConfigDir)).rejects.toThrow();
+    } finally {
+      await sandbox.teardown();
+    }
+  });
+
+  it('releases the production-written scratch lease when Claude provisioning fails after acquisition', async () => {
+    const { baseDir: _explicitBaseDir, ...defaulted } = options();
+    const scratchHome = join(worktree, '.daemon', 'scratch', 'run-15', '2-claude');
+    let observedLease: Record<string, unknown> | undefined;
+    const failingFs: SandboxFs = {
+      ...realSandboxFs,
+      writeFile: async (path, value) => {
+        if (path.endsWith('settings.json')) {
+          observedLease = JSON.parse(await readFile(join(scratchHome, 'owner.json'), 'utf8'));
+          throw Object.assign(new Error('post-acquire Claude provisioning failure'), { path });
+        }
+        await realSandboxFs.writeFile(path, value);
+      },
+    };
+
+    await expect(provisionSandboxBuildEnv({
+      ...defaulted,
+      repository: 'owner/repository',
+      featureSlug: 'sandbox-build-env-failure',
+      runId: 'run-15',
+      attempt: 2,
+      fs: failingFs,
+    })).rejects.toThrow('post-acquire Claude provisioning failure');
+    expect(observedLease).toMatchObject({
+      repository: 'owner/repository',
+      featureSlug: 'sandbox-build-env-failure',
+      runId: 'run-15',
+      attempt: 2,
+      ownerPid: process.pid,
+    });
+    await expect(access(scratchHome)).rejects.toThrow();
+  });
+
 
   it('keeps the child env isolated and teardown idempotent on the crash path', async () => {
     const parentEnv = { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/operator/.claude' };

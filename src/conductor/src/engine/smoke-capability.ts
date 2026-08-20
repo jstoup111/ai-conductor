@@ -1,8 +1,11 @@
+import { LIVE_E2E_PROVIDERS } from './live-e2e-providers.js';
+
 /** The complete set of capabilities a smoke test may require. */
 export const SMOKE_CAPABILITIES = [
   'hermetic',
   'toolchain',
-  'credentialed',
+  'credentialed:claude',
+  'credentialed:codex',
 ] as const;
 
 export type SmokeCapability = (typeof SMOKE_CAPABILITIES)[number];
@@ -37,7 +40,29 @@ export type AdvisorySmokeCapabilityResolution =
 
 export type GateSmokeCapabilityResolution =
   | { outcome: 'ran' }
+  | { outcome: 'skipped'; provider: 'claude' | 'codex'; unmet: string }
   | { outcome: 'failed'; unmet: string };
+
+type CredentialedSmokeCapability = Extract<SmokeCapability, `credentialed:${string}`>;
+
+/** Resolves a manifest provider to a declared closed credentialed capability. */
+function credentialedSmokeCapability(
+  provider: (typeof LIVE_E2E_PROVIDERS)[number]['id'],
+): CredentialedSmokeCapability {
+  const capability = `credentialed:${provider}`;
+  if (!SMOKE_CAPABILITIES.includes(capability as SmokeCapability)) {
+    throw new Error(`Live E2E provider ${provider} has no declared smoke capability`);
+  }
+  return capability as CredentialedSmokeCapability;
+}
+
+/** Pairs every production manifest provider with its closed credentialed capability. */
+function liveCredentialedSmokeCapabilities(): readonly (readonly [
+  CredentialedSmokeCapability,
+  (typeof LIVE_E2E_PROVIDERS)[number],
+])[] {
+  return LIVE_E2E_PROVIDERS.map((provider) => [credentialedSmokeCapability(provider.id), provider]);
+}
 
 /** The executable required by each smoke file that needs the toolchain capability. */
 const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
@@ -86,6 +111,22 @@ function forceSkipsFile(
 function resolveAdvisorySmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, AdvisorySmokeCapabilityResolution> {
+  const credentialedCapabilities = Object.fromEntries(
+    liveCredentialedSmokeCapabilities().map(([capability, { credentialEnvVar }]) => {
+      return [
+        capability,
+        forceSkipsCapability(environment, capability)
+          ? { outcome: 'skipped', unmet: 'operator override' }
+          : environment[credentialEnvVar]
+          ? { outcome: 'ran' }
+          : { outcome: 'skipped', unmet: credentialEnvVar },
+      ];
+    }),
+  ) as Record<
+    CredentialedSmokeCapability,
+    AdvisorySmokeCapabilityResolution
+  >;
+
   return {
     hermetic: forceSkipsCapability(environment, 'hermetic')
       ? { outcome: 'skipped', unmet: 'operator override' }
@@ -95,11 +136,7 @@ function resolveAdvisorySmokeCapabilities(
       : hasCommand('toolchain')
       ? { outcome: 'ran' }
       : { outcome: 'skipped', unmet: 'toolchain' },
-    credentialed: forceSkipsCapability(environment, 'credentialed')
-      ? { outcome: 'skipped', unmet: 'operator override' }
-      : environment.CLAUDE_CODE_OAUTH_TOKEN
-      ? { outcome: 'ran' }
-      : { outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    ...credentialedCapabilities,
   };
 }
 
@@ -151,6 +188,24 @@ export function resolveGateSmokeFile(
 function resolveGateSmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, GateSmokeCapabilityResolution> {
+  const credentialedCapabilities = Object.fromEntries(
+    liveCredentialedSmokeCapabilities().map(([capability, { id, binaryName, credentialEnvVar }]) => {
+      return [
+        capability,
+        forceSkipsCapability(environment, capability)
+          ? { outcome: 'failed', unmet: 'operator override' }
+          : environment[credentialEnvVar]
+          ? hasCommand(binaryName)
+            ? { outcome: 'ran' }
+            : { outcome: 'failed', unmet: binaryName }
+          : { outcome: 'skipped', provider: id, unmet: credentialEnvVar },
+      ];
+    }),
+  ) as Record<
+    CredentialedSmokeCapability,
+    GateSmokeCapabilityResolution
+  >;
+
   return {
     hermetic: forceSkipsCapability(environment, 'hermetic')
       ? { outcome: 'failed', unmet: 'operator override' }
@@ -160,11 +215,7 @@ function resolveGateSmokeCapabilities(
       : hasCommand('toolchain')
       ? { outcome: 'ran' }
       : { outcome: 'failed', unmet: 'toolchain' },
-    credentialed: forceSkipsCapability(environment, 'credentialed')
-      ? { outcome: 'failed', unmet: 'operator override' }
-      : environment.CLAUDE_CODE_OAUTH_TOKEN
-      ? { outcome: 'ran' }
-      : { outcome: 'failed', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
+    ...credentialedCapabilities,
   };
 }
 
@@ -172,7 +223,7 @@ function resolveGateSmokeCapabilities(
 export function assertGateCredentialedExecution(
   executedCapabilities: readonly SmokeCapability[],
 ): void {
-  if (!executedCapabilities.includes('credentialed')) {
+  if (!executedCapabilities.some((capability) => capability.startsWith('credentialed:'))) {
     throw new Error('Gate-mode smoke run executed no credentialed test files');
   }
 }

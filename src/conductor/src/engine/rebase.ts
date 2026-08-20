@@ -4,6 +4,7 @@ import { join, isAbsolute } from 'node:path';
 import type { StepName } from '../types/index.js';
 import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
+import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { saveStepStatus } from './state.js';
@@ -382,7 +383,6 @@ export function isCodeOrTestPath(path: string): boolean {
   if (p.startsWith('.docs/')) return false;
   if (p.startsWith('docs/')) return false;
   if (/(^|\/)README(\.[A-Za-z]+)?$/i.test(p)) return false;
-  if (/\.(md|mdx|txt|rst)$/i.test(p)) return false;
   // Everything else (src/**, test/**, lib/**, config, etc.) is code/test.
   return true;
 }
@@ -454,7 +454,8 @@ export async function writeHalt(
   projectRoot: string,
   conflicts: string[],
   extraReason?: string,
-): Promise<void> {
+  events?: ConductorEventEmitter,
+): Promise<HaltMarkerWriteResult> {
   const fileList = conflicts.length > 0 ? conflicts.join(', ') : '(unknown)';
   const note =
     `rebase conflict — parked for human resolution\n` +
@@ -465,11 +466,15 @@ export async function writeHalt(
     `  2. git rebase --continue\n` +
     `  3. rm .pipeline/HALT\n` +
     `  4. Re-queue the feature for the daemon.\n`;
-  await writeHaltMarker(projectRoot, note, 'needs-human');
+  return writeHaltMarker(projectRoot, note, 'needs-human', events);
 }
 
 /** Park a seal refusal that happened before git started a rebase. */
-export async function writeSealHalt(projectRoot: string, reason: string): Promise<void> {
+export async function writeSealHalt(
+  projectRoot: string,
+  reason: string,
+  events?: ConductorEventEmitter,
+): Promise<HaltMarkerWriteResult> {
   const note =
     `protected-artifact seal error\n` +
     `${reason}\n\n` +
@@ -478,13 +483,17 @@ export async function writeSealHalt(projectRoot: string, reason: string): Promis
     `  2. Perform an audited reseal with the engine rotation function.\n` +
     `  3. Clear .pipeline/HALT and .pipeline/HALT.class, then re-queue the feature.\n\n` +
     `This refusal happens before and does not start a git rebase; do not run git rebase --continue.\n`;
-  await writeHaltMarker(projectRoot, note, 'needs-human');
+  return writeHaltMarker(projectRoot, note, 'needs-human', events);
 }
 
 // ── Outcome model ────────────────────────────────────────────────────────────
 
 export type RebaseOutcome =
-  | { kind: 'noop' }
+  | {
+      kind: 'noop';
+      /** Complete rebase delta when the base advanced without touching code/test paths. */
+      allChangedPaths?: string[];
+    }
   | {
       kind: 'mergeable_skip';
       /** The ref the skip decision was taken against, e.g. `origin/main`. */
@@ -494,7 +503,13 @@ export type RebaseOutcome =
       /** Whether that ref came from origin or from a local branch. */
       baseKind: 'remote' | 'local';
     }
-  | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
+  | {
+      kind: 'changed';
+      changedCodePaths: string[];
+      /** Complete pre-filter rebase delta; absent when the delta is uncomputable. */
+      allChangedPaths?: string[];
+      featureSurface?: string[];
+    }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
 
 /** A protected-artifact refusal raised before git starts a rebase. */
@@ -771,7 +786,9 @@ async function classifyClean(
     dUncomputable = true;
   }
   const codePaths = filterCodeOrTestPaths(changed);
-  if (!dUncomputable && codePaths.length === 0) return { kind: 'noop' };
+  if (!dUncomputable && codePaths.length === 0) {
+    return { kind: 'noop', allChangedPaths: changed };
+  }
   // F: the feature's own claimed surface — files the feature's commits
   // touched, before the rebase (mergeBase..preTree). Threaded onto the
   // outcome for the delta-aware gate-invalidation classifier (Task 6+);
@@ -791,7 +808,12 @@ async function classifyClean(
       featureSurface = undefined;
     }
   }
-  return { kind: 'changed', changedCodePaths: codePaths, featureSurface };
+  return {
+    kind: 'changed',
+    changedCodePaths: codePaths,
+    ...(dUncomputable ? {} : { allChangedPaths: changed }),
+    featureSurface,
+  };
 }
 
 
@@ -816,10 +838,136 @@ export interface CiFailureContext { worktreePath: string; prUrl: string; hint: s
 export type CiFailureResolver = (ctx: CiFailureContext) => Promise<CiFailureAttempt>;
 
 /**
+ * Was a vanished feature commit's INTENT already realized by the base, rather
+ * than lost?
+ *
+ * A rebase legitimately drops a commit whose work the new base already carries:
+ * the replay empties it, either because the change is verbatim upstream or
+ * because it conflicted with an upstream edit to the same region that a
+ * resolver then settled in the base's favour. Both erase the subject this
+ * guard looks for while losing nothing.
+ *
+ * End-state alone cannot separate that from a `--skip`: after either, HEAD
+ * simply holds the base's shape of the region. What separates them is whether
+ * the dropped commit's own intent survives — so this compares the commit's
+ * diff against HEAD's content of the paths it touched:
+ *
+ *   - every line the commit ADDED is present in HEAD, and
+ *   - no line it REMOVED is back in HEAD
+ *
+ * The upstream-equivalent fix (both sides delete the same dead code) passes:
+ * its removals are gone and it added nothing. A `--skip`'d commit fails: the
+ * content it introduced is simply absent.
+ *
+ * Fails closed — a rename, a binary hunk, or any git failure reports "not
+ * superseded" and the HALT stands.
+ */
+interface DroppedFileEdit {
+  oldPath: string | null;
+  newPath: string | null;
+  added: string[];
+  removed: string[];
+}
+
+/** Count each line of `content`, trimmed. Blank lines are not counted. */
+function lineCounts(content: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const raw of content.split('\n')) {
+    const line = raw.trim();
+    if (line) counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Split a `git show -U0` body into one record per file it touched. */
+function parseDroppedCommitDiff(diff: string): DroppedFileEdit[] | null {
+  const edits: DroppedFileEdit[] = [];
+  let current: DroppedFileEdit | null = null;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      current = { oldPath: null, newPath: null, added: [], removed: [] };
+      edits.push(current);
+      continue;
+    }
+    if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) return null;
+    if (current === null || line.startsWith('@@')) continue;
+    if (line.startsWith('--- ')) {
+      const source = line.slice(4).trim();
+      current.oldPath = source === '/dev/null' ? null : source.replace(/^a\//, '');
+    } else if (line.startsWith('+++ ')) {
+      const target = line.slice(4).trim();
+      current.newPath = target === '/dev/null' ? null : target.replace(/^b\//, '');
+    } else if (line.startsWith('+')) {
+      const body = line.slice(1).trim();
+      if (body) current.added.push(body);
+    } else if (line.startsWith('-')) {
+      const body = line.slice(1).trim();
+      if (body) current.removed.push(body);
+    }
+  }
+  return edits;
+}
+
+async function supersededByBase(git: GitRunner, sha: string): Promise<boolean> {
+  // -U0: hunk bodies carry only the commit's own +/- lines, no context.
+  const show = await git(['show', '--format=', '--unified=0', '--no-renames', sha]);
+  if (show.exitCode !== 0) return false;
+  const edits = parseDroppedCommitDiff(show.stdout);
+  if (edits === null) return false;
+  // A commit with no diff offers no evidence that its intent survives. Absence
+  // of evidence is not supersession: fail closed and let the HALT stand.
+  if (edits.length === 0) return false;
+
+  for (const edit of edits) {
+    if (edit.newPath === null) {
+      // The commit deleted the file: its intent survives only if HEAD has no
+      // such file either.
+      if (edit.oldPath === null) return false;
+      const stillThere = await git(['cat-file', '-e', `HEAD:${edit.oldPath}`]);
+      if (stillThere.exitCode === 0) return false;
+      continue;
+    }
+
+    const head = await git(['show', `HEAD:${edit.newPath}`]);
+    if (head.exitCode !== 0) {
+      // HEAD dropped the file. Anything the commit added is gone with it; a
+      // pure deletion's intent is satisfied.
+      if (edit.added.length > 0) return false;
+      continue;
+    }
+    const headCounts = lineCounts(head.stdout);
+
+    // Additions must be present at least as often as the commit introduced them.
+    for (const [line, count] of lineCounts(edit.added.join('\n'))) {
+      if ((headCounts.get(line) ?? 0) < count) return false;
+    }
+
+    // Removals are judged against the commit's OWN parent, not by bare presence:
+    // a structural line like `});` legitimately survives elsewhere in the file.
+    // What must hold is that HEAD carries no more copies than the removal left.
+    if (edit.removed.length === 0) continue;
+    const parentPath = edit.oldPath ?? edit.newPath;
+    const parent = await git(['show', `${sha}^:${parentPath}`]);
+    if (parent.exitCode !== 0) return false;
+    const parentCounts = lineCounts(parent.stdout);
+    for (const [line, count] of lineCounts(edit.removed.join('\n'))) {
+      if ((headCounts.get(line) ?? 0) > (parentCounts.get(line) ?? 0) - count) return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Check whether every commit subject from before the rebase is still present in
  * the current `baseRef..HEAD` range. Subject-set membership (not patch-id) lets
  * a conflict resolution legitimately change a commit's diff while keeping its
  * subject; a --skip'd commit loses its subject entirely and is caught here.
+ *
+ * A missing subject is not lost work on its own: when the base already carries
+ * the commit's change, the replay empties it and git drops it. Each missing
+ * subject is therefore resolved back to its pre-rebase commit (via `ORIG_HEAD`,
+ * the tip git recorded before replaying) and put through {@link supersededByBase}
+ * before the guard reports loss. A subject that cannot be resolved fails closed.
  *
  * Empty `subjectsBefore` → true (nothing to lose).
  */
@@ -834,7 +982,26 @@ export async function featureCommitsPreserved(
   const currentSubjects = new Set(
     r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0),
   );
-  return subjectsBefore.every((s) => currentSubjects.has(s));
+  const missing = subjectsBefore.filter((s) => !currentSubjects.has(s));
+  if (missing.length === 0) return true;
+
+  // NUL-delimited so a subject containing whitespace still splits correctly.
+  const pre = await git(['log', '--format=%H%x00%s', `${baseRef}..ORIG_HEAD`]);
+  if (pre.exitCode !== 0) return false;
+  const shaBySubject = new Map<string, string>();
+  for (const line of pre.stdout.split('\n')) {
+    const [sha, subject] = line.split('\0');
+    if (!sha?.trim() || subject === undefined) continue;
+    // First writer wins: the newest commit carrying a repeated subject.
+    if (!shaBySubject.has(subject.trim())) shaBySubject.set(subject.trim(), sha.trim());
+  }
+
+  for (const subject of missing) {
+    const sha = shaBySubject.get(subject);
+    if (!sha) return false;
+    if (!(await supersededByBase(git, sha))) return false;
+  }
+  return true;
 }
 
 /**
@@ -883,6 +1050,16 @@ export async function resolveRebaseConflicts(
     // Not actually mid-rebase — nothing to do.
     return conflictOutcome;
   }
+
+  // The rebase state retains ORIG_HEAD while paused: it is the feature tip
+  // before replay began. Its merge-base with `onto` is the base before the
+  // advance. That range is supplementary attribution only: gate
+  // invalidation retains its established `onto..HEAD` replayed-path contract.
+  const preAdvanceBaseResult = await git(['merge-base', 'ORIG_HEAD', onto]);
+  const preAdvanceBase =
+    preAdvanceBaseResult.exitCode === 0 && preAdvanceBaseResult.stdout.trim()
+      ? preAdvanceBaseResult.stdout.trim()
+      : undefined;
 
   // Feature commit subjects that must survive: all commits in <onto>..ORIG_HEAD.
   // ORIG_HEAD is the pre-rebase feature tip (set by git before it starts replaying).
@@ -945,11 +1122,46 @@ export async function resolveRebaseConflicts(
       };
     }
 
-    // Both guards pass — reclassify by whether code/test paths changed.
-    const changed = filterCodeOrTestPaths(await changedPathsBetween(git, onto, 'HEAD'));
-    return changed.length > 0
-      ? { kind: 'changed', changedCodePaths: changed }
-      : { kind: 'noop' };
+    // Both guards pass. `onto..HEAD` is the established invalidation set for
+    // a resolved rebase. Preserve it even when complete base-advance
+    // attribution is unavailable.
+    let changedCodePaths: string[];
+    try {
+      const replayed = await git(['diff', '--name-only', onto, 'HEAD']);
+      if (replayed.exitCode !== 0) {
+        return { kind: 'changed', changedCodePaths: [] };
+      }
+      changedCodePaths = filterCodeOrTestPaths(
+        replayed.stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0),
+      );
+    } catch {
+      return { kind: 'changed', changedCodePaths: [] };
+    }
+
+    // The complete pre-advance-base..onto delta is optional metadata. It
+    // describes all base changes for readers that need attribution, but must
+    // never alter the established changedCodePaths invalidation contract or
+    // turn a successfully resolved rebase into a conflict halt.
+    let allChangedPaths: string[] | undefined;
+    if (preAdvanceBase !== undefined) {
+      try {
+        const delta = await git(['diff', '--name-only', preAdvanceBase, onto]);
+        if (delta.exitCode === 0) {
+          allChangedPaths = delta.stdout
+            .split('\n')
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+        }
+      } catch {
+        // Complete-delta attribution is optional after resolution succeeds.
+      }
+    }
+    return changedCodePaths.length > 0
+      ? { kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
+      : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
   }
 
   // All cap attempts consumed without the rebase completing.
@@ -1283,7 +1495,15 @@ export async function emitRebaseEvent(
   try {
     switch (outcome.kind) {
       case 'noop':
-        await events.emit({ type: 'rebase_noop' });
+        await events.emit(
+          outcome.allChangedPaths === undefined
+            ? { type: 'rebase_noop' }
+            : {
+                type: 'rebase_changed',
+                changedPaths: [],
+                allChangedPaths: outcome.allChangedPaths,
+              },
+        );
         break;
       case 'mergeable_skip':
         await events.emit({
@@ -1297,11 +1517,15 @@ export async function emitRebaseEvent(
         await events.emit({
           type: 'rebase_changed',
           changedPaths: outcome.changedCodePaths,
+          ...(outcome.allChangedPaths === undefined
+            ? {}
+            : { allChangedPaths: outcome.allChangedPaths }),
         });
         break;
       case 'conflict_halt':
         await events.emit({
           type: 'rebase_conflict_halt',
+          step: 'rebase',
           reason: outcome.reason,
           conflicts: outcome.conflicts,
         });

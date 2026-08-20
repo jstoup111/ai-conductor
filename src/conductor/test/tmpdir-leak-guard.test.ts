@@ -3,7 +3,7 @@
 // No vitest wiring involved: each seam is exercised directly, the same split
 // used by signals-leak-guard.test.ts and global-setup-engineer-signals.test.ts.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, realpath, readdir, rm, symlink, writeFile } from 'fs/promises';
+import { chmod, mkdtemp, mkdir, realpath, readdir, rm, symlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -141,6 +141,18 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
     expect(existsSync(runRoot)).toBe(false);
     // The real tmpdir itself survives — only the run root is reclaimed.
     expect(await readdir(fakeRealTmpdir)).toEqual([]);
+  });
+
+  it('removes a run root containing a read-only fixture directory', async () => {
+    const runRoot = await createRunTmpRoot(fakeRealTmpdir);
+    const protectedDir = join(runRoot, 'fixture', '.pipeline');
+    await mkdir(protectedDir, { recursive: true });
+    await writeFile(join(protectedDir, 'task-status.json'), '{}\n', 'utf-8');
+    await chmod(protectedDir, 0o555);
+
+    await removeRunTmpRoot(runRoot);
+
+    expect(existsSync(runRoot)).toBe(false);
   });
 
   it('treats an already-absent run root as success (interrupted run, manual cleanup)', async () => {

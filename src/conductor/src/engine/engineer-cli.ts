@@ -41,7 +41,7 @@ import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter — the
 // engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
 import { brainLoopAlive } from './engineer/brain-liveness.js';
-import { createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
+import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
@@ -743,7 +743,17 @@ export async function dispatchEngineer(
   const registryPath = opts.registryPath;
   const engineerDir = opts.engineerDir;
 
-  switch (dispatch.kind) {
+  const reportCorruptLedger = (error: CorruptLedgerError): number => {
+    const quarantineLocation = error.quarantinePath ?? error.quarantineDiagnostic ?? 'unavailable';
+    printErr(
+      `engineer ${dispatch.kind}: intake ledger is corrupt at ${error.ledgerPath}; ` +
+        `quarantine path: ${quarantineLocation}; ledger was not modified.`,
+    );
+    return 1;
+  };
+
+  try {
+    switch (dispatch.kind) {
     // ── launch ──────────────────────────────────────────────────────────────────
     // Bare `conduct-ts engineer`: drop the operator into the interactive /engineer loop.
     case 'launch': {
@@ -805,9 +815,13 @@ export async function dispatchEngineer(
             if (n > 0) print(`Intake: ${n} issue(s) queued.`);
           } catch (err: unknown) {
             // Best-effort: intake must never block the interactive loop.
-            printErr(
-              `engineer: intake pre-poll failed (${err instanceof Error ? err.message : String(err)}) — continuing.`,
-            );
+            if (err instanceof CorruptLedgerError) {
+              return reportCorruptLedger(err);
+            } else {
+              printErr(
+                `engineer: intake pre-poll failed (${err instanceof Error ? err.message : String(err)}) — continuing.`,
+              );
+            }
           }
         }
         try {
@@ -1041,9 +1055,13 @@ export async function dispatchEngineer(
               });
             }
           } catch (e: unknown) {
-            printErr(
-              `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
-            );
+            if (e instanceof CorruptLedgerError) {
+              throw e;
+            } else {
+              printErr(
+                `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            }
             // Continue — handoff still succeeds
           }
         }
@@ -1064,7 +1082,6 @@ export async function dispatchEngineer(
       }
 
       if (handoffResult.kind === 'pr-opened') {
-        print(JSON.stringify({ kind: 'pr-opened', url: handoffResult.url }));
         // Intake write-back (FR-36): a real spec PR was opened — comment its URL,
         // apply `engineer:handled`, and advance the ledger to `done`. Advisory —
         // a gh failure never reverts a delivered PR. Only on a PR (not local-commit,
@@ -1078,6 +1095,7 @@ export async function dispatchEngineer(
             branch,
           );
         }
+        print(JSON.stringify({ kind: 'pr-opened', url: handoffResult.url }));
       } else {
         // pr-skipped — record authored key manually (openSpecPr already records on skip).
         // Task 9: Also record branch evidence in the ledger if sourceRef is present.
@@ -1093,9 +1111,13 @@ export async function dispatchEngineer(
               });
             }
           } catch (e: unknown) {
-            printErr(
-              `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
-            );
+            if (e instanceof CorruptLedgerError) {
+              throw e;
+            } else {
+              printErr(
+                `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            }
             // Continue — handoff still succeeds
           }
         }
@@ -1224,7 +1246,8 @@ export async function dispatchEngineer(
       await queue.ack(envelope);
       try {
         await ledger.transition(envelope.source, envelope.sourceRef, 'claimed');
-      } catch {
+      } catch (error: unknown) {
+        if (error instanceof CorruptLedgerError) throw error;
         // Entry may be absent for a non-recording source — advisory transition.
       }
       // FR-13: persist a claim record so `engineer worktree --source-ref` can later
@@ -1528,5 +1551,9 @@ export async function dispatchEngineer(
       print(`migrate-issue-deps: ${created} link(s) created, ${alreadyPresent} already present.`);
       return 0;
     }
+    }
+  } catch (error: unknown) {
+    if (error instanceof CorruptLedgerError) return reportCorruptLedger(error);
+    throw error;
   }
 }

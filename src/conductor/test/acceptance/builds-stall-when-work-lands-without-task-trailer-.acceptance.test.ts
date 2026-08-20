@@ -133,6 +133,7 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     [
       '.pipeline/acceptance-specs-red.json',
       JSON.stringify({
+        outcome: 'specs-generated',
         command: 'bundle exec rspec spec/acceptance',
         targetSpecs: ['spec/acceptance/feature_spec.rb'],
         executed: 1,
@@ -821,7 +822,7 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['no plan task was ever resolved'],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
               codeStamp: headSha.trim(),
             }),
           );
@@ -939,7 +940,7 @@ describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
             JSON.stringify({
               verdict: 'FAIL',
               reasons: ['plan task 3 was never resolved'],
-              rubric: { tautology: false, scope: false, rootCause: false, completeness: true, wiring: false },
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
               codeStamp: headSha.trim(),
             }),
           );

@@ -58,3 +58,8 @@ export function renderSkillInvocation(
   const prefix = providerKey === 'codex' ? '$' : '/';
   return [`${prefix}${descriptor.skillName}`, ...descriptor.arguments].join(' ');
 }
+
+/** Render a registry-owned auxiliary skill without pretending it is a StepName. */
+export function renderAuxiliarySkillInvocation(skillName: string, providerKey: string): string {
+  return renderSkillInvocation({ kind: 'skill', skillName, arguments: [] }, providerKey);
+}

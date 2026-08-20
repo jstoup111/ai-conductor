@@ -14,6 +14,7 @@ import {
   readStepHeartbeat,
 } from './step-heartbeat.js';
 import { readFullSuiteEvidence } from './full-suite-evidence.js';
+import { computeBuildReviewMetrics, readMergedFeatureEvents } from './build-tail-rollup.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -157,6 +158,8 @@ export interface ParkedEntry {
 }
 
 export interface InheritedState {
+  /** Optional read-only build-review summary; skipped coverage is never a pass. */
+  buildReviewMetrics?: { lapsToPass?: number; skipped: number; cacheHits: number; infrastructureFailures: number; rubricFailureRates?: Record<string, { failures: number; judged: number }>; skipReasons?: Record<string, number> };
   halted: HaltedEntry[];
   inProgress: InProgressEntry[];
   eligible: EligibleEntry[];
@@ -498,6 +501,22 @@ export async function scanInheritedState(
   const processedSlugs = new Set(processed.map((p) => p.slug));
   const processedBySlug = new Map(processed.map((entry) => [entry.slug, entry]));
   const slugs = await listWorktreeSlugs(deps.worktreeBase);
+  const featureEvents = await Promise.all(slugs.map(async (slug) => {
+    try {
+      return await readMergedFeatureEvents(join(deps.worktreeBase, slug));
+    } catch (err) {
+      deps.log?.(
+        `dashboard: skipped build-review metrics for ${slug} (${err instanceof Error ? err.message : String(err)})`,
+      );
+      return undefined;
+    }
+  }));
+  const mergedFeatureEvents = featureEvents.flatMap((events) => events ?? []);
+  const buildReviewMetrics = mergedFeatureEvents.some((event) =>
+    typeof event.type === 'string' && event.type.startsWith('build_review_'),
+  )
+    ? computeBuildReviewMetrics(mergedFeatureEvents)
+    : undefined;
 
   const halted: HaltedEntry[] = [];
   const haltedSlugs = new Set<string>();
@@ -693,6 +712,7 @@ export async function scanInheritedState(
   }
 
   return {
+    buildReviewMetrics,
     halted,
     inProgress,
     eligible,
@@ -848,6 +868,15 @@ export function renderDashboard(
 ): string {
   const lines: string[] = [];
   lines.push('── inherited state ──────────────────────────────────────────');
+  if (state.buildReviewMetrics) {
+    const metrics = state.buildReviewMetrics;
+    lines.push(`BUILD REVIEW: laps-to-pass=${metrics.lapsToPass ?? 'not reached'}; reduced coverage (skipped, not pass)=${metrics.skipped}; cache-hits=${metrics.cacheHits}; infrastructure-failures=${metrics.infrastructureFailures}`);
+    for (const [rubric, rate] of Object.entries(metrics.rubricFailureRates ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+      lines.push(`  raw ${rubric}: failures=${rate.failures}/${rate.judged}`);
+    }
+    const skipReasons = Object.entries(metrics.skipReasons ?? {});
+    if (skipReasons.length > 0) lines.push(`  skip reasons: ${skipReasons.map(([reason, count]) => `${reason}=${count}`).join(', ')}`);
+  }
 
   // PARKED (FR-6) has ABSOLUTE precedence over every other group: it renders
   // FIRST, and a parked slug is excluded from HALTED, PROCESSED, IN-PROGRESS,

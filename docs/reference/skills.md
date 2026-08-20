@@ -527,8 +527,9 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 `test-suite` and `wiring-check` have no `SKILL.md` — both `test_suite` (index 14) and `wiring_check`
 (index 13) are **engine-native** BUILD steps. `test_suite` obtains a current result from the
-repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility;
-wiring reachability is judged by `build_review`. The two names remain in `build_verification` (see
+repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility.
+`build_review` fans out to the engine-managed Tautology, Scope, Root Cause, and Completeness rubric
+skills; their raw verdicts are joined before effective dispositions are applied. The two names remain in `build_verification` (see
 [The build verification group](steps.md#the-build-verification-group)); it fans out after `build` and
 joins before `build_review`.
 
@@ -571,14 +572,18 @@ joins before `build_review`.
 
 ### remediate
 
-> Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
+> Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `remediate` (out-of-band, SHIP, prerequisite `prd_audit`). Engine enforcement is
   `advisory`. Deliberately outside the sequential list so the loop never dispatches it unconditionally.
-- **Inputs** — `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
-  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`.
+- **Inputs** — `.pipeline/build-review.json` (present when a `build_review` FAIL dispatches
+  remediation), `.pipeline/prd-audit.md`, `.pipeline/architecture-review-as-built.md`,
+  `.pipeline/test-failures.md`, and `.pipeline/build-stall-question.md`. A `build_review`-sourced
+  dispatch also carries best-effort `plan contract:` and `prior attempts:` pointer lines (see
+  [gates](../explanation/gates.md#where-a-build_review-fail-goes)); the skill treats a referenced plan
+  task's Steps as the governing repair contract and prior-attempt artifacts as context only.
 - **Outputs** — `.pipeline/remediation.json`, overwritten each run. The engine then appends each task
   into the feature's plan. No completion glob — the engine reads the JSON directly to route.
 - **Gate role** — advisory; it is the unblocker rather than a blocker. HALT is reserved for exactly

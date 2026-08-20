@@ -8,6 +8,8 @@ import {
 } from '../../src/engine/cost-rollup.js';
 import { classifyMetering } from '../../src/engine/metering.js';
 import { formatFeatureUsageTotal } from '../../src/execution/provider-diagnostics.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 describe('engine/cost-rollup', () => {
   let dir: string;
@@ -120,6 +122,33 @@ describe('engine/cost-rollup', () => {
     expect(rollup.retries).toBe(1);
     expect(rollup.halts).toBe(1);
     expect(rollup.unmetered).toEqual({ count: 0, durationMs: 0 });
+  });
+
+  it('counts a loop halt only when the production event sink persists it', async () => {
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await events.emit({ type: 'loop_halt', reason: 'retry budget exhausted' });
+      expect((await computeCostRollup(dir)).halts).toBe(1);
+    } finally {
+      persister.stop();
+    }
+
+    const noHaltDir = await mkdtemp(join(tmpdir(), 'cost-rollup-no-halt-'));
+    const noHaltEvents = new ConductorEventEmitter();
+    const noHaltPersister = new EventPersister(join(noHaltDir, '.pipeline', 'events.jsonl'), noHaltEvents);
+    try {
+      noHaltPersister.start();
+      await noHaltEvents.emit({
+        type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'tests failed',
+      });
+      noHaltPersister.stop();
+      expect((await computeCostRollup(noHaltDir)).halts).toBe(0);
+    } finally {
+      noHaltPersister.stop();
+      await rm(noHaltDir, { recursive: true, force: true });
+    }
   });
 
   it('attributes every provider attempt without double-counting successful step totals', async () => {
@@ -437,6 +466,7 @@ describe('engine/cost-rollup', () => {
         costUsd: 3.75,
         inputTokens: 2000,
         outputTokens: 500,
+        cachedInputTokens: 0,
       });
       expect(formatFeatureUsageTotal(totals)).toBe(
         'finish: total usage — 3 dispatches, $3.75, 2k→500 tok, 1 unmetered',

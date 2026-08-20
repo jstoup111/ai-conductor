@@ -3,6 +3,7 @@ export interface ReleasePublisherConfig {
   branch: string;
   base: string;
   appLogin: string;
+  stableBranch?: string;
 }
 
 /** The push event observed by the publisher workflow. */
@@ -27,6 +28,7 @@ export interface ReleasePublisherGit {
   /** Read an existing annotated tag so a retry cannot recreate or overwrite it. */
   readAnnotatedTag(tag: string): Promise<{ commit: string } | undefined>;
   createAnnotatedTag(input: { tag: string; commit: string; message: string }): Promise<void>;
+  updateStableBranch?(input: { branch: string; commit: string }): Promise<void>;
 }
 
 export interface ReleasePublisherGithub {
@@ -75,6 +77,13 @@ export async function runReleasePublisherAction(
 
   const publicationAuthority = await publishRelease(input);
   if (publicationAuthority.state !== 'publishable') return publicationAuthority;
+
+  if (input.config.stableBranch !== undefined) {
+    if (input.git.updateStableBranch === undefined) {
+      return { state: 'rejected', reason: 'Stable branch publication is configured without an update seam.' };
+    }
+    await input.git.updateStableBranch({ branch: input.config.stableBranch, commit: input.event.commit });
+  }
 
   return { state: 'published', version: publicationAuthority.version };
 }

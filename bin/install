@@ -883,38 +883,32 @@ configure_mermaid_renderer() {
 
 # ─── AI Conductor config (channel, current version) ──────────────────────────
 
-# Detect the current harness version from git tag or VERSION file.
-# Returns "vX.Y.Z" when on an exact tag, "vX.Y.Z" from VERSION as a fallback,
-# or "main@<short-sha>" when on main.
+# Detect the current harness identity from the checkout.
+# Stable and tagged installs record the resolver's release baseline, never the
+# VERSION file — an off-tag checkout reads its own VERSION as the latest release
+# and reports up-to-date forever. Main installs retain their distinct
+# main@<short-sha> identity.
 detect_current_version() {
-  local tag
-  tag=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD 2>/dev/null || echo "")
-  if [ -n "$tag" ]; then
-    echo "$tag"
+  local channel=${1:-tagged} kind identity baseline distance source sha
+
+  if [ "$channel" = "main" ]; then
+    sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    printf 'main@%s\n' "$sha"
     return 0
   fi
-  if [ -f "${HARNESS_DIR}/VERSION" ]; then
-    local v
-    v=$(tr -d '[:space:]' < "${HARNESS_DIR}/VERSION")
-    if [ -n "$v" ]; then
-      echo "v$v"
-      return 0
-    fi
-  fi
-  local sha
-  sha=$(git -C "$HARNESS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  echo "main@$sha"
+
+  IFS=$'\t' read -r kind identity baseline distance source \
+    <<< "$(resolve_harness_identity "$HARNESS_DIR")"
+  case "$kind" in
+    release|post-release) printf '%s\n' "$baseline" ;;
+    *) printf '\n' ;;
+  esac
 }
 
 # Create or refresh the schema-owned conductor block in ~/.ai-conductor/config.yml.
-# First run: prompt for channel (tagged vs main). Update mode: refresh the
+# First run: prompt for channel (stable, tagged, or main). Update mode: refresh the
 # current version and check timestamp while preserving user preferences.
 configure_conductor() {
-  local detected
-  detected=$(detect_current_version)
-  local now
-  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
   # Seed before deciding whether this is a first run. A legacy-only install
   # becomes a populated conductor block, whose user preferences must win over
   # first-run defaults.
@@ -923,20 +917,31 @@ configure_conductor() {
     return 1
   fi
 
+  local channel="tagged"
+  if [ -f "$HARNESS_USER_CONFIG" ]; then
+    channel=$(conductor_cfg_get updateChannel tagged) || return 1
+  fi
+  local now
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
   if [ ! -f "$HARNESS_USER_CONFIG" ]; then
     # First run — pick a channel.
-    local channel="tagged"
+    channel="stable"
     if [ "$UPDATE_MODE" != true ] && [ -t 0 ]; then
       echo ""
       info "Harness update channel — which version should /conduct follow?"
-      echo "    1) tagged  — stable semver releases (recommended)"
-      echo "    2) main    — bleeding edge, every merge to main"
+      echo "    1) stable  — stable release channel (recommended)"
+      echo "    2) tagged  — immutable semver release pin"
+      echo "    3) main    — bleeding edge, every merge to main"
       read -r -p "  Choice [1]: " choice
       case "$choice" in
-        2) channel="main" ;;
-        *) channel="tagged" ;;
+        2) channel="tagged" ;;
+        3) channel="main" ;;
+        *) channel="stable" ;;
       esac
     fi
+    local detected
+    detected=$(detect_current_version "$channel")
     if conductor_cfg_set updateChannel "$channel" && \
       conductor_cfg_set autoCheck true && \
       conductor_cfg_set currentVersion "$detected" && \
@@ -948,6 +953,8 @@ configure_conductor() {
     fi
   else
     # Update — refresh currentVersion + lastCheckedAt, preserve everything else.
+    local detected
+    detected=$(detect_current_version "$channel")
     if conductor_cfg_set currentVersion "$detected" && \
       conductor_cfg_set lastCheckedAt "$now"; then
       ok "Refreshed conductor configuration (version: ${detected})"

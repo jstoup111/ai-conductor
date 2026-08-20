@@ -4,11 +4,77 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
+import { fork, type ChildProcess } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 async function loadLedger() {
   return import('../../../../src/engine/engineer/intake/ledger.js') as Promise<any>;
+}
+
+interface WorkerMessage {
+  kind: 'ready' | 'done' | 'failed';
+  reason?: string;
+}
+
+const here = dirname(fileURLToPath(import.meta.url));
+const workerPath = join(here, '../../../fixtures/intake-ledger-record-worker.ts');
+
+function waitForWorkerMessage(child: ChildProcess, kind: WorkerMessage['kind']): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      child.off('message', onMessage);
+      child.off('exit', onExit);
+      child.off('error', onError);
+    };
+    const onMessage = (message: unknown) => {
+      const candidate = message as Partial<WorkerMessage>;
+      if (candidate.kind !== kind && candidate.kind !== 'failed') return;
+      cleanup();
+      if (candidate.kind === 'failed') reject(new Error(candidate.reason ?? 'ledger worker failed'));
+      else resolve();
+    };
+    const onExit = (code: number | null) => {
+      cleanup();
+      reject(new Error(`ledger worker exited before ${kind} (code ${String(code)})`));
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    child.on('message', onMessage);
+    child.on('exit', onExit);
+    child.on('error', onError);
+  });
+}
+
+function waitForWorkerExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => child.once('exit', () => resolve()));
+}
+
+async function concurrentlyRecord(ledgerPath: string, sourceRefs: string[]): Promise<void> {
+  const children = sourceRefs.map((sourceRef) =>
+    fork(workerPath, [JSON.stringify({ ledgerPath, sourceRef })], {
+      execArgv: ['--import', 'tsx'],
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    }),
+  );
+
+  try {
+    await Promise.all(children.map((child) => waitForWorkerMessage(child, 'ready')));
+    const completions = children.map((child) => waitForWorkerMessage(child, 'done'));
+    for (const child of children) child.send('go');
+    await Promise.all(completions);
+  } finally {
+    const exits = children.map(waitForWorkerExit);
+    for (const child of children) {
+      if (child.connected) child.disconnect();
+      if (child.exitCode === null) child.kill();
+    }
+    await Promise.all(exits);
+  }
 }
 
 let dir: string;
@@ -53,6 +119,33 @@ describe('FR-34 exactly-once / no false dedup', () => {
     const l = createLedger(join(dir, 'ledger.json'));
     await l.record({ source: 'github-issues', sourceRef: 'o/a#1' });
     expect(await l.known('github-issues', 'o/a#2')).toBe(false);
+  });
+
+  it('persists distinct refs and preserves a duplicate ref capturedAt across concurrent processes', async () => {
+    const { createLedger } = await loadLedger();
+    const distinctRefs = ['o/a#1', 'o/a#2', 'o/a#3'];
+    const sameRef = 'o/a#same';
+    const distinctLedgerPath = join(dir, 'distinct-ledger.json');
+    const sameLedgerPath = join(dir, 'same-ledger.json');
+
+    await concurrentlyRecord(distinctLedgerPath, distinctRefs);
+    await concurrentlyRecord(sameLedgerPath, [sameRef, sameRef, sameRef]);
+    const initialSameEntry = (await createLedger(sameLedgerPath).list())[0];
+    await concurrentlyRecord(sameLedgerPath, [sameRef, sameRef, sameRef]);
+
+    expect({
+      distinctEntries: (await createLedger(distinctLedgerPath).list())
+        .map((entry: { source: string; sourceRef: string }) => [entry.source, entry.sourceRef])
+        .sort(),
+      sameRefEntries: await createLedger(sameLedgerPath).list(),
+    }).toEqual({
+      distinctEntries: distinctRefs.map((sourceRef) => ['github-issues', sourceRef]),
+      sameRefEntries: [expect.objectContaining({
+        source: 'github-issues',
+        sourceRef: sameRef,
+        capturedAt: initialSameEntry.capturedAt,
+      })],
+    });
   });
 });
 

@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { validateConfig } from '../../src/engine/config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -79,6 +81,7 @@ import { runDaemon, type BacklogItem, type DaemonDeps } from '../../src/engine/d
 //    breaker', ...)` block — those helpers are file-private there). ────────
 
 const RED_EVIDENCE_JSON = JSON.stringify({
+  outcome: 'specs-generated',
   command: 'bundle exec rspec spec/acceptance',
   targetSpecs: ['spec/acceptance/feature_spec.rb'],
   executed: 1,
@@ -319,19 +322,24 @@ describe('S4: absolute attempt ceiling backstops slow-drip within a dispatch (ne
   let dir: string;
   let statePath: string;
   let events: ConductorEventEmitter;
+  let persister: EventPersister;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'progress-halt-s4-'));
     statePath = join(dir, 'conduct-state.json');
     events = new ConductorEventEmitter();
+    persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    persister.start();
   });
 
   afterEach(async () => {
+    persister.stop();
     await rm(dir, { recursive: true, force: true });
   });
 
   it('attempt_ceiling=5 with a +1-per-attempt runner over 100 tasks stops at exactly 5 attempts with a progressing-hit-ceiling reason, never "tasks not completed"', async () => {
     await seedAllArtifactsExceptTaskStatus(dir);
+    await writeFile(join(dir, '.pipeline', 'pipeline-events.jsonl'), '');
     const TOTAL = 100;
     const CEILING = 5;
     let progress = 0;
@@ -374,6 +382,39 @@ describe('S4: absolute attempt ceiling backstops slow-drip within a dispatch (ne
     expect(loopHaltEvents[0].reason).toMatch(/progressing.*(hit|reached).{0,20}attempt ceiling/i);
     expect(loopHaltEvents[0].reason).not.toMatch(/tasks not completed/i);
     expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+
+    const ledger = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as {
+        type: string;
+        step?: string;
+        activeInterval?: { startedAtMs: number; durationMs: number };
+      });
+    const terminalIndexes = ledger.flatMap((event, index) =>
+      event.type === 'step_completed' || event.type === 'step_failed' ? [index] : [],
+    );
+    const terminals = terminalIndexes.map((index) => ledger[index]!);
+    const loopHaltIndex = ledger.findIndex((event) => event.type === 'loop_halt');
+    const countsByStep = (events: readonly { step?: string }[]) =>
+      events.reduce((counts, event) => {
+        if (event.step !== undefined) {
+          counts.set(event.step, (counts.get(event.step) ?? 0) + 1);
+        }
+        return counts;
+      }, new Map<string, number>());
+    const startedByStep = countsByStep(ledger.filter((event) => event.type === 'step_started'));
+    const terminalByStep = countsByStep(terminals);
+
+    expect([...terminalByStep.entries()].sort()).toEqual([...startedByStep.entries()].sort());
+    expect(terminals.every((event) =>
+      event.activeInterval !== undefined && event.activeInterval.durationMs >= 0,
+    )).toBe(true);
+    expect(terminalIndexes.every((index) => index < loopHaltIndex)).toBe(true);
+    expect(terminals.some((event) => event.step === 'build')).toBe(true);
+    const timing = await computeTimingRollup(dir);
+    expect(timing.state).toBe('measured');
+    expect('reason' in timing && timing.reason?.startsWith('open-executions:')).toBe(false);
   });
 });
 

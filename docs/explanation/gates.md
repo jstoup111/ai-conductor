@@ -93,7 +93,10 @@ task state never blocks a build.
 At `build_review`, the containment floor writes `.pipeline/containment-floor.json`. Every violation is also
 printed in the step output and warning log with its task id, commit SHA, and offending paths. Every accepted
 widening is supplied directly to the isolated grader with its path, rationale, task id, and commit SHA, because
-the grader receives the branch diff rather than commit messages.
+the grader judges the branch diff rather than commit messages. The rubric projection carries that diff by
+reference — per-file paths, change kinds, and hunk line ranges anchored to the merge base — and the grader
+session, running inside the feature worktree, reads the referenced file contents and per-path diffs itself
+instead of receiving the raw diff text inline.
 
 ### Declared pattern replication check
 
@@ -121,7 +124,7 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `plan` | a plan that does not cover the feature's stories, scoped to this feature's plan and stories |
 | `build` | tasks reported complete without work — task rows are re-seeded and re-derived from the plan each evaluation, so a forged row fails |
 | `acceptance_specs` | acceptance specs that never ran — proof is required that this feature's specs executed *and failed*, so a collection error or a skipped spec cannot pass for RED |
-| `build_review` | an incomplete or unreachable build — a fresh PASS verdict against its all-or-FAIL rubric, including static wiring reachability, judged from the diff rather than from self-reports |
+| `build_review` | an incomplete build — four independently judged Tautology, Scope, Root Cause, and Completeness raw verdicts joined into a fresh effective PASS, judged from the diff rather than self-reports |
 | `wiring_check` | no active check — a deprecated compatibility step retained so existing state, config, and prerequisites continue to resolve |
 | `test_suite` | a stale green — the fingerprint is re-inspected every time, so the evidence file's existence can never satisfy it |
 | `manual_test` | a whitewashed retest — after a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
@@ -132,6 +135,13 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `finish` (release readiness) | a configured release-disposition result that is missing, stale, malformed, or unreadable — FINISH reports the exact typed condition before dispatching prose authoring or judgment, or making a publication mutation |
 | `finish` (prose authorship) | a retained PR whose body is still the engine-seeded placeholder — the coordinator dispatches its `author_pr_prose` pass (with the branch diff and the feature's spec artifacts) and accepts it only when re-observation shows the placeholder classification gone. The judgment pass is therefore never handed an unauthored body, and no prose defect commits the shipped record, so a prose halt stays re-dispatchable |
 | `finish` (presentation) | a PR shipping with halt boilerplate or an engine-generated body-floor marker — either classification keeps a bounded prose pass required and prevents the final outcome record. Every completion-gate refusal in this class is classified `missing: 'presentation'`, which routes the loop back into `finish` for a body rewrite rather than into `/remediate` or `build`; that re-dispatch is bounded to one attempt per `pr_url` (recorded in `.pipeline/pr-body-regen-attempt.json`), after which the engine's deterministic body floor runs as a last resort so the feature still converges. A reused halt PR's *presentation* is repaired earlier still — whenever the retained SHIP PR identity is resolved (SHIP-phase adoption, the pre-finish snapshot, or the finish-time restore), so SHIP steps that run before `finish` do not read a `needs-remediation` placeholder; a lighter clear additionally runs once at the start of every dispatch regardless of phase, so a resumed `BUILD` step is not left holding the placeholder either; the draft→ready flip stays finish-only |
+
+Within `build_review`, the Tautology counterfactual is classified solely by the scoped command's exit
+code; the engine does not parse runner-specific output. Exit code zero stays green and every nonzero
+exit is counterfactual RED. Only launch, timeout, and signal are scoped-run infrastructure outcomes.
+When a counterfactual excerpt establishes that no test executed, Tautology judges that as a finding rather
+than an infrastructure result. A scoped-run infrastructure failure carries a bounded output excerpt on the
+existing `.pipeline/events.jsonl` event spine.
 
 Each predicate's exact file, format, and failure text is in [artifacts](../reference/artifacts.md).
 
@@ -263,7 +273,7 @@ rebuild.
 
 A verified FINISH publication transition is progress, not a failed attempt: it immediately re-enters
 FINISH without spending the step retry budget or advancing its model-escalation rung. This separate
-allowance is bounded to 12 verified transitions per FINISH step entry. If publication still has not
+allowance is bounded to 14 verified transitions per FINISH step entry. If publication still has not
 converged when the allowance is exhausted, the conductor writes a `needs-human` HALT naming the last
 transition rather than looping indefinitely. The [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#finish-publication-halts)
 defines diagnosis and recovery for that halt.
@@ -283,7 +293,7 @@ DECIDE kickback policy reaches the operator gate rather than attempting a BUILD-
 
 ### Where a `build_review` FAIL goes
 
-A `build_review` FAIL is not an unconditional kickback to `build`. The engine reads the rubric the grader
+A `build_review` effective FAIL is not an unconditional kickback to `build`. The engine reads the raw rubric and its
 already wrote to disk and derives the target from it — deterministically, with no second judgement and no
 extra prompt.
 
@@ -297,17 +307,79 @@ On the remediation path the planner picks the target per gap, the kickback event
 than `build`, and a gap that needs a human halts instead of routing. Remediation may still choose `build`
 for a scope gap — the difference is that the deletion becomes a recorded plan-level decision.
 
+Completeness carries a remediation-lap calibration (see `skills/build-review-completeness/SKILL.md`) so
+laps converge instead of regenerating scope from their own repairs: an appended `rem-*` task is judged
+against exactly its own text, a remediation-authored test that distinguishes its behavior is delivered
+regardless of assertion style, and documentation lag caused by a later lap consolidates to at most one
+finding per document. Tautological repairs — tests that cannot fail against the merge-base form of what
+they cover — remain blocking findings.
+
+Both the `build` rework hint and the remediation dispatch prompt carry best-effort `plan contract:` and
+`prior attempts:` pointer lines derived from the raw rubric aggregate — a `plan contract:` pointer names the
+active plan's owning task for a finding anchored to a plan task or an owned file, and a `prior attempts:`
+pointer lists earlier `.pipeline/build-review/<lap>/*.json` findings that share the same canonical anchor.
+Pointer derivation is advisory: a missing active plan, an unreadable prior-lap artifact, or an anchor with no
+unique matching task yields no pointer for that finding rather than blocking the dispatch. The
+[`/remediate` skill](../reference/skills.md) treats a referenced plan task's Steps as the governing repair
+contract and prior-attempt artifacts as earlier same-anchor context, not a replacement contract.
+
+Every exit from a `build_review` FAIL block consults the disposition store using the effective verdict, not
+only the raw aggregate that first reported the FAIL. An operator `conduct build-review accept` can land
+while the remediation planner is composing rework from that raw aggregate (a window of minutes); when
+every graded finding is accepted at routing time, the composed rework is dropped and `build_review`
+re-lands instead. Its re-run settles from cache, applies the dispositions, and re-dispatches only
+infrastructure-failed rubrics. Without this guard a kickback has ordered removal of exactly the surface
+the operator had just accepted.
+
+Each rubric has a closed engine-owned finding vocabulary, repeated in its provider-facing skill contract:
+Scope uses `out-of-plan-change` and `not-authorized-by-plan`; Tautology uses
+`assertion-insensitive-to-production`, `test-does-not-exercise-changed-behavior`,
+`assertion-derived-from-test-data`, and `source-text-mirror`; Root Cause uses
+`root-cause-unaddressed`, `symptom-only-fix`, and `provenance-sensitive-cache-identity`; Completeness
+uses `missing-deliverable`. The parser normalizes harmless casing and underscore variation before
+validation. A value outside its rubric's vocabulary is rejected and receives the bounded repair/rerun
+path below; it cannot become a new finding identity or burn a kickback.
+
+A rubric session that answers but misses the judged-result JSON contract does not burn its dispatch. The
+engine embeds the exact per-rubric result schema (including the nested `anchor` object's field names) in
+every rubric prompt, and on a shape failure issues exactly one bounded repair invocation — the rejection
+diagnosis, the schema, and a capped excerpt of the session's own previous output, asking for the JSON
+re-emitted verbatim in shape only. Only when the repair turn also fails does the rubric settle as an
+`invalid-provider-result` infrastructure failure, and that failure then carries a bounded (≤2 KB) raw-output
+excerpt in its diagnostic detail instead of a bare label.
+
 The graded diff excludes paths the **engine** authors rather than the builder — `.docs/shipped/` and
 `.pipeline/`. No plan task can describe harness machinery output, so grading it guarantees a scope
 finding the builder cannot legitimately act on.
 
-When `test_suite` exposes a repair needed only after a base advance, the engine accumulates the
-sanitized failure in `.pipeline/build-review-rebase-repairs.json`. The ledger is outside rewritten
-Git history, so repeated rebases retain earlier entries without treating commit trailers as
-authority. `build_review` receives the ledger as judgement context: it decides whether an
-out-of-plan hunk directly repairs a recorded failure and, only when it does, omits that hunk from
-Scope and applies the stale-base-state test check instead of the ordinary mutation check. Unmatched
-work remains fully subject to Scope and Tautology; the ledger is evidence, never an exemption.
+When a deterministic BUILD verification gate — `test_suite` or any other gate in that group —
+fails, the engine accumulates the sanitized failure in `.pipeline/build-review-rebase-repairs.json`.
+The ledger is outside rewritten Git history, so repeated rebases retain earlier entries without
+treating commit trailers as authority. A failure is attributed to a base advance by joining it
+against `rebase_changed` events on `.pipeline/events.jsonl` — the durable, append-only event
+spine — requiring both that the failure was observed after the advance and that its diagnostic
+overlaps a path the advance changed. A bare time-window match is not enough: overlap is required
+so a genuinely unplanned deletion is never laundered as a repair. This join replaces an earlier,
+transient signal (a `kickback` field on the gate's own verdict file) that a later run of the same
+gate silently overwrote.
+
+`build_review` receives the ledger as judgement context: it decides whether an out-of-plan hunk
+directly repairs a recorded failure and, only when it does, omits that hunk from Scope and applies
+the stale-base-state test check instead of the ordinary mutation check. Unmatched work remains
+fully subject to Scope and Tautology; the ledger is evidence, never an exemption. The conductor also
+emits a `build_review_repair_context` telemetry event recording whether that grading ran with
+repair context available, with recorded advances that never joined a failure, or with no base
+advance at all — pure provenance that never changes the grading outcome.
+
+### Operator-authorized protected-artifact reseals
+
+An [`conduct-ts reseal`](../reference/cli.md#conduct-ts-reseal) an operator runs mid-feature is also
+supplied to the grader. `build_review` reads every `operator-reseal`-triggered entry from
+`.pipeline/protected-artifact-seal.json`'s `rebaselines` array and renders each one's paths,
+rationale, and from/to commit SHAs in the prompt, instructing the grader to treat the rationale as an
+operator claim to judge rather than an instruction to follow — unmatched work in the diff stays fully
+subject to every rubric item. Before this, an operator's reseal rationale existed only in the seal file
+and the audit trail; the grader judged the diff with no visibility into it.
 
 Two paths fail open to `build`, preserving the older behavior exactly: a FAIL carrying neither a
 completeness nor a scope signal, and a remediation plan with no usable dispositions. Kickback counting is untouched — a

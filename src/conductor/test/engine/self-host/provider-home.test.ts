@@ -1,11 +1,61 @@
 import { describe, expect, it } from 'vitest';
-import { access, lstat, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { provisionProviderHome } from '../../../src/engine/self-host/provider-home.js';
+import { promisify } from 'node:util';
+import {
+  ProviderHomeProvisionError,
+  provisionProviderHome,
+  realProviderHomeFs,
+  type ProviderHomeFs,
+} from '../../../src/engine/self-host/provider-home.js';
 import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 
+const execFile = promisify(execFileCb);
+
 describe('provider-aware self-host homes', () => {
+  it('provisions a Codex home from the worktree scratch root unless baseDir is explicit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-scratch-'));
+    const worktree = join(root, 'worktree');
+    const explicitBaseDir = join(root, 'explicit-homes');
+    await Promise.all([
+      mkdir(join(worktree, 'skills'), { recursive: true }),
+      mkdir(explicitBaseDir, { recursive: true }),
+    ]);
+
+    const home = await provisionProviderHome({
+      provider: { id: 'codex' },
+      worktreeRoot: worktree,
+      repository: 'owner/repository',
+      featureSlug: 'provider-home',
+      runId: 'run-11',
+      attempt: 2,
+    });
+    const explicitHome = await provisionProviderHome({
+      provider: { id: 'codex' },
+      worktreeRoot: worktree,
+      runId: 'run-11',
+      attempt: 2,
+      baseDir: explicitBaseDir,
+    });
+    try {
+      const scratchRoot = join(worktree, '.daemon', 'scratch', 'run-11', '2-codex');
+      expect([home.homeDir, home.childEnv().CODEX_HOME, explicitHome.homeDir]).toEqual([
+        expect.stringMatching(new RegExp(`^${scratchRoot}/self-host-codex-`)),
+        home.homeDir,
+        expect.stringMatching(new RegExp(`^${explicitBaseDir}/self-host-codex-`)),
+      ]);
+      const lease = JSON.parse(await readFile(join(scratchRoot, 'owner.json'), 'utf8'));
+      expect(Object.keys(lease).sort()).toEqual(['attempt', 'featureSlug', 'ownerPid', 'repository', 'runId', 'startedAt']);
+      expect(lease).toMatchObject({ repository: 'owner/repository', featureSlug: 'provider-home', runId: 'run-11', attempt: 2, ownerPid: process.pid });
+      expect(new Date(lease.startedAt).toISOString()).toBe(lease.startedAt);
+    } finally {
+      await Promise.all([home.teardown(), explicitHome.teardown()]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['claude', 'CLAUDE_CONFIG_DIR'],
     ['codex', 'CODEX_HOME'],
@@ -96,6 +146,115 @@ describe('provider-aware self-host homes', () => {
     ).rejects.toThrow('[REDACTED]');
     expect((await (await import('node:fs/promises')).readdir(baseDir))).toEqual([]);
     await rm(root, { recursive: true, force: true });
+  });
+
+  it('preserves the missing-skills error and releases its default scratch lease', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-missing-skills-'));
+    const worktree = join(root, 'worktree');
+    const scratchHome = join(worktree, '.daemon', 'scratch', 'run-14', '5-claude');
+    await mkdir(worktree, { recursive: true });
+    let observedLease: Record<string, unknown> | undefined;
+    const fs: ProviderHomeFs = {
+      ...realProviderHomeFs,
+      pathExists: async (path) => {
+        if (path === join(worktree, 'skills')) {
+          observedLease = JSON.parse(await readFile(join(scratchHome, 'owner.json'), 'utf8'));
+          return false;
+        }
+        return realProviderHomeFs.pathExists(path);
+      },
+    };
+
+    try {
+      await expect(provisionProviderHome({
+        provider: { id: 'claude' },
+        worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-missing-skills',
+        runId: 'run-14',
+        attempt: 5,
+        fs,
+      })).rejects.toEqual(expect.objectContaining({
+        name: ProviderHomeProvisionError.name,
+        message: `Self-host worktree is missing required asset 'skills' at ${join(worktree, 'skills')}.`,
+      }));
+      expect(observedLease).toMatchObject({
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-missing-skills',
+        runId: 'run-14',
+        attempt: 5,
+        ownerPid: process.pid,
+      });
+      await expect(access(scratchHome)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('releases the production-written scratch lease when preparation fails after acquisition', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-leased-failure-'));
+    const worktree = join(root, 'worktree');
+    const scratchHome = join(worktree, '.daemon', 'scratch', 'run-14', '3-claude');
+    await mkdir(join(worktree, 'skills'), { recursive: true });
+    let observedLease: Record<string, unknown> | undefined;
+
+    try {
+      await expect(provisionProviderHome({
+        provider: {
+          id: 'claude',
+          prepareSelfHostAuth: async () => {
+            observedLease = JSON.parse(await readFile(join(scratchHome, 'owner.json'), 'utf8'));
+            throw new Error('post-acquire failure');
+          },
+        },
+        worktreeRoot: worktree,
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-failure',
+        runId: 'run-14',
+        attempt: 3,
+      })).rejects.toThrow('Failed to provision isolated claude self-host home: post-acquire failure');
+      expect(observedLease).toMatchObject({
+        repository: 'owner/repository',
+        featureSlug: 'provider-home-failure',
+        runId: 'run-14',
+        attempt: 3,
+        ownerPid: process.pid,
+      });
+      await expect(access(scratchHome)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a git worktree clean while its provider home exists under ignored scratch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-clean-worktree-'));
+    const worktree = join(root, 'worktree');
+    await mkdir(join(worktree, 'skills'), { recursive: true });
+    await Promise.all([
+      writeFile(join(worktree, '.gitignore'), '.daemon/\n'),
+      writeFile(join(worktree, 'skills', 'SKILL.md'), 'skill\n'),
+    ]);
+    await execFile('git', ['init', '--quiet', '-b', 'main', worktree]);
+    await execFile('git', ['-C', worktree, 'config', 'user.email', 'task14@example.test']);
+    await execFile('git', ['-C', worktree, 'config', 'user.name', 'Task Fourteen']);
+    await execFile('git', ['-C', worktree, 'add', '.']);
+    await execFile('git', ['-C', worktree, 'commit', '--quiet', '-m', 'fixture']);
+
+    const home = await provisionProviderHome({
+      provider: { id: 'codex' },
+      worktreeRoot: worktree,
+      repository: 'owner/repository',
+      featureSlug: 'provider-home-clean',
+      runId: 'run-14',
+      attempt: 4,
+    });
+    try {
+      expect(home.homeDir).toContain(join('.daemon', 'scratch', 'run-14', '4-codex'));
+      expect((await execFile('git', ['-C', worktree, 'status', '--porcelain'])).stdout).toBe('');
+    } finally {
+      await home.teardown();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('gives Codex a child-only .agents/skills view backed by the throwaway copy, not the worktree', async () => {

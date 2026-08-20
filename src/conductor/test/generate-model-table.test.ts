@@ -8,6 +8,7 @@ import {
   assertNoDuplicateRowNames,
   renderModelTable,
   buildEngineRows,
+  buildAuxiliaryRows,
   buildExtraRows,
   stepDisplayName,
   runGenerateModelTable,
@@ -30,7 +31,10 @@ import {
   type ProviderModelPolicy,
 } from '../src/engine/provider-model-policy.js';
 import { DEFAULT_STEP_MODELS } from '../src/engine/resolved-config.js';
-import { SKILL_STEP_MAP, PIN_EXEMPT_SKILLS } from '../src/engine/model-table-metadata.js';
+import {
+  SKILL_STEP_MAP,
+  PIN_EXEMPT_SKILLS,
+} from '../src/engine/model-table-metadata.js';
 import { STEP_RATIONALE } from '../src/engine/model-table-metadata.js';
 import type { ComplexityTier, StepName } from '../src/types/steps.js';
 
@@ -309,17 +313,20 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     const table = renderModelTable();
     const lines = table.split('\n').slice(2); // skip header + separator
     const engineNames = buildEngineRows().map((r) => r.name);
+    const auxiliaryNames = buildAuxiliaryRows().map((r) => r.name);
     const extraNames = new Set(buildExtraRows().map((r) => r.name));
+    const preExtraNames = new Set([...engineNames, ...auxiliaryNames]);
 
     const firstExtraIndex = lines.findIndex((line) =>
       [...extraNames].some((name) => line.startsWith(`| ${name} |`)),
     );
     expect(firstExtraIndex).toBeGreaterThan(-1);
 
-    // Every line before the first extra row must be an engine row.
+    // Every line before the first interactive row must be engine-derived or
+    // an engine-managed auxiliary rubric.
     for (let i = 0; i < firstExtraIndex; i++) {
-      const matchesEngineRow = engineNames.some((name) => lines[i]!.startsWith(`| ${name} |`));
-      expect(matchesEngineRow).toBe(true);
+      const matchesPreExtraRow = [...preExtraNames].some((name) => lines[i]!.startsWith(`| ${name} |`));
+      expect(matchesPreExtraRow).toBe(true);
     }
   });
 
@@ -385,8 +392,40 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
 
   it('does not produce duplicate row names (e.g. acceptance_specs renamed to writing-system-tests)', () => {
     expect(() => renderModelTable()).not.toThrow();
-    const names = [...buildEngineRows(), ...buildExtraRows()].map((r) => r.name);
+    const names = [...buildEngineRows(), ...buildAuxiliaryRows(), ...buildExtraRows()].map((r) => r.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+describe('build-review auxiliary rubric rows', () => {
+  const rubricSkills = [
+    'build-review-tautology',
+    'build-review-scope',
+    'build-review-root-cause',
+    'build-review-completeness',
+  ];
+
+  it('renders four retained engine-managed rubric skills with inherited resolved policy', () => {
+    expect(buildAuxiliaryRows()).toEqual(
+      rubricSkills.map((name) => expect.objectContaining({
+        name,
+        executionPath: 'engine-managed auxiliary rubric',
+        claudeModel: 'inherits resolved rubric policy',
+        claudeEffort: 'inherits resolved rubric policy',
+        codexModel: 'inherits resolved rubric policy',
+        codexEffort: 'inherits resolved rubric policy',
+      })),
+    );
+  });
+
+  it('keeps auxiliary rubric rows out of the lifecycle-step renderer', () => {
+    const engineNames = buildEngineRows().map((row) => row.name);
+    expect(rubricSkills.filter((name) => engineNames.includes(name))).toEqual([]);
+
+    const rendered = renderModelTable();
+    for (const name of rubricSkills) {
+      expect(rendered).toContain(`| ${name} | engine-managed auxiliary rubric |`);
+    }
   });
 });
 

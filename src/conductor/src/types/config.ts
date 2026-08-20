@@ -200,7 +200,7 @@ export interface DefaultsConfig {
  * should not override this block — it's per-user, not per-repo.
  */
 export interface ConductorConfig {
-  update_channel?: 'tagged' | 'main';
+  update_channel?: 'tagged' | 'stable' | 'main';
   auto_check?: boolean;
   current_version?: string;
   last_checked_at?: string;
@@ -309,6 +309,15 @@ export interface KickbackEscalationConfig {
 }
 
 /**
+ * Cumulative build-review convergence-bound kill-switch. An absent block
+ * resolves to `{ enabled: true }`, mirroring `KickbackEscalationConfig`.
+ */
+export interface CumulativeKickbackBoundConfig {
+  /** Master on/off switch for the cumulative convergence bound. Omitted → true. */
+  enabled?: boolean;
+}
+
+/**
  * Gate-code-validity-on-redispatch kill-switch (gate-code-validity-on-redispatch,
  * #817, Task 8): master on/off switch for the `gateVerdictStillValid` preserve
  * check that lets `build_review`/`prd_audit`/`architecture_review_as_built`/
@@ -356,6 +365,8 @@ export interface HarnessSelfHostConfig {
   skill_relink_preflight?: boolean;
   /** Run the self-build under a throwaway CLAUDE_CONFIG_DIR (TR-5/6). Omitted → true. */
   sandbox_build_env?: boolean;
+  /** Contain the dispatch from the live checkout with bubblewrap. Omitted → true. */
+  live_containment?: boolean;
   /** HALT for operator VERSION-bump approval at finish (TR-7). Omitted → true. */
   version_approval_gate?: boolean;
   /** HALT on integrity/CHANGELOG/migration gate failure (TR-8/9/10). Omitted → true. */
@@ -464,6 +475,11 @@ export interface HarnessConfig {
    * `{ enabled: true }`. See `KickbackEscalationConfig`.
    */
   kickback_escalation?: KickbackEscalationConfig;
+  /**
+   * Cumulative build-review convergence-bound kill-switch. Absent block
+   * resolves to `{ enabled: true }`. See `CumulativeKickbackBoundConfig`.
+   */
+  cumulative_kickback_bound?: CumulativeKickbackBoundConfig;
   /**
    * Gate-code-validity-on-redispatch kill-switch (#817, Task 8). Absent block
    * resolves to `{ enabled: true }`. See `GateCodeValidityConfig`.
@@ -605,19 +621,6 @@ export interface HarnessConfig {
    */
   ci_watch?: CiWatchConfig;
   /** Entry points supplied to the build_review wiring rubric. */
-  wiring?: WiringConfig;
-}
-
-/**
- * Build-review wiring rubric configuration.
- */
-export interface WiringConfig {
-  /**
-   * Repo-relative production entry points (e.g. CLI/bin scripts, package
-   * `main`/`index.ts`) that the build-review grader uses when judging static
-   * wiring reachability. Absent or empty means the wiring item is not judged.
-   */
-  entry_points?: string[];
 }
 
 /**
@@ -634,12 +637,36 @@ export interface MergeableAutoresolveConfig {
   suiteCommand?: string;
 }
 
+/** The closed set of independently-executed build-review rubric branches. */
+export type BuildReviewRubricId =
+  | 'tautology'
+  | 'scope'
+  | 'rootCause'
+  | 'completeness';
+
+/** Optional execution overrides for one build-review rubric branch. */
+export interface BuildReviewRubricConfig {
+  enabled?: boolean;
+  llm_provider?: ProviderSelection;
+  model?: string;
+  effort?: EffortLevel;
+  model_fallback_ladder?: string[];
+  max_retries?: number;
+  escalate?: boolean;
+}
+
+/** Per-rubric settings keyed by the closed {@link BuildReviewRubricId} set. */
+export type BuildReviewRubricsConfig = Partial<
+  Record<BuildReviewRubricId, BuildReviewRubricConfig>
+>;
+
 /**
- * Configuration for the opt-in `build_review` judgement gate. Every field is
- * optional and follows the safe-by-default principle: absent/malformed → off.
+ * Configuration for the default-on `build_review` judgement gate. Legacy
+ * fields retain their tolerant per-key parsing; the rubric execution subtree
+ * is a closed policy map.
  */
 export interface BuildReviewConfig {
-  /** Enable the build_review gate. Default: false (off, legacy topology). */
+  /** Enable the build_review gate. Default: true. */
   enabled?: boolean;
   /** Enable the per-task work-happened commit floor gate. Default: true (on, fail-safe). */
   perTaskFloor?: boolean;
@@ -648,6 +675,10 @@ export interface BuildReviewConfig {
    * scope. Default: false (report-only).
    */
   scopeContainmentEnforced?: boolean;
+  /** Maximum concurrently-dispatched enabled rubric branches. Default: 5. */
+  maxParallel?: number;
+  /** Closed per-rubric enablement and execution-policy overrides. */
+  rubrics?: BuildReviewRubricsConfig;
 }
 
 /**

@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+const execFile = promisify(execFileCb);
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
@@ -245,5 +249,157 @@ describe('sealed-artifact remediation routing', () => {
     expect(outcome.target).not.toBe('acceptance_specs');
     const entries = await readdir(projectRoot, { recursive: true });
     expect(entries.filter((entry) => /request|ledger|record/i.test(entry))).toEqual([]);
+  });
+});
+
+describe('remediation plan append without engine-state.json (engineer-specced daemon feature)', () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'remediation-no-engine-state-'));
+    // The engineer-specced daemon shape: the spec PR landed the plan, the
+    // build starts with DECIDE pre-done, so the plan step's
+    // recordActivePlanPath never ran and .pipeline/engine-state.json does
+    // not exist. The plan is discoverable by the slug convention only.
+    await mkdir(join(projectRoot, '.docs/plans'), { recursive: true });
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(projectRoot, '.docs/plans/feature.md'),
+      '# Implementation plan\n\n## Tasks\n\n### Task 1: Existing task\n',
+      'utf8',
+    );
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('appends BUILD remediation tasks to the slug-resolved plan and seeds task status', async () => {
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(
+          join(projectRoot, '.pipeline/remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: 'build_review:vacuous-test',
+                disposition: 'build',
+                category: null,
+                rationale: 'The changed test never drives the production path.',
+                tasks: [
+                  { id: 'rem-build-review-vacuous-1', title: 'Rewrite the test to drive Conductor.run()', status: 'pending' },
+                ],
+              },
+            ],
+          }),
+          'utf8',
+        );
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidenceFile: string },
+      ) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'build review blocked',
+      { source: 'build-review', evidenceFile: '.pipeline/build-review.json' },
+    );
+
+    expect(outcome.kind).toBe('route');
+    const plan = await readFile(join(projectRoot, '.docs/plans/feature.md'), 'utf8');
+    expect(plan).toContain('### Task rem-build-review-vacuous-1: Rewrite the test to drive Conductor.run()');
+    const taskStatus = await readFile(join(projectRoot, '.pipeline/task-status.json'), 'utf8');
+    expect(taskStatus).toContain('rem-build-review-vacuous-1');
+  });
+
+  it('commits the engine-authored plan amendment so the worktree stays clean', async () => {
+    // Left uncommitted, the appended plan line fails the build step's
+    // clean-tree completion check, and builders refuse to commit a protected
+    // artifact they did not modify — burning build retries on bookkeeping.
+    const g = (args: string[]) => execFile('git', args, { cwd: projectRoot });
+    await g(['init', '-q', '-b', 'main']);
+    await g(['config', 'user.email', 't@t.com']);
+    await g(['config', 'user.name', 'T']);
+    await g(['config', 'commit.gpgsign', 'false']);
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(
+          join(projectRoot, '.pipeline/remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: 'build_review:vacuous-test',
+                disposition: 'build',
+                category: null,
+                rationale: 'The changed test never drives the production path.',
+                tasks: [
+                  { id: 'rem-build-review-vacuous-1', title: 'Rewrite the test to drive Conductor.run()', status: 'pending' },
+                ],
+              },
+            ],
+          }),
+          'utf8',
+        );
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidenceFile: string },
+      ) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'build review blocked',
+      { source: 'build-review', evidenceFile: '.pipeline/build-review.json' },
+    );
+
+    expect(outcome.kind).toBe('route');
+    const plan = await readFile(join(projectRoot, '.docs/plans/feature.md'), 'utf8');
+    expect(plan).toContain('### Task rem-build-review-vacuous-1');
+    // The plan amendment is committed by the engine — no dirty plan path left
+    // for the builder to trip over.
+    const status = await g(['status', '--porcelain', '--', '.docs/plans/feature.md']);
+    expect(status.stdout.trim()).toBe('');
+    const head = await g(['log', '-1', '--format=%s']);
+    expect(head.stdout.trim()).toBe('chore(plan): record appended remediation tasks');
+    // The appended id is recorded so the build completion predicate can
+    // reject a later removal of its heading from the plan.
+    const engineState = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf8'),
+    );
+    expect(engineState.appendedRemediationTaskIds).toContain('rem-build-review-vacuous-1');
   });
 });

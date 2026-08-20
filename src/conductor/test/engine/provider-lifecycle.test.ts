@@ -23,11 +23,16 @@ function deferred<T>(): {
 }
 
 describe('provider lifecycle transitions', () => {
-  it('halts needs-human after the replacement preparation also times out', async () => {
+  it('returns a marker-write failure after the replacement preparation also times out without an emitter', async () => {
     vi.useFakeTimers();
     const first = deferred<string>();
     const replacement = deferred<string>();
     try {
+      writeHaltMarker.mockResolvedValue({
+        status: 'failed',
+        path: '/project/.pipeline/HALT',
+        reason: 'disk full',
+      });
       const attempts: string[] = [];
       let now = 10_000;
       const episodeStore: ProviderLifecycleEpisodeStore = {
@@ -73,6 +78,11 @@ describe('provider lifecycle transitions', () => {
           attempt: { logicalStep: 'build', id: 'attempt-2' },
           elapsedMilliseconds: 330_123,
           recoveryCount: 1,
+          haltMarkerWrite: {
+            status: 'failed',
+            path: '/project/.pipeline/HALT',
+            reason: 'disk full',
+          },
         },
       });
       expect(attempts).toEqual(['attempt-1', 'attempt-2']);

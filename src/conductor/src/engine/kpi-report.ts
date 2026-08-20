@@ -13,6 +13,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseShippedRecord } from './shipped-record.js';
 import type { TimingRollup } from './timing-rollup.js';
+import type { BuildReviewMetrics } from './build-tail-rollup.js';
 
 export interface KpiCostFields {
   input: number;
@@ -41,11 +42,45 @@ export interface KpiProviderCostFields {
 
 export type KpiTimeFields = TimingRollup;
 
+function parseBuildReviewBlock(content: string): BuildReviewMetrics | undefined {
+  const match = /^## Build Review\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/m.exec(content);
+  if (!match) return undefined;
+  const body = match[1];
+  const number = (name: string): number | undefined => {
+    const value = new RegExp(`^${name}:\\s*(\\d+)\\s*$`, 'm').exec(body)?.[1];
+    return value === undefined ? undefined : Number(value);
+  };
+  const laps = /^laps_to_pass:\s*(\d+|not reached)\s*$/m.exec(body)?.[1];
+  const rubricFailureRates: Record<string, { failures: number; judged: number }> = {};
+  const skipReasons: Record<string, number> = {};
+  let section: 'rubrics' | 'skip_reasons' | undefined;
+  for (const line of body.split('\n')) {
+    if (line === 'rubrics:') { section = 'rubrics'; continue; }
+    if (line === 'skip_reasons:') { section = 'skip_reasons'; continue; }
+    const entry = /^  ([^:]+): failures: (\d+), judged: (\d+)$/.exec(line);
+    if (section === 'rubrics' && entry) rubricFailureRates[entry[1]] = { failures: Number(entry[2]), judged: Number(entry[3]) };
+    const skipReason = /^  ([^:]+): (\d+)$/.exec(line);
+    if (section === 'skip_reasons' && skipReason) skipReasons[skipReason[1]] = Number(skipReason[2]);
+  }
+  const skipped = number('skipped');
+  const cacheHits = number('cache_hits');
+  const infrastructureFailures = number('infrastructure_failures');
+  if (skipped === undefined || cacheHits === undefined || infrastructureFailures === undefined) return undefined;
+  return {
+    lapsToPass: laps && laps !== 'not reached' ? Number(laps) : undefined,
+    rubricFailureRates,
+    skipped,
+    cacheHits,
+    infrastructureFailures,
+    skipReasons,
+  };
+}
+
 /**
  * Parse the independently rendered `## Time` section. Cost fields are never
  * consulted, so timing remains reportable when cost evidence is absent.
  */
-function parseTimeBlock(content: string): KpiTimeFields {
+export function parseTimeBlock(content: string): KpiTimeFields {
   const match = /^## Time\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/m.exec(content);
   if (!match) return { state: 'unavailable' };
 
@@ -58,6 +93,7 @@ function parseTimeBlock(content: string): KpiTimeFields {
   const activeMs = num('active_ms');
   const providerActiveMs = num('provider_active_ms');
   const noProviderActiveMs = num('no_provider_active_ms');
+  const reason = /^reason:\s*(.+?)\s*$/m.exec(body)?.[1];
 
   if (/^state:\s*unavailable\s*$/m.test(body)) {
     return { state: 'unavailable' };
@@ -72,7 +108,11 @@ function parseTimeBlock(content: string): KpiTimeFields {
     return { state: 'measured', activeMs, providerActiveMs, noProviderActiveMs };
   }
 
-  return activeMs === undefined ? { state: 'partial' } : { state: 'partial', activeMs };
+  return {
+    state: 'partial',
+    ...(activeMs === undefined ? {} : { activeMs }),
+    ...(reason === undefined ? {} : { reason: reason as Extract<TimingRollup, { state: 'partial' }>['reason'] }),
+  };
 }
 
 /**
@@ -168,6 +208,7 @@ interface FeatureKpi {
    * blending into the stamped ones.
    */
   engineVersion: string;
+  buildReview?: BuildReviewMetrics;
 }
 
 interface TimingAggregate {
@@ -201,7 +242,10 @@ function formatFeatureTiming(time: TimingRollup): string {
     );
   }
   if (time.state === 'partial') {
-    return ` time=partial${time.activeMs === undefined ? '' : ` active_ms=${time.activeMs}`}`;
+    return (
+      ` time=partial${time.activeMs === undefined ? '' : ` active_ms=${time.activeMs}`}` +
+      `${time.reason === undefined ? '' : ` reason=${time.reason}`}`
+    );
   }
   return ' time=unavailable';
 }
@@ -264,9 +308,18 @@ function renderProviderLines(providers: Record<string, KpiProviderCostFields>): 
 
 function renderFeatureLines(feature: FeatureKpi): string[] {
   const timing = formatFeatureTiming(feature.time);
+  const buildReview = feature.buildReview
+    ? ` build_review=laps_to_pass=${feature.buildReview.lapsToPass ?? 'not reached'} skipped=${feature.buildReview.skipped} cache_hits=${feature.buildReview.cacheHits} infrastructure_failures=${feature.buildReview.infrastructureFailures}`
+    : '';
+  const rubricLines = feature.buildReview
+    ? Object.entries(feature.buildReview.rubricFailureRates).sort(([a], [b]) => a.localeCompare(b)).map(
+      ([rubric, rate]) => `  - ${rubric}: raw_failures=${rate.failures}/${rate.judged}`,
+    )
+    : [];
   if (!feature.cost) {
     return [
-      `- ${feature.slug}: engine=${feature.engineVersion} no Cost data available (skipped)${timing}`,
+      `- ${feature.slug}: engine=${feature.engineVersion} no Cost data available (skipped)${timing}${buildReview}`,
+      ...rubricLines,
     ];
   }
   const cost = feature.cost;
@@ -282,7 +335,7 @@ function renderFeatureLines(feature: FeatureKpi): string[] {
     `cache_read=${cost.cacheRead} cache_creation=${cost.cacheCreation} ` +
     `dispatches=${cost.dispatches} retries=${cost.retries} halts=${cost.halts} ` +
     `duration_ms=${cost.unmeteredDurationMs} cost_usd=${costUsd}${marker}${timing}`;
-  return [featureLine, ...renderProviderLines(cost.providers)];
+  return [`${featureLine}${buildReview}`, ...renderProviderLines(cost.providers), ...rubricLines];
 }
 
 function renderAggregateLine(aggregate: ReportAggregate): string {
@@ -322,6 +375,7 @@ async function loadFeatures(shippedDir: string): Promise<FeatureKpi[]> {
       cost: parseCostBlock(content),
       time: parseTimeBlock(content),
       engineVersion,
+      buildReview: parseBuildReviewBlock(content),
     });
   }
 

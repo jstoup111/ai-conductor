@@ -84,15 +84,37 @@ both the acceptance spec and its implementation. The waiver must be recorded wit
 and attributable approval; the completion is reported as waived, never as proven RED. Without that
 recorded declaration, the acceptance specs must establish ordinary failing-spec RED evidence.
 
+### Behavioral Coverage at the Lowest Sufficient Layer
+
+Every happy and negative acceptance criterion needs one concrete coverage disposition: existing
+sufficient behavioral proof, a lower-layer behavioral test, or an acceptance/system spec. A criterion
+does not automatically require a new acceptance/system spec, and work remains incomplete until its
+disposition identifies the proof or test that covers the behavior.
+
+Reserve acceptance/system coverage for a distinct, multi-step externally observable flow that cannot
+be proven sufficiently below. Negative behavior remains mandatory, but lower-layer coverage retains
+its failure permutations; an acceptance/system spec covers the distinct flow without duplicating each
+of those permutations. Test scope follows changed behavior and failure boundaries, not production-file
+count, so production-file count does not determine test-file count. Natural-language skill guidance
+alone is not executable or machine-readable behavior and must not be tested solely by matching its
+wording.
+
+Every generated acceptance/system spec must still establish genuine RED evidence before
+implementation. A declared exact-copy `Pattern-source` / `Rename-map` contract remains its separate
+mechanical exception: it copies the source acceptance specs under its governing contract even when
+the lowest-sufficient-layer rule would not select them from scratch. This exception does not apply to
+ordinary semantic pattern reuse without that declaration.
+
 **DECIDE scope:** The operator chooses the fix breadth before approach confirmation. Do not silently
 narrow or broaden the requested outcome.
 
 ### DECIDE Artifact Amendment Ownership
 
-When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE amends that artifact
-in place on the spec branch before the first BUILD entry. Add the correction beside the original
-assertion in this additive form; never rewrite or delete the original text and never create a separate
-amendment record:
+When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE corrects that artifact
+in place on the spec branch before the first BUILD entry. Story artifacts under `.docs/stories/` are the
+exception: replace superseded assertions in place and leave no amendment record. For all other accepted
+DECIDE artifacts, add the correction beside the original assertion in this additive form; never rewrite
+or delete the original text and never create a separate amendment record:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
@@ -200,8 +222,8 @@ this section. CI enforces both content drift (the table matches the source) and 
 | worktree-manager | autonomous engine | haiku | low | gpt-5.6-luna | low | Git operations — mechanical branch/worktree management. |
 | writing-system-tests | autonomous engine | opus | medium (S/M), high (L) | gpt-5.6-sol | medium (S/M), high (L) | Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work. |
 | pipeline | autonomous engine | sonnet | medium (S/M), high (L) | gpt-5.6-terra | medium (S/M), high (L) | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass. |
-| build-review | autonomous engine | opus | high | gpt-5.6-sol | high | Fresh-session grader judging a maker's diff for test tautology, scope creep, root-cause fixes, plan completeness, and static wiring reachability — adversarial code review demands a high-capability model, same class of judgement as prd_audit/code-review. |
-| wiring-check | engine machinery | — | — | — | — | Deprecated compatibility step; build_review owns wiring judgement. |
+| build-review | autonomous engine | opus | high | gpt-5.6-sol | high | Fresh-session grader judging a maker's diff for test tautology, scope creep, root-cause fixes, and plan completeness — adversarial code review demands a high-capability model, same class of judgement as prd_audit/code-review. |
+| wiring-check | engine machinery | — | — | — | — | Deprecated compatibility no-op; reachability is no longer judged anywhere in BUILD. |
 | test-suite | engine machinery | — | — | — | — | Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required. |
 | manual-test | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Structured validation against stories — pattern-following. |
 | prd-audit | autonomous engine | opus | high | gpt-5.6-sol | high | Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR. |
@@ -211,6 +233,10 @@ this section. CI enforces both content drift (the table matches the source) and 
 | finish | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Coordinates final test, status, and coverage evidence with MEDIUM effort so completion claims remain grounded. |
 | remediate | autonomous engine | opus | medium | gpt-5.6-sol | medium | A high-capability model from the selected provider policy guards failure disposition; a false HALT wastes context and wrong routing misroutes rework. MEDIUM effort balances concrete gap routing with the strength of the selected model. |
 | attribution-verify | autonomous engine | opus | high | gpt-5.6-sol | high | Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages. |
+| build-review-tautology | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges mutation sensitivity from the engine-owned green proof and reverted-production preflight. |
+| build-review-scope | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges changed paths and surfaces against the approved plan and accepted widening context. |
+| build-review-root-cause | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges whether the implementation addresses the stated defect rather than only a symptom. |
+| build-review-completeness | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges the approved plan holistically against the full implementation diff. |
 | verify-claims | supported-host interactive | inherits caller |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Cross-cutting correctness protocol applied within the invoking skill's context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller's model. |
 | domain-reviewer | supported-host interactive | sonnet (<50-line diff), opus (≥50-line diff) |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment. |
 | evaluator | supported-host interactive | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) |  | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | Right-sized by batch content. |
@@ -508,18 +534,19 @@ block in `~/.ai-conductor/config.yml`:
 
 ```yaml
 conductor:
-  update_channel: tagged
+  update_channel: stable
   auto_check: true
   current_version: v0.3.0
   last_checked_at: 2026-04-11T00:00:00Z
 ```
 
-- **`update_channel`** — `tagged` (default, stable semver releases) or `main`
-  (bleeding edge, every merge to main).
+- **`update_channel`** — `stable` (default, a branch advanced only after release
+  publication), `tagged` (semver tag checkouts), or `main` (bleeding edge,
+  every merge to main).
 - **`auto_check`** — if `true`, every `/conduct` run checks for updates on the
   configured channel before running any pipeline step.
-- **`current_version`** — the version of the harness your project is pinned to.
-  On the tagged channel this is a `vX.Y.Z` tag; on main it's `main@<sha>`.
+- **`current_version`** — the installed harness identity. On the stable and
+  tagged channels this is a `vX.Y.Z` tag; on main it's `main@<sha>`.
 - **`last_checked_at`** — the ISO-8601 UTC timestamp of the most recent update
   check.
 
@@ -530,16 +557,17 @@ It is not a live configuration source.
 
 ### Update flow
 
-1. `bin/update` fetches either the latest tag (`tagged`) or the remote branch
-   (`main`), depending on how it's invoked:
+1. `bin/update` fetches the configured release source: the moving release
+   branch (`stable`), the latest semver tag (`tagged`), or the development
+   branch (`main`):
    - `bin/update` (no args) forces a check now, bypassing the `conductor.auto_check`
      gate.
    - `bin/update --auto` checks only if `conductor.auto_check` is not `false`; this is
      what `conduct-ts` spawns automatically at daemon startup.
-2. If a newer version exists, the relevant `CHANGELOG.md` blocks are rendered
-   with the configured markdown viewer (see `markdown_viewer` in
-   `~/.ai-conductor/config.yml`) and the user is prompted before anything is
-   applied. Updates never apply without explicit approval.
+2. If a newer version exists, the user is prompted before anything is applied.
+   Tagged updates also render the relevant `CHANGELOG.md` blocks with the
+   configured markdown viewer (see `markdown_viewer` in
+   `~/.ai-conductor/config.yml`). Updates never apply without explicit approval.
 3. On approval, the harness is checked out at the new version and
    `bin/migrate` runs automatically. It:
    - Re-runs `bin/install --update` to refresh symlinks and re-merge
@@ -552,7 +580,8 @@ It is not a live configuration source.
 ### Changing channels
 
 ```
-bin/update --set-channel tagged   # follow stable semver tags
+bin/update --set-channel stable   # follow only fully published releases (default)
+bin/update --set-channel tagged   # follow semver tag checkouts
 bin/update --set-channel main     # follow main branch
 bin/update                        # force an update check now
 bin/update --auto                 # check only if conductor.auto_check != false
@@ -627,6 +656,13 @@ tmux sessions; the next `daemon start` (or engineer nudge) respawns.
   every phase: BUILD (don't implement against a superseded design), and SHIP /
   debugging / manual-test (a bug on a condemned path is a removal signal, not a
   fix target).
+- **Pattern authority is conditional.** An approved architecture outranks observed
+  code. Otherwise, when a suitable established local pattern applies, reuse it
+  for that feature; a verified no-fit or an operator-authorized bounded departure
+  is allowed. This is a feature-specific conformance decision, not a universal
+  project style or pattern catalog. A declared exact replication remains a
+  distinct mechanical case: reproduce its specified source exactly rather than
+  treating pattern choice as permission to vary it.
 - Retro runs on both harness AND application after every feature
 - Tech-context is additive — never overrides generic skill behavior
 - **Docs track features.** Every feature that adds or changes user-facing

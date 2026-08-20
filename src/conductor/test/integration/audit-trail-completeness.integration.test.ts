@@ -26,6 +26,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState, ConductorEvent } from '../../src/types/index.js';
+import { EVENT_SINKS, auditedEventTypes, persistedEventTypes } from '../../src/engine/event-sinks.js';
 import { writeState } from '../../src/engine/state.js';
 
 /**
@@ -46,15 +47,32 @@ import { writeState } from '../../src/engine/state.js';
  *                           absent" invariant); the fixture below MUST NOT
  *                           produce a record.
  */
+type AuditedEventType = Exclude<ConductorEvent['type'], 'containment_check_unresolved'>;
+
 const EVENT_TYPE_CLASSIFICATION: Record<
-  ConductorEvent['type'],
+  AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  contained_live_checkout_drift: 'not-audited-by-design',
+  self_host_containment_verdict: 'not-audited-by-design',
+  build_review_rubric_started: 'not-audited-by-design',
+  build_review_rubric_prompt: 'not-audited-by-design',
+  build_review_rubric_result: 'not-audited-by-design',
+  build_review_rubric_skipped: 'not-audited-by-design',
+  build_review_cache_hit: 'not-audited-by-design',
+  build_review_rubric_infrastructure_failure: 'not-audited-by-design',
+  build_review_disposition_accepted: 'not-audited-by-design',
+  build_review_disposition_refused: 'not-audited-by-design',
+  build_review_disposition_version_invalidated: 'friction-mapped',
+  build_review_outer_verdict: 'not-audited-by-design',
   step_started: 'not-audited-by-design',
   deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
   provider_attempt: 'not-audited-by-design',
+  scratch_cleanup_reclaimed: 'not-audited-by-design',
+  scratch_cleanup_retained: 'not-audited-by-design',
+  scratch_cleanup_failed: 'not-audited-by-design',
   // Whole-feature cost telemetry: durable in events.jsonl, but it describes no
   // friction — it is a summation of dispatches already mapped elsewhere.
   feature_usage_total: 'not-audited-by-design',
@@ -88,6 +106,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   verdict_freshness: 'friction-mapped',
   build_review_base: 'not-audited-by-design',
   build_review_stale_mirage_regrade: 'not-audited-by-design',
+  build_review_repair_context: 'not-audited-by-design',
   mode_skip: 'not-audited-by-design', // skipped steps must have zero records
   build_stall: 'not-audited-by-design',
   build_progress: 'not-audited-by-design',
@@ -105,6 +124,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_member_evidence_recomputed: 'not-audited-by-design',
   kickback: 'friction-mapped',
   loop_halt: 'friction-mapped',
+  halt_marker_write_failed: 'friction-mapped',
   loop_converged: 'not-audited-by-design',
   rebase_noop: 'not-audited-by-design',
   rebase_mergeable_skip: 'not-audited-by-design',
@@ -134,6 +154,33 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+  contained_live_checkout_drift: {
+    type: 'contained_live_checkout_drift',
+    evidence: 'live root read-only; worktree writable',
+    attribution: 'concurrent-operator',
+    summary: '1 added, 0 removed, 0 changed: added operator-edit.txt',
+  },
+  self_host_containment_verdict: {
+    type: 'self_host_containment_verdict',
+    contained: true,
+    evidence: 'live root read-only; worktree writable',
+  },
+  containment_check_unresolved: {
+    type: 'containment_check_unresolved',
+    failure: 'evaluation-failed',
+    taskId: '1',
+    ts: 1755300000000,
+  },
+  build_review_rubric_started: { type: 'build_review_rubric_started', rubric: 'scope', lapId: 'lap-1' },
+  build_review_rubric_prompt: { type: 'build_review_rubric_prompt', rubric: 'scope', lapId: 'lap-1', promptBytes: 4096 },
+  build_review_rubric_result: { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
+  build_review_rubric_skipped: { type: 'build_review_rubric_skipped', rubric: 'scope', lapId: 'lap-1', reason: 'disabled' },
+  build_review_cache_hit: { type: 'build_review_cache_hit', rubric: 'scope', lapId: 'lap-1' },
+  build_review_rubric_infrastructure_failure: { type: 'build_review_rubric_infrastructure_failure', rubric: 'scope', lapId: 'lap-1', reason: 'provider-error' },
+  build_review_disposition_accepted: { type: 'build_review_disposition_accepted', feature: 'feature', lapId: 'lap-1', findingId: 'sha256:x', operator: 'operator' },
+  build_review_disposition_refused: { type: 'build_review_disposition_refused', feature: 'feature', reason: 'non-tty' },
+  build_review_disposition_version_invalidated: { type: 'build_review_disposition_version_invalidated', feature: 'feature', findingId: 'sha256:x', rubric: 'scope', contractVersion: 'v1' },
+  build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
   step_started: { type: 'step_started', step: 'build', index: 0 },
   deprecated_step: {
     type: 'deprecated_step',
@@ -148,6 +195,33 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     provider: 'claude',
     outcome: 'success',
     invoked: true,
+  },
+  scratch_cleanup_reclaimed: {
+    type: 'scratch_cleanup_reclaimed',
+    repository: 'owner/repository',
+    featureSlug: 'provider-scratch',
+    runId: 'R',
+    attempt: 1,
+    path: '/worktree/.daemon/scratch/R/1-codex',
+    reason: 'dead-owner',
+  },
+  scratch_cleanup_retained: {
+    type: 'scratch_cleanup_retained',
+    repository: 'owner/repository',
+    featureSlug: 'provider-scratch',
+    runId: 'R',
+    attempt: 1,
+    path: '/worktree/.daemon/scratch/R/1-codex',
+    reason: 'live-owner',
+  },
+  scratch_cleanup_failed: {
+    type: 'scratch_cleanup_failed',
+    repository: 'owner/repository',
+    featureSlug: 'provider-scratch',
+    runId: 'R',
+    attempt: 1,
+    path: '/worktree/.daemon/scratch/R/1-codex',
+    reason: 'removal blocked',
   },
   feature_usage_total: {
     type: 'feature_usage_total',
@@ -259,6 +333,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     mergeBase: 'abc123',
     regradeCount: 1,
   },
+  build_review_repair_context: {
+    type: 'build_review_repair_context',
+    disposition: 'context_available',
+    repairCount: 1,
+  },
   mode_skip: { type: 'mode_skip', step: 'bootstrap', mode: 'fresh', reason: 'already bootstrapped' },
   build_stall: {
     type: 'build_stall',
@@ -298,10 +377,19 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   kickback: { type: 'kickback', from: 'conflict_check', to: 'architecture_review', evidence: 'missing seam', count: 1 },
   loop_halt: { type: 'loop_halt', reason: 'kickback cap exceeded' },
+  halt_marker_write_failed: {
+    type: 'halt_marker_write_failed',
+    path: '/tmp/project/.pipeline/HALT',
+    reason: 'disk full',
+  },
   loop_converged: { type: 'loop_converged' },
   rebase_noop: { type: 'rebase_noop' },
   rebase_mergeable_skip: { type: 'rebase_mergeable_skip' },
-  rebase_changed: { type: 'rebase_changed', changedPaths: ['a.ts'] },
+  rebase_changed: {
+    type: 'rebase_changed',
+    changedPaths: ['a.ts'],
+    allChangedPaths: ['a.ts', 'docs/guide.md'],
+  },
   rebase_gate_reverified: { type: 'rebase_gate_reverified', step: 'build_review', skippedDispatch: false },
   rebase_gate_preserved: {
     type: 'rebase_gate_preserved',
@@ -494,9 +582,9 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     ).toBe(true);
   });
 
-  it('drift guard: every ConductorEvent type is classified, and the writer honors that classification', async () => {
+  it('drift guard: every audit-owned event type is classified, and the writer honors that classification', async () => {
     // Enumeration-driven (writing-system-tests §3): EVENT_TYPE_CLASSIFICATION
-    // above is a `Record` keyed by the full `ConductorEvent['type']` union —
+    // above is a `Record` keyed by the audit-writer-owned event union —
     // TypeScript itself refuses to compile this file if a new event type is
     // added without a classification, which is the actual drift guard (a
     // hand-written fixture list can silently go stale; a missing `Record`
@@ -511,7 +599,7 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     writer.subscribe(events);
 
     for (const [type, classification] of Object.entries(EVENT_TYPE_CLASSIFICATION) as Array<
-      [ConductorEvent['type'], 'friction-mapped' | 'not-audited-by-design']
+      [AuditedEventType, 'friction-mapped' | 'not-audited-by-design']
     >) {
       const before = (await readRecords(dir)).length;
       await events.emit(EVENT_FIXTURES[type]);
@@ -529,6 +617,39 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
         ).toBe(before);
       }
     }
+
+    // These variants are intentionally off the audit trail: their runtime sink
+    // declarations must agree with the writer observation above.  The engine
+    // rubric events stay durable; externally-owned disposition events do not
+    // re-enter events.jsonl when the closeout tail re-emits them.
+    const buildReviewSinkExpectations = {
+      build_review_rubric_started: { render: false, persist: true, audit: false },
+      build_review_rubric_result: { render: false, persist: true, audit: false },
+      build_review_rubric_skipped: { render: false, persist: true, audit: false },
+      build_review_cache_hit: { render: false, persist: true, audit: false },
+      build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false },
+      build_review_disposition_accepted: { render: false, persist: false, audit: false },
+      build_review_disposition_refused: { render: false, persist: false, audit: false },
+      build_review_disposition_version_invalidated: { render: false, persist: true, audit: true },
+      build_review_outer_verdict: { render: false, persist: true, audit: false },
+    } satisfies Partial<Record<ConductorEvent['type'], { render: boolean; persist: boolean; audit: boolean }>>;
+    expect(Object.fromEntries(Object.keys(buildReviewSinkExpectations).map((type) => [
+      type,
+      EVENT_SINKS[type as ConductorEvent['type']],
+    ]))).toEqual(buildReviewSinkExpectations);
+    expect(persistedEventTypes()).toEqual(expect.arrayContaining([
+      'build_review_rubric_started',
+      'build_review_rubric_result',
+      'build_review_rubric_skipped',
+      'build_review_cache_hit',
+      'build_review_rubric_infrastructure_failure',
+      'build_review_outer_verdict',
+    ]));
+    expect(persistedEventTypes()).not.toEqual(expect.arrayContaining([
+      'build_review_disposition_accepted',
+      'build_review_disposition_refused',
+    ]));
+    expect(auditedEventTypes()).not.toEqual(expect.arrayContaining(Object.keys(buildReviewSinkExpectations)));
   });
 
   it('a UI-only event with no writer mapping produces no record and no error (allowlist, not a catch-all)', async () => {
@@ -544,5 +665,28 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
 
     const records = await readRecords(dir);
     expect(records).toHaveLength(0);
+  });
+
+  it('a persisted but unaudited containment check produces no audit record', async () => {
+    const { EVENT_SINKS } = await import('../../src/engine/event-sinks.js');
+    expect(EVENT_SINKS.containment_check_unresolved).toMatchObject({
+      persist: true,
+      audit: false,
+    });
+
+    const mod = await loadWriter();
+    const AuditTrailWriter = mod.AuditTrailWriter as new (root: string) => {
+      subscribe(emitter: ConductorEventEmitter): void;
+    };
+    new AuditTrailWriter(dir).subscribe(events);
+
+    await events.emit({
+      type: 'containment_check_unresolved',
+      failure: 'evaluation-failed',
+      taskId: '3',
+      ts: 1_000,
+    });
+
+    expect(await readRecords(dir)).toHaveLength(0);
   });
 });

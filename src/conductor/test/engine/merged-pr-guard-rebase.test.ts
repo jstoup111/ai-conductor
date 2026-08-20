@@ -13,8 +13,8 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, rm, writeFile, access } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
@@ -77,7 +77,7 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 /** Non-conflicting repo: `feat` branch cleanly rebases onto `main`. */
-async function buildCleanRepo(): Promise<{
+async function buildCleanRepo(baseAdvancePath = 'c.md'): Promise<{
   repo: string;
   g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 }> {
@@ -97,10 +97,8 @@ async function buildCleanRepo(): Promise<{
   await g(['commit', '-q', '-m', 'feat: add b']);
 
   await g(['checkout', '-q', 'main']);
-  // Docs-only base advance: this fixture's subject is the merged-PR guard, and
-  // it needs the branch to take the mergeable-SKIP path. A base that gains
-  // code/test paths is no longer skippable on textual cleanliness alone.
-  await writeFile(join(repo, 'c.md'), 'unrelated\n');
+  await mkdir(dirname(join(repo, baseAdvancePath)), { recursive: true });
+  await writeFile(join(repo, baseAdvancePath), 'unrelated\n');
   await g(['add', '.']);
   await g(['commit', '-q', '-m', 'main: add c']);
 
@@ -255,7 +253,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(false);
   });
 
-  it('negative: no pr_url recorded — clean normal finish uses mergeable skip with zero guard queries', async () => {
+  it('negative: no pr_url recorded — normal finish rebases a root source advance with zero guard queries', async () => {
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -283,9 +281,44 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
 
     expect(calls).toHaveLength(0);
     const afterSha = (await g(['rev-parse', 'feat'])).stdout.trim();
-    expect(afterSha).toBe(beforeSha);
+    expect(afterSha).not.toBe(beforeSha);
     expect(await fileExists(join(repo, '.pipeline/HALT'))).toBe(false);
     expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(true);
+  });
+
+  it('retains an excluded docs/c.md rebase record while the root c.md contrast is runtime source', async () => {
+    ({ repo, g } = await buildCleanRepo('docs/c.md'));
+    const docsEvents: Array<{ changedPaths?: string[]; allChangedPaths?: string[] }> = [];
+    events = new ConductorEventEmitter();
+    events.on('rebase_changed', (event) => {
+      if (event.type === 'rebase_changed') docsEvents.push(event);
+    });
+    const docsOutcome = await rebaseModule.performRebase(rebaseModule.makeGitRunner(repo), repo, 'main');
+    await rebaseModule.emitRebaseEvent(events, docsOutcome);
+    expect(docsEvents).toContainEqual(expect.objectContaining({
+      changedPaths: [], allChangedPaths: ['docs/c.md'],
+    }));
+    await rm(repo, { recursive: true, force: true });
+
+    ({ repo, g } = await buildCleanRepo('c.md'));
+    statePath = join(repo, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+    await seedPreRebaseState(statePath, repo);
+
+    const baseSha = (await g(['rev-parse', 'main'])).stdout.trim();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult) },
+      events,
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+      fromStep: 'rebase',
+    } as never);
+
+    await conductor.run();
+
+    expect((await g(['merge-base', '--is-ancestor', baseSha, 'feat'])).stdout).toBe('');
   });
 
   // ── TS-4: cost bound — exactly one guard query at rebase entry ────────────

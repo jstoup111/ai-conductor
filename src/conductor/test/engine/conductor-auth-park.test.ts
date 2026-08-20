@@ -36,6 +36,9 @@ const READY_STATE: ConductState = {
   architecture_review: 'done',
   acceptance_specs: 'done',
   test_suite: 'done',
+  // Daemon self-host dispatches require a concrete feature identity for the
+  // scratch-home lease, just as production backlog work does.
+  feature_desc: 'auth-park-test',
 } as ConductState;
 
 describe('conductor auth-park: daemon-token mode', () => {
@@ -2037,6 +2040,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     let buildAttempt1Failed = false;
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'auth-park-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
@@ -2114,6 +2118,7 @@ describe('conductor auth-park: daemon-token mode', () => {
   it('authFailure park on daemon token: attempt counter unchanged (same retry, not new attempt)', async () => {
     let buildAttempts = 0;
     const runner: StepRunner = {
+      selfHostRunId: () => 'auth-park-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
@@ -2187,6 +2192,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     let buildAttempts = 0;
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'auth-park-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
@@ -2259,6 +2265,7 @@ describe('conductor auth-park: daemon-token mode', () => {
 
   it('authFailure park: non-empty content check (mtime alone is insufficient)', async () => {
     const runner: StepRunner = {
+      selfHostRunId: () => 'auth-park-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         return { success: false, authFailure: true } as AuthResult;
@@ -2325,6 +2332,7 @@ describe('conductor auth-park: daemon-token mode', () => {
 
   it('authFailure park timeout: HALT names daemon token path and re-mint instructions (not operator path)', async () => {
     const runner: StepRunner = {
+      selfHostRunId: () => 'auth-park-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         return { success: false, authFailure: true } as AuthResult;
@@ -2398,6 +2406,7 @@ describe('conductor auth-park: daemon-token mode', () => {
 
   it('park timeout HALT: does not mention expiresAt or retries exhausted (daemon-token specific)', async () => {
     const runner: StepRunner = {
+      selfHostRunId: () => 'auth-park-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         return { success: false, authFailure: true } as AuthResult;
@@ -2472,6 +2481,7 @@ describe('conductor auth-park: daemon-token mode', () => {
   it('park timeout: retry budget not consumed (park does not count as a retry)', async () => {
     let buildAttempts = 0;
     const runner: StepRunner = {
+      selfHostRunId: () => 'auth-park-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;
@@ -2556,6 +2566,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     let buildAttempt1Failed = false;
 
     const runner: StepRunner = {
+      selfHostRunId: () => 'auth-park-run',
       run: vi.fn(async (step: string): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         buildAttempts++;

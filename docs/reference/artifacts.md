@@ -121,6 +121,23 @@ gate's dispositions. `build` deliberately does not: a build agent rewriting its 
 what it implemented is the scope violation `build_review` exists to catch, and the repair routes to
 the `plan` step, which an autonomous run may not enter.
 
+When the engine appends remediation tasks to the plan after a `remediate` round, it commits that
+amendment itself (`chore(plan): record appended remediation tasks`) — the appended heading is engine
+bookkeeping, not builder work, and leaving it uncommitted would fail the build step's clean-tree
+completion check. The engine also records every appended task id in
+`.pipeline/engine-state.json` (`appendedRemediationTaskIds`), and the build completion predicate
+refuses completion while any recorded id's `### Task <id>` heading is missing from the plan:
+deleting a remediation task never completes it. The guard disarms only when the engine-state file is
+absent (e.g. a recreated worktree), never on a plan edit.
+
+The seal-rotation evaluator honors the same record: an authored plan whose divergence from the base
+tip is exactly an append of the recorded `### Task rem-*` blocks (base content a byte prefix of
+head, every suffix heading a recorded task id) is treated as the engine's own amendment and rotates
+without an operator reseal — the `protected_artifact_rebaseline` event reports it under
+`includedEngineAppendedPaths`. Any other authored divergence (unrecorded ids, extra headings, prose
+before the first recorded heading, or a non-append edit) still refuses with
+`feature-authored:head-differs-from-base` and requires `conduct-ts reseal`.
+
 **Protected-artifact seal.** `.pipeline/protected-artifact-seal.json` fingerprints every file under
 `.docs/architecture`, `.docs/decisions`, `.docs/plans`, `.docs/specs`, and `.docs/stories` against a
 baseline commit:
@@ -150,17 +167,19 @@ rotation proceeds for the rest. An indeterminate authorship probe still fails cl
 rotation. The engine records each rotation in `rebaselines` and logs the trigger, old and new
 commits, and paths.
 
-An accepted-artifact correction belongs to DECIDE, before that first BUILD entry. DECIDE writes the
-additive note beside the original assertion:
+An accepted-artifact correction belongs to DECIDE, before that first BUILD entry. For every protected
+artifact except stories, DECIDE writes the additive note beside the original assertion:
 
 ```markdown
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-The original assertion remains present, and no separate amendment artifact is created. This places the
-correction in the initial seal baseline. `conduct-ts plan-protected-targets <plan-path>` prevents a
-plan from assigning the same mutation to BUILD, and the land gate independently refuses a violating
-plan.
+The original assertion remains present, and no separate amendment artifact is created. Story artifacts
+under `.docs/stories/` are the exception: DECIDE replaces the superseded assertion in place and leaves
+no amendment record — git history and the spec PR carry the correction's provenance. Either way, this
+places the correction in the initial seal baseline. `conduct-ts plan-protected-targets <plan-path>`
+prevents a plan from assigning the same mutation to BUILD, and the land gate independently refuses a
+violating plan.
 
 An operator-approved plan or architecture amendment committed after first BUILD leaves this
 baseline stale by design. Review the amendment, then reseal the reviewed paths with
@@ -369,7 +388,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `attribution-verdict.json` | `{ schema?, anchor?: { head?, residue?[] }, results? }` | `attribution-verdict.ts` |
 | `audit-trail/` | Per-task `review.json`, `rework-N.json`, `commit.txt`, `summary.json`, plus `events.jsonl` and a `WRITE-FAILED` marker | `audit-trail.ts`, `pipeline` skill |
 | `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
-| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness, wiring }, codeStamp? }`. `rubric.wiring: true` means wiring failed and requires a non-empty `findings.wiring`; `rubric.wiring: false` means wiring passed and needs no wiring finding. A missing or malformed item fails closed. | `build_review` step |
+| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness }, codeStamp? }`. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as the retired `wiring`) is ignored, so a verdict written before the rubric changed still parses. | `build_review` step |
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
@@ -568,10 +587,14 @@ never blocks either section. `state` is one of `measured`, `partial`, or `unavai
 carries `active_ms` (the union of all active step/group execution intervals), `provider_active_ms` (the
 portion of active time actually spent inside a provider process), and `no_provider_active_ms`
 (`active_ms - provider_active_ms`, engine/code time). `partial` carries `active_ms` only when active
-time itself was trustworthy but provider or completeness evidence was not; `unavailable` carries no
-fields. Timing is derived from `.pipeline/events.jsonl` at ship time and is never a fabricated zero —
-missing or incomplete evidence downgrades the state instead. Records written before this section
-existed simply have no `## Time` block, and `conduct-ts kpi` reports those as `time=unavailable`.
+time itself was trustworthy but provider or completeness evidence was not. When the rollup identifies
+the downgrade route, `partial` also carries `reason`: `empty-active-union`,
+`active-evidence-incomplete`, `open-executions:<ids>`, `provider-outside-active-union`, or
+`provider-evidence-incomplete`; records shipped before the reason field existed simply omit that
+line. `unavailable` carries no fields. Timing is derived from `.pipeline/events.jsonl` at ship time
+and is never a fabricated zero — missing or incomplete evidence downgrades the state instead. Records
+written before this section existed simply have no `## Time` block, and `conduct-ts kpi` reports those
+as `time=unavailable`.
 
 `conduct-ts shipped-record --slug <plan-stem> --pr <pr-url-or-local>` writes it; both flags are
 required and re-running with identical content is a no-op. Its exit code cannot be used to detect
@@ -596,20 +619,39 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **71 variants**. `EventPersister` subscribes to the **44** event types
-marked `persist: true` in `event-sinks.ts` and writes only those:
+`ConductorEvent` defines **91 variants** across **90** event types (`self_host_containment_verdict`
+declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
+subscribes to the **63** event types marked `persist: true` in `event-sinks.ts` and writes only
+those:
 
-`step_started`, `step_completed`, `step_failed`, `provider_attempt`, `feature_usage_total`,
+`contained_live_checkout_drift`, `self_host_containment_verdict`,
+`build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
+`build_review_cache_hit`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
+`step_started`, `deprecated_step`, `step_completed`, `step_failed`, `provider_attempt`,
+`scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
+`feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `session_reset`,
 `credentials_park`, `operator_park_boundary`, `credentials_park_progress`,
 `finish_publication_transition`, `finish_publication_blocked`, `finish_publication_disposition`,
 `feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
-`verdict_freshness`, `mode_skip`, `build_stall`, `build_progress`, `build_no_progress`,
-`renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`,
-`build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
-`unattributed_progress`, `attribution_divergence`, `acceptance_red`.
+`verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
+`build_no_progress`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
+`parallel_failure`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
+`loop_halt`, `halt_marker_write_failed`, `rebase_changed`, `rebase_gate_invalidated`,
+`rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`, and `acceptance_red`.
+
+`contained_live_checkout_drift` and `self_host_containment_verdict` are the containment boundary's
+closure events (`live-containment.ts`): the drift event names a concurrent operator's live-checkout
+change once a dispatch is proven contained, and the verdict event records whether that proof
+succeeded for each completed self-host dispatch. Both render to the terminal and daemon log and
+persist to this file; see [`live_containment`](configuration.md#harness_self_host) and the
+[live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
+
+`build_review_disposition_accepted` and `build_review_disposition_refused` are declared `persist:
+false` deliberately: they are written by the external build-review CLI to its own pipeline-owned
+ledger and tailed onto the live bus, so re-persisting them here would duplicate the same occurrence.
 
 The BUILD-member settle events carry only a member, decision, and closed basis classification:
 `build_member_evidence_reused` is `reuse` with `fingerprint-match`;
@@ -632,19 +674,19 @@ evidence of a prevented resume rather than a path to a later resumed invocation.
 same session-capability contract described in
 [Per-step session capability contract](../explanation/architecture.md#per-step-session-capability-contract).
 
-Readers: `conduct-ts inline --report`, `computeCostRollup` (which feeds the shipped record's `## Cost`
-block), the daemon signal emitters, the engineer-loop signal assembler, and the `retro` skill by prose.
-No dashboard and no `kpi` path reads it.
+Halt occurrences are consumed by `cost-rollup.halts`, the shipped record's `## Cost` block,
+`conduct-ts kpi`, and the engineer-loop signal assembler. `conduct-ts inline --report` renders
+neither halt nor kickback tables.
 
-> **Known limitation.** The other 28 event types — including `gate_verdict`, `kickback`, `loop_halt`,
-> `loop_converged`, `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`,
-> `ci_failed`, and every `rebase_*` variant — are emitted for real but never persisted, because the
-> emitter dispatches only to handlers registered for that exact type. Three read paths are structurally
-> dead as a result: `cost-rollup.halts` counts `loop_halt` and is therefore **permanently 0** — and that
-> zero is committed verbatim into every shipped record's `## Cost` block and re-read by `conduct-ts kpi`;
-> `aggregateKickbacks` and `aggregateHalts` always return `[]`, so `--report` shows no kickbacks and no
-> halts however many occurred. Read halts from `.pipeline/HALT` and the daemon log instead.
-> Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+> **Known limitation.** The other 27 event types — including `gate_verdict`, `loop_converged`,
+> `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`, `ci_failed`, and every
+> remaining `rebase_*` variant not listed above — are emitted for real but never persisted, because
+> the emitter dispatches only to handlers registered for that exact type. `loop_halt`,
+> `halt_marker_write_failed`, and `rebase_conflict_halt` are persisted, so `cost-rollup.halts`,
+> shipped records' `## Cost` blocks, `conduct-ts kpi`, and the engineer-loop signal assembler can
+> consume real halt occurrences. `.pipeline/HALT` remains the durable park signal and the daemon
+> log remains a useful immediate diagnostic. `kickback` is likewise persisted, but `--report`
+> renders neither halt nor kickback tables.
 
 `build_progress` events carry an additional `tickReason` (`task-delta` | `head-moved` |
 `heartbeat`) and an explicit `headMoved` boolean, letting a reader distinguish "HEAD did not
@@ -688,10 +730,13 @@ type AuditRecord = {
 
 `at` is epoch milliseconds, not the ISO `ts` used by `events.jsonl`, and `event` is a derived string,
 not a raw event type. `phase` is omitted for an `operator`-origin record — an interactive reseal runs
-outside any step's phase. It subscribes to eight source events (`gate_verdict`, `step_retry`,
+outside any step's phase. It subscribes to eleven source events (`gate_verdict`, `step_retry`,
 `kickback`, `loop_halt`, `step_completed`, `halt_cleared`, `protected_artifact_reseal`,
-`protected_artifact_reseal_refused`) and emits eight strings (`gate_pass`, `gate_fail`, `retry`,
-`kickback`, `intervention`, `halt_cleared`, `reseal`, `reseal_refused`). A write failure drops a
+`protected_artifact_reseal_refused`, `halt_marker_write_failed`,
+`remediation_sealed_artifact_redirect`, `verdict_freshness`) and emits ten strings (`gate_pass`,
+`gate_fail`, `retry`, `kickback`, `intervention`, `halt_cleared`, `reseal`, `reseal_refused`,
+`halt_marker_write_failed`, `verdict_freshness`). `remediation_sealed_artifact_redirect` is
+subscribed but intentionally emits no audit record. A write failure drops a
 `WRITE-FAILED` marker beside it and, for
 [`conduct-ts reseal`](cli.md#conduct-ts-reseal) specifically, fails the reseal itself — its writer is
 constructed fail-closed, unlike every step-attributed writer, because a reseal whose audit record was
@@ -751,8 +796,9 @@ parsed with its input, output, cache, cost, dispatch, and `cost_unmetered` field
 
 **Parsed timing fields** (`KpiTimeFields`, mirrors `TimingRollup`): `state` (`measured`, `partial`, or
 `unavailable`), plus `activeMs`, `providerActiveMs`, and `noProviderActiveMs` when present. Parsing is
-independent of Cost — a missing, malformed, or absent `## Time` block never affects Cost output and is
-reported as `state: unavailable`.
+independent of Cost. A `partial` block also parses its optional `reason` downgrade route; records
+shipped before the reason field existed simply omit it. A missing, malformed, or absent `## Time`
+block never affects Cost output and is reported as `state: unavailable`.
 
 **Output:** a plain-text report on stdout. No file, no JSON. Per feature it prints `input`, `output`,
 `tokens` (their sum), cache fields, dispatch fields, `duration_ms`, and `cost_usd`, suffixed
@@ -769,8 +815,9 @@ aggregate cost is `unavailable`. An empty or missing directory prints `No shippe
 
 Each feature row also appends a `time=` suffix: `time=measured active_ms=<n> provider_active_ms=<n>
 no_provider_active_ms=<n>` when measured, `time=partial` (with `active_ms=<n>` when active time alone
-was trustworthy), or `time=unavailable`. The aggregate line adds `timing measured=<n> partial=<n>
-unavailable=<n>` counts, plus `avg_active_ms`, `avg_provider_active_ms`, and
+was trustworthy and `reason=<route>` when the downgrade route is known), or `time=unavailable`.
+The aggregate line adds `timing measured=<n> partial=<n> unavailable=<n>` counts, plus
+`avg_active_ms`, `avg_provider_active_ms`, and
 `avg_no_provider_active_ms` averaged only over `measured` features — partial and unavailable rows
 never contribute to or fabricate an average.
 

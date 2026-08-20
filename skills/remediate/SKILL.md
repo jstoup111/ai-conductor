@@ -1,6 +1,6 @@
 ---
 name: remediate
-description: "Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human."
+description: "Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human."
 enforcement: gating
 phase: ship
 standalone: true
@@ -9,10 +9,10 @@ requires: [verify-claims]
 
 ## Purpose
 
-Turns a **blocking SHIP gate into action**. When `prd-audit`, `architecture-review --as-built`, or
-the `finish` verification reports gaps the daemon would otherwise HALT on, this skill reasons over
-each blocking gap and decides *how the daemon should proceed* — autonomously where it can,
-human-in-the-loop only where it must.
+Turns a **blocking gate into action**. When `build_review` fails, or when `prd-audit`,
+`architecture-review --as-built`, or the `finish` verification reports SHIP gaps the daemon would
+otherwise HALT on, this skill reasons over each blocking gap and decides *how the daemon should
+proceed* — autonomously where it can, human-in-the-loop only where it must.
 
 **Correctness gate:** a gap's disposition and its routing target rest on a claim about the gap's
 nature. Per the `/verify-claims` protocol, ground that classification in the audit evidence with a
@@ -33,7 +33,8 @@ If a gap can be turned into concrete work, it is **not** a HALT. This skill plan
 dispositions and writes tasks. It does **not** edit code, write tests, or amend the PRD; the step it
 kicks back to does that.
 
-**Run at SHIP, only when a prior audit BLOCKED — dispatched by the conductor on the blocking path.**
+**Run when `build_review` fails, or at SHIP when a prior audit BLOCKED — dispatched by the
+conductor on the blocking path.**
 
 ## Practices
 
@@ -42,7 +43,7 @@ kicks back to does that.
 Read the blocking gaps or stall-question and their per-gap evidence from whichever trigger
 dispatched this skill (the conductor's dispatch context names it):
 
-**Gap-based inputs (prd-audit, architecture-review_as-built, finish failure):**
+**Gap-based inputs (prd-audit, architecture-review_as-built, finish failure, build_review trigger):**
 - `.pipeline/prd-audit.md` — the per-FR verdict table + Per-FR Detail (verdict, gap-class,
   `file:line` evidence). Blocking rows are the `FR-N` rows that are `MISSING`/`PARTIAL`/`DIVERGED`
   and **not** `ACCEPTED`.
@@ -52,6 +53,8 @@ dispatched this skill (the conductor's dispatch context names it):
   test failures: per failing file, the tests, one-line reasons, and finish's read on the cause.
   If finish left no artifact (older skill, or it crashed), fall back to running the failing part
   of the suite yourself to gather the evidence.
+- `.pipeline/build-review.json` — present when the `build_review` trigger dispatches remediation
+  after a FAIL verdict. Read its rubric findings and reasons as the per-gap evidence.
 
 **Stall-question input (daemon mode only, build_stall trigger):**
 - `.pipeline/build-stall-question.md` — present when the build step stalled with
@@ -64,6 +67,12 @@ Consider **only the blocking gaps or the stall question**. Each gap already carr
 `file:line` evidence — use it; do not re-audit from scratch. A stall question should be
 answered by reasoning over committed artifacts (plan, stories, ADRs, task-status) without
 re-reading source files unless essential.
+
+**Remediation context pointers:** When the dispatch context includes `plan contract:` or
+`prior attempts:` pointers, read every referenced file before planning repairs. Treat the
+referenced plan task's **Steps** as the governing contract for the repair; prior-attempt
+artifacts supply earlier same-anchor context, not a replacement contract. When no pointers
+appear, inspect `.docs/plans/` and `.pipeline/build-review/` directly before planning.
 
 ### 2. Dispatch `remediation-planner`
 
@@ -79,10 +88,10 @@ gap must be turned into concrete work:
 
 | Disposition | When | Daemon effect |
 |---|---|---|
-| `build` | impl / test / wiring bug with clear evidence (the fix is obvious from the gap); **implementation/test/documentation drift that preserves the approved architecture**; OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
+| `build` | impl / test bug with clear evidence (the fix is obvious from the gap); **implementation/test/documentation drift that preserves the approved architecture**; OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
 | `acceptance_specs` | the gap exists because acceptance coverage is missing or too weak to pin the behavior | kick to **acceptance_specs** (regenerate failing specs), then build |
 | `architecture_review` | changing or clarifying **approved architecture** is required before the gap can be closed | kick to **architecture_review** |
-| `plan` | functionality that **is in scope** but the plan simply omitted or missed (a planning omission, not an architecture or design decision) | kick to **plan** (re-plan), then build |
+| `plan` | functionality that **is in scope** but the plan simply omitted or missed (a planning omission, not an architecture or design decision) | In a daemon run, a `plan` disposition is a terminal needs-human HALT and never re-plans. |
 | `halt` + `category: architectural-clarity` | an architectural gap that needs a human *decision* before any code can be right; OR **stall-question requires architectural judgement beyond the committed spec** | **HALT** for human |
 | `halt` + `category: product-scope` | functionality the **initial design never covered**; OR **stall-question hinges on product-level decision not in the PRD** | **HALT** for human DECIDE |
 | `halt` + `category: unanswerable` | **stall-question only:** the question is ambiguous or cannot be answered from committed artifacts alone; need more evidence | **HALT** — flag the question as unanswerable and preserve it verbatim |
@@ -103,6 +112,10 @@ Judgment rules:
   `build`.
 - A gap that is an `impl-gap` in the audit is almost always `build` (or `acceptance_specs` when the
   real miss is coverage).
+- **Baseline-passing test gaps are `build`.** Positive example: a changed test that passes against
+  the baseline and needs strengthening within an existing task's RED/GREEN steps is `build`, not a
+  planning miss. Negative example: do not select `plan` merely because the existing test passed
+  against the baseline.
 - **RED-waiver obligation:** An `acceptance_specs` disposition may waive separate RED proof only
   for a remediation that must atomically repair both the acceptance spec and its implementation.
   The disposition must require a recorded declaration with a non-empty reason and attributable
@@ -113,12 +126,16 @@ Judgment rules:
   TEST to the new contract — never a task that weakens the production code to appease the old
   test. A test that reveals a real implementation bug gets impl-fix tasks. Reserve `halt` for a
   failure that evidences a genuine design ambiguity, not mere uncertainty about the fix.
+- **Sibling trigger routes remain unchanged.** A clear `prd-audit` impl-gap, an as-built architecture finding that preserves approved architecture, and a finish test failure each route `build`. A `build_stall` question answerable from committed artifacts routes `build`; a question needing architecture, product, or unanswerable judgment routes `halt`.
 - An `intended-drift` is `halt: product-scope` **only** if it reflects unplanned product
   functionality; if it preserves approved architecture, it is `build`. Route to
   `architecture_review` only when the approved architecture itself must change or be clarified.
 - **Keep omissions distinct from decisions.** An in-scope planning omission is a plan miss, not an
   architecture or design decision, so it routes to `plan`; it does not make `architecture_review`
   appropriate.
+- **Check plan-task coverage before `plan`.** Before selecting `plan`, examine the approved plan's
+  existing tasks. A gap whose remedy is admitted by an existing task is `build`; use `plan` only
+  when no existing task admits the remedy.
 - **Reject contradictory dispositions.** It is forbidden and invalid to select
   `architecture_review` when no architectural decision is needed; that architecture_review
   disposition is invalid. Route that clear conforming implementation/test/documentation work to
@@ -160,7 +177,7 @@ The conductor reads this file to route, so the shape is exact:
 ```
 
 Field rules:
-- `id` — the blocking FR id (`FR-N`); for an as-built finding, the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`); for a stall-question, `stall:<slug>` where `<slug>` is a 1-3 word summary of the question topic (e.g. `stall:validation-layer`, `stall:acceptance-test-fidelity`).
+- `id` — the blocking FR id (`FR-N`); for an as-built finding, the violated ADR id (its filename stem, e.g. `adr-2026-06-29-rate-limit-strategy`); for a finish test failure, `test:<failing file stem>` (e.g. `test:loop-intake`); for a `build_review` trigger gap, `build_review:<stem>` (e.g. `build_review:completeness`); for a stall-question, `stall:<slug>` where `<slug>` is a 1-3 word summary of the question topic (e.g. `stall:validation-layer`, `stall:acceptance-test-fidelity`).
 - `disposition` — one of `build` | `acceptance_specs` | `architecture_review` | `plan` | `publication` | `halt`.
   Use `publication` when the shipped code is already correct and the ONLY defect is in what the
   pull request *says* — a placeholder or wrong-template body, a stale title, a missing `Closes`
@@ -169,7 +186,7 @@ Field rules:
   `gh pr edit` is the failure this disposition exists to prevent. Conversely, never use
   `publication` when any code, test, spec, or configuration must change — that is `build`.
 - `category` — **only** when `disposition == "halt"`: `architectural-clarity` | `product-scope` | `unanswerable` (stall-question only). Otherwise `null`.
-- `rationale` — one sentence citing the gap's `file:line` evidence and justifying the disposition. For a **stall-question with `disposition == "build"`**, the rationale contains the **answer to the question**, grounded in the committed artifacts that support it.
+- `rationale` — one sentence citing the gap's `file:line` evidence and justifying the disposition. For a **stall-question with `disposition == "build"`**, the rationale contains the **answer to the question**, grounded in the committed artifacts that support it. A `plan` rationale must name the examined plan task IDs and why none admits the fix.
 - `tasks` — for a `publication` disposition, tasks are OPTIONAL and purely informational: the
   `rationale` is the remedy, and nothing is ever appended to the plan (see §5). Otherwise:
   **required, non-empty** when `disposition == "build"` (and recommended for `acceptance_specs`/`plan`), EXCEPT for **stall-question answers**, which have `tasks: []` (no further work — the answer in `rationale` is the remedy). Each task is concrete and **file-scoped** (`file:line` + exactly what to change), drawn from the audit evidence. **`[]` for all `halt` dispositions.** A `build` disposition with empty `tasks` is invalid EXCEPT when the input is a `build_stall` stall-question.
@@ -213,7 +230,9 @@ Headers re-parse via the Task 18 grammar and must include:
 
 ## Verification
 
-- [ ] Read the blocking gaps from `.pipeline/prd-audit.md` (and `.pipeline/architecture-review-as-built.md` if present), or the stall-question from `.pipeline/build-stall-question.md`
+- [ ] Read the blocking gaps from `.pipeline/build-review.json`, `.pipeline/prd-audit.md` (and
+      `.pipeline/architecture-review-as-built.md` if present), or the stall-question from
+      `.pipeline/build-stall-question.md`
 - [ ] One disposition per blocking gap or stall-question — nothing blocking omitted
 - [ ] HALT used ONLY for `architectural-clarity`, `product-scope`, or (stall-question) `unanswerable`; every other gap/question routed to a step
 - [ ] A gap whose ONLY defect is published PR prose (placeholder/wrong-template body, stale title,
@@ -224,5 +243,7 @@ Headers re-parse via the Task 18 grammar and must include:
 - [ ] For a stall-question answer (`build_stall` disposition `build`), the `rationale` clearly answers the original question and cites the artifacts that support it
 - [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,
       never to `build` or `acceptance_specs`
-- [ ] `id` format correct: `FR-N`, `test:<stem>`, `adr-<stem>`, or `stall:<slug>`
+- [ ] A `plan` rationale names the examined plan task IDs and why none admits the fix
+- [ ] `id` format correct: `FR-N`, `build_review:<stem>`, `test:<stem>`, `adr-<stem>`, or
+      `stall:<slug>`
 - [ ] Valid JSON written to `.pipeline/remediation.json` matching the contract exactly

@@ -15,6 +15,7 @@ import {
   HALT_MARKER_RELATIVE,
 } from '../../src/engine/task-progress.js';
 import { CUSTOM_COMPLETION_PREDICATES } from '../../src/engine/artifacts.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 describe('task-progress', () => {
   let dir: string;
@@ -543,6 +544,22 @@ describe('task-progress', () => {
       const written = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
       expect(written).toContain(question);
       expect(written).toContain(detail);
+    });
+
+    it('writeStallHalt returns a failed result and emits when creating .pipeline fails', async () => {
+      const blockedRoot = join(dir, 'not-a-directory');
+      await writeFile(blockedRoot, 'file blocks mkdir');
+      const events = new ConductorEventEmitter();
+      const failures: Array<{ path: string; reason: string }> = [];
+      events.on('halt_marker_write_failed', (event) => {
+        if (event.type === 'halt_marker_write_failed') failures.push(event);
+      });
+
+      const result = await writeStallHalt(blockedRoot, 'question', 'detail', events);
+
+      expect(result.status).toBe('failed');
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.path).toBe(join(blockedRoot, '.pipeline', 'HALT'));
     });
 
     it('writeStallQuestionEvidence and writeStallHalt work together for capture/clear/evidence ordering', async () => {

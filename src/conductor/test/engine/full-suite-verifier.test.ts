@@ -1587,7 +1587,7 @@ describe('FullSuiteVerifier', () => {
       .catch(() => null);
     const blockedResult = await new FullSuiteVerifier({
       ...verificationOptions,
-      lock: { waitTimeoutMs: 0 },
+      lock: { waitTimeoutMs: 0, processOwnsRecordedLock: () => true },
     }).ensure();
 
     expect({ racingResult, canonicalOwner, blockedResult, executions }).toEqual({
@@ -1649,6 +1649,9 @@ describe('FullSuiteVerifier', () => {
       lock: {
         waitTimeoutMs: 0,
         wait: async () => undefined,
+        // A live owner whose instance cannot be disproved (including an
+        // unavailable platform identity probe) must remain protected.
+        processOwnsRecordedLock: () => true,
       },
     } as ConstructorParameters<typeof FullSuiteVerifier>[0]);
     const staleRoot = await makeLockedProject(2_147_483_647, 'stale-owner');
@@ -1690,6 +1693,61 @@ describe('FullSuiteVerifier', () => {
         reason: 'internal_error',
         message: 'Unable to verify full-suite lock owner liveness: liveness probe denied',
       },
+      executions: 1,
+    });
+  });
+
+  it('recovers a stale lock when its PID is live but cannot be its recorded owner instance', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-lock-reused-pid-');
+    await writeProjectFile(
+      projectRoot,
+      '.pipeline/test-suite.lock/owner.json',
+      JSON.stringify({
+        version: 1,
+        // A process in another PID namespace (or a PID-reuse successor) can
+        // make this numeric PID look live without being the lock owner.
+        pid: process.pid,
+        token: 'dead-owner-instance',
+        acquiredAt: '2026-07-25T12:00:00.000Z',
+      }),
+    );
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:current',
+          headSha: 'head-current',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      execute: async () => {
+        executions += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-07-25T18:00:00.000Z',
+          endedAt: '2026-07-25T18:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'passed\n',
+          stderr: '',
+        };
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        processIsLive: () => true,
+        // This is intentionally a stronger identity check than signal-0:
+        // the observed live PID cannot be the instance recorded in owner.json.
+        processOwnsRecordedLock: () => false,
+      },
+    } as ConstructorParameters<typeof FullSuiteVerifier>[0]).ensure();
+
+    expect({ result: result.status, executions }).toEqual({
+      result: 'EXECUTED',
       executions: 1,
     });
   });

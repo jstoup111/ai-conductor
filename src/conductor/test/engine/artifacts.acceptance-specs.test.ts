@@ -55,6 +55,7 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
   }
 
   const validEvidence = {
+    outcome: 'specs-generated',
     command: 'pytest spec/integration/test_x.py',
     targetSpecs: ['spec/integration/test_x.py'],
     executed: 3,
@@ -130,10 +131,93 @@ describe('engine/artifacts — acceptance_specs predicate purity', () => {
     expect(result.done).toBe(false);
     expect(result.reason).toContain(ACCEPTANCE_SPECS_RED_EVIDENCE);
   });
+
+  it('completes a disposition-only outcome without spec files, a run contract, or RED counters', async () => {
+    // Grounding fixtures (rem-build-review-root-cause-2): the records are
+    // validated against the feature's stories and plan, and citations must
+    // resolve on disk.
+    await createFile(
+      '.docs/stories/feature.md',
+      '# Stories\n\n### Happy Path\n- Given X, When Y, Then Z\n\n### Negative Paths\n- Given bad X, When Y, Then refusal\n',
+    );
+    await createFile(
+      '.docs/plans/feature.md',
+      '# Plan\n\n### Task 12: Lower-layer coverage\n**Files:** src/engine/foo.ts\n',
+    );
+    await createFile('src/engine/existing.test.ts', '// existing test');
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({
+        outcome: 'disposition-only',
+        dispositions: [
+          {
+            criterion: 'happy: visible result',
+            disposition: 'existing-sufficient-test',
+            citation: 'src/engine/existing.test.ts:1',
+          },
+          {
+            criterion: 'negative: missing evidence',
+            disposition: 'planned-lower-layer-test',
+            citation: '.docs/plans/feature.md:42',
+            owningTask: 'Task 12',
+            layer: 'engine',
+          },
+        ],
+      }),
+    );
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs')).resolves.toEqual({
+      done: true,
+      viaException: false,
+    });
+  });
+
+  it('refuses a disposition-only outcome when spec files are present', async () => {
+    await createFile('test/acceptance/foo.spec.ts', 'spec content');
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({
+        outcome: 'disposition-only',
+        dispositions: [
+          {
+            criterion: 'happy: visible result',
+            disposition: 'existing-sufficient-test',
+            citation: 'src/conductor/test/engine/artifacts.acceptance-specs.test.ts:1',
+          },
+        ],
+      }),
+    );
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs')).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
+
+  it('refuses a disposition-only outcome when a run contract is present', async () => {
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({
+        outcome: 'disposition-only',
+        dispositions: [{
+          criterion: 'happy: visible result',
+          disposition: 'existing-sufficient-test',
+          citation: 'src/conductor/test/engine/artifacts.acceptance-specs.test.ts:1',
+        }],
+      }),
+    );
+    await createFile('.pipeline/acceptance-specs-run.json', '{}');
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs')).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
 });
 
 describe('validateAcceptanceRedEvidence refusal classification', () => {
   const validEvidence = {
+    outcome: 'specs-generated',
     command: 'pytest spec/integration/test_x.py',
     targetSpecs: ['spec/integration/test_x.py'],
     executed: 3,
@@ -153,6 +237,46 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
       ok: false,
       class: 'shape',
     });
+  });
+
+  it.each([
+    ['missing outcome', (() => { const { outcome: _outcome, ...evidence } = validEvidence; return evidence; })()],
+    ['unknown outcome', { ...validEvidence, outcome: 'other' }],
+  ])('refuses a %s as a tagged-union shape failure', (_case, evidence) => {
+    expect(validateAcceptanceRedEvidence(evidence)).toMatchObject({ ok: false, class: 'shape' });
+  });
+
+  it('accepts exhaustive citation-bearing disposition-only records', () => {
+    expect(
+      validateAcceptanceRedEvidence({
+        outcome: 'disposition-only',
+        dispositions: [
+          {
+            criterion: 'happy: completion',
+            disposition: 'existing-sufficient-test',
+            citation: 'src/conductor/test/engine/artifacts.acceptance-specs.test.ts:1',
+          },
+          {
+            criterion: 'negative: malformed evidence',
+            disposition: 'planned-lower-layer-test',
+            citation: '.docs/plans/feature.md:42',
+            owningTask: 'Task 12',
+            layer: 'engine',
+          },
+        ],
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it.each([
+    ['empty records', { outcome: 'disposition-only', dispositions: [] }],
+    ['missing citation', { outcome: 'disposition-only', dispositions: [{ criterion: 'happy', disposition: 'existing-sufficient-test' }] }],
+    ['incomplete lower-layer record', { outcome: 'disposition-only', dispositions: [{ criterion: 'negative', disposition: 'planned-lower-layer-test', citation: 'plan.md:1' }] }],
+    ['unknown disposition', { outcome: 'disposition-only', dispositions: [{ criterion: 'happy', disposition: 'acceptance-system-spec', citation: 'spec.ts:1' }] }],
+    ['mixed RED fields', { outcome: 'disposition-only', command: 'npm test', dispositions: [{ criterion: 'happy', disposition: 'existing-sufficient-test', citation: 'test.ts:1' }] }],
+    ['mixed disposition records', { ...validEvidence, dispositions: [{ criterion: 'happy', disposition: 'existing-sufficient-test', citation: 'test.ts:1' }] }],
+  ])('refuses disposition-only evidence with %s', (_case, evidence) => {
+    expect(validateAcceptanceRedEvidence(evidence)).toMatchObject({ ok: false, class: 'shape' });
   });
 
   it('classifies a missing passed counter as a shape refusal', () => {
@@ -374,6 +498,334 @@ describe('validateAcceptanceRedEvidence refusal classification', () => {
       ok: false,
       class: 'outcome',
       reason,
+    });
+  });
+});
+
+// rem-build-review-task13-1: the disposition-only zero-spec check must count
+// only the FEATURE's own acceptance spec files, not the repository-wide
+// acceptance corpus — any unrelated pre-existing test previously refused a
+// legitimate disposition-only completion.
+describe('acceptance_specs disposition-only zero-spec check is feature-scoped', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'artifacts-acceptance-disposition-scope-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function createFile(relativePath: string, content = 'test') {
+    const fullPath = join(dir, relativePath);
+    await mkdir(join(fullPath, '..'), { recursive: true });
+    await writeFile(fullPath, content, 'utf-8');
+  }
+
+  const STORIES_DOC = [
+    '# Stories',
+    '',
+    '**Status:** ACCEPTED',
+    '',
+    '## Story 1: Observable behavior',
+    '',
+    '### Happy Path',
+    '- Given a valid input, When the engine runs, Then the visible result appears',
+    '',
+    '### Negative Paths',
+    '- Given malformed evidence, When the engine runs, Then it refuses fail-closed',
+    '',
+  ].join('\n');
+
+  const PLAN_DOC = [
+    '# Plan',
+    '',
+    '### Task 12: Cover the lower-layer behavior',
+    '**Files:** src/engine/foo.ts',
+    '',
+  ].join('\n');
+
+  async function seedFeatureFixtures() {
+    await createFile('.docs/stories/my-feature.md', STORIES_DOC);
+    await createFile('.docs/plans/my-feature.md', PLAN_DOC);
+    await createFile('test/engine/existing-behavior.test.ts', '// existing test');
+  }
+
+  const dispositionEvidence = {
+    outcome: 'disposition-only',
+    dispositions: [
+      {
+        criterion: 'Story 1 happy path: visible result',
+        disposition: 'existing-sufficient-test',
+        citation: 'test/engine/existing-behavior.test.ts:1',
+      },
+      {
+        criterion: 'Story 1 negative path: refuses malformed evidence',
+        disposition: 'planned-lower-layer-test',
+        citation: '.docs/plans/my-feature.md:3',
+        owningTask: 'Task 12',
+        layer: 'engine',
+      },
+    ],
+  };
+
+  const featureCtx = {
+    featureDesc: 'my-feature',
+    artifactResolution: {
+      featureIdentities: ['my-feature'],
+      changedPaths: new Set<string>(),
+    },
+  };
+
+  it('completes when only pre-existing unrelated acceptance specs exist', async () => {
+    await seedFeatureFixtures();
+    await createFile('test/acceptance/unrelated-legacy-feature.acceptance.test.ts', '// legacy');
+    await createFile('spec/acceptance/other_corpus_spec.rb', '# legacy');
+    await createFile(ACCEPTANCE_SPECS_RED_EVIDENCE, JSON.stringify(dispositionEvidence));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toEqual({
+      done: true,
+      viaException: false,
+    });
+  });
+
+  it('refuses when a spec file is attributed to the feature by identity', async () => {
+    await seedFeatureFixtures();
+    await createFile('test/acceptance/my-feature.acceptance.test.ts', '// this feature');
+    await createFile(ACCEPTANCE_SPECS_RED_EVIDENCE, JSON.stringify(dispositionEvidence));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
+
+  it("refuses when a spec file is among the feature's changed paths", async () => {
+    await seedFeatureFixtures();
+    await createFile('test/acceptance/renamed-elsewhere.spec.ts', '// this feature');
+    await createFile(ACCEPTANCE_SPECS_RED_EVIDENCE, JSON.stringify(dispositionEvidence));
+
+    const ctx = {
+      ...featureCtx,
+      artifactResolution: {
+        featureIdentities: ['my-feature'],
+        changedPaths: new Set(['test/acceptance/renamed-elsewhere.spec.ts']),
+      },
+    };
+    await expect(checkStepCompletion(dir, 'acceptance_specs', ctx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
+
+  it('falls back fail-closed to the whole corpus without any attribution context', async () => {
+    await seedFeatureFixtures();
+    await createFile('test/acceptance/unrelated-legacy-feature.acceptance.test.ts', '// legacy');
+    await createFile(ACCEPTANCE_SPECS_RED_EVIDENCE, JSON.stringify(dispositionEvidence));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs')).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+    });
+  });
+});
+
+// rem-build-review-root-cause-2: disposition-only records must be validated
+// against the active story criteria (exhaustiveness, not mere non-emptiness)
+// and every citation must resolve — an existing-sufficient-test must cite a
+// test file that exists, a planned-lower-layer-test must name an owning task
+// that exists in the plan. Unresolved citations are refused fail-closed.
+describe('acceptance_specs disposition-only records are grounded in the story and plan artifacts', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'artifacts-acceptance-disposition-ground-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function createFile(relativePath: string, content = 'test') {
+    const fullPath = join(dir, relativePath);
+    await mkdir(join(fullPath, '..'), { recursive: true });
+    await writeFile(fullPath, content, 'utf-8');
+  }
+
+  const STORIES_DOC = [
+    '# Stories',
+    '',
+    '**Status:** ACCEPTED',
+    '',
+    '## Story 1: Observable behavior',
+    '',
+    '### Happy Path',
+    '- Given a valid input, When the engine runs, Then the visible result appears',
+    '- Given a detailed input, When the engine runs, Then the detailed result appears',
+    '',
+    '### Negative Paths',
+    '- Given malformed evidence, When the engine runs, Then it refuses fail-closed',
+    '',
+    '## Story 2: Second behavior',
+    '',
+    '### Happy Path',
+    '- Given another input, When the engine runs, Then the second result appears',
+    '',
+    '### Negative Paths',
+    '- Given a bad citation, When the gate runs, Then it refuses',
+    '',
+  ].join('\n');
+
+  const PLAN_DOC = [
+    '# Plan',
+    '',
+    '### Task 12: Cover the lower-layer behavior',
+    '**Files:** src/engine/foo.ts',
+    '',
+  ].join('\n');
+
+  const featureCtx = {
+    featureDesc: 'my-feature',
+    artifactResolution: {
+      featureIdentities: ['my-feature'],
+      changedPaths: new Set<string>(),
+    },
+  };
+
+  function record(criterion: string, overrides: Record<string, unknown> = {}) {
+    return {
+      criterion,
+      disposition: 'existing-sufficient-test',
+      citation: 'test/engine/existing-behavior.test.ts:1',
+      ...overrides,
+    };
+  }
+
+  const fullCoverage = [
+    record('Story 1 happy: Given a valid input, When the engine runs, Then the visible result appears'),
+    record('Story 1 happy: Given a detailed input, When the engine runs, Then the detailed result appears'),
+    record('Story 1 negative: Given malformed evidence, When the engine runs, Then it refuses fail-closed', {
+      disposition: 'planned-lower-layer-test',
+      citation: '.docs/plans/my-feature.md:3',
+      owningTask: 'Task 12',
+      layer: 'engine',
+    }),
+    record('Story 2 happy: Given another input, When the engine runs, Then the second result appears'),
+    record('Story 2 negative: Given a bad citation, When the gate runs, Then it refuses'),
+  ];
+
+  async function seedFixtures(dispositions: unknown[]) {
+    await createFile('.docs/stories/my-feature.md', STORIES_DOC);
+    await createFile('.docs/plans/my-feature.md', PLAN_DOC);
+    await createFile('test/engine/existing-behavior.test.ts', '// existing test');
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({ outcome: 'disposition-only', dispositions }),
+    );
+  }
+
+  it('completes when every story criterion is covered and every citation resolves', async () => {
+    await seedFixtures(fullCoverage);
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toEqual({
+      done: true,
+      viaException: false,
+    });
+  });
+
+  it('refuses records that do not cover every active story happy and negative criterion', async () => {
+    // Story 2's negative path is missing — non-emptiness alone must not pass.
+    await seedFixtures(fullCoverage.slice(0, 3));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('Story 2 negative'),
+    });
+  });
+
+  it('refuses an omitted authoritative criterion even when its story path has another disposition', async () => {
+    await seedFixtures(fullCoverage.filter((entry) => !entry.criterion.includes('detailed input')));
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('detailed input'),
+    });
+  });
+
+  it('refuses an invented criterion name in place of an authoritative story criterion', async () => {
+    const inventedCriterion = fullCoverage.map((entry) =>
+      entry.criterion.includes('detailed input')
+        ? { ...entry, criterion: 'Story 1 happy: invented result name' }
+        : entry,
+    );
+    await seedFixtures(inventedCriterion);
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('invented result name'),
+    });
+  });
+
+  it('refuses an existing-sufficient-test citation whose test file does not exist', async () => {
+    const badCitation = [
+      record('Story 1 happy: Given a valid input, When the engine runs, Then the visible result appears', {
+        citation: 'test/engine/never-written.test.ts:1',
+      }),
+      ...fullCoverage.slice(1),
+    ];
+    await seedFixtures(badCitation);
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('never-written.test.ts'),
+    });
+  });
+
+  it('refuses a citation whose line is outside the cited file', async () => {
+    const outOfRangeCitation = [
+      record('Story 1 happy: Given a valid input, When the engine runs, Then the visible result appears', {
+        citation: 'test/engine/existing-behavior.test.ts:2',
+      }),
+      ...fullCoverage.slice(1),
+    ];
+    await seedFixtures(outOfRangeCitation);
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('existing-behavior.test.ts:2'),
+    });
+  });
+
+  it('refuses a planned-lower-layer-test whose owning task is not in the plan', async () => {
+    const phantomTask = fullCoverage.map((r) =>
+      r.disposition === 'planned-lower-layer-test' ? { ...r, owningTask: 'Task 99' } : r,
+    );
+    await seedFixtures(phantomTask);
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('Task 99'),
+    });
+  });
+
+  it("refuses disposition-only evidence when the feature's stories doc cannot be resolved", async () => {
+    await createFile('test/engine/existing-behavior.test.ts', '// existing test');
+    await createFile(
+      ACCEPTANCE_SPECS_RED_EVIDENCE,
+      JSON.stringify({ outcome: 'disposition-only', dispositions: fullCoverage }),
+    );
+
+    await expect(checkStepCompletion(dir, 'acceptance_specs', featureCtx)).resolves.toMatchObject({
+      done: false,
+      acceptanceRedRefusalClass: 'shape',
+      reason: expect.stringContaining('stories'),
     });
   });
 });
