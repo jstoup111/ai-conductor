@@ -556,3 +556,63 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     expect(rootCause).toEqual({ kind: "infrastructure-failure", rubric: "rootCause", reason: "invalid-provider-result" });
   });
 });
+
+describe("build-review coordinator: findings-only provider payloads", () => {
+  const noTautology = () =>
+    config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } });
+
+  const judged = (rubric: "scope" | "rootCause" | "completeness", projection: { lapId: string; snapshotDigest: string }) => ({
+    kind: "judged" as const, rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+    contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
+  });
+
+  it("settles an empty findings-only payload as a scope PASS stamped with engine-held envelope values", async () => {
+    const coordination = await coordinateBuildReviewRubrics({
+      config: noTautology(),
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async (branch, projection) => branch.rubric === "scope"
+        ? { findings: [] }
+        : judged(branch.rubric, projection),
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+
+    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined)
+      .toEqual({
+        kind: "dispatched", rubric: "scope",
+        result: {
+          kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+          findings: [], verdict: "PASS",
+        },
+      });
+  });
+
+  it("settles a well-formed scope finding without provider envelope fields", async () => {
+    const finding = {
+      concernKind: "out-of-plan-change",
+      summary: "The changed source path is not authorized by the plan.",
+      evidenceLocations: ["src/a.ts:1"],
+      anchor: { rubric: "scope" as const, path: "src/a.ts", relation: "not-authorized-by-plan" },
+    };
+    const coordination = await coordinateBuildReviewRubrics({
+      config: noTautology(),
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: vi.fn(), readCache: async () => undefined,
+      dispatchModel: async (branch, projection) => branch.rubric === "scope"
+        ? { findings: [finding] }
+        : judged(branch.rubric, projection),
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    });
+
+    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined)
+      .toEqual({
+        kind: "dispatched", rubric: "scope",
+        result: {
+          kind: "judged", rubric: "scope", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
+          findings: [finding], verdict: "FAIL",
+        },
+      });
+  });
+});
