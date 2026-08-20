@@ -6,7 +6,7 @@ nav_order: 7
 
 # Skills
 
-The catalog of all 34 skills: 29 under `skills/` and 5 repository-local ones under `.agents/skills/`.
+The catalog of all 38 skills: 33 under `skills/` and 5 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -30,31 +30,61 @@ matches on when deciding to invoke the skill.
 | `standalone` | no | Whether an operator can run the skill on its own. Absent means non-standalone |
 | `operator_only` | no | `true` marks a skill an operator invokes from *outside* a run. `bin/install` still symlinks it into both user-space catalogs (`~/.claude/skills`, `~/.agents/skills`), so the operator has it on either provider; the engine suppresses it per dispatch instead. Enforced — integrity check 5d fails on drift between this flag and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts`. See [operator-only suppression coverage](#operator-only-suppression-coverage) for what each provider actually enforces |
 | `phase_active_policy` | no | Operator-skill policy for `.pipeline/phase-active`. `daemon-triage` declares `advisory`: marker and daemon-status evidence may warn but never block read-only diagnosis |
+| `disable-model-invocation` | invocation-dependent | Claude control. `true` keeps the skill operator/engine-invocable but removes it from model-initiated selection |
+| `implicit_invocation` | invocation-dependent | Harness audit marker. `required` is allowed only for a verified same-session dependency that must remain model-invocable; it is not a host setting |
 | `requires` | no | Prerequisite skills or artifact paths |
 | `model` | no | Hand-authored model pin. Seven skills carry one; the rest inherit. See [models](models.md) |
+
+## Invocation policy
+
+Discovery is not activation. Every catalog entry is classified exhaustively by integrity check 2a:
+
+- **Explicit-only:** Claude declares `disable-model-invocation: true`; Codex declares
+  `policy.allow_implicit_invocation: false` in `agents/openai.yaml`. An operator or engine-rendered
+  `/skill-name` or `$skill-name` prompt still works.
+- **Implicit-required:** the shared frontmatter carries `implicit_invocation: required`, and neither
+  host disable is present. This exception is reserved for a verified model-initiated caller inside an
+  already active skill.
+
+The 12 implicit-required shipped skills are:
+
+| Skill group | Skills | Why they cannot be explicit-only in the distributed catalog |
+| --- | --- | --- |
+| `/engineer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/engineer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
+| Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims` | Called from an active skill: issue authoring, fresh debugging, batch simplification, or load-bearing claim verification |
+
+The 21 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-completeness`,
+`build-review-root-cause`, `build-review-scope`, `build-review-tautology`, `code-review`, `conduct`,
+`daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
+`remediate`, `retro`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
+explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
+`write-tests`.
+
+`code-review` is intentionally explicit-only: pipeline embeds its three-stage evaluator contract and
+states that no separate `code-review` dispatch is needed. `pr` is likewise explicit-only because
+FINISH inlines its authoring contract and explicitly forbids delegating to `/pr`. Engine registry
+invocations are explicit prompts, including conditional `remediate` and `rebase` steps, so those
+skills do not need model discovery. A user may locally force any implicit-required skill to
+explicit-only, but composed callers that depend on it will no longer complete automatically.
 
 ### Operator-only suppression coverage
 
 `operator_only: true` is enforced per dispatch, not at install time — the operator keeps the skill on
-both providers. Coverage is not uniform, and the gap is load-bearing enough to state plainly:
+both providers. Catalog invocation policy now provides the same baseline on both hosts:
 
 | | Claude | Codex |
 | --- | --- | --- |
-| **Self-host build** | `skillOverrides` in the worktree's `.claude/settings.local.json` | the skill is pruned from the throwaway `CODEX_HOME` skills copy — no artifact to load |
-| **Any other repo** | `skillOverrides`, same as above | **not mechanically suppressed** |
+| **Self-host build** | Catalog `disable-model-invocation`, plus `skillOverrides` defense in depth | Catalog `allow_implicit_invocation: false`, plus pruning from the throwaway `CODEX_HOME` defense in depth |
+| **Any other repo** | Catalog `disable-model-invocation` | Catalog `allow_implicit_invocation: false` |
 
-The bottom-right cell is a real gap. Codex discovers skills by listing `~/.agents/skills` and honors
-no per-session override, and the isolated-home path that would let the engine prune that view is
-gated to self-host builds (`isSelfBuild()`, `conductor.ts`) precisely so other repos stay
-byte-for-byte unchanged. In that cell `daemon-triage` warns when phase-marker and daemon-status
-evidence looks live but still continues read-only diagnosis; its mutation approval contract prevents
-unprompted recovery actions. Closing the invocation gap properly means the engine owning the entry
-point rather than shipping a loadable skill at all; that is
-[#1098](https://github.com/jstoup111/ai-conductor/issues/1098).
+`daemon-triage` therefore remains available when an operator explicitly asks for it without being a
+model-selected response to an unrelated failure. Its phase-marker/liveness warning and per-mutation
+approval contract remain necessary for explicitly initiated triage.
 
 The repository integrity suite checks that every `skills/*/SKILL.md` has `name`, `description`,
-`enforcement`, and `phase`. The four `.agents/skills/` entries are outside that check and declare only
-`name` and `description`.
+`enforcement`, and `phase`. The five `.agents/skills/` entries are outside that required-field check;
+they declare `name`, `description`, and the Claude invocation control. Check 2a covers invocation
+policy across both catalogs and both host metadata formats.
 
 ## Index
 
@@ -189,7 +219,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### memory
 
-> Use at the start of every session for recall, during work when significant decisions are made, and when context seems missing. Recall-before-act protocol with categorized persistence and staleness detection.
+> Use when the operator requests project recall, when the harness dispatches its memory step, or when an active harness workflow requires a memory checkpoint. Recall-before-act protocol with categorized persistence and staleness detection.
 
 - **Frontmatter** — `enforcement: gating`, `phase: understand`, `standalone: true`, `requires: []`, no model pin.
 - **Engine step** — `memory` (index 1, UNDERSTAND). Engine enforcement is `advisory`.
@@ -197,8 +227,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `context/`, read in full; referenced file paths, checked for drift.
 - **Outputs** — kebab-case Markdown entries under `.memory/`, each with `created`, `category`, and
   `related` frontmatter; an updated `.memory/index.md`. No `.docs/` or `.pipeline/` artifact.
-- **Gate role** — advisory. Its two in-skill rules (recall before acting, persist decisions
-  immediately) produce no verdict, no marker file, and block nothing downstream.
+- **Gate role** — advisory. Its two in-skill rules (recall at invocation start, persist decisions at
+  declared checkpoints) produce no verdict, no marker file, and block nothing downstream.
 
 ### assess
 

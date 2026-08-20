@@ -1,5 +1,6 @@
 ---
 name: manual-test
+disable-model-invocation: true
 description: "Use after /finish to validate stories via curl (API) or browser (full-stack). Bugs found loop back through /tdd."
 enforcement: gating
 phase: ship

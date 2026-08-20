@@ -1,5 +1,6 @@
 ---
 name: architecture-review
+implicit_invocation: required
 description: "Use before implementation to review stories through a technical feasibility and architectural alignment lens. Also use at batch boundaries to catch architectural drift."
 enforcement: gating
 phase: decide
@@ -74,7 +75,8 @@ Skip:
 **Explore agent limits for Medium tier:** Max 2 agents with non-overlapping scopes:
 - Agent 1: the PRD/spec (`.docs/specs/`) — its FRs are the review input (stories/plan don't exist yet)
 - Agent 2: relevant source files for the feature area
-- Do NOT dispatch agents to read `.memory/` (auto-loaded at session start)
+- Do NOT dispatch agents solely to read `.memory/`; this active workflow reads relevant entries
+  directly when it needs them
 - Do NOT dispatch a third agent for decisions/ADRs (read `.docs/decisions/` directly if needed)
 
 For **Small** features, architecture-review is skipped entirely by `/conduct`.

@@ -41,7 +41,10 @@ bin/migrate
 
 This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and `~/.agents/skills/`
 directories and installs the conductor CLI to `~/.local/bin/`. The installer never places harness skills in
-a project directory; project-local skills are optional explicit overrides.
+a project directory; project-local skills are optional explicit overrides. Most installed skills are
+explicit-only, so discovery alone does not activate them in unrelated chats. Twelve verified
+same-session dependencies remain model-invocable so composed harness workflows continue to work; see
+[Skills](docs/reference/skills.md#invocation-policy).
 
 Full walkthrough, prerequisites, and first-run blockers: **[Quickstart](docs/quickstart.md)**.
 

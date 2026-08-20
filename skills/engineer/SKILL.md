@@ -1,5 +1,6 @@
 ---
 name: engineer
+disable-model-invocation: true
 description: "Interactive, phone-drivable idea→spec loop: hands a raw idea to the right repo, runs the full DECIDE phase there, and opens a spec PR. Use when capturing and routing new work, NOT when building inside one repo (that is plain conduct)."
 enforcement: advisory
 phase: decide

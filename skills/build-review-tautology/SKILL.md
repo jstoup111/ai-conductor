@@ -1,5 +1,6 @@
 ---
 name: build-review-tautology
+disable-model-invocation: true
 description: "Judge whether changed tests distinguish the changed production behavior from its merge-base form."
 enforcement: gating
 phase: build

@@ -1,5 +1,6 @@
 ---
 name: plan
+implicit_invocation: required
 description: "Use after stories are written and conflict-check has passed clean. Converts user stories into a step-by-step implementation plan with 2-5 minute task granularity."
 enforcement: gating
 phase: decide

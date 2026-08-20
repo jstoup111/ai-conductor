@@ -1,5 +1,6 @@
 ---
 name: build-review-scope
+disable-model-invocation: true
 description: "Judge whether implementation changes stay within the approved plan, repair context, and accepted scope widenings."
 enforcement: gating
 phase: build

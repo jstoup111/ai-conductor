@@ -147,6 +147,16 @@ artifact, or lifecycle gate. Do not weaken or bypass the shared artifact or gate
 required outcome, artifact, and lifecycle gate remain the same for direct invocation and
 daemon-managed workflows; missing artifact or gate evidence leaves the workflow incomplete.
 
+Installed skills are **explicit-only by default**. Claude skills declare
+`disable-model-invocation: true`; Codex skills declare
+`policy.allow_implicit_invocation: false` in `agents/openai.yaml`. The engine's rendered `/skill-name`
+or `$skill-name` prompt is an explicit invocation, so lifecycle dispatch still works. Only these
+same-session dependencies remain model-invocable because another skill must be able to activate them:
+`architecture-diagram`, `architecture-review`, `coherence-check`, `conflict-check`, `debugging`,
+`explore`, `intake`, `plan`, `prd`, `simplify`, `stories`, and `verify-claims`. Do not add an
+exception merely because a skill is useful or broadly applicable; it must have a verified
+model-initiated caller whose workflow would otherwise break.
+
 If a required capability is unavailable for the selected provider, stop before incompatible work
 begins. Report an unsupported-capability diagnostic that names the selected provider, the missing
 capability, and the concrete recovery action required to continue. Leave the lifecycle gate
@@ -462,7 +472,11 @@ Each skill declares its enforcement level honestly:
 ## Memory
 
 Project-level memory lives in `.memory/` with categories: decisions, patterns, gotchas, context.
-Every session starts with recall. Significant decisions are persisted during work.
+Every explicit memory invocation and harness-managed memory step starts with recall. Significant
+decisions are persisted when an active harness workflow requires a memory checkpoint. Ordinary host
+chat does not invoke memory automatically; use `/memory` in Claude or `$memory` in Codex when recall
+is wanted outside the lifecycle. Claude session hooks may still surface a bounded memory index or a
+persistence reminder; that context injection is not an invocation of the memory skill.
 Skills with Memory Checkpoint sections define when writes are expected — check skill verification lists.
 
 ## Push Policy

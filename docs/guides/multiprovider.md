@@ -119,6 +119,7 @@ steps:
 | Skill catalog | `~/.claude/skills` | `~/.agents/skills` |
 | Project instruction file | `CLAUDE.md` | `AGENTS.md` |
 | Skill invocation syntax | `/skill-name` | `$skill-name` |
+| Explicit-only metadata | `disable-model-invocation: true` in `SKILL.md` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` |
 | Interactive steps | a real REPL | none — `codex exec` is one-shot, streamed as JSONL |
 | Readiness check | none; failures are classified from process signals and output | explicit `codex doctor --json --summary` before every dispatch, failing closed |
 | Isolated-home variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` |
@@ -128,6 +129,12 @@ Both hosts share one skill corpus; only the invocation syntax and the discovery 
 Model and effort resolution per host is owned by [../reference/models.md](../reference/models.md);
 the environment variables above are enumerated in
 [../reference/environment.md](../reference/environment.md).
+
+Catalog discovery does not imply permission to invoke. Most harness skills are explicit-only on both
+hosts: the operator or engine can still activate them with the native syntax, but the model cannot
+select them merely because their description resembles an unrelated request. The small set of
+same-session dependencies intentionally omits both host controls; the exhaustive classification and
+its rationale are in [the skills reference](../reference/skills.md#invocation-policy).
 
 `--interactive` is honored differently as a consequence: under `codex` there is no REPL to open, so
 conversational steps stream a single one-shot run instead of handing you a prompt.

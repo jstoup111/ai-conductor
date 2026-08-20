@@ -1,5 +1,6 @@
 ---
 name: assess
+disable-model-invocation: true
 description: "Use for codebase health assessment. Dispatches 9 specialist agents + CTO orchestrator to evaluate security, data integrity, dependencies, architecture, duplication, testing, infrastructure, observability, and developer experience."
 enforcement: gating
 phase: understand

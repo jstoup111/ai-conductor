@@ -1,5 +1,6 @@
 ---
 name: build-review-root-cause
+disable-model-invocation: true
 description: "Judge whether the implementation addresses the stated defect rather than only its symptom."
 enforcement: gating
 phase: build

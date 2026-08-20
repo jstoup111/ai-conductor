@@ -1,5 +1,6 @@
 ---
 name: prd
+implicit_invocation: required
 description: "Use on the PRODUCT track after /explore, when a feature has user-facing requirements. Authors a product-only design doc (PRD) with enumerated functional requirements. Convergent half of the old brainstorm. Skipped on the technical track (no product requirements to spec)."
 enforcement: gating
 phase: decide

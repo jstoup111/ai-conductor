@@ -1,5 +1,6 @@
 ---
 name: build-review-completeness
+disable-model-invocation: true
 description: "Judge whether the full implementation diff delivers the approved plan's outcomes."
 enforcement: gating
 phase: build

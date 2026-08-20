@@ -1,5 +1,6 @@
 ---
 name: pipeline
+disable-model-invocation: true
 description: "Use when executing an implementation plan with multiple tasks. Factory orchestration with three autonomy levels, quality gates, rework budgets, and audit trails."
 enforcement: structural
 phase: build

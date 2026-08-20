@@ -1,5 +1,6 @@
 ---
 name: tdd
+disable-model-invocation: true
 description: "Use when implementing any feature or bugfix. Five-step cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT. Enforces test-first development with domain integrity review at every phase boundary."
 enforcement: structural
 phase: build
