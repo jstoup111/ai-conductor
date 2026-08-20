@@ -231,7 +231,7 @@ describe("build-review semantic cache", () => {
     });
   });
 
-  it("serves a pre-change v3 entry as a cache hit and excludes lap identity from its projection digest", () => {
+  it("serves a pre-change entry without fresh dispatch and excludes lap identity from its projection digest", async () => {
     const projection = {
       rubric: "scope",
       contractVersion: "v3",
@@ -241,7 +241,12 @@ describe("build-review semantic cache", () => {
       contentDigest: "sha256:content",
       digest: "sha256:ignored",
       planBody: "# Plan",
-    } as never;
+    };
+    const projectionWithCurrentLap = {
+      ...projection,
+      lapId: "lap-after",
+      snapshotDigest: "sha256:snapshot-after",
+    };
     const request = {
       rubric: "scope" as const,
       contractVersion: "v3" as const,
@@ -252,18 +257,19 @@ describe("build-review semantic cache", () => {
       snapshotDigest: "snapshot-current",
     };
 
-    expect({
-      cache: classifyBuildReviewCacheLookup(entry(), request),
-      digestBefore: projectionDigest(projection),
-      digestAfter: projectionDigest({ ...projection, lapId: "lap-after", snapshotDigest: "sha256:snapshot-after" }),
-    }).toMatchObject({
-      cache: { kind: "hit", hit: { result: { lapId: "lap-current", snapshotDigest: "snapshot-current" } } },
-      digestBefore: expect.any(String),
-      digestAfter: expect.any(String),
+    const root = "/feature";
+    const fs = memoryFilesystem({ [cacheEntryPath(root, "scope")]: JSON.stringify(entry()) });
+    const freshDispatch = vi.fn();
+    const cache = classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "scope", fs), request);
+
+    if (cache.kind === "miss") freshDispatch();
+
+    expect(cache).toMatchObject({
+      kind: "hit",
+      hit: { result: { lapId: "lap-current", snapshotDigest: "snapshot-current" } },
     });
-    expect(projectionDigest(projection)).toBe(
-      projectionDigest({ ...projection, lapId: "lap-after", snapshotDigest: "sha256:snapshot-after" }),
-    );
+    expect(freshDispatch).not.toHaveBeenCalled();
+    expect(projectionDigest(projection as never)).toBe(projectionDigest(projectionWithCurrentLap as never));
   });
 
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {
