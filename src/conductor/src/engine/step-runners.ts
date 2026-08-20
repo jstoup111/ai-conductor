@@ -47,7 +47,12 @@ import {
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
-import { coordinateBuildReviewRubrics, validateBuildReviewDispatchedResult, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
+import {
+  coordinateBuildReviewRubrics,
+  stampBuildReviewDispatchedCandidate,
+  validateBuildReviewDispatchedResult,
+  type BuildReviewDispatchableRubric,
+} from './build-review-coordinator.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
@@ -2025,11 +2030,12 @@ export class DefaultStepRunner implements StepRunner {
     if (candidate === undefined) {
       return { rejection: 'no parseable JSON object was found in the response' };
     }
-    const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
+    const stampedCandidate = stampBuildReviewDispatchedCandidate(candidate, rubric, projection);
+    const result = validateBuildReviewDispatchedResult(stampedCandidate, rubric, projection);
     if (result) return { result, rejection: '' };
     try {
       return {
-        rejection: describeBuildReviewJudgedResultRejection(candidate, rubric, projection,
+        rejection: describeBuildReviewJudgedResultRejection(stampedCandidate, rubric, projection,
           buildReviewFindingReferenceContext(projection)),
       };
     } catch {

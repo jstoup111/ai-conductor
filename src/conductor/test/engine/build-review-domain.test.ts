@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import * as buildReviewDomain from '../../src/engine/build-review-domain.js';
+import { stampBuildReviewDispatchedCandidate } from '../../src/engine/build-review-coordinator.js';
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   buildReviewFindingReferenceContext,
@@ -582,6 +583,28 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
       kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
       findings: [], verdict: 'FAIL',
     }, 'scope', expected)).toContain('contradicts the findings array');
+  });
+
+  it('diagnoses a findings-only provider response under its engine-stamped v3 envelope', () => {
+    const projection = {
+      rubric: 'tautology', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      changedFiles: [], changedTestSelectors: ['test/widget.test.ts'],
+    } as unknown as BuildReviewRubricProjection;
+    const candidate = stampBuildReviewDispatchedCandidate({
+      findings: [{
+        concernKind: 'source-text-mirror', summary: 'The assertion mirrors source text.', evidenceLocations: ['test/widget.test.ts:8'],
+        anchor: {
+          rubric: 'tautology', changedTest: 'test/widget.test.ts',
+          exercisedBehavior: 'writes state', violationKind: 'source-text-mirror',
+        },
+      }],
+    }, 'tautology', projection);
+    const rejection = describeBuildReviewJudgedResultRejection(
+      candidate, 'tautology', projection, buildReviewFindingReferenceContext(projection),
+    );
+
+    expect(rejection).not.toMatch(/top-level "kind"|"rubric" must be|"contractVersion" must be|"lapId" must echo|"snapshotDigest" must echo/);
+    expect(rejection).toContain('findings[0].anchor.changedTest must be a content-region reference');
   });
 
   it('does not fabricate a verdict contradiction for the recorded non-canonical completeness anchor', () => {

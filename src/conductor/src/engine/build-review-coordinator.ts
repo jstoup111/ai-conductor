@@ -169,27 +169,41 @@ function infrastructure(rubric: BuildReviewRubricId, reason: string, detail?: st
 }
 
 /**
- * The single authority on whether a dispatched candidate is a usable judged
- * result for this projection. Exported so the dispatch layer's in-session
- * validate-and-repair loop accepts and rejects with exactly the same
- * predicate the coordinator settles branches with.
+ * Reconstruct the envelope from engine-held projection values before the
+ * provider result reaches either validation or repair diagnosis. Providers
+ * supply only findings, so provider-owned envelope fields must not influence
+ * either path.
+ */
+export function stampBuildReviewDispatchedCandidate(
+  candidate: unknown,
+  rubric: BuildReviewRubricId,
+  projection: BuildReviewRubricProjection,
+): unknown {
+  const source = typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
+    ? candidate as Record<string, unknown>
+    : undefined;
+  return {
+    kind: "judged",
+    rubric,
+    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+    lapId: projection.lapId,
+    snapshotDigest: projection.snapshotDigest,
+    findings: source?.findings,
+  };
+}
+
+/**
+ * The single authority on whether an engine-stamped dispatched candidate is a
+ * usable judged result for this projection. Exported so the dispatch layer's
+ * in-session validate-and-repair loop accepts and rejects with exactly the
+ * same predicate the coordinator settles branches with.
  */
 export function validateBuildReviewDispatchedResult(
   candidate: unknown,
   rubric: BuildReviewRubricId,
   projection: BuildReviewRubricProjection,
 ): BuildReviewJudgedResult | undefined {
-  const source = typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
-    ? candidate as Record<string, unknown>
-    : undefined;
-  const result = source && parseBuildReviewJudgedResult({
-    kind: "judged",
-    rubric,
-    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-    lapId: projection.lapId,
-    snapshotDigest: projection.snapshotDigest,
-    findings: source.findings,
-  }, buildReviewFindingReferenceContext(projection));
+  const result = parseBuildReviewJudgedResult(candidate, buildReviewFindingReferenceContext(projection));
   // Treat the provider list as one boundary value.  Parsing individual
   // findings is insufficient: duplicate/colliding identities would otherwise
   // become two independently persisted branch facts.
@@ -325,7 +339,8 @@ export async function coordinateBuildReviewRubrics(
       const projection = projections[rubric];
       try {
         const dispatched = await input.dispatchModel(branch, projection);
-        const result = validateBuildReviewDispatchedResult(dispatched, rubric, projection);
+        const candidate = stampBuildReviewDispatchedCandidate(dispatched, rubric, projection);
+        const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
         if (!result) {
           const failure = parseBuildReviewDispatchFailure(dispatched);
           return { rubric, branch: infrastructure(rubric, "invalid-provider-result", failure?.detail) };
