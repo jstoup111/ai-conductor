@@ -27,7 +27,7 @@ bullets as written, and does not pretend to.
 | story | story-2 | task-5 | covered | CLI message corrected; asserts both the removed `**Files:**` advice and the unchanged clean-plan exit 0. |
 | story | story-3 | task-6, task-7 | covered | `skills/plan` gains the fifth directory and the any-reference scope; `HARNESS.md` and `skills/remediate` gain the fifth directory. |
 | story | story-4 |  | covered | Delivered during DECIDE and already committed on this spec branch. It carries no task deliberately: the artifact is under `.docs/decisions/`, so tasking its mutation would commit the exact violation this feature prevents (governing ADR §1 and §4). |
-| story | story-5 | task-8 | covered | Runbook authored and registered in the docs index and README's exhaustive runbook list. |
+| story | story-5 | task-8 | covered | Runbook authored. Registration is deliberately not tasked — the gating `maintain-documentation` step owns human-facing documentation and the README runbook list. |
 | task | task-1 | story-1 | covered | RED: a task with a `**Files:**` line and a foreign protected path in prose yields a violation. Fails on `main`. |
 | task | task-2 | story-1 | covered | Regression floor plus the own-feature and non-protected negatives; green before and after. |
 | task | task-3 | story-1 | covered | GREEN: `hasFilesLineByTaskId` either/or replaced by a union; predicate and dedup unchanged. |
@@ -35,4 +35,4 @@ bullets as written, and does not pretend to.
 | task | task-5 | story-2 | covered | `cli.ts:433` message replaced; no longer advises the edit that silences the prose scan. |
 | task | task-6 | story-3 | covered | `skills/plan` §3 gains `.docs/decisions/` and extends beyond the `**Files:**` set, own-feature carve-out preserved. |
 | task | task-7 | story-3 | covered | `HARNESS.md:123-124` and `skills/remediate/SKILL.md:101` gain the fifth directory. |
-| task | task-8 | story-5 | covered | Runbook authored, indexed, and linked from README. |
+| task | task-8 | story-5 | covered | Runbook authored; the file only, with registration left to the maintain-documentation step. |

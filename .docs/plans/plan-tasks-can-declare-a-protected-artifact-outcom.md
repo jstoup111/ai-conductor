@@ -121,15 +121,22 @@ so it no longer implies a `**Files:**` line resolves a violation.
 `.docs/decisions/` to both. HARNESS.md is the consumer-facing contract, so its wording stays
 provider-neutral and mechanism-free.
 
-### Task 8: Author and register the recovery runbook
+### Task 8: Author the recovery runbook
 
 **Story:** 5 (happy)
-**Files:** docs/runbooks/protected-artifact-plan-deadlock.md; docs/runbooks/index.md; README.md
+**Files:** docs/runbooks/protected-artifact-plan-deadlock.md
 **Dependencies:** T5
 
 Document the signature (a completeness `missing-outcome` finding whose evidence cites only the plan
 and the diff, with `remediation_sealed_artifact_redirect` events and no legal autonomous route), the
 sanctioned exit (`conduct-ts build-review accept` with a sealed-artifact rationale), and the durable
 fix (amend in DECIDE, re-author the task — never task the mutation). State plainly that this is the
-accepted residue per the governing ADR §5, not a defect awaiting a bypass. Register it in
-`docs/runbooks/index.md` and in README's enumerated runbook list, which is exhaustive (S5.2).
+accepted residue per the governing ADR §5, not a defect awaiting a bypass.
+
+Author the runbook file only. Do **not** edit `docs/runbooks/index.md` or README's runbook list:
+registering a new runbook is owned by this repository's gating `maintain-documentation` step
+(`.ai-conductor/config.yml`, `after: rebase`), whose Audiences section names runbooks as its
+destination and whose README ownership section governs that list. This task exists because that
+step decides impact from the surfaces a diff changed, and this diff changes a scanner and prose
+rather than recovery behavior — so it would record an evidence-backed no-op and the runbook would
+never be written.

@@ -124,10 +124,12 @@ human is acceptable where a bypass is not." That residue needs a documented reco
   sanctioned exit
 - **And** it states the durable fix: amend in DECIDE and re-author the task, never task the mutation
 
-**S5.2 happy — discoverable**
+**S5.2 negative — registration is not this feature's work**
 - **Given** the new runbook
-- **When** `docs/runbooks/index.md` and the README runbook list are read
-- **Then** both link it
+- **When** the plan is read
+- **Then** no task edits `docs/runbooks/index.md` or README's runbook list
+- *(Registering it belongs to the gating `maintain-documentation` step, which owns human-facing
+  documentation and whose README ownership section governs that list.)*
 
 ---
 
