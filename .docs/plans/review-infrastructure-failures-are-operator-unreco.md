@@ -202,6 +202,13 @@ existing cumulative reset". That reset is deleted by `adr-2026-08-18-rebase-inva
 feature has not landed when this task runs, read `kickback-ledger.ts` as current and implement the
 advance and ceiling only — never add a PASS reset.
 
+> **Amended 2026-08-19 by operator retry:** ADR D2 requires the generic credit helper to be
+> invoked exactly once in `conductor.ts`'s `advanceTail` changed-rebase invalidation loop,
+> immediately before `build_review` is re-opened. Extend the RED/GREEN proof to cover that
+> conductor-level behavior and include `src/conductor/src/engine/conductor.ts` plus its focused
+> behavioral test in this task. The generic helper remains owned by `kickback-ledger.ts`; this
+> amendment corrects the previously omitted call site rather than duplicating its logic.
+
 **Dependencies:** Task 5
 
 ### Task 7: A mechanical lap publishes no aggregate and re-runs the review
