@@ -202,6 +202,31 @@ existing cumulative reset". That reset is deleted by `adr-2026-08-18-rebase-inva
 feature has not landed when this task runs, read `kickback-ledger.ts` as current and implement the
 advance and ceiling only — never add a PASS reset.
 
+**Note (amended 2026-08-20, operator-directed):** step 3's instruction to "verify that rather than
+re-implementing it" was wrong on one point, and this task's scope is widened to correct it.
+
+The generic helper is `creditKickbackGateLapCounts` (`kickback-ledger.ts`), and it is pure — it
+transforms an entry and nothing more. It therefore does **not** credit the allowance on its own:
+something must load the ledger, apply it, and persist the result at the moment a rebase invalidates
+`build_review`. No other approved task owns that seam (Tasks 10-11 touch `conductor.ts` only for
+exhaustion and halt behavior; Task 20 owns event emission), so without this amendment the call site
+is out-of-plan.
+
+Task 6 therefore also owns, in `conductor.ts`'s `advanceTail` changed-rebase invalidation loop:
+invoke the generic credit exactly once for `build_review`, immediately before `navigateStateBack`
+re-opens the gate, and prove it at conductor level. ADR D2/D6 require the credit before the gate is
+re-opened, not merely that a helper exists. The existing ledger-helper scope is retained unchanged.
+
+**Files (additional):**
+- `src/conductor/src/engine/conductor.ts` — credit `build_review` once in the rebase-invalidation
+  loop, before `navigateStateBack`
+- `src/conductor/test/engine/conductor.test.ts` — conductor-level proof: a changed rebase that
+  re-opens `build_review` zeroes `cumulative` and `mechanicalFaults` in the persisted ledger and
+  leaves the step `pending`; a changed rebase that re-opens a *different* gate credits nothing
+
+Delivered by `64db10f2d` ("fix(conductor): credit invalidated rebase review laps"). This note
+records the scope that commit already occupies; it does not request further implementation.
+
 > **Amended 2026-08-19 by operator retry:** ADR D2 requires the generic credit helper to be
 > invoked exactly once in `conductor.ts`'s `advanceTail` changed-rebase invalidation loop,
 > immediately before `build_review` is re-opened. Extend the RED/GREEN proof to cover that
