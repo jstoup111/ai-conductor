@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ConductState, HarnessConfig } from '../../src/types/index.js';
 import type {
@@ -8,7 +8,7 @@ import type {
   StateMutation,
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
-import { rewindState } from '../../src/engine/rewind.js';
+import { dispatchRewindCommand, rewindState } from '../../src/engine/rewind.js';
 
 class RecordingStateStore implements ConductStateStore<ConductState> {
   readonly batches: NamedAtomicStateMutationBatch<ConductState>[] = [];
@@ -30,6 +30,26 @@ class RecordingStateStore implements ConductStateStore<ConductState> {
 class RefusingStateStore extends RecordingStateStore {
   override async applyBatch(_batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult> {
     return { kind: 'conflict', message: 'Expected test_suite to match before operator rewind to build' };
+  }
+}
+
+class ApplyingStateStore extends RecordingStateStore {
+  constructor(readonly state: ConductState) {
+    super();
+  }
+
+  override async applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult> {
+    this.batches.push(batch);
+    const mutable = this.state as Record<string, unknown>;
+    for (const mutation of batch.mutations) {
+      if (mutable[mutation.field] !== mutation.expected) {
+        return { kind: 'conflict', message: `${String(mutation.field)} changed` };
+      }
+    }
+    for (const mutation of batch.mutations) {
+      mutable[mutation.field] = mutation.next;
+    }
+    return { kind: 'applied' };
   }
 }
 
@@ -67,7 +87,7 @@ describe('rewindState', () => {
     const config: HarnessConfig = {
       steps: { lint: { after: 'build', skill: 'lint', enforcement: 'gating' } },
     };
-    const state: ConductState = { ...completeState, lint: 'done', wiring_check: 'skipped', last_step: 'finish' };
+    const state = { ...completeState, lint: 'done', wiring_check: 'skipped', last_step: 'finish' } as ConductState;
 
     const result = await rewindState({ state, config, target: 'lint', store, readCurrentState: async () => state });
 
@@ -95,5 +115,50 @@ describe('rewindState', () => {
 
     await expect(rewindState({ state: completeState, config: {}, target: 'build', store, readCurrentState: async () => current }))
       .rejects.toThrow('test_suite: expected done, current failed');
+  });
+
+  describe('dispatchRewindCommand', () => {
+  it('uses resolved config so a declared custom target is accepted at the command boundary', async () => {
+    const config: HarnessConfig = {
+      steps: { lint: { after: 'build', skill: 'lint', enforcement: 'gating' } },
+    };
+    const state = { ...completeState, lint: 'done', last_step: 'finish' } as ConductState;
+    const store = new ApplyingStateStore(state);
+    const emit = vi.fn(async () => {});
+
+    await expect(dispatchRewindCommand({ kind: 'rewind', target: 'lint' }, '/fixture', {
+      loadConfig: async () => ({ ok: true, config, warnings: [] }),
+      readState: async () => ({ ok: true, value: state }),
+      store,
+      preflightDerivedRecords: async () => {},
+      clearDerivedRecords: async () => {},
+      emit,
+    })).resolves.toBe(0);
+
+    expect((state as Record<string, unknown>).lint).toBe('stale');
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ target: 'lint' }));
+  });
+
+  it('restores state through the mutation port when derived-record cleanup fails, leaving retry valid', async () => {
+    const state: ConductState = { ...completeState };
+    const original = { ...state };
+    const store = new ApplyingStateStore(state);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, '/fixture', {
+      loadConfig: async () => ({ ok: true, config: {}, warnings: [] }),
+      readState: async () => ({ ok: true, value: state }),
+      store,
+      preflightDerivedRecords: async () => {},
+      clearDerivedRecords: async () => { throw new Error('cannot clear HALT'); },
+    })).resolves.toBe(1);
+
+    expect(state).toEqual(original);
+    expect(store.batches.map((batch) => batch.name)).toEqual([
+      'operator rewind state',
+      'rollback failed operator rewind state',
+    ]);
+    error.mockRestore();
+  });
   });
 });

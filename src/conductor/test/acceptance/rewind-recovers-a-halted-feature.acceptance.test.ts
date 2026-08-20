@@ -116,7 +116,7 @@ describe('conduct-ts rewind recovery', () => {
     }));
 
     const dispatched: StepName[] = [];
-    const inspect = vi.fn(async () => ({ status: 'STALE' as const, reason: 'rewind requires a fresh suite run' }));
+    const inspect = vi.fn(async () => ({ status: 'STALE' as const, reason: 'source_changed' as const }));
     const runner: StepRunner = {
       run: async (step) => {
         dispatched.push(step);

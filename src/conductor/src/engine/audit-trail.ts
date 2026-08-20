@@ -222,6 +222,13 @@ export class AuditTrailWriter {
           condition: event.condition,
           ...(event.path ? { path: event.path } : {}),
         };
+      case 'operator_rewind':
+        return {
+          origin: 'operator',
+          event: 'operator_rewind',
+          reason: `rewound to ${event.target}`,
+          cause: event.demoted.join(', '),
+        };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict
         // (e.g. early-exit steps). If a gate_verdict was already recorded
