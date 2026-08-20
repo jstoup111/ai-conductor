@@ -6,7 +6,11 @@ import {
   type BuildReviewCoordinationInput,
   type BuildReviewCoordinatorHooks,
 } from "../../src/engine/build-review-coordinator.js";
-import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
+import {
+  parseBuildReviewInfrastructureFailure,
+  parseBuildReviewLapId,
+  type BuildReviewInfrastructureFailureReason,
+} from "../../src/engine/build-review-domain.js";
 import type { BuildReviewCacheEntry } from "../../src/engine/build-review-cache.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
@@ -595,6 +599,36 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
 
     expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined)
       .toEqual({ kind: "infrastructure-failure", rubric: "scope", reason: "invalid-provider-result", detail });
+  });
+
+  // Task 18 step 3 forbids adding a member to the closed
+  // BuildReviewInfrastructureFailureReason union — that mapping belongs to
+  // `review-infrastructure-failures-are-operator-unreco`. The Record below is
+  // keyed BY the union, so `typecheck:test` fails on a missing key when a member
+  // is added and on an excess key when one is removed; the runtime assertions
+  // then prove the parser admits exactly these members and nothing else.
+  it("pins the closed infrastructure-reason vocabulary against silent growth", () => {
+    const pinned: Record<BuildReviewInfrastructureFailureReason, true> = {
+      "provider-error": true,
+      "retry-exhausted": true,
+      "missing-artifact": true,
+      "malformed-artifact": true,
+      "stale-artifact": true,
+      "identity-mismatch": true,
+      "preflight-failed": true,
+      "artifact-read-failed": true,
+    };
+    const reasons = Object.keys(pinned) as BuildReviewInfrastructureFailureReason[];
+
+    expect(reasons).toHaveLength(8);
+    for (const reason of reasons) {
+      expect(parseBuildReviewInfrastructureFailure({
+        kind: "infrastructure-failure", rubric: "scope", reason, detail: "d",
+      })).toEqual({ kind: "infrastructure-failure", rubric: "scope", reason, detail: "d" });
+    }
+    expect(parseBuildReviewInfrastructureFailure({
+      kind: "infrastructure-failure", rubric: "scope", reason: "invalid-provider-result", detail: "d",
+    })).toBeUndefined();
   });
 });
 
