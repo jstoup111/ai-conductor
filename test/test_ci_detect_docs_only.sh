@@ -48,6 +48,20 @@ out=$(printf '.docs/x.md\nsrc/conductor/src/index.ts\n' | "$DETECT_BIN")
 assert_eq "mixed list -> docs_only=false" \
   "docs_only=false" "$out"
 
+large_mixed_changed_files() {
+  local index=0
+  printf 'src/conductor/src/index.ts\n'
+  while [ "$index" -lt 20000 ]; do
+    printf '.docs/generated/%05d.md\n' "$index"
+    index=$((index + 1))
+  done
+}
+
+out=$(large_mixed_changed_files | "$DETECT_BIN")
+status=$?
+assert_eq "large mixed list exits cleanly under pipefail and reports docs_only=false" \
+  "0:docs_only=false" "${status}:${out}"
+
 out=$(printf 'bin/conduct\n' | "$DETECT_BIN")
 assert_eq "single non-doc line -> docs_only=false" \
   "docs_only=false" "$out"

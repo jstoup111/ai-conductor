@@ -19,7 +19,6 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
   if [[ ! "$line" =~ ^\.docs/ ]]; then
     docs_only=false
-    break
   fi
 done
 
