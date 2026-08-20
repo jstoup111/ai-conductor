@@ -229,7 +229,7 @@ describe('build_review input isolation', () => {
 
     await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
       success: false,
-      output: 'build_review scope rubric rejected after repair: invalid-provider-result: the rubric worker lost its response payload',
+      output: 'build_review mechanical fault in scope (malformed-artifact): invalid-provider-result: the rubric worker lost its response payload',
     });
   });
 
