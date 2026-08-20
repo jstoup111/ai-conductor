@@ -21,6 +21,7 @@ import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import { ALL_STEPS } from './steps.js';
 
 // ── Main-advance re-kick sweep (ADR-013 / FR-7, FR-9, FR-12) ──────────────────
 //
@@ -331,9 +332,9 @@ export type RekickResumeResult = 'skipped' | 'rebased' | 'halted' | 'already_shi
 
 /**
  * Build the re-kick path's post-rebase pre-verify capability
- * (adr-2026-07-08-post-rebase-gate-first-mechanical-reverify). Scoped to
- * `build` exactly — every other gate answers `{ done: false }` and is
- * therefore invalidated unconditionally, as the ADR requires.
+ * (adr-2026-07-08-post-rebase-gate-first-mechanical-reverify). It resolves
+ * whichever registry-declared tree-attesting gate is requested; every other
+ * gate fails closed and is therefore invalidated unconditionally.
  *
  * The feature's plan is resolved the same way the conductor's `completionCtx`
  * resolves it: engine-recorded path first, then the plan whose stem matches
@@ -346,8 +347,9 @@ export function makeRekickBuildPreVerify(
   slug?: string,
 ): (step: string) => Promise<{ done: boolean; reason?: string }> {
   return async (step) => {
-    if (step !== 'build') {
-      return { done: false, reason: 'post-rebase pre-verify is scoped to the build gate' };
+    const definition = ALL_STEPS.find((candidate) => candidate.name === step);
+    if (!definition?.treeAttestingCompletion) {
+      return { done: false, reason: 'post-rebase pre-verify is unavailable for this gate' };
     }
     let featureDesc = slug;
     try {
@@ -366,7 +368,7 @@ export function makeRekickBuildPreVerify(
         reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed',
       };
     }
-    return checkStepCompletion(worktreePath, 'build', {
+    return checkStepCompletion(worktreePath, definition.name, {
       projectRoot: worktreePath,
       planPath,
       featureDesc,
