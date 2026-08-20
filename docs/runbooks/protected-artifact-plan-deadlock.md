@@ -1,3 +1,9 @@
+---
+title: Protected-artifact plan deadlock
+parent: Runbooks
+nav_order: 8
+---
+
 # Protected-artifact plan deadlock
 
 ## Symptom
