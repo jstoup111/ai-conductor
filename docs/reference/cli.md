@@ -868,6 +868,24 @@ malformed, mismatched, or already-consumed grant authorizes nothing and the run 
 Clearing `.pipeline/HALT` or `.pipeline/HALT.class` is not an authorization; use the
 [DECIDE-entry recovery procedure](../runbooks/stalled-or-stuck-feature.md#the-halt-refused-a-decide-entry).
 
+## `conduct-ts rewind`
+
+```bash
+conduct-ts rewind --to <step>
+```
+
+Returns a halted feature to an earlier pipeline step. Run it from that feature's worktree, for example
+`cd .worktrees/<slug>`, after identifying the step that must run again.
+
+`--to` is required and must name a step in the resolved registry that is strictly earlier than the
+feature's recorded `last_step`. The command refuses an unknown, current, or later target without
+mutating state. It also refuses if the state changed while the rewind was being applied.
+
+On success, it marks the target and every later non-skipped step `stale`, clears their gate verdicts,
+then clears both `.pipeline/HALT` and `.pipeline/HALT.class` atomically. It emits an `operator_rewind`
+event and prints `Rewound to <step>.` The next daemon dispatch begins at the rewound step. Do not edit
+`conduct-state.json`, gate files, or halt markers by hand; use this command instead.
+
 ## `conduct-ts reseal`
 
 ```bash
