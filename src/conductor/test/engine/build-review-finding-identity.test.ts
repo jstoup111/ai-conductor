@@ -207,6 +207,35 @@ describe('build-review finding identity', () => {
     });
   });
 
+  it('gives titled and bare plan-task references one completeness identity', () => {
+    const finding = {
+      rubric: 'completeness', contractVersion: 'v1', concernKind: 'missing-deliverable',
+      anchor: {
+        rubric: 'completeness',
+        missingSurface: 'src/conductor/src/engine/build-review-domain.ts',
+        missingOutcome: 'normalizes the plan-task reference',
+        missingKind: 'missing-deliverable',
+      },
+    };
+    const titled = canonicalizeBuildReviewFindingIdentity({
+      ...finding,
+      anchor: {
+        ...finding.anchor,
+        planTask: 'Task 7: The resolved channel and its source are confirmed in the output',
+      },
+    });
+    const bare = canonicalizeBuildReviewFindingIdentity({
+      ...finding,
+      anchor: { ...finding.anchor, planTask: '7' },
+    });
+
+    // Independently precomputed SHA-256 of the sorted bare-reference payload.
+    const expectedId = 'sha256:682da73785b1445942b0a6f6b0239b0c1709baab2b8f882c014e2ab8eed76701';
+
+    expect(bare?.id).toBe(expectedId);
+    expect(titled?.id).toBe(bare?.id);
+  });
+
   it('keeps distinct canonical snapshot references as distinct identities', () => {
     const subjects = [
       { rubric: 'tautology', concernKind: 'source-text-mirror', anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'x', violationKind: 'source-text-mirror' }, field: 'changedTest', alternate: 'test/b.test.ts' },
