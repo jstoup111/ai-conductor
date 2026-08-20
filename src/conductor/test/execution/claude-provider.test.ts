@@ -89,7 +89,8 @@ describe('ClaudeProvider', () => {
           expect.any(String),
           '--print',
           '--output-format',
-          'json',
+          'stream-json',
+          '--verbose',
         ],
       ]);
     });
@@ -129,30 +130,56 @@ describe('ClaudeProvider', () => {
     });
 
     it('returns the successful subprocess interval without changing output or provider usage', async () => {
-      const readings = [1_000, 1_025];
+      const readings = [1_000, 1_025, 2_000, 2_025];
       const clock: IntervalClock = {
         nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
       };
       provider = new ClaudeProvider(clock);
-      mockExeca.mockResolvedValue({
-        stdout: JSON.stringify({
-          result: 'Done!',
-          usage: { input_tokens: 12, output_tokens: 7 },
-          duration_ms: 20,
-        }),
+      const terminalResult = {
+        type: 'result',
+        result: 'Done!',
+        total_cost_usd: 0.0042,
+        num_turns: 3,
+        usage: { input_tokens: 12, output_tokens: 7 },
+        duration_ms: 20,
+      };
+      mockExeca.mockResolvedValueOnce({
+        stdout: [
+          JSON.stringify({ type: 'system', subtype: 'init' }),
+          JSON.stringify({
+            type: 'result',
+            result: 'stale result',
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'intermediate activity' }] },
+          }),
+          JSON.stringify(terminalResult),
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any).mockResolvedValueOnce({
+        stdout: JSON.stringify(terminalResult),
         stderr: '',
         exitCode: 0,
         failed: false,
       } as any);
 
-      const result = await provider.invoke(baseOptions);
+      const streamResult = await provider.invoke(baseOptions);
+      const singleJsonResult = await provider.invoke(baseOptions);
 
-      expect(result).toMatchObject({
+      expect(streamResult).toMatchObject({
         success: true,
         output: 'Done!',
         exitCode: 0,
-        tokenUsage: { input: 12, output: 7, durationMs: 20 },
+        tokenUsage: { input: 12, output: 7, costUsd: 0.0042, numTurns: 3, durationMs: 20 },
         observedIntervals: [{ startedAtMs: 1_000, durationMs: 25 }],
+      });
+      expect(streamResult).toEqual({
+        ...singleJsonResult,
+        observedIntervals: streamResult.observedIntervals,
       });
     });
 
@@ -333,6 +360,8 @@ describe('ClaudeProvider', () => {
       expect(opts).toMatchObject({ input: 'Do the thing' });
       expect(opts.stdin).toBeUndefined();
       expect(args).toContain('--print');
+      expect(args).toContain('--verbose');
+      expect(args).toEqual(expect.arrayContaining(['--output-format', 'stream-json']));
       expect(args).not.toContain('-p');
       expect(args).not.toContain('Do the thing');
     });
@@ -1224,12 +1253,15 @@ describe('ClaudeProvider', () => {
     it('ignores stdin in print mode so `claude -p` cannot hang on TTY stdin', async () => {
       mockExeca.mockResolvedValue({ exitCode: 0 } as any);
       await provider.invokeInteractive({ ...baseOptions, interactive: false });
-      const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
+      const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts).toMatchObject({
         stdin: 'ignore',
         stdout: ['pipe', 'inherit'],
         stderr: ['pipe', 'inherit'],
       });
+      expect(args).toEqual(expect.arrayContaining(['-p', 'Do the thing']));
+      expect(args).not.toContain('--verbose');
+      expect(args).not.toContain('stream-json');
     });
 
     it('inherits REPL input while streaming and capturing output', async () => {
