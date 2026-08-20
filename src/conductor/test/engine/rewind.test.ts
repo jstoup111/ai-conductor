@@ -185,7 +185,8 @@ describe('rewindState', () => {
             await rm(path, options);
           },
           readFile: (path) => readFile(path, 'utf-8'),
-          writeFile: (path, contents) => writeFile(path, contents, 'utf-8'),
+          restoreHalt: (cwd, body) => writeFile(join(cwd, '.pipeline/HALT'), body, 'utf-8'),
+          writeClass: (path, contents) => writeFile(path, contents, 'utf-8'),
         }),
       })).resolves.toBe(1);
 
@@ -219,10 +220,8 @@ describe('rewindState', () => {
             await rm(path, options);
           },
           readFile: (path) => readFile(path, 'utf-8'),
-          writeFile: async (path, contents) => {
-            if (path.endsWith('/HALT')) throw new Error('HALT restoration write failed');
-            await writeFile(path, contents, 'utf-8');
-          },
+          restoreHalt: async () => { throw new Error('HALT restoration write failed'); },
+          writeClass: (path, contents) => writeFile(path, contents, 'utf-8'),
         }),
       })).resolves.toBe(1);
 

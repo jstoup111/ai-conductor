@@ -7,7 +7,7 @@ import { loadConfig } from './config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
-import { HALT_CLASS_MARKER, HALT_MARKER } from './halt-marker.js';
+import { HALT_CLASS_MARKER, HALT_MARKER, writeHaltMarker } from './halt-marker.js';
 import { GATES_DIR } from './gate-verdicts.js';
 import { join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -42,14 +42,21 @@ export interface RewindMarkerFilesystem {
   rename: typeof rename;
   remove: typeof rm;
   readFile: (path: string) => Promise<string>;
-  writeFile: (path: string, contents: string) => Promise<void>;
+  restoreHalt: (root: string, body: string) => Promise<void>;
+  writeClass: (path: string, contents: string) => Promise<void>;
 }
 
 const markerFilesystem: RewindMarkerFilesystem = {
   rename,
   remove: rm,
   readFile: (path) => readFile(path, 'utf-8'),
-  writeFile: (path, contents) => writeFile(path, contents, 'utf-8'),
+  async restoreHalt(root, body) {
+    const result = await writeHaltMarker(root, body, 'needs-human');
+    if (result.status !== 'written') {
+      throw new Error(`Canonical HALT restoration failed: ${result.reason ?? result.path}`);
+    }
+  },
+  writeClass: (path, contents) => writeFile(path, contents, 'utf-8'),
 };
 
 export function detectRewindCommand(argv: string[]): RewindDispatch | null {
@@ -84,7 +91,11 @@ export async function clearHaltAtomically(
     for (const index of moved) {
       if (removed.has(index)) {
         try {
-          await filesystem.writeFile(originals[index], contents[index]);
+          if (index === 0) {
+            await filesystem.restoreHalt(root, contents[index]);
+          } else {
+            await filesystem.writeClass(originals[index], contents[index]);
+          }
         } catch (restoreError) {
           restorationFailures.push(restoreError);
           // A missing class sidecar is deliberately fail-closed when HALT is
