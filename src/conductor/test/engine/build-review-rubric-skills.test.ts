@@ -187,7 +187,9 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/plan.*diff.*whole/i);
 
     expect(skill).toMatch(/default-enabled/i);
-    expectFindingsOnlyProviderPayload(skill, 'Completeness');
+    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
+    expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
+    expect(skill).toMatch(/empty\s+array means no Completeness concern was found/i);
     expect(skill).toMatch(/engine.*explicit disablement/i);
     expect(skill).toMatch(/missing deliverable/i);
     expect(skill).toMatch(/approved plan outcome\/task/i);
