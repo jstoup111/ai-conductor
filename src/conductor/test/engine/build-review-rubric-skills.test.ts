@@ -73,7 +73,9 @@ describe('engine/build-review rubric skill contracts', () => {
     // content-free manifest (path + merge-base blob sha per file).
     expect(skill).toMatch(/reverted-production manifest/i);
 
-    expectFindingsOnlyProviderPayload(skill, 'Tautology');
+    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
+    expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
+    expect(skill).toMatch(/empty\s+array means no Tautology concern was found/i);
     expect(skill).toMatch(/concern kind/i);
     expect(skill).toMatch(/changed test/i);
     expect(skill).toMatch(/exercised behavior\/assertion/i);
