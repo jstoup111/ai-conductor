@@ -150,6 +150,25 @@ describe('build-review dispositions', () => {
     await expect(store.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
   });
 
+  it('keeps reduced-coverage state unchanged when current-state validation or duplicate protection refuses it', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    const input = {
+      feature, rubric: 'tautology' as const, reason: 'preflight-failed' as const, rationale: 'reason', operator: 'james',
+    };
+
+    await expect(store.appendReducedCoverageIfCurrent(input, async () => false)).resolves.toMatchObject({ ok: false, kind: 'invalid' });
+    expect(filesystem.writes).toEqual([]);
+
+    await expect(store.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: true });
+    const writesBeforeDuplicate = filesystem.writes.length;
+    await expect(store.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: false, kind: 'invalid' });
+    expect(filesystem.writes).toHaveLength(writesBeforeDuplicate);
+  });
+
   it('refuses unreadable or unwritable reduced-coverage state so the review remains blocking', async () => {
     const filesystem = new MemoryFilesystem();
     filesystem.files.set('/repo/.pipeline/build-review-dispositions.json', '{broken');

@@ -442,6 +442,40 @@ export class BuildReviewDispositionStore {
   }
 
   /**
+   * Validates a reduced-coverage decision against current caller-owned state
+   * and appends it under the aggregate publisher's shared lease.
+   */
+  async appendReducedCoverageIfCurrent(
+    input: BuildReviewReducedCoverageInput,
+    validate: (records: readonly BuildReviewReducedCoverageDispositionRecord[]) => Promise<boolean>,
+  ): Promise<BuildReviewReducedCoverageAppendResult> {
+    const feature = parseFeatureIdentity(input.feature);
+    const identity = parseReducedCoverageIdentity({ rubric: input.rubric, reason: input.reason });
+    if (!feature || !identity || !nonEmptyString(input.rationale) || !nonEmptyString(input.operator)) {
+      return { ok: false, kind: 'invalid', message: 'build-review reduced-coverage input is invalid' };
+    }
+    const transaction = await this.withLease(async (): Promise<BuildReviewReducedCoverageAppendResult> => {
+      const loaded = await this.load();
+      if (!loaded.ok) return loaded;
+      const records = loaded.state.records.filter((entry): entry is BuildReviewReducedCoverageDispositionRecord =>
+        !isFindingDispositionRecord(entry) && sameFeature(entry.feature, feature));
+      if (!await validate(Object.freeze(records))) {
+        return { ok: false, kind: 'invalid', message: 'current reduced-coverage state is invalid' };
+      }
+      if (records.some((record) => record.identity.rubric === identity.rubric && record.identity.reason === identity.reason)) {
+        return { ok: false, kind: 'invalid', message: 'reduced coverage is already recorded for this rubric and cause' };
+      }
+      const disposition: BuildReviewReducedCoverageDispositionRecord = {
+        kind: 'reduced-coverage', version: STORE_VERSION, feature, identity,
+        rationale: input.rationale, operator: input.operator, acceptedAt: new Date(this.clock()).toISOString(),
+      };
+      const replaced = await this.replace({ version: STORE_VERSION, records: [...loaded.state.records, disposition] });
+      return replaced.ok ? { ok: true, record: disposition } : replaced;
+    });
+    return transaction.ok ? transaction.value : transaction;
+  }
+
+  /**
    * Runs caller validation and the disposition append under the one bounded
    * state lease.  Callers use this when their validation also reads a sibling
    * aggregate whose lap must not change between observation and acceptance.

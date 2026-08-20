@@ -30,6 +30,9 @@ describe('CLI', () => {
     expect(detectBuildReviewRecordReducedCoverageCommand([
       'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'rootCause', '--rationale', 'risk', '--reason', 'provider-error',
     ])).toBeNull();
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'unknown', '--rationale', 'risk',
+    ])).toMatchObject({ kind: 'record-reduced-coverage', rubric: 'unknown' });
   });
   it('parses feature description as positional arg', () => {
     const opts = parseArgs(['node', 'conduct', 'URL shortener']);

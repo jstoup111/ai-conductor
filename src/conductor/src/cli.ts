@@ -155,7 +155,7 @@ export type BuildReviewRecordReducedCoverageDispatch = {
   readonly kind: 'record-reduced-coverage';
   readonly feature: string;
   readonly lapId: string;
-  readonly rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness';
+  readonly rubric: string;
   readonly rationale: string;
 };
 
@@ -201,9 +201,9 @@ export function detectBuildReviewRecordReducedCoverageCommand(argv: string[]): B
   const rubric = read('--rubric');
   const rationale = read('--rationale');
   const expected = ['--feature', feature, '--lap', lapId, '--rubric', rubric, '--rationale', rationale];
-  if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !rationale ||
-    !/^[a-z0-9][a-z0-9-]*$/.test(feature) || !['tautology', 'scope', 'rootCause', 'completeness'].includes(rubric ?? '')) return null;
-  return { kind: 'record-reduced-coverage', feature, lapId, rubric: rubric as BuildReviewRecordReducedCoverageDispatch['rubric'], rationale };
+  if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !rubric || !rationale ||
+    !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
+  return { kind: 'record-reduced-coverage', feature, lapId, rubric, rationale };
 }
 
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
