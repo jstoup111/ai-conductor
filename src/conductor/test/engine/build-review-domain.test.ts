@@ -588,6 +588,38 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     }, 'scope', expected)).toContain('contradicts the findings array');
   });
 
+  it('preserves a provider-owned tautology relocationAudit through the engine stamp', () => {
+    const projection = {
+      rubric: 'tautology', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      changedFiles: [], changedTestSelectors: [],
+    } as unknown as BuildReviewRubricProjection;
+    const relocationAudit = ['[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move'];
+
+    // The audit is contract-required evidence on fixture-relocation results
+    // (persisted in the artifact, consumed by the aggregate). The stamp must
+    // carry it through, not silently discard it with the other provider-owned
+    // envelope fields.
+    const stamped = stampBuildReviewDispatchedCandidate(
+      { findings: [], relocationAudit }, 'tautology', projection,
+    ) as Record<string, unknown>;
+    expect(stamped.relocationAudit).toEqual(relocationAudit);
+    expect(parseBuildReviewJudgedResult(stamped)).toMatchObject({ verdict: 'PASS', relocationAudit });
+
+    // Absent stays absent — the stamp never manufactures audit evidence.
+    const bare = stampBuildReviewDispatchedCandidate(
+      { findings: [] }, 'tautology', projection,
+    ) as Record<string, unknown>;
+    expect('relocationAudit' in bare).toBe(false);
+
+    // A non-tautology payload smuggling an audit is rejected with the named
+    // problem, not silently laundered by the stamp.
+    const smuggled = stampBuildReviewDispatchedCandidate(
+      { findings: [], relocationAudit }, 'scope', projection,
+    );
+    expect(describeBuildReviewJudgedResultRejection(smuggled, 'scope', expected))
+      .toContain('"relocationAudit" must be absent or empty for rubric scope');
+  });
+
   it('diagnoses a findings-only provider response under its engine-stamped v3 envelope', () => {
     const projection = {
       rubric: 'tautology', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,

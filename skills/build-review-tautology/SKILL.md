@@ -71,7 +71,9 @@ results must not manufacture relocation-audit evidence.
 
 ## Result contract (v3)
 
-Return exactly one JSON object whose only top-level field is `findings`, an array. The engine owns
+Return exactly one JSON object whose only top-level fields are `findings`, an array, and — only
+when the fixture-relocation exception was evaluated — the audit-only `relocationAudit` array
+described above. The engine owns
 the `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot
 identity after validating this findings-only payload.
 Return every independent finding; an empty array means no Tautology concern was found. Each finding
