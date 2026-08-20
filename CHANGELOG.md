@@ -38,6 +38,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Shipped-record timing now reaches the `measured` state instead of getting stuck at `partial`/`unavailable`, and a `partial` state's `## Time` block now names its downgrade reason. ([implementation PR #1727](https://github.com/jstoup111/ai-conductor/pull/1727)).
 - A build_review pass no longer resets the cumulative kickback convergence cap by itself; the cap is credited back only when a rebase actually invalidates a judged build_review, closing a loophole that let build_review cycle indefinitely across passes. ([implementation PR #1728](https://github.com/jstoup111/ai-conductor/pull/1728)).
 - build_review findings anchored to dot-leading repository paths such as `.docs/plans/` are accepted, so a scope violation in a plan file can be reported instead of looping until retries are exhausted. ([implementation PR #1756](https://github.com/jstoup111/ai-conductor/pull/1756)).
+- build_review Scope no longer flags the engine's own appended remediation plan tasks as an unauthorized out-of-plan change. ([implementation PR #1757](https://github.com/jstoup111/ai-conductor/pull/1757)).
+- A Codex dispatch whose shell tool calls could not be spawned is now reported as a failed dispatch instead of a success, so a build_review rubric that could not read the diff raises an infrastructure failure rather than a hollow PASS. ([implementation PR #1758](https://github.com/jstoup111/ai-conductor/pull/1758)).
 
 ## [0.103.0] - 2026-08-17
 
