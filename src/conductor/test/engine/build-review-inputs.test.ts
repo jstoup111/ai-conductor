@@ -411,6 +411,100 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
     });
 
+    // The engine appends its own `### Task rem-*` blocks to the approved plan
+    // during remediation rounds (recorded in `.pipeline/engine-state.json`).
+    // That append lands as a feature commit, so the graded diff showed it as a
+    // change to an approved DECIDE artifact and Scope FAILed it as an
+    // out-of-plan change no authority could ever grant — the feature cannot
+    // remove it, because the engine requires it (observed on
+    // `clean-rubric-judgements-rejected-as-invalid-provid`, whose plan diff was
+    // 0 removals / 11 additions, all of them recorded `rem-*` headings).
+    // The exclusion reuses the seal's recorded-ids rule, so a plan amendment
+    // that is anything more than exactly those blocks stays in the diff.
+    async function recordAppendedRemediationTaskIds(ids: readonly string[]): Promise<void> {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/engine-state.json'),
+        JSON.stringify({ appendedRemediationTaskIds: ids }),
+        'utf-8',
+      );
+    }
+
+    const BASE_PLAN = '# Plan\n\n### Task 1: do the thing\n- Files: src/a.ts\n';
+
+    it('excludes the plan from the graded diff when its only amendment is the engine’s recorded remediation append', async () => {
+      await recordAppendedRemediationTaskIds(['rem-tautology-1', 'rem-root-cause-1']);
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['show', 'abc1234:plan.md'], result: { stdout: BASE_PLAN } },
+        {
+          match: ['show', 'HEAD:plan.md'],
+          result: {
+            stdout: `${BASE_PLAN}\n### Task rem-tautology-1: strengthen the test\n- Files: test/a.test.ts\n\n### Task rem-root-cause-1: fix the cause\n- Files: src/a.ts\n`,
+          },
+        },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/x b/x\n' } },
+      ]);
+
+      await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((c) => c[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..HEAD',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
+        ':(exclude)plan.md',
+      ]);
+    });
+
+    it('keeps the plan in the graded diff when the amendment is more than the recorded append', async () => {
+      await recordAppendedRemediationTaskIds(['rem-tautology-1']);
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['show', 'abc1234:plan.md'], result: { stdout: BASE_PLAN } },
+        {
+          match: ['show', 'HEAD:plan.md'],
+          result: {
+            // A hand-authored task rides along with the engine's own append.
+            stdout: `${BASE_PLAN}\n### Task rem-tautology-1: strengthen the test\n- Files: test/a.test.ts\n\n### Task 9: unplanned extra work\n- Files: src/b.ts\n`,
+          },
+        },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/x b/x\n' } },
+      ]);
+
+      await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((c) => c[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..HEAD',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
+      ]);
+    });
+
+    it('keeps the plan in the graded diff when the engine recorded no appended remediation tasks', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/x b/x\n' } },
+      ]);
+
+      await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((c) => c[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..HEAD',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
+      ]);
+      expect(calls.some((c) => c[0] === 'show')).toBe(false);
+    });
+
     it('names exactly the engine-authored surfaces as machinery paths', () => {
       expect([...MACHINERY_AUTHORED_PATHS].sort()).toEqual([
         '.docs/shipped/',
@@ -662,6 +756,63 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature.txt');
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
+    });
+
+    // End-to-end form of the engine-append exclusion: the plan is committed on
+    // the base branch and the feature branch carries the engine's own
+    // remediation append. Scope may never see that append as an out-of-plan
+    // change, because no authority can grant it and the feature cannot remove
+    // it — the engine requires the blocks.
+    async function commitPlanRemediationFixture(headPlanBody: string, recordedIds: readonly string[]): Promise<string> {
+      const scopedPlanPath = join(dir, '.docs/plans/rem-fixture.md');
+      const basePlanBody = '# Plan\n\n### Task 1: do the thing\n- Files: src/fix.ts\n';
+      await git('checkout', 'main');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(scopedPlanPath, basePlanBody, 'utf-8');
+      await git('add', '.');
+      await git('commit', '-m', 'approved plan');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+
+      await git('checkout', '-b', 'feature/remediation');
+      await writeFile(scopedPlanPath, headPlanBody, 'utf-8');
+      await writeFile(join(dir, 'src-fix.ts'), 'export const fixed = true;\n', 'utf-8');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/engine-state.json'),
+        JSON.stringify({ appendedRemediationTaskIds: recordedIds }),
+        'utf-8',
+      );
+      await git('add', '.');
+      await git('commit', '-m', 'remediation round');
+      return scopedPlanPath;
+    }
+
+    const ENGINE_APPENDED_PLAN =
+      '# Plan\n\n### Task 1: do the thing\n- Files: src/fix.ts\n'
+      + '\n### Task rem-tautology-1: strengthen the test\n- Files: test/fix.test.ts\n';
+
+    it('keeps the engine’s own recorded remediation append out of the graded diff', async () => {
+      const scopedPlanPath = await commitPlanRemediationFixture(ENGINE_APPENDED_PLAN, ['rem-tautology-1']);
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.diff).toContain('src-fix.ts');
+      expect(result.diff).not.toContain('.docs/plans/rem-fixture.md');
+      expect(result.diff).not.toContain('rem-tautology-1');
+      // The plan the rubrics judge against still carries the appended task.
+      expect(result.planBody).toContain('### Task rem-tautology-1');
+    });
+
+    it('grades a plan amendment that is more than the recorded remediation append', async () => {
+      const scopedPlanPath = await commitPlanRemediationFixture(
+        `${ENGINE_APPENDED_PLAN}\n### Task 9: unplanned extra work\n- Files: src/other.ts\n`,
+        ['rem-tautology-1'],
+      );
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.diff).toContain('.docs/plans/rem-fixture.md');
+      expect(result.diff).toContain('Task 9: unplanned extra work');
     });
 
     it('threads cumulative repair context into the isolated grader inputs', async () => {

@@ -352,6 +352,18 @@ The graded diff excludes paths the **engine** authors rather than the builder �
 `.pipeline/`. No plan task can describe harness machinery output, so grading it guarantees a scope
 finding the builder cannot legitimately act on.
 
+The same reasoning covers one file the builder normally does own: the feature's own plan. During
+remediation the engine appends its own `### Task rem-*` blocks to the approved plan and records
+their ids in `.pipeline/engine-state.json`. Those blocks land in a feature commit, so Scope used to
+read them as an unauthorized amendment to an approved DECIDE artifact — a finding no plan task,
+repair context, or accepted widening could ever authorize, and one the feature could not clear by
+removing the blocks, because the engine requires them. When the plan's divergence from the graded
+base is **exactly** those recorded blocks — the same test the protected-artifact seal applies before
+it tolerates the append — the plan path is excluded from the graded diff; there is nothing else in
+it to review. Any other amendment (an edited earlier line, an unrecorded task id, added prose)
+fails that test and is graded in full. The plan body the rubrics judge against is unaffected: it
+still carries every appended remediation task.
+
 When a deterministic BUILD verification gate — `test_suite` or any other gate in that group —
 fails, the engine accumulates the sanitized failure in `.pipeline/build-review-rebase-repairs.json`.
 The ledger is outside rewritten Git history, so repeated rebases retain earlier entries without
