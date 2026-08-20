@@ -4176,6 +4176,38 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(result).toMatchObject({ kind: 'dispatch-failure', detail: expect.stringContaining('byte-identical') });
   });
 
+  it('records the changed repair payload diagnosis rather than the initial diagnosis', async () => {
+    const initialOutput = '{"findings":[{}]}';
+    const repairedOutput = incidentShapedOutput;
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: initialOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: repairedOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      detail: expect.stringContaining('findings[0].anchor is required'),
+    });
+    expect((result as { detail: string }).detail).not.toContain('findings[0].concernKind must be a non-empty string');
+  });
+
+  it('keeps the initial diagnosis when the repair invocation returns no output', async () => {
+    const initialOutput = '{"findings":[{}]}';
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: initialOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      detail: expect.stringContaining('findings[0].concernKind must be a non-empty string'),
+    });
+  });
+
   it('returns undefined (not a failure report) when the provider invocation itself fails', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: false, output: 'crashed', exitCode: 1 });
     const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
