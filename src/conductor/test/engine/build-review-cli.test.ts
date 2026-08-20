@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
-import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
@@ -21,25 +21,95 @@ const aggregate = joinBuildReviewRubricOutcomes({
   },
 });
 
+function aggregateWithRootCause(result: BuildReviewRubricResult) {
+  return joinBuildReviewRubricOutcomes({
+    lapId, snapshotDigest: 'sha256:snapshot', results: { ...aggregate.results, rootCause: result },
+  });
+}
+
 describe('build-review findings CLI', () => {
   it('records reduced coverage for an interactive resolved local operator using the engine-derived cause', async () => {
-    const appendReducedCoverage = vi.fn(async (input) => ({
+    const appendReducedCoverageIfCurrent = vi.fn(async (input, validate) => {
+      expect(await validate([])).toBe(true);
+      return {
       ok: true as const,
       record: { kind: 'reduced-coverage' as const, version: 'v1' as const, ...input, acceptedAt: '2026-08-19T12:00:00.000Z' },
-    }));
-    const store = { appendReducedCoverage };
+      };
+    });
+    const store = { appendReducedCoverageIfCurrent };
 
     await expect(dispatchBuildReviewRecordReducedCoverage({
       kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'Provider is unavailable.',
     }, {
       cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
-      readFile: async () => JSON.stringify(aggregate), createStore: () => store, print: vi.fn(),
+      readFile: async () => JSON.stringify(aggregate), readMechanicalFaults: async () => 3, createStore: () => store, print: vi.fn(),
     })).resolves.toBe(0);
 
-    expect(appendReducedCoverage).toHaveBeenCalledWith({
+    expect(appendReducedCoverageIfCurrent).toHaveBeenCalledWith({
       feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, rubric: 'rootCause', reason: 'provider-error',
       rationale: 'Provider is unavailable.', operator: 'local-operator',
+    }, expect.any(Function));
+  });
+
+  it.each([
+    ['judged rubric', aggregateWithRootCause({ kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' }), 3, [], 'infrastructure failure', false],
+    ['skipped rubric', aggregateWithRootCause({ kind: 'skipped', rubric: 'rootCause', reason: 'disabled' }), 3, [], 'infrastructure failure', false],
+    ['remaining allowance', aggregate, 2, [], 'allowance', true],
+    ['duplicate decision', aggregate, 3, [{ kind: 'reduced-coverage' as const, version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' }, identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const }, rationale: 'already accepted', operator: 'james', acceptedAt: '2026-08-19T12:00:00.000Z' }], 'already recorded', true],
+  ])('refuses %s without storing a reduced-coverage decision', async (_caseName, currentAggregate, mechanicalFaults, records, reason, entersLease) => {
+    const persisted = [...records];
+    const appendReducedCoverageIfCurrent = vi.fn(async (_input, validate) => {
+      expect(await validate(records)).toBe(false);
+      return { ok: false as const, kind: 'invalid' as const, message: 'not eligible' };
     });
+    const print = vi.fn();
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'risk',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(currentAggregate), readMechanicalFaults: async () => mechanicalFaults,
+      createStore: () => ({ appendReducedCoverageIfCurrent }), print,
+    })).resolves.toBe(1);
+    expect(print).toHaveBeenCalledWith(expect.stringMatching(new RegExp(reason, 'i')));
+    expect(persisted).toEqual(records);
+    if (entersLease) expect(appendReducedCoverageIfCurrent).toHaveBeenCalledOnce();
+    else expect(appendReducedCoverageIfCurrent).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown rubric before store access and a replaced review lap inside the lease', async () => {
+    const unknownStore = vi.fn();
+    const unknownPrint = vi.fn();
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'unknown', rationale: 'risk',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      createStore: unknownStore, print: unknownPrint,
+    })).resolves.toBe(1);
+    expect(unknownStore).not.toHaveBeenCalled();
+    expect(unknownPrint).toHaveBeenCalledWith(expect.stringMatching(/not a known rubric/i));
+
+    const nextLap = joinBuildReviewRubricOutcomes({
+      lapId: parseBuildReviewLapId('lap-next')!, snapshotDigest: 'sha256:next', results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId: parseBuildReviewLapId('lap-next')!, snapshotDigest: 'sha256:next', contractVersion: 'v2' as never, findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId: parseBuildReviewLapId('lap-next')!, snapshotDigest: 'sha256:next', contractVersion: 'v2' as never, findings: [finding], verdict: 'FAIL' },
+        rootCause: { kind: 'infrastructure-failure', rubric: 'rootCause', reason: 'provider-error', detail: 'offline' },
+        completeness: { kind: 'skipped', rubric: 'completeness', reason: 'disabled' },
+      },
+    });
+    let reads = 0;
+    const appendReducedCoverageIfCurrent = vi.fn(async (_input, validate) => {
+      expect(await validate([])).toBe(false);
+      return { ok: false as const, kind: 'invalid' as const, message: 'current reduced-coverage state is invalid' };
+    });
+    const stalePrint = vi.fn();
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'rootCause', rationale: 'risk',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(++reads === 1 ? aggregate : nextLap), readMechanicalFaults: async () => 3,
+      createStore: () => ({ appendReducedCoverageIfCurrent }), print: stalePrint,
+    })).resolves.toBe(1);
+    expect(stalePrint).toHaveBeenCalledWith(expect.stringMatching(/review lap changed/i));
   });
 
   it('refuses non-interactive and unresolvable operators before aggregate or store access', async () => {
