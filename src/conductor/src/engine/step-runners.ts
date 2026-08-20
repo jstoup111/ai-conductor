@@ -1824,14 +1824,16 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     // A result that still violates the judged contract after its one repair
-    // turn is not a reviewer decision about the diff.  Do not publish it as
-    // a fresh FAIL aggregate: completion deliberately classifies a missing
-    // verdict as `absent`, which re-dispatches this rubric without consuming
-    // the build_review kickback budget.
+    // turn — including a byte-identical repair that cannot converge — is not
+    // a reviewer decision about the diff. Do not publish it as a fresh FAIL
+    // aggregate: completion deliberately classifies a missing verdict as
+    // `absent`, which re-dispatches this rubric without consuming the
+    // build_review kickback budget.
     const rejectedAfterRepair = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
       branch.kind === 'infrastructure-failure' &&
       branch.reason === 'invalid-provider-result' &&
-      branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true,
+      (branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true ||
+        branch.detail?.startsWith('judged-result repair was byte-identical to the rejected output;') === true),
     );
     if (rejectedAfterRepair) {
       return {

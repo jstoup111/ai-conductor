@@ -3678,7 +3678,7 @@ TIER: M`,
       })).toEqual({ allowed: true });
     });
 
-    it('leaves no verdict artifact after a vocabulary rejection survives its repair turn', async () => {
+    it('leaves no verdict artifact after a byte-identical vocabulary repair is rejected', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: true,
         output: JSON.stringify({
