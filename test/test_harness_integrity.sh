@@ -154,6 +154,53 @@ else
   esac
 fi
 
+# ── 1c. No NUL bytes in tracked text source ─────────────────────────────────
+# A raw NUL control character committed into a source file makes that file
+# BINARY to every search tool in the toolchain, and they all fail SILENTLY:
+# `grep` (shimmed to `ugrep -I` in agent sessions) and recursive `rg` skip the
+# file entirely — no match, no count line, no warning, exit 1. An agent then
+# reads "0 matches" as "this symbol does not exist" and reasons from a false
+# premise.
+#
+# This is not hypothetical. On 2026-08-18 a raw NUL landed at
+# src/conductor/src/engine/build-review-domain.ts:84, in a template literal
+# where every comparable site writes the `\u0000` escape
+# (plan-protected-targets.ts, build-review-removals.ts, provider-execution.ts,
+# finish-publication-production.ts, intake-loop.ts). It went unnoticed for two
+# days and produced exactly that misdiagnosis.
+#
+# The escape is semantically identical, so there is never a reason to commit
+# the raw byte. Scope is tracked text source; binary assets are excluded by
+# extension, and `git grep -I` skips anything git itself classifies as binary
+# via .gitattributes.
+
+echo ""
+echo -e "${BOLD}1c. No NUL bytes in tracked text source${NC}"
+
+nul_hits=""
+while IFS= read -r tracked; do
+  case "$tracked" in
+    *.ts|*.tsx|*.js|*.mjs|*.cjs|*.json|*.sh|*.md|*.yml|*.yaml) ;;
+    *) continue ;;
+  esac
+  [ -f "${HARNESS_DIR}/${tracked}" ] || continue
+  # A NUL cannot be passed as a grep pattern argument (C strings end at NUL),
+  # so detect by construction: stripping NULs changes the file iff it had one.
+  if ! LC_ALL=C tr -d '\000' < "${HARNESS_DIR}/${tracked}" | cmp -s - "${HARNESS_DIR}/${tracked}"; then
+    nul_hits="${nul_hits}${tracked}"$'\n'
+  fi
+done < <(git -C "${HARNESS_DIR}" ls-files)
+
+if [ -z "$nul_hits" ]; then
+  assert "no tracked text source contains a NUL byte" 0
+else
+  echo -e "  ${RED}FAIL${NC} tracked text source contains a NUL byte:"
+  printf '%s' "$nul_hits" | sed 's/^/    /'
+  echo "    remediation: replace the raw NUL with the \\u0000 escape, e.g."
+  echo "      perl -0777 -pi -e 's/\\000/\\\\u0000/g' <file>"
+  assert "no tracked text source contains a NUL byte" 1
+fi
+
 # ── 2. SKILL.md frontmatter ─────────────────────────────────────────────────
 
 echo ""
