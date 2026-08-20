@@ -166,6 +166,9 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
       verifyArtifacts: true,
       config,
       maxRetries: 1,
+      // This fixture targets the build_review-to-build transition, not the
+      // preceding tree-attesting BUILD verification gates.
+      fromStep: 'build_review',
     } as never);
 
     await conductor.run();
