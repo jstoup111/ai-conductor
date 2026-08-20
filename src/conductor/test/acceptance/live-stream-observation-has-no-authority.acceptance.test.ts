@@ -24,18 +24,6 @@ import type {
 } from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 
-interface ProviderStreamObservation {
-  activeChildren?: number;
-  childObservability: 'observed' | 'unsupported';
-  uncachedInputTokens: number;
-  outputTokens: number;
-  cachedInputTokens?: number;
-}
-
-type StreamInvokeOptions = InvokeOptions & {
-  onProviderStream?: (observation: ProviderStreamObservation) => void;
-};
-
 interface ScriptedSubprocessResult {
   stdout: string;
   stderr: string;
@@ -70,7 +58,7 @@ function subprocessFactory(chunks: string[], result: ScriptedSubprocessResult) {
 function invoke(
   chunks: string[],
   stdout: string,
-  options: Partial<StreamInvokeOptions> = {},
+  options: Partial<InvokeOptions> = {},
   exitCode = 0,
 ): Promise<InvokeResult> {
   const provider = new ClaudeProvider(
@@ -82,7 +70,7 @@ function invoke(
       failed: exitCode !== 0,
     }) as never,
   );
-  const invokeOptions: StreamInvokeOptions = {
+  const invokeOptions: InvokeOptions = {
     prompt: 'observe this autonomous dispatch',
     sessionId: 'acceptance-session',
     resume: false,
@@ -92,7 +80,7 @@ function invoke(
 }
 
 describe('Story 7: stream observation never gains authority over an autonomous dispatch', () => {
-  it('reassembles split records, skips unknown lines, and preserves result, activity, and timing when every observation callback throws', async () => {
+  it('preserves the observer-free result, heartbeat pulses, and interval when every observation callback throws', async () => {
     const assistant = JSON.stringify({
       type: 'assistant',
       usage: {
@@ -118,15 +106,18 @@ describe('Story 7: stream observation never gains authority over an autonomous d
     const stream = `${assistant}\nnot-a-provider-record\n${terminal}\n`;
     const splitAt = Math.floor(assistant.length / 2);
     const chunks = [stream.slice(0, splitAt), stream.slice(splitAt, splitAt + 9), stream.slice(splitAt + 9)];
+    const baselineActivity = vi.fn();
     const onActivity = vi.fn();
     const onProviderStream = vi.fn(() => {
       throw new Error('observer sink unavailable');
     });
 
+    const baseline = await invoke(chunks, stream, { onActivity: baselineActivity });
     const result = await invoke(chunks, stream, { onActivity, onProviderStream });
 
     expect(onProviderStream).toHaveBeenCalled();
-    expect(onActivity).toHaveBeenCalledTimes(chunks.length);
+    expect(onActivity).toHaveBeenCalledTimes(baselineActivity.mock.calls.length);
+    expect(result).toEqual(baseline);
     expect(result).toMatchObject({
       success: true,
       output: 'dispatch completed',
@@ -144,16 +135,27 @@ describe('Story 7: stream observation never gains authority over an autonomous d
     });
   });
 
-  it('discards an unterminated partial record and keeps the pre-existing raw passthrough when no complete record is parseable', async () => {
+  it('keeps child work unknown when no stream record parses and discards a killed partial record without observer errors', async () => {
     const partial = '{"type":"assistant","usage":{"input_tokens":99';
-    const onProviderStream = vi.fn();
+    const unparseableStream = `not-json\n${partial}`;
+    const heartbeat = vi.fn();
+    const onProviderStream = vi.fn(() => {
+      throw new Error('must not run for unparseable records');
+    });
 
-    const result = await invoke([partial], partial, { onProviderStream }, 1);
+    const result = await invoke(
+      ['not-json\n', partial],
+      unparseableStream,
+      { onActivity: heartbeat, onProviderStream },
+      1,
+    );
 
+    // No callback means no observed child count; dashboard rendering remains "children: unknown".
     expect(onProviderStream).not.toHaveBeenCalled();
+    expect(heartbeat).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
       success: false,
-      output: partial,
+      output: unparseableStream,
       exitCode: 1,
       tokenUsage: undefined,
       observedIntervals: [{ startedAtMs: 1_000, durationMs: 25 }],
