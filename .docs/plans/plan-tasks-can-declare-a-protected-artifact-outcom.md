@@ -70,7 +70,7 @@ naming `.docs/stories/<plan-stem>.md` yields none (S1.3); a task naming only `sr
 ### Task 3: GREEN — union the `**Files:**` and prose scans
 
 **Story:** 1 (happy)
-**Files:** src/conductor/src/engine/plan-protected-targets.ts
+**Files:** src/conductor/src/engine/plan-protected-targets.ts; src/conductor/src/engine/plan-task-parse.ts
 **Dependencies:** T1; T2
 
 Replace the `hasFilesLineByTaskId` either/or branch with a union over both sources. Keep the

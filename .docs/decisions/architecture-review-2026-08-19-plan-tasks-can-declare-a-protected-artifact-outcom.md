@@ -22,6 +22,8 @@ signature and return type are unchanged. No new component, channel, store, or ev
 with the event-spine rule, since a violation is a return value consumed in-process by the caller
 that requested it.
 
+> **Amended 2026-08-20 by #1736:** The scanner-only assertion is incomplete: `parsePlanTaskPaths` must also retain each task section's foreign protected backtick references when that section declares `**Files:**`. The scanner then unions those retained references with declared paths, while keeping its existing `isProtectedArtifactPath(path) && !namesOwnFeature(path, planStem)` predicate and `taskId\0path` deduplication unchanged. This is required because the parser currently withholds those references from Files-declared tasks, so a scanner-only union cannot detect the observed foreign artifact outcome.
+
 ## Risks
 
 ### R1 — Widening the scanner risks false positives on a repository-wide blocking gate
