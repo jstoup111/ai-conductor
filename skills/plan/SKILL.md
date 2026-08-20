@@ -105,6 +105,11 @@ Break stories into tasks at **2-5 minute granularity**. Each task follows the TD
 4. Verify test passes (GREEN)
 5. Commit with message: "[descriptive message]"
 
+**Done when:**
+- [2-5 enumerated, falsifiable checks — see 3d. Each is a definite yes/no a
+  zero-context reviewer can evaluate: a named test that passes, a command and
+  its expected output, a concrete property of the diff.]
+
 **Files likely touched:**
 - [file path] — [what changes]
 
@@ -203,6 +208,35 @@ declaration.
 An absent or empty `**Preserves:**` value grants no preservation; ordinary holistic judgment
 applies unchanged.
 
+### 3d. `Done when:` — Falsifiable Completion Criteria (REQUIRED)
+
+Every task carries a `**Done when:**` block of 2-5 enumerated checks. Together they are the task's
+complete definition of done: when every check passes, the task is finished — full stop.
+
+Each check must be **falsifiable**: a zero-context reviewer evaluates it to a definite yes or no
+without appealing to an ideal. Name the test and what it asserts, the command and its expected
+output, or the concrete diff property. "The guard is robust" is not a check; "the guard rejects the
+three drift fixtures listed in Steps and exits non-zero" is.
+
+**Unbounded quality words are banned unless immediately closed.** An outcome stated as
+"fail-closed", "comprehensive", "robust", "hardened", "both directions", or any similar unbounded
+property MUST be followed in the same block by either the closed enumeration of cases it means, or
+the named mechanism that makes deeper failure impossible. An enforcement property is a mechanism
+decision, and the mechanism is decided HERE, in DECIDE — never left for the builder to pick or a
+reviewer to litigate. (Precedent: a task saying "extend the guard … both directions, fail-closed"
+with no mechanism let the builder choose textual source extraction; review then correctly found a
+deeper hole in it every lap until the cumulative cap halted the feature. The fix was a mechanism —
+execute the parser instead of reading it — that DECIDE could have named up front. See #1763.)
+
+**Review is bound by this block.** A completion judgement measures the task against its `Done
+when:` checks. A genuine concern beyond them is new work: it is filed as intake, never raised as a
+finding that blocks this task. Criteria that turn out to be wrong are amended in DECIDE, not
+stretched in review.
+
+Do not restate Steps or duplicate story acceptance criteria; the block states the observable end
+state, not the route there. For a `Verify-only:` task the block names what the verification must
+observe.
+
 ### 4. Task Ordering Rules
 
 1. **Infrastructure first** — Database migrations, model definitions, route setup
@@ -290,6 +324,8 @@ the shape of the work before reading individual tasks.]
 - [ ] All happy path criteria covered by at least one task
 - [ ] All negative path criteria covered by at least one task
 - [ ] No task exceeds 5 minutes of work
+- [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left
+      without its closed enumeration or named mechanism (3d)
 - [ ] Dependencies are explicit and acyclic
 ```
 
