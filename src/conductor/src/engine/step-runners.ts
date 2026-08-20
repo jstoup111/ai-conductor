@@ -129,6 +129,38 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
   'remediate', // conductor-dispatched gap-remediation planner — runs unattended
 ]);
 
+/** Default hard floor for live provider-stream observation emission. */
+export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
+
+type ProviderStreamIntervalConfig = {
+  provider_stream?: { min_interval_ms?: unknown };
+};
+
+/** Resolve the optional provider-stream cadence, rejecting non-positive values. */
+export function resolveProviderStreamMinIntervalMs(config: ProviderStreamIntervalConfig | undefined): number {
+  const value = config?.provider_stream?.min_interval_ms;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS;
+}
+
+export function createProviderStreamThrottle<T>(
+  emit: (observation: T) => void,
+  options: { minIntervalMs: number; now?: () => number },
+): (observation: T) => void {
+  const now = options.now ?? Date.now;
+  const minIntervalMs = options.minIntervalMs > 0
+    ? options.minIntervalMs
+    : DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS;
+  let lastEmissionMs = Number.NEGATIVE_INFINITY;
+  return (observation) => {
+    const current = now();
+    if (current - lastEmissionMs < minIntervalMs) return;
+    lastEmissionMs = current;
+    emit(observation);
+  };
+}
+
 // Steps where the skill design requires a back-and-forth conversation (the
 // user refines scope with Claude), not a single one-shot response. These are
 // dispatched as Claude REPL sessions (positional prompt, no -p flag) so the
