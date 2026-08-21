@@ -9,8 +9,7 @@ const smokeCapability = 'credentialed:claude';
 
 /**
  * Live probe outcome — 2026-08-21, Claude Code 2.1.238:
- * - `Task` tool_use: absent; the CLI emitted `Agent` instead.
- * - Matching `Task` tool_result: absent; the emitted `Agent` had a matching tool_result.
+ * - `Task` tool_use and matching tool_result: absent; the CLI emitted `Agent` and its matching tool_result instead.
  * - Non-null `parent_tool_use_id`: observed on the child record.
  *
  * Child attribution is therefore observed for the current CLI contract. If a future probe lacks
@@ -66,9 +65,12 @@ describe.skipIf(!shouldRun)('smoke/Claude subagent stream attribution', () => {
         { cwd, reject: false, timeout: 240_000 },
       );
       const records = parseRecords(result.stdout);
-      const childToolIds = records.flatMap(contentBlocks).flatMap((block) =>
-        block.type === 'tool_use' && block.name === observedChildToolName && typeof block.id === 'string' ? [block.id] : [],
+      const toolUses = records.flatMap(contentBlocks).filter((block) =>
+        block.type === 'tool_use' && typeof block.name === 'string' && typeof block.id === 'string',
       );
+      const childToolIds = toolUses
+        .filter((block) => block.name === observedChildToolName)
+        .map((block) => block.id as string);
       const hasMatchingResult = records
         .flatMap(contentBlocks)
         .some((block) => block.type === 'tool_result'
@@ -79,10 +81,10 @@ describe.skipIf(!shouldRun)('smoke/Claude subagent stream attribution', () => {
       );
 
       expect({
-        childToolUse: childToolIds.length > 0,
+        childToolNames: toolUses.map((block) => block.name),
         matchingToolResult: hasMatchingResult,
         childMessage: hasChildMessage,
-      }).toEqual({ childToolUse: true, matchingToolResult: true, childMessage: true });
+      }).toEqual({ childToolNames: [observedChildToolName], matchingToolResult: true, childMessage: true });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
