@@ -17,7 +17,6 @@ import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import {
   accumulateProviderStreamTokens,
   ProviderStreamAssembler,
-  ProviderStreamChildTracker,
 } from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
@@ -565,7 +564,6 @@ export class ClaudeProvider implements LLMProvider {
     try {
       onSpawn?.();
       const streamAssembler = new ProviderStreamAssembler();
-      const childTracker = new ProviderStreamChildTracker();
       let uncachedInputTokens = 0;
       let cachedInputTokens = 0;
       let outputTokens = 0;
@@ -573,14 +571,12 @@ export class ClaudeProvider implements LLMProvider {
         try {
           onActivity?.();
           for (const record of streamAssembler.push(String(chunk))) {
-            childTracker.observe(record);
             const tokenTotals = accumulateProviderStreamTokens([record]);
             uncachedInputTokens += tokenTotals.uncachedInputTokens;
             cachedInputTokens += tokenTotals.cachedInputTokens;
             outputTokens += tokenTotals.outputTokens;
             onProviderStream?.({
-              childObservability: childTracker.childObservability,
-              activeChildren: childTracker.activeChildren,
+              childObservability: 'unsupported',
               uncachedInputTokens,
               cachedInputTokens,
               outputTokens,
