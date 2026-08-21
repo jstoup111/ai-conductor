@@ -20,7 +20,7 @@ export class ProviderStreamAssembler {
   }
 }
 
-/** Tracks the live child spans represented by Claude's Task tool calls. */
+/** Tracks the live child spans represented by Claude's child-delegation tool calls. */
 export class ProviderStreamChildTracker {
   readonly childObservability = 'observed' as const;
 
@@ -43,7 +43,7 @@ export class ProviderStreamChildTracker {
       const fields = block as Record<string, unknown>;
       if (
         fields.type === 'tool_use'
-        && fields.name === 'Task'
+        && (fields.name === 'Task' || fields.name === 'Agent')
         && typeof fields.id === 'string'
       ) {
         this.openChildIds.add(fields.id);

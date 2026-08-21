@@ -55,13 +55,13 @@ describe('ProviderStreamChildTracker', () => {
     ]);
   });
 
-  it('does not open or close Task-tracked children for Agent records', () => {
+  it('tracks Agent calls through their matching tool results', () => {
     const tracker = new ProviderStreamChildTracker();
 
     tracker.observe(agentUse('agent-child'));
     expect({ childObservability: tracker.childObservability, activeChildren: tracker.activeChildren }).toEqual({
       childObservability: 'observed',
-      activeChildren: 0,
+      activeChildren: 1,
     });
 
     tracker.observe(taskUse('task-child'));

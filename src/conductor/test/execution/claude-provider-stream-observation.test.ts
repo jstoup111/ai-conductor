@@ -5,7 +5,7 @@ import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 describe('ClaudeProvider provider stream observations', () => {
-  it('reports Agent records as child-unsupported with running token totals', async () => {
+  it('reports Agent records as active children with running token totals', async () => {
     const stdout = new PassThrough();
     let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
     let resolveStarted: () => void;
@@ -54,18 +54,18 @@ describe('ClaudeProvider provider stream observations', () => {
     expect(observations).toHaveLength(2);
     const providerObservations = observations as Array<Record<string, unknown>>;
     expect(providerObservations[0]).toMatchObject({
-      childObservability: 'unsupported',
+      childObservability: 'observed',
+      activeChildren: 1,
       uncachedInputTokens: 17,
       cachedInputTokens: 8,
       outputTokens: 7,
     });
-    expect(Object.hasOwn(providerObservations[0], 'activeChildren')).toBe(false);
     expect(providerObservations[1]).toMatchObject({
-      childObservability: 'unsupported',
+      childObservability: 'observed',
+      activeChildren: 0,
       uncachedInputTokens: 17,
       cachedInputTokens: 8,
       outputTokens: 7,
     });
-    expect(Object.hasOwn(providerObservations[1], 'activeChildren')).toBe(false);
   });
 });

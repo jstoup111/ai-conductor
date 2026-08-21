@@ -12,9 +12,8 @@ const smokeCapability = 'credentialed:claude';
  * - `Task` tool_use and matching tool_result: absent; the CLI emitted `Agent` and its matching tool_result instead.
  * - Non-null `parent_tool_use_id`: observed on the child record.
  *
- * `Agent` is not a supported substitute for `Task` lifecycle attribution. The observed result and
- * parent id prove the live CLI has child activity, but not the Task contract required to expose an
- * active-child count. Claude child observability is therefore unsupported for this probe.
+ * The matching `Agent` lifecycle is the active Claude child-work contract. The observed result and
+ * parent id prove the CLI can report an active-child count for this probe.
  */
 const observedChildToolName = 'Agent';
 
@@ -50,7 +49,7 @@ function contentBlocks(record: Record<string, unknown>): Array<Record<string, un
 const shouldRun = Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) && claudeBinaryAvailable();
 
 describe.skipIf(!shouldRun)('smoke/Claude subagent stream attribution', () => {
-  it('records the falsified Task attribution and classifies Claude child observability as unsupported', async () => {
+  it('records the Agent attribution used for Claude child observability', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'claude-subagent-stream-smoke-'));
     try {
       const result = await execa(
@@ -95,12 +94,10 @@ describe.skipIf(!shouldRun)('smoke/Claude subagent stream attribution', () => {
         parentAttribution: true,
       });
 
-      // Only Task/tool_result pairs support an active-child count. A successful Agent result and
-      // parent id must not be reinterpreted as that unavailable lifecycle contract.
-      const childObservation = taskToolIds.length > 0
-        ? { childObservability: 'observed' as const, activeChildren: taskToolIds.length }
+      const childObservation = agentToolIds.length > 0
+        ? { childObservability: 'observed' as const, activeChildren: agentToolIds.length }
         : { childObservability: 'unsupported' as const };
-      expect(childObservation).toEqual({ childObservability: 'unsupported' });
+      expect(childObservation).toEqual({ childObservability: 'observed', activeChildren: 1 });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
