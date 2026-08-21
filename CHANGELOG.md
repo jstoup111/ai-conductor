@@ -11,18 +11,20 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.104.0] - 2026-08-20
+## [0.104.0] - 2026-08-21
 
 ### Added
 
 - Task-attributed commits are checked against the active task's declared files at commit time, with violations and accepted scope widenings carried into build_review evidence. ([implementation PR #1534](https://github.com/jstoup111/ai-conductor/pull/1534)).
 - Self-host dispatches now prove the live checkout is read-only with a two-sided bwrap probe, so concurrent operator edits during a contained build no longer halt the run; unproven or opted-out dispatches keep the prior fail-closed behavior. ([implementation PR #1698](https://github.com/jstoup111/ai-conductor/pull/1698)).
+- Build-review configuration accepts causalIntegrity as an input alias for rootCause. ([implementation PR #1766](https://github.com/jstoup111/ai-conductor/pull/1766)).
 
 ### Changed
 
 - Story artifacts under `.docs/stories/` are now corrected in place during DECIDE instead of accumulating additive amendment blocks; all other accepted DECIDE artifacts keep the additive-amendment rule. ([implementation PR #1539](https://github.com/jstoup111/ai-conductor/pull/1539)).
 - Acceptance-spec authoring is disposition-driven — criteria proven at a lower layer complete the acceptance_specs gate with grounded disposition records instead of fabricated specs, and BUILD prefers applicable local patterns. ([implementation PR #1678](https://github.com/jstoup111/ai-conductor/pull/1678)).
 - The plan skill requires every task to carry a "Done when:" block of falsifiable completion checks, closing unbounded outcome language at DECIDE so completion review has a definite stopping point. ([implementation PR #1764](https://github.com/jstoup111/ai-conductor/pull/1764)).
+- build_review rubric results are engine-stamped from findings-only provider payloads, with honest per-field rejection diagnosis and a behavioral (execute-the-parser) contract drift guard, ending the invalid-provider-result rejection loop. ([implementation PR #1748](https://github.com/jstoup111/ai-conductor/pull/1748)).
 
 ### Fixed
 
@@ -42,6 +44,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review Scope no longer flags the engine's own appended remediation plan tasks as an unauthorized out-of-plan change. ([implementation PR #1757](https://github.com/jstoup111/ai-conductor/pull/1757)).
 - A Codex dispatch whose shell tool calls could not be spawned is now reported as a failed dispatch instead of a success, so a build_review rubric that could not read the diff raises an infrastructure failure rather than a hollow PASS. ([implementation PR #1758](https://github.com/jstoup111/ai-conductor/pull/1758)).
 - build_review rubrics no longer treat engine-appended remediation tasks as findings or as authority, so remediation laps converge instead of expanding their own judgement surface each round. ([implementation PR #1761](https://github.com/jstoup111/ai-conductor/pull/1761)).
+- Installed harness skills now stay explicit-only unless same-session workflow composition requires implicit invocation. ([implementation PR #1762](https://github.com/jstoup111/ai-conductor/pull/1762)).
 
 ## [0.103.0] - 2026-08-17
 
