@@ -109,9 +109,13 @@ conduct-ts build-review accept --feature <slug> --lap <lap> --finding <id> --rat
 `findings` is read-only and renders the current feature's raw and effective build-review findings;
 `--json` selects machine-readable output. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
-and a non-empty rationale. Stale, unknown, unauthorized, or non-interactive requests are refused
-without changing artifacts and exit 1; successful findings inspection and accepted exact-current
-findings exit 0.
+and a non-empty rationale. Acceptance works on every rubric — `tautology`, `scope`, `rootCause`, and
+`completeness` — because the identity the engine prints is the identity the disposition store
+accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
+artifacts and exit 1; successful findings inspection and accepted exact-current findings exit 0.
+A refusal names the check that failed — unreadable aggregate, non-current lap, unknown finding, or a
+disposition-store rejection — and records the same reason on the feature's
+`build_review_disposition_refused` event.
 
 ## `conduct-ts scope-check`
 

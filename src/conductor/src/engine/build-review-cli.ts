@@ -147,22 +147,18 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
  */
 export async function dispatchBuildReviewAccept(command: BuildReviewAcceptCommand, deps: BuildReviewAcceptDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
-  let worktree: string | undefined;
-  let feature: BuildReviewFeatureIdentity | undefined;
-  try {
-    // Resolve the feature-owned external-event target before validating any
-    // mutable review state. Every refusal can then be observed through the
-    // existing same-schema writer, including argument and TTY failures.
-    const resolved = await resolveCliFeature(command, deps);
-    if (!resolved) throw new Error('feature identity is unavailable');
-    ({ worktree, feature } = resolved);
-  } catch {
+  // Resolve the feature-owned external-event target before validating any
+  // mutable review state. Every refusal can then be observed through the
+  // existing same-schema writer, including argument and TTY failures.
+  const resolved = await resolveCliFeature(command, deps).catch(() => undefined);
+  if (!resolved) {
     print(`build-review accept: refused for '${command.feature}'; the feature worktree could not be resolved.`);
     return 1;
   }
+  const { worktree, feature } = resolved;
   const refuse = (reason: string, message: string): number => {
     try {
-      (deps.appendEvent ?? appendCloseoutEvent)(worktree!, {
+      (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
         type: 'build_review_disposition_refused', feature: command.feature, reason, ts: new Date().toISOString(),
       });
     } catch {
@@ -179,56 +175,72 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   if (!requestedLap || !command.rationale.trim()) {
     return refuse('invalid-lap-or-blank-rationale', 'build-review accept: requires an exact current lap and non-empty rationale.');
   }
+  const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
+  const readAggregate = async (): Promise<ReturnType<typeof parseBuildReviewAggregate>> => {
+    try {
+      return parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
+    } catch {
+      return undefined;
+    }
+  };
+  // Each precondition refuses under its own reason. A single catch-all made a
+  // stale lap, an unknown finding id, and a store rejection indistinguishable
+  // to the operator reading the refusal (#1769).
+  const aggregate = await readAggregate();
+  if (!aggregate) {
+    return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; the current build-review aggregate is missing or malformed.`);
+  }
+  if (aggregate.lapId !== requestedLap) {
+    return refuse('requested-lap-not-current', `build-review accept: refused for '${command.feature}'; lap '${command.lapId}' is not the current lap ('${aggregate.lapId}').`);
+  }
+  const currentFinding = [...Object.values(aggregate.results)].flatMap((result) => result.kind === 'judged'
+    ? result.findings.map((finding) => ({
+      finding,
+      identity: canonicalizeBuildReviewFindingIdentity({ rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor }),
+    }))
+    : []).find((candidate) => candidate.identity?.id === command.findingId);
+  if (!currentFinding?.identity) {
+    return refuse('finding-not-current', `build-review accept: refused for '${command.feature}'; '${command.findingId}' is not a current judged finding on lap '${aggregate.lapId}'.`);
+  }
+  const identity = currentFinding.identity;
   try {
-    const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
-    const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
-    if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');
-    const currentFinding = [...Object.values(aggregate.results)].flatMap((result) => result.kind === 'judged'
-      ? result.findings.map((finding) => ({
-        finding,
-        identity: canonicalizeBuildReviewFindingIdentity({ rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor }),
-      }))
-      : []).find((candidate) => candidate.identity?.id === command.findingId);
-    if (!currentFinding?.identity) throw new Error('finding is not a current judged finding');
-    const identity = currentFinding.identity;
-    if (!feature) throw new Error('feature identity is unavailable');
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.finding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
+    const unchanged = async (): Promise<boolean> => {
+      const current = await readAggregate();
+      return current !== undefined && current.lapId === requestedLap && current.snapshotDigest === aggregate.snapshotDigest &&
+        JSON.stringify(current.results) === JSON.stringify(aggregate.results);
+    };
     const appended = store.appendIfCurrent
       ? await store.appendIfCurrent(appendInput, async (records) => {
-        const current = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree!, '.pipeline/build-review.json'))));
-        if (!current || current.lapId !== requestedLap || current.snapshotDigest !== aggregate.snapshotDigest || JSON.stringify(current.results) !== JSON.stringify(aggregate.results)) return false;
+        if (!await unchanged()) return false;
         const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records);
         return effective?.unresolvedFindingIds.includes(identity.id) === true;
       })
       : await (async () => {
         const listed = await store.list(feature);
         if (!listed.ok) return listed;
-        const current = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree!, '.pipeline/build-review.json'))));
-        if (!current || current.lapId !== requestedLap || current.snapshotDigest !== aggregate.snapshotDigest || JSON.stringify(current.results) !== JSON.stringify(aggregate.results)) {
+        if (!await unchanged()) {
           return { ok: false as const, kind: 'invalid' as const, message: 'current review lap changed while waiting for disposition state' };
         }
         const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records);
         if (!effective || !effective.unresolvedFindingIds.includes(identity.id)) return { ok: false as const, kind: 'invalid' as const, message: 'finding is already accepted or not actionable' };
         return store.append(appendInput);
       })();
-    if (!appended.ok) throw new Error(appended.message);
-    (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
-      type: 'build_review_disposition_accepted', feature: command.feature, lapId: requestedLap, findingId: identity.id, operator: operator.trim(), ts: new Date().toISOString(),
-    });
+    if (!appended.ok) {
+      return refuse(`disposition-store-${appended.kind}`, `build-review accept: refused for '${command.feature}'; the disposition store rejected the acceptance (${appended.kind}): ${appended.message}`);
+    }
+    try {
+      (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
+        type: 'build_review_disposition_accepted', feature: command.feature, lapId: requestedLap, findingId: identity.id, operator: operator.trim(), ts: new Date().toISOString(),
+      });
+    } catch {
+      // The disposition is already durable; best-effort telemetry must never
+      // report a completed acceptance back to the operator as a refusal.
+    }
     print(`build-review accept: accepted ${identity.id} for lap ${requestedLap}.`);
     return 0;
-  } catch {
-    if (worktree) {
-      try {
-        (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
-          type: 'build_review_disposition_refused', feature: command.feature, reason: 'current-finding-lap-or-state-invalid', ts: new Date().toISOString(),
-        });
-      } catch {
-        // CLI refusal remains authoritative even if best-effort telemetry cannot append.
-      }
-    }
-    print(`build-review accept: refused for '${command.feature}'; the current finding, lap, or state could not be verified.`);
-    return 1;
+  } catch (error) {
+    return refuse('disposition-store-unavailable', `build-review accept: refused for '${command.feature}'; the disposition store could not be reached: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

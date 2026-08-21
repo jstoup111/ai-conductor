@@ -9,7 +9,7 @@ import {
 } from './conduct-state-lease.js';
 import { parseBuildReviewLapId, type BuildReviewLapId } from './build-review-domain.js';
 import {
-  canonicalizeBuildReviewFindingIdentity,
+  rehydrateBuildReviewFindingIdentity,
   type BuildReviewFindingIdentity,
 } from './build-review-finding-identity.js';
 
@@ -108,12 +108,18 @@ function parseFeatureIdentity(value: unknown): BuildReviewFeatureIdentity | unde
     : undefined;
 }
 
+/**
+ * Re-derives a finding identity from its own canonical payload. The payload is
+ * validated by the canonical-schema parser, never by the grader-facing anchor
+ * parser: those are two different schemas, and putting one on top of the other
+ * made every non-scope identity the engine produced unstorable (#1769).
+ */
 function parseFindingIdentity(value: unknown): BuildReviewFindingIdentity | undefined {
   const source = record(value);
   if (!source || !exactKeys(source, ['id', 'canonicalPayload', 'canonicalJson']) || typeof source.id !== 'string' || typeof source.canonicalJson !== 'string') {
     return undefined;
   }
-  const canonical = canonicalizeBuildReviewFindingIdentity(source.canonicalPayload);
+  const canonical = rehydrateBuildReviewFindingIdentity(source.canonicalPayload);
   return canonical && canonical.id === source.id && canonical.canonicalJson === source.canonicalJson ? canonical : undefined;
 }
 

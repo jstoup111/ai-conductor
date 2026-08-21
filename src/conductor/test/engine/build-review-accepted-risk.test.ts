@@ -68,4 +68,46 @@ describe('accepted build-review risk rendering', () => {
   it('refuses known but unrenderable accepted-risk records', () => {
     expect(renderBuildReviewAcceptedRisk([{ ...record(), rationale: '' }])).toMatchObject({ ok: false });
   });
+
+  // Regression for #1769: a record whose identity came from any rubric other
+  // than `scope` was judged unrenderable, so the published accepted-risk
+  // section could not carry it.
+  it('renders an accepted record on every rubric the engine can produce', () => {
+    const engineFindings = [
+      ['tautology', {
+        rubric: 'tautology', contractVersion: 'v3', concernKind: 'source-text-mirror',
+        anchor: {
+          rubric: 'tautology', exercisedBehavior: 'persists state', violationKind: 'source-text-mirror',
+          changedTest: {
+            path: 'test/widget.test.ts',
+            contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            display: 'widget persists state',
+          },
+        },
+      }],
+      ['rootCause', {
+        rubric: 'rootCause', contractVersion: 'v3', concernKind: 'symptom-only-fix',
+        anchor: {
+          rubric: 'rootCause', statedDefect: 'state is not persisted', relation: 'symptom-only-fix',
+          locus: {
+            path: 'src/handler.ts',
+            contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            display: 'persistence return branch',
+          },
+        },
+      }],
+      ['completeness', {
+        rubric: 'completeness', contractVersion: 'v3', concernKind: 'missing-deliverable',
+        anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state', missingKind: 'missing-deliverable' },
+      }],
+    ] as const;
+
+    for (const [rubric, input] of engineFindings) {
+      const identity = canonicalizeBuildReviewFindingIdentity(input)!;
+      const rendered = renderBuildReviewAcceptedRisk([{ ...record(), finding: identity }]);
+
+      expect(rendered).toMatchObject({ ok: true });
+      expect((rendered as { section: string }).section).toContain(`- Finding: \`${identity.id}\` — rubric: ${rubric}`);
+    }
+  });
 });

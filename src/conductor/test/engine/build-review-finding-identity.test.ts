@@ -8,6 +8,7 @@ import {
 import {
   canonicalizeBuildReviewFindingIdentity,
   canonicalizeBuildReviewFindingSet,
+  rehydrateBuildReviewFindingIdentity,
   type BuildReviewFindingIdentityInput,
 } from '../../src/engine/build-review-finding-identity.js';
 
@@ -491,5 +492,167 @@ describe('build-review finding identity', () => {
     ]);
 
     expect(findings).toHaveLength(2);
+  });
+});
+
+describe('build-review finding identity canonical-payload round-trip', () => {
+  const titleHash = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const hunkHash = 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+  const engineFindings: readonly (readonly [string, BuildReviewFindingIdentityInput])[] = [
+    ['tautology v3', {
+      rubric: 'tautology', contractVersion: 'v3', concernKind: 'assertion-insensitive-to-production',
+      anchor: {
+        rubric: 'tautology', exercisedBehavior: 'persists state', violationKind: 'assertion-insensitive-to-production',
+        changedTest: { path: 'test/widget.test.ts', contentHash: titleHash, display: 'widget persists state' },
+      },
+    }],
+    ['tautology v3 with occurrence', {
+      rubric: 'tautology', contractVersion: 'v3', concernKind: 'source-text-mirror',
+      anchor: {
+        rubric: 'tautology', exercisedBehavior: 'persists state', violationKind: 'source-text-mirror',
+        changedTest: { path: 'test/widget.test.ts', contentHash: titleHash, display: 'widget persists state', occurrence: 2 },
+      },
+    }],
+    ['tautology v2', {
+      rubric: 'tautology', contractVersion: 'v2', concernKind: 'source-text-mirror',
+      anchor: { rubric: 'tautology', changedTest: 'test/a.test.ts', exercisedBehavior: 'save', violationKind: 'source-text-mirror' },
+    }],
+    ['scope v1', {
+      rubric: 'scope', contractVersion: 'v1', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'out-of-plan-change' },
+    }],
+    ['scope v3', {
+      rubric: 'scope', contractVersion: 'v3', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: '.docs/plans/a.md', relation: 'not-authorized-by-plan' },
+    }],
+    ['rootCause v3', {
+      rubric: 'rootCause', contractVersion: 'v3', concernKind: 'root-cause-unaddressed',
+      anchor: {
+        rubric: 'rootCause', statedDefect: 'state is not persisted', relation: 'root-cause-unaddressed',
+        locus: { path: 'src/handler.ts', contentHash: hunkHash, display: 'persistence return branch' },
+      },
+    }],
+    ['rootCause v3 with occurrence', {
+      rubric: 'rootCause', contractVersion: 'v3', concernKind: 'symptom-only-fix',
+      anchor: {
+        rubric: 'rootCause', statedDefect: 'state is not persisted', relation: 'symptom-only-fix',
+        locus: { path: 'src/handler.ts', contentHash: hunkHash, display: 'persistence return branch', occurrence: 1 },
+      },
+    }],
+    ['rootCause v2', {
+      rubric: 'rootCause', contractVersion: 'v2', concernKind: 'symptom-only-fix',
+      anchor: { rubric: 'rootCause', statedDefect: 'does not save', locus: 'src/handler.ts', relation: 'symptom-only-fix' },
+    }],
+    ['completeness v3', {
+      rubric: 'completeness', contractVersion: 'v3', concernKind: 'missing-deliverable',
+      anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state', missingKind: 'missing-deliverable' },
+    }],
+  ];
+
+  it.each(engineFindings)("re-derives the engine's own %s identity from its canonical payload", (_name, input) => {
+    const identity = canonicalizeBuildReviewFindingIdentity(input);
+
+    expect(identity).toBeDefined();
+    expect(rehydrateBuildReviewFindingIdentity(identity!.canonicalPayload)).toEqual(identity);
+  });
+
+  it('re-derives an identity read back from persisted JSON, on every rubric', () => {
+    for (const [, input] of engineFindings) {
+      const identity = canonicalizeBuildReviewFindingIdentity(input)!;
+      const persisted = JSON.parse(JSON.stringify(identity)) as { canonicalPayload: unknown };
+
+      const rehydrated = rehydrateBuildReviewFindingIdentity(persisted.canonicalPayload);
+
+      expect(rehydrated?.id).toBe(identity.id);
+      expect(rehydrated?.canonicalJson).toBe(identity.canonicalJson);
+    }
+  });
+
+  it('keeps prose and evidence drift on the same disposition target', () => {
+    const tautology = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'tautology', contractVersion: 'v3', concernKind: 'source-text-mirror',
+      anchor: {
+        rubric: 'tautology', exercisedBehavior: 'persists state', violationKind: 'source-text-mirror',
+        changedTest: { path: 'test/widget.test.ts', contentHash: titleHash, display: 'widget persists state' },
+      },
+    })!;
+    const driftedTautology = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'tautology', contractVersion: 'v3', concernKind: 'source-text-mirror',
+      anchor: {
+        rubric: 'tautology', exercisedBehavior: 'a completely different sentence about the same test', violationKind: 'source-text-mirror',
+        changedTest: { path: 'test/relocated/widget.test.ts', contentHash: titleHash, display: 'the same title rendered differently' },
+      },
+    })!;
+    const rootCause = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'rootCause', contractVersion: 'v3', concernKind: 'root-cause-unaddressed',
+      anchor: {
+        rubric: 'rootCause', statedDefect: 'state is not persisted', relation: 'root-cause-unaddressed',
+        locus: { path: 'src/handler.ts', contentHash: hunkHash, display: 'persistence return branch' },
+      },
+    })!;
+    const driftedRootCause = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'rootCause', contractVersion: 'v3', concernKind: 'root-cause-unaddressed',
+      anchor: {
+        rubric: 'rootCause', statedDefect: 'the write is omitted entirely', relation: 'root-cause-unaddressed',
+        locus: { path: 'src/handler.ts', contentHash: hunkHash, display: 'persistence branch after rebase' },
+      },
+    })!;
+    const completeness = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'completeness', contractVersion: 'v3', concernKind: 'missing-deliverable',
+      anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state', missingKind: 'missing-deliverable' },
+    })!;
+    const driftedCompleteness = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'completeness', contractVersion: 'v3', concernKind: 'missing-deliverable',
+      anchor: { rubric: 'completeness', planTask: 'Task 11: persist widget state', missingSurface: 'src/state.ts', missingOutcome: 'no state is written at all', missingKind: 'missing-deliverable' },
+    })!;
+
+    expect(driftedTautology.id).toBe(tautology.id);
+    expect(driftedRootCause.id).toBe(rootCause.id);
+    expect(driftedCompleteness.id).toBe(completeness.id);
+    expect(rehydrateBuildReviewFindingIdentity(driftedTautology.canonicalPayload)).toEqual(tautology);
+    expect(rehydrateBuildReviewFindingIdentity(driftedRootCause.canonicalPayload)).toEqual(rootCause);
+    expect(rehydrateBuildReviewFindingIdentity(driftedCompleteness.canonicalPayload)).toEqual(completeness);
+  });
+
+  it('refuses a malformed canonical payload rather than rehashing whatever it was handed', () => {
+    const tautology = canonicalizeBuildReviewFindingIdentity(engineFindings[0]![1])!.canonicalPayload;
+    const rootCause = canonicalizeBuildReviewFindingIdentity(engineFindings[5]![1])!.canonicalPayload;
+    const completeness = canonicalizeBuildReviewFindingIdentity(engineFindings[8]![1])!.canonicalPayload;
+
+    const malformed: readonly unknown[] = [
+      undefined,
+      'sha256:not-a-payload',
+      { ...tautology, extra: 'field' },
+      { rubric: tautology.rubric, contractVersion: tautology.contractVersion, concernKind: tautology.concernKind },
+      { ...tautology, rubric: 'nonsense' },
+      { ...tautology, contractVersion: 'v4' },
+      { ...tautology, concernKind: 'not-a-vocabulary-member' },
+      // The concern kind and its anchor classification must still agree.
+      { ...tautology, concernKind: 'source-text-mirror' },
+      { ...tautology, anchor: { ...tautology.anchor, rubric: 'scope' } },
+      // The grader's prose fields are not part of the canonical schema.
+      { ...tautology, anchor: { ...tautology.anchor, exercisedBehavior: 'persists state' } },
+      { ...tautology, anchor: { ...tautology.anchor, changedTest: { contentHash: 'sha256:short' } } },
+      { ...tautology, anchor: { ...tautology.anchor, changedTest: { contentHash: titleHash, occurrence: 0 } } },
+      { ...tautology, anchor: { ...tautology.anchor, changedTest: { contentHash: titleHash, occurrence: 1.5 } } },
+      { ...tautology, anchor: { ...tautology.anchor, changedTest: { contentHash: titleHash, display: 'widget persists state' } } },
+      { ...rootCause, anchor: { ...rootCause.anchor, locus: { contentHash: hunkHash } } },
+      { ...rootCause, anchor: { ...rootCause.anchor, locus: { path: '../escape.ts', contentHash: hunkHash } } },
+      { ...completeness, anchor: { ...completeness.anchor, planTask: 'task 11 (with spaces)' } },
+      { ...completeness, anchor: { ...completeness.anchor, missingSurface: '/absolute/state.ts' } },
+    ];
+
+    for (const payload of malformed) {
+      expect(rehydrateBuildReviewFindingIdentity(payload)).toBeUndefined();
+    }
+  });
+
+  it('rejects a v3 anchor downgraded to a bare path and a v2 anchor upgraded to a content region', () => {
+    const v3 = canonicalizeBuildReviewFindingIdentity(engineFindings[0]![1])!.canonicalPayload;
+    const v2 = canonicalizeBuildReviewFindingIdentity(engineFindings[2]![1])!.canonicalPayload;
+
+    expect(rehydrateBuildReviewFindingIdentity({ ...v3, anchor: { ...v3.anchor, changedTest: 'test/widget.test.ts' } })).toBeUndefined();
+    expect(rehydrateBuildReviewFindingIdentity({ ...v2, anchor: { ...v2.anchor, changedTest: { contentHash: titleHash } } })).toBeUndefined();
   });
 });
