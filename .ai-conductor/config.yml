@@ -53,9 +53,21 @@ build_review:
   scopeContainmentEnforced: true
   rubrics:
     # tautology is opt-in engine-wide (#1682: its scoped-run preflight only
-    # recognizes Vitest/pytest output); this repo runs Vitest, so enable it.
+    # recognizes Vitest/pytest output). This repo runs Vitest and DID enable it,
+    # but disabled it on 2026-08-21 by operator decision. Rationale on #1626:
+    # the rubric gates whether unit tests will keep telling the truth later —
+    # test debt — not whether the software works. Functional proof is unaffected
+    # (engine-enforced acceptance RED per adr-2026-07-21, the full suite,
+    # prd_audit/manual_test), and completeness already carries a can't-fail bar
+    # for task deliverables. Measured cost: 61% lap fail rate, one feature ran
+    # 6 laps / ~$90 without terminating.
+    #
+    # RE-ENABLE under #1619, as part of that implementation — when the
+    # counterfactual is mechanical and runs at build time, where it costs
+    # seconds and cannot cycle because it is not a judgement. Do not re-enable
+    # it as a review-time LLM rubric.
     tautology:
-      enabled: true
+      enabled: false
       llm_provider: claude
       model: opus
       effort: high
