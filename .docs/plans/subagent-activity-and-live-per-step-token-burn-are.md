@@ -287,13 +287,15 @@ an opt-in live probe (Task 20), and the throttle lives at the dispatch (Tasks 12
 **Type:** happy-path
 
 **Steps:**
-1. Write failing test: opening a `Task` tool_use with no matching tool_result yields
-   `activeChildren: 1`; three opened and one closed yields 2; all closed yields 0 with
+1. Write failing test: opening a child tool_use (the live-probed contract — currently `Agent`,
+   with `Task` also recognized; see Operator Amendment 2026-08-21) with no matching tool_result
+   yields `activeChildren: 1`; three opened and one closed yields 2; all closed yields 0 with
    `childObservability: 'observed'`; an unmatched tool_result, a duplicated tool_result, and a
    message whose `parent_tool_use_id` names an unopened child each leave the count unchanged and
    never negative.
 2. Verify test fails (RED)
-3. Implement: a set of open child ids keyed by tool_use id; open on a `Task` tool_use block, close
+3. Implement: a set of open child ids keyed by tool_use id; open on a child tool_use block
+   matching the live-probed contract (currently `Agent`; `Task` remains recognized), close
    on the matching tool_result, ignore anything unmatched. Repeat here the pattern trait from the
    Technical Approach that a missing or unrecognized input reads as "no change", never as a failure.
 4. Verify test passes (GREEN)
@@ -558,12 +560,16 @@ an opt-in live probe (Task 20), and the throttle lives at the dispatch (Tasks 12
 **Steps:**
 1. Write failing test: an opt-in smoke test that dispatches a real Claude session which spawns one
    subagent, captures the stream, and asserts the records this feature depends on are present —
-   a `Task` tool_use block, its matching tool_result, and at least one message with a non-null
-   `parent_tool_use_id`.
+   a child tool_use block, its matching tool_result, and at least one message with a non-null
+   `parent_tool_use_id`. (Probe outcome 2026-08-21, Claude Code 2.1.238: the child tool is
+   `Agent`; no `Task` tool_use appears.)
 2. Verify test fails (RED)
 3. Implement: register the smoke leg under the existing opt-in smoke tier so the default suite and
-   CI exclude it, and record the observed outcome. If the assumption does not hold, the honest
-   outcome is `childObservability: 'unsupported'` on Claude too — do not fabricate a count.
+   CI exclude it, and record the observed outcome. If no attributable child lifecycle is observed
+   at all — no child tool_use with a matching tool_result — the honest outcome is
+   `childObservability: 'unsupported'` on Claude too; do not fabricate a count. A child lifecycle
+   observed under a different tool name than assumed (the recorded probe shows `Agent`) IS the
+   attribution contract: record it and track it (Operator Amendment 2026-08-21).
 4. Verify test passes (GREEN)
 5. Commit with message: "test(smoke): confirm subagent stream attribution with an opt-in live probe"
 
@@ -670,3 +676,25 @@ Rationale: the declared work shipped inside another task's commit — provider-s
 ### Task rem-scope-task-contract-2: src/conductor/test/execution/provider-stream-children.test.ts:1-75 and src/conductor/test/execution/claude-provider-stream-observation.test.ts:8-63 — prove Agent records do not open or close Task-tracked children and replace Agent-observed Claude lifecycle assertions with childObservability unsupported, no activeChildren, and unchanged token observations
 ### Task rem-scope-task-contract-3: src/conductor/test/smoke/claude-subagent-stream.smoke.test.ts:11-85 — retain the recorded Task-absent and Agent-observed live-probe evidence, and assert that this falsified Task attribution yields unsupported Claude child observability rather than an Agent-derived count
 ### Task rem-completeness-daemon-guide-1: docs/guides/running-the-daemon.md:343,360,364-365 — update the IN-PROGRESS examples and explanation to show numeric children only when observed, children unknown otherwise, current input/output token totals when observed, and tokens unavailable when no live observation exists
+
+## Operator Amendment (2026-08-21): Claude child-lifecycle contract is the live-probed `Agent` tool
+
+Successive review laps appended mutually contradictory remediation tasks: Tasks
+rem-root-cause-agent-1/2 and rem-completeness-agent-1/2 direct the build to track the live-probed
+`Agent` tool_use lifecycle, while Tasks rem-scope-task-contract-1/2/3 direct the build to remove
+`Agent` tracking and report Claude child observability as unsupported. Enforcing both cycles the
+build forever. The operator resolves the contradiction as follows:
+
+- The accepted Story 2 outcome — observable Claude child (subagent) activity — stands.
+- The live probe (recorded in `src/conductor/test/smoke/claude-subagent-stream.smoke.test.ts`,
+  2026-08-21, Claude Code 2.1.238) proves the real CLI reports child work as an `Agent` tool_use
+  with a matching tool_result and non-null `parent_tool_use_id`. That probed contract — not the
+  originally assumed `Task` name — is the authorized child-lifecycle signal. Tasks 10 and 21 are
+  amended accordingly above.
+- Tasks rem-scope-task-contract-1, rem-scope-task-contract-2, and rem-scope-task-contract-3 are
+  RETRACTED by this amendment. Their premise — that only a `Task` lifecycle was authorized and an
+  `Agent`-observed probe therefore falsifies attribution — is superseded. Do not re-remove `Agent`
+  lifecycle tracking; do not report `childObservability: 'unsupported'` for Claude while the
+  probed `Agent` contract is implemented.
+- The `unsupported` fallback remains the honest outcome only when no attributable child lifecycle
+  is observed at all.
