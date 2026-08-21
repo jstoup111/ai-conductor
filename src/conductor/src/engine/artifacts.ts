@@ -3686,10 +3686,38 @@ function parseFrVerdictRow(line: string): ParsedFrRow | null {
   return { fr: frId, blocking, gapClass };
 }
 
+/** Heading that opens the authoritative verdict table, at any heading level. */
+const VERDICT_TABLE_HEADING_RE = /^\s{0,3}#{1,6}\s+Verdict\s+Table\s*$/i;
+const MARKDOWN_HEADING_RE = /^\s{0,3}#{1,6}\s+/;
+
+/**
+ * Return the lines a verdict-row scan may read.
+ *
+ * When the report carries a `## Verdict Table` heading, ONLY the lines of that
+ * section (up to the next heading of any level) are in scope. Auditors routinely
+ * write narrative tables elsewhere in the report — a "what moved since cycle N"
+ * history table whose cells carry PRIOR-cycle verdicts is the observed case — and
+ * a whole-document scan reads those history cells as current verdicts. That
+ * falsely blocked an all-ALIGNED audit: a row reading
+ * `| FR-15 | DIVERGED (intended-drift), blocking | **ALIGNED** | ... |` parsed as
+ * a blocking DIVERGED verdict even though the real Verdict Table row said ALIGNED.
+ *
+ * Reports with no such heading (including the pre-heading report shape) keep the
+ * whole-document scan, so this narrows nothing that was previously correct.
+ */
+function verdictTableLines(content: string): string[] {
+  const lines = content.split('\n');
+  const start = lines.findIndex((l) => VERDICT_TABLE_HEADING_RE.test(l));
+  if (start === -1) return lines; // no heading — legacy whole-document scan
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => MARKDOWN_HEADING_RE.test(l));
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 /** Return expected FR ids that have no parseable verdict row in the report. */
 export function findFrIdsWithoutRows(content: string, expectedIds: ReadonlySet<string>): string[] {
   const present = new Set<string>();
-  for (const line of content.split('\n')) {
+  for (const line of verdictTableLines(content)) {
     const row = parseFrVerdictRow(line);
     if (row) present.add(row.fr);
   }
@@ -3737,7 +3765,7 @@ export async function prdAuditCoverageGap(
  */
 function findUnalignedFrRows(content: string): string[] {
   const blocking: string[] = [];
-  for (const line of content.split('\n')) {
+  for (const line of verdictTableLines(content)) {
     const row = parseFrVerdictRow(line);
     if (row?.blocking) blocking.push(row.fr);
   }
@@ -3751,7 +3779,7 @@ function findUnalignedFrRows(content: string): string[] {
  */
 function findUnalignedFrRowsWithClass(content: string): UnalignedFrRow[] {
   const rows: UnalignedFrRow[] = [];
-  for (const line of content.split('\n')) {
+  for (const line of verdictTableLines(content)) {
     const row = parseFrVerdictRow(line);
     if (row?.blocking) rows.push({ fr: row.fr, gapClass: row.gapClass });
   }

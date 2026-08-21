@@ -82,6 +82,8 @@ filename, overwritten each run; NOT a committed design artifact):
 **PRD(s) audited:** [.docs/specs/...]
 **Overall:** PASS | BLOCKED
 
+## Verdict Table
+
 | FR | Verdict | Gap-class | Evidence (file:line) | Accepted? |
 |----|---------|-----------|----------------------|-----------|
 | FR-1 | ALIGNED | n/a | app/foo.rb:42 | — |
@@ -99,6 +101,18 @@ row is also **blocking** when it carries an `FR-N` id with `MISSING`/`PARTIAL`/`
 **not** marked `ACCEPTED`. Mark a row `ACCEPTED` only after the human has explicitly accepted that
 divergence (see §5). The report is overwritten on re-run — it reflects the CURRENT state; git
 holds the history.
+
+**The `## Verdict Table` heading is required, and it is the ONLY table that may carry a verdict
+keyword next to an `FR-N` id.** The gate scans that section for verdict rows. Elsewhere in the
+report — a "what moved since cycle N" summary, a remediation log, a per-FR narrative — you MUST NOT
+put a PRIOR-cycle verdict (`ALIGNED`/`PARTIAL`/`DIVERGED`/`MISSING`) in a table cell beside an
+`FR-N` id. Write prior-cycle history as PROSE instead:
+
+> The single row that changed is FR-15. Its cycle-4 state was a blocking intended-drift divergence;
+> its cycle-5 state is recorded in the Verdict Table below.
+
+A history table like `| FR-15 | DIVERGED (intended-drift) | **ALIGNED** | … |` reads as a current
+`DIVERGED` verdict and blocks an all-`ALIGNED` audit.
 
 ### 5. Gate + Kickback
 
@@ -151,7 +165,8 @@ echo "non-aligned FRs: 2, accepted divergences: 1, PRD amended: yes" > .pipeline
 - [ ] Every FR enumerated and traced to implementing code (or its absence)
 - [ ] One `prd-auditor` dispatch per FR with scoped context
 - [ ] Each FR has a verdict, gap-class, and file:line evidence
-- [ ] Report written to `.pipeline/prd-audit.md` with the verdict table
+- [ ] Report written to `.pipeline/prd-audit.md` with the verdict table under a `## Verdict Table` heading
+- [ ] No prior-cycle verdict appears in a table cell beside an `FR-N` id outside that section — history is prose
 - [ ] Every blocking FR routed by gap-class (impl-gap → BUILD, intended-drift → DECIDE)
 - [ ] Loop continues until all FRs ALIGNED or human-ACCEPTED; no row self-accepted
 - [ ] 3-cycle rework budget enforced, then escalate to operator (no infinite loop)

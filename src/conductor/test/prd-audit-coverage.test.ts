@@ -102,6 +102,40 @@ describe('findFrIdsWithoutRows', () => {
   it('returns every expected id when the report is empty', () => {
     expect(findFrIdsWithoutRows('', new Set(['FR-1', 'FR-2A']))).toEqual(['FR-1', 'FR-2A']);
   });
+
+  it('ignores rows outside the Verdict Table section when the heading is present', () => {
+    const content = [
+      '## What moved since cycle 4',
+      '',
+      '| FR | Cycle 4 | Cycle 5 |',
+      '| --- | --- | --- |',
+      '| FR-2 | DIVERGED | ALIGNED |',
+      '',
+      '## Verdict Table',
+      '',
+      '| FR | Verdict | Gap-class | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| FR-1 | ALIGNED | — | Covered |',
+    ].join('\n');
+
+    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2']))).toEqual(['FR-2']);
+  });
+
+  it('stops the Verdict Table section at the next heading', () => {
+    const content = [
+      '## Verdict Table',
+      '',
+      '| FR | Verdict | Gap-class | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| FR-1 | ALIGNED | — | Covered |',
+      '',
+      '## Per-FR Detail',
+      '',
+      '| FR-2 | ALIGNED | — | narrative recap |',
+    ].join('\n');
+
+    expect(findFrIdsWithoutRows(content, new Set(['FR-1', 'FR-2']))).toEqual(['FR-2']);
+  });
 });
 
 describe('prdAuditCoverageGap', () => {
@@ -251,6 +285,68 @@ describe('prd_audit completion predicate coverage', () => {
     });
     await expect(access(join(root, '.pipeline/prd-audit-code-stamp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
+    });
+  });
+
+  it('keeps a report done when a prior-cycle history table carries a stale DIVERGED verdict', async () => {
+    await writeFile(
+      join(root, '.pipeline/prd-audit.md'),
+      [
+        '# PRD Audit',
+        '',
+        '## What moved since cycle 4',
+        '',
+        '| FR | Cycle 4 | Cycle 5 | Why |',
+        '| --- | --- | --- | --- |',
+        '| FR-5 | DIVERGED (`intended-drift`), blocking | **ALIGNED** | PRD amended |',
+        '',
+        '## Verdict Table',
+        '',
+        '| FR | Verdict | Gap-class | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| FR-1 | ALIGNED | — | Covered |',
+        '| FR-2 | ALIGNED | — | Covered |',
+        '| FR-3 | ALIGNED | — | Covered |',
+        '| FR-4 | ALIGNED | — | Covered |',
+        '| FR-5 | ALIGNED | — | Covered |',
+      ].join('\n'),
+    );
+
+    await expect(
+      checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext }),
+    ).resolves.toMatchObject({ done: true });
+  });
+
+  it('still blocks on a Verdict Table row that a narrative table claims is closed', async () => {
+    await writeFile(
+      join(root, '.pipeline/prd-audit.md'),
+      [
+        '# PRD Audit',
+        '',
+        '## What moved since cycle 4',
+        '',
+        '| FR | Cycle 4 | Cycle 5 |',
+        '| --- | --- | --- |',
+        '| FR-5 | DIVERGED | ALIGNED |',
+        '',
+        '## Verdict Table',
+        '',
+        '| FR | Verdict | Gap-class | Evidence |',
+        '| --- | --- | --- | --- |',
+        '| FR-1 | ALIGNED | — | Covered |',
+        '| FR-2 | ALIGNED | — | Covered |',
+        '| FR-3 | ALIGNED | — | Covered |',
+        '| FR-4 | ALIGNED | — | Covered |',
+        '| FR-5 | MISSING | impl-gap | Not implemented |',
+      ].join('\n'),
+    );
+
+    await expect(
+      checkStepCompletion(root, 'prd_audit', { artifactResolution: featureContext }),
+    ).resolves.toEqual({
+      done: false,
+      reason:
+        'prd-audit found un-ALIGNED FRs: FR-5 — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit',
     });
   });
 
