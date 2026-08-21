@@ -12,9 +12,9 @@ const smokeCapability = 'credentialed:claude';
  * - `Task` tool_use and matching tool_result: absent; the CLI emitted `Agent` and its matching tool_result instead.
  * - Non-null `parent_tool_use_id`: observed on the child record.
  *
- * Child attribution is therefore observed for the current CLI contract. If a future probe lacks
- * parent attribution, Claude child observability must be recorded as unsupported rather than
- * inferring an active-child count.
+ * `Agent` is not a supported substitute for `Task` lifecycle attribution. The observed result and
+ * parent id prove the live CLI has child activity, but not the Task contract required to expose an
+ * active-child count. Claude child observability is therefore unsupported for this probe.
  */
 const observedChildToolName = 'Agent';
 
@@ -50,7 +50,7 @@ function contentBlocks(record: Record<string, unknown>): Array<Record<string, un
 const shouldRun = Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) && claudeBinaryAvailable();
 
 describe.skipIf(!shouldRun)('smoke/Claude subagent stream attribution', () => {
-  it('records the observed child-tool call, its matching result, and a child message attribution', async () => {
+  it('records the falsified Task attribution and classifies Claude child observability as unsupported', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'claude-subagent-stream-smoke-'));
     try {
       const result = await execa(
@@ -68,23 +68,39 @@ describe.skipIf(!shouldRun)('smoke/Claude subagent stream attribution', () => {
       const toolUses = records.flatMap(contentBlocks).filter((block) =>
         block.type === 'tool_use' && typeof block.name === 'string' && typeof block.id === 'string',
       );
-      const childToolIds = toolUses
+      const taskToolIds = toolUses
+        .filter((block) => block.name === 'Task')
+        .map((block) => block.id as string);
+      const agentToolIds = toolUses
         .filter((block) => block.name === observedChildToolName)
         .map((block) => block.id as string);
-      const hasMatchingResult = records
+      const hasMatchingAgentResult = records
         .flatMap(contentBlocks)
         .some((block) => block.type === 'tool_result'
           && typeof block.tool_use_id === 'string'
-          && childToolIds.includes(block.tool_use_id));
-      const hasChildMessage = records.some((record) =>
+          && agentToolIds.includes(block.tool_use_id));
+      const hasParentAttribution = records.some((record) =>
         typeof record.parent_tool_use_id === 'string' && record.parent_tool_use_id.length > 0,
       );
 
       expect({
-        childToolNames: toolUses.map((block) => block.name),
-        matchingToolResult: hasMatchingResult,
-        childMessage: hasChildMessage,
-      }).toEqual({ childToolNames: [observedChildToolName], matchingToolResult: true, childMessage: true });
+        taskToolIds,
+        agentToolNames: toolUses.filter((block) => block.name === observedChildToolName).map((block) => block.name),
+        matchingAgentResult: hasMatchingAgentResult,
+        parentAttribution: hasParentAttribution,
+      }).toEqual({
+        taskToolIds: [],
+        agentToolNames: [observedChildToolName],
+        matchingAgentResult: true,
+        parentAttribution: true,
+      });
+
+      // Only Task/tool_result pairs support an active-child count. A successful Agent result and
+      // parent id must not be reinterpreted as that unavailable lifecycle contract.
+      const childObservation = taskToolIds.length > 0
+        ? { childObservability: 'observed' as const, activeChildren: taskToolIds.length }
+        : { childObservability: 'unsupported' as const };
+      expect(childObservation).toEqual({ childObservability: 'unsupported' });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
