@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Task-attributed commits are checked against the active task's declared files at commit time, with violations and accepted scope widenings carried into build_review evidence. ([implementation PR #1534](https://github.com/jstoup111/ai-conductor/pull/1534)).
 - Self-host dispatches now prove the live checkout is read-only with a two-sided bwrap probe, so concurrent operator edits during a contained build no longer halt the run; unproven or opted-out dispatches keep the prior fail-closed behavior. ([implementation PR #1698](https://github.com/jstoup111/ai-conductor/pull/1698)).
 - Build-review configuration accepts causalIntegrity as an input alias for rootCause. ([implementation PR #1766](https://github.com/jstoup111/ai-conductor/pull/1766)).
+- Adds `conduct-ts rewind --to <step>` to return a halted feature to an earlier pipeline step, and rebase- or resume-invalidated test-suite and build-review proofs are now mechanically re-verified instead of halting the pipeline on a stale proof. ([implementation PR #1741](https://github.com/jstoup111/ai-conductor/pull/1741)).
 
 ### Changed
 
