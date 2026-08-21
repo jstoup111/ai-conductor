@@ -1,5 +1,6 @@
 ---
 name: finish
+disable-model-invocation: true
 description: "Use at the FINISH boundary to gather an operator's publication intent, author the retained PR's reader-facing prose when it is still unauthored, and judge that prose; the engine-owned publication coordinator performs all deterministic publication mechanics."
 enforcement: gating
 phase: ship

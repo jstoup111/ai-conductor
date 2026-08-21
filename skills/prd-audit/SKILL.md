@@ -1,5 +1,6 @@
 ---
 name: prd-audit
+disable-model-invocation: true
 description: "Use at SHIP, after manual-test and before retro/finish. Audits shipped implementation against the PRD's functional requirements (FR-N); gates on gaps and kicks back to BUILD or DECIDE."
 enforcement: gating
 phase: ship

@@ -1,5 +1,6 @@
 ---
 name: simplify
+implicit_invocation: required
 description: "Review changed code for duplication, complexity, and over-engineering at batch boundaries. Blocking gate — must pass before next batch proceeds."
 enforcement: gating
 phase: build

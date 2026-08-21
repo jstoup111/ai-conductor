@@ -1,6 +1,7 @@
 ---
 name: memory
-description: "Use at the start of every session for recall, during work when significant decisions are made, and when context seems missing. Recall-before-act protocol with categorized persistence and staleness detection."
+disable-model-invocation: true
+description: "Use when the operator requests project recall, when the harness dispatches its memory step, or when an active harness workflow requires a memory checkpoint. Recall-before-act protocol with categorized persistence and staleness detection."
 enforcement: gating
 phase: understand
 standalone: true
@@ -9,17 +10,19 @@ requires: []
 
 ## Purpose
 
-Provides persistent, categorized memory across sessions. Ensures the agent starts every session
-by recalling relevant context and persists significant learnings during work. Prevents repeated
-questions, lost decisions, and rediscovered gotchas.
+Provides persistent, categorized memory across harness-managed sessions. Ensures an explicit memory
+invocation starts by recalling relevant context and persists significant learnings at declared
+workflow checkpoints. Prevents repeated questions, lost decisions, and rediscovered gotchas without
+allowing the memory skill to self-activate in unrelated host chats. Provider session hooks may still
+surface bounded memory context without invoking this skill.
 
 This skill is the retrieval and persistence guidance for the `local` memory provider (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-provider-retrieval-guidance-location). Recall is always performed by the agent reading `.memory/` files and judging relevance — the harness contains no search, ranking, or embedding logic (FR-3 invariant).
 
 ## Practices
 
-### Recall Protocol (Session Start)
+### Recall Protocol (Invocation Start)
 
-**This is a hard gate: every session MUST start with recall before any action.**
+**This is a hard gate: every memory invocation MUST start with recall before any other memory work.**
 
 1. Check if `.memory/index.md` exists
    - If not: this is a fresh project — skip recall, note "no prior memory"
@@ -128,10 +131,10 @@ Memory is for **non-obvious, cross-session knowledge** that would be lost betwee
 
 ## Verification
 
-- [ ] Session started with recall (or noted "no prior memory" for fresh projects)
+- [ ] This memory invocation started with recall (or noted "no prior memory" for fresh projects)
 - [ ] Relevant memories surfaced to user with concise summaries
 - [ ] Stale entries flagged (>30 days or referenced files changed)
-- [ ] Significant decisions persisted immediately (not batched)
+- [ ] Significant decisions encountered during this invocation persisted immediately (not batched)
 - [ ] `.memory/index.md` updated after every write
 - [ ] Memory entries use the correct format with all required fields
 - [ ] No entries created for information derivable from code

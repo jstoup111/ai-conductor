@@ -1,5 +1,6 @@
 ---
 name: remediate
+disable-model-invocation: true
 description: "Use when build_review fails or, at SHIP, when prd-audit, the as-built architecture review, or finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human."
 enforcement: gating
 phase: ship

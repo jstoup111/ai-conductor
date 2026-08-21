@@ -1,5 +1,6 @@
 ---
 name: stories
+implicit_invocation: required
 description: "Use after architecture-review, when the design is approved. Generates user stories with mandatory happy and negative paths as Given/When/Then scenarios — from the PRD's FRs (product track) or the technical intent (technical track)."
 enforcement: gating
 phase: decide

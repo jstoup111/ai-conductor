@@ -235,6 +235,27 @@ for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
   fi
 done
 
+# ── 2a. Skill implicit invocation policy ────────────────────────────────────
+# The focused checker validates the live catalogs; its mutation suite proves the
+# checker rejects drift, duplicates, contradictions, and repository-local gaps.
+
+echo ""
+echo -e "${BOLD}2a. Skill implicit invocation policy${NC}"
+
+if invocation_policy_output=$(bash "$SCRIPT_DIR/check_skill_invocation_policy.sh" "$HARNESS_DIR" 2>&1); then
+  assert "shipped and repository-local skills are exhaustively classified for implicit invocation" 0
+else
+  printf '%s\n' "$invocation_policy_output" | sed 's/^/    /'
+  assert "shipped and repository-local skills are exhaustively classified for implicit invocation" 1
+fi
+
+if invocation_policy_fixture_output=$(bash "$SCRIPT_DIR/test_skill_invocation_policy.sh" 2>&1); then
+  assert "invocation policy checker rejects invalid metadata mutations" 0
+else
+  printf '%s\n' "$invocation_policy_fixture_output" | sed 's/^/    /'
+  assert "invocation policy checker rejects invalid metadata mutations" 1
+fi
+
 # ── 3. Agent references ─────────────────────────────────────────────────────
 
 echo ""
