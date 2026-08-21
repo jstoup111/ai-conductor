@@ -874,6 +874,84 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it('advances the authoring transition when authored prose preserved the body-floor marker', async () => {
+    // #1703: the authoring provider wrote 3,988 characters of genuine prose but
+    // left the invisible floor marker line in place. Marker-presence-alone
+    // classification kept calling the body a placeholder, so the
+    // non-advancing-transition guard halted FINISH on finished work.
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-authored-marker-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1741';
+      let body = `${PR_BODY_FLOOR_MARKER}\n\n## Why\n\n_Not yet authored_\n`;
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({ url: prUrl, title: 'fix: author the retained PR body', body, isDraft: true, labels: [] }) };
+        }
+        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+      });
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const dispatchAuthoring = vi.fn(async () => {
+        body = [
+          PR_BODY_FLOOR_MARKER,
+          '',
+          '## Why',
+          '',
+          'The FINISH publication coordinator refused to advance because it classified an authored',
+          'body as an engine placeholder, halting a feature whose work was already complete.',
+          '',
+          '## What Changed',
+          '',
+          'Floor classification now reads the body content, so an invisible marker that survived the',
+          'authoring pass no longer outweighs the prose sitting underneath it.',
+          '',
+          '## Testing',
+          '',
+          'Unit coverage for the shared floor predicate plus this coordinator-level regression.',
+        ].join('\n');
+        return { success: true };
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        gh,
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        observeReleaseReadiness: async () => 'present',
+        writeShippedRecord: vi.fn(async () => 0),
+        repairPresentation: async () => {},
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto' as const,
+        daemon: true,
+        dispatchJudgment,
+        dispatchAuthoring,
+        emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+
+      expect(dispatchAuthoring).toHaveBeenCalledOnce();
+      expect(dispatchJudgment).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['halt', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'halt' } }, { kind: 'human_required', reason: 'judgment_halt_prose' }],
     ['refused', { success: true, publicationDisposition: { kind: 'refused', detail: 'provider declined' } }, { kind: 'human_required', reason: 'judgment_refused', detail: 'provider declined' }],

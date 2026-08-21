@@ -18,9 +18,11 @@ import {
   readStaleHaltBanner,
   readFlooredBody,
   postHaltHistoryComment,
+  isEngineFlooredBody,
   PR_BODY_FLOOR_MARKER,
   HALT_HISTORY_COMMENT_MARKER,
 } from '../../src/engine/halt-pr-rehabilitation.js';
+import { shipDraftPrBody } from '../../src/engine/ship-draft-pr.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { HALT_PR_BANNER_SENTINEL, NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
 
@@ -592,6 +594,90 @@ describe('bodyFloor: honest test-evidence checkbox (false-completion regression)
   });
 });
 
+/**
+ * The floor marker is provenance, not a verdict. An authoring pass that
+ * rewrote the body but left the invisible marker line behind used to keep the
+ * body classified as an unauthored floor forever (#1703), so FINISH halted on
+ * genuine prose. Classification is therefore content-derived: the marker is
+ * necessary, never sufficient.
+ */
+const AUTHORED_BODY = [
+  '## Why',
+  '',
+  'The FINISH publication coordinator classified an authored body as a placeholder because the',
+  'invisible body-floor marker survived the authoring pass, so the non-advancing-transition guard',
+  'halted the feature with all of its work green.',
+  '',
+  '## What Changed',
+  '',
+  'Floor classification now reads the body content instead of trusting marker presence alone, and',
+  'both the publication observer and the presentation reader share one predicate so they can never',
+  'disagree about whether a body was authored.',
+  '',
+  '## Testing',
+  '',
+  'Unit coverage for the predicate plus a coordinator-level regression that drives the authoring',
+  'transition with a body whose marker survived the rewrite.',
+].join('\n');
+
+describe('isEngineFlooredBody', () => {
+  it('classifies a body with no marker as authored', () => {
+    expect(isEngineFlooredBody(AUTHORED_BODY)).toBe(false);
+  });
+
+  it('classifies the rehabilitation floor block as a floor', () => {
+    const floor = [
+      PR_BODY_FLOOR_MARKER,
+      '',
+      '## Summary',
+      '',
+      'widget import flow',
+      '',
+      '## Test evidence',
+      '',
+      '- [x] 16/16 plan tasks completed with evidence-gated commits',
+    ].join('\n');
+    expect(isEngineFlooredBody(floor)).toBe(true);
+  });
+
+  it('classifies the SHIP-entry draft body as a floor', () => {
+    expect(isEngineFlooredBody(shipDraftPrBody('widget import flow'))).toBe(true);
+  });
+
+  it('classifies authored prose as authored even when the marker survived the rewrite', () => {
+    expect(isEngineFlooredBody(`${PR_BODY_FLOOR_MARKER}\n\n${AUTHORED_BODY}`)).toBe(false);
+  });
+
+  it('keeps a floor a floor under every structured block the engine appends to it', () => {
+    const floor = [
+      PR_BODY_FLOOR_MARKER,
+      '',
+      '## Summary',
+      '',
+      'widget import flow',
+      '',
+      'Closes acme/repo#7',
+      '',
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: A reader-facing summary of the delivered change, restored from the pre-finish snapshot.',
+      '',
+      '<!-- build-review-accepted-risk:start -->',
+      '## Accepted build-review risk',
+      '',
+      'Accepted findings: 2',
+      '',
+      '- Finding: `scope:v1:out-of-plan-change:src/a.ts` — rubric: scope',
+      '- Finding: `scope:v1:out-of-plan-change:src/b.ts` — rubric: scope',
+      '',
+      "Details are retained in the feature's local build-review disposition store.",
+      '<!-- build-review-accepted-risk:end -->',
+    ].join('\n');
+    expect(isEngineFlooredBody(floor)).toBe(true);
+  });
+});
+
 describe('readFlooredBody', () => {
   it('returns the floor marker for an engine-generated placeholder body', async () => {
     const { gh } = fakeGh([
@@ -609,6 +695,13 @@ describe('readFlooredBody', () => {
 
   it('returns null (fail-open) when gh errors', async () => {
     const { gh } = fakeGh([new Error('gh: network error')]);
+    expect(await readFlooredBody(gh, CWD, PR_URL)).toBeNull();
+  });
+
+  it('returns null for authored prose whose floor marker survived the authoring pass', async () => {
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify({ body: `${PR_BODY_FLOOR_MARKER}\n\n${AUTHORED_BODY}` }) },
+    ]);
     expect(await readFlooredBody(gh, CWD, PR_URL)).toBeNull();
   });
 });

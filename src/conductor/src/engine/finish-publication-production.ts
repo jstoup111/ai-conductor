@@ -15,7 +15,7 @@ import type { StepRunResult } from './conductor.js';
 import { type GhRunner, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
-import { PR_BODY_FLOOR_MARKER, hasHaltSignal } from './halt-pr-rehabilitation.js';
+import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
 import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import {
   dispatchFinishRecord,
@@ -155,7 +155,14 @@ function prProse(
   const text = `${prTitle}\n${prBody}`.trim();
   if (!text) return 'placeholder';
   if (halted) return 'halt';
-  if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
+  // The floor marker is provenance, not a verdict: it is an invisible comment
+  // an authoring pass can preserve while rewriting every word around it, and
+  // marker-presence-alone classification then pinned genuine prose at
+  // 'placeholder' until the non-advancing-transition guard halted FINISH
+  // (#1703). `isEngineFlooredBody` reads the body content instead, so an
+  // intact floor still classifies as a placeholder and authored prose does
+  // not.
+  if (isEngineFlooredBody(prBody) || /Draft opened automatically/i.test(text)) {
     return 'placeholder';
   }
   // Existing prose is a judgment candidate until this coordinator either
