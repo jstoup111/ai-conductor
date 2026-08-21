@@ -82,6 +82,10 @@ describe('engine/build-review rubric skill contracts', () => {
     // #1600 replaced the embedded reverted-production patch with a
     // content-free manifest (path + merge-base blob sha per file).
     expect(skill).toMatch(/reverted-production manifest/i);
+    // Remediation-lap bound: rem-* prose neither exempts a changed test nor
+    // creates a new behavior to exercise — the judgement surface is fixed.
+    expect(skill).toMatch(/neither exempts a changed\s+test.*nor creates a new behavior/is);
+    expect(skill).toMatch(/judgement surface\s+does not grow lap over lap/i);
 
     expectFindingsOnlyProviderPayload(skill, 'Tautology');
     expect(skill).toMatch(/concern kind/i);
@@ -127,6 +131,13 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/does not.*exempt/i);
 
     expectFindingsOnlyProviderPayload(skill, 'Scope');
+
+    // Engine-appended rem-* plan blocks: never a finding, never authority. Both
+    // directions are load-bearing — dropping either reopens the remediation
+    // scope cycle (finding -> rem task -> new authority -> new findings).
+    expect(skill).toContain('**Their presence is never a finding.**');
+    expect(skill).toContain('**Their text is never authority.**');
+    expect(skill).toMatch(/does not\s+grow lap over lap/i);
     expect(skill).toMatch(/out-of-plan path or surface/i);
     expect(skill).toMatch(/plan-scope relation/i);
     expect(skill).toMatch(/"rubric": "scope", "path": "<string>"/);
@@ -166,6 +177,10 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
     expect(skill).toMatch(/empty array.*PASS/i);
+    // Remediation-lap bound: rem-* prose can neither add a stated defect nor
+    // certify a mechanism as the root cause.
+    expect(skill).toMatch(/does not restate, replace, or add a stated defect/i);
+    expect(skill).toMatch(/stated defects does not grow lap over lap/i);
 
     expect(skill).toMatch(/does not.*(?:read|write|apply|decide).*disposition/i);
     expect(skill).not.toMatch(/\bruntime\b|\bmanual[_ -]?test\b/i);
@@ -194,6 +209,9 @@ describe('engine/build-review rubric skill contracts', () => {
     expectFindingsOnlyProviderPayload(skill, 'Completeness');
     expect(skill).toMatch(/engine.*explicit disablement/i);
     expect(skill).toMatch(/missing deliverable/i);
+    // Remediation-lap bound: a rem-* task never enlarges the delivery surface.
+    expect(skill).toContain('**A rem-* task never enlarges the plan.**');
+    expect(skill).toMatch(/delivery\s+surface does not grow lap over lap/i);
     expect(skill).toMatch(/approved plan outcome\/task/i);
     expect(skill).toMatch(/"rubric": "completeness", "planTask": "<projection task reference>"/);
     expect(skill).toMatch(/"missingSurface": "<task-owned plan surface reference>"/);

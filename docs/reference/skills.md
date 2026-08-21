@@ -322,7 +322,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Outputs** — `.docs/plans/<date>-<feature>.md`.
 - **Gate role** — blocking. It refuses to produce a plan without stories, dependency lines, both paths,
   and a clean conflict-check; every acceptance criterion must map to at least one task; 41 or more tasks
-  is a hard stop. Each `Story:`
+  is a hard stop. Every task carries a `Done when:` block of falsifiable completion checks — an
+  unbounded quality word ("fail-closed", "robust", "comprehensive") must be closed by an enumeration
+  or a named mechanism in the same block, and completion review is bound by these checks (deeper
+  concerns are filed as intake, not raised as blocking findings). Each `Story:`
   line takes one id — a comma-separated list silently registers only the first. Plans must not append
   a terminal catch-all task that re-proves the completed feature; scoped tests stay with their
   behavior-owning implementation task, while writing-system-tests and later BUILD/SHIP gates own

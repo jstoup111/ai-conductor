@@ -66,6 +66,10 @@ repairs:
   where the document affirmatively contradicts shipped behavior. Phrasing that merely predates the
   latest repair round is not a gap.
 
+- **A rem-* task never enlarges the plan.** Its outcome is bounded by its own text, and it grants
+  nothing elsewhere: no other task's outcome grows because a remediation round ran, so the delivery
+  surface does not grow lap over lap.
+
 Before emitting any finding anchored to a `rem-*` task, apply this convergence test: would the
 finding have been valid against exactly what that task's text asked for? If it demands more, it is
 scope expansion — omit it.

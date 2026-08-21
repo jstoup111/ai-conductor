@@ -41,6 +41,22 @@ For each operator reseal, judge whether its rationale justifies the named protec
 amendment in its commit range. Assess unmatched paths normally under this Scope contract; a reseal
 does not exempt them. Reseal evidence does not weaken another rubric.
 
+## Remediation-lap calibration
+
+The approved plan may carry engine-appended `### Task rem-*` headings from earlier remediation
+rounds. The engine writes and commits these itself as routing bookkeeping. Two bounds keep this
+rubric convergent across laps:
+
+- **Their presence is never a finding.** The engine-appended `rem-*` blocks are not a BUILD-time
+  amendment of the approved plan; do not raise an out-of-plan-change against the plan for carrying
+  them.
+- **Their text is never authority.** Do not cite a `rem-*` task to admit any changed path or
+  surface. The authorization surface for every diff is exactly the original approved plan tasks,
+  the projection's repair context, accepted scope widenings, and operator reseals — it does not
+  grow lap over lap, and remediation prose never joins it. A repair commit that must touch a
+  surface outside that authority carries its own accepted scope widening; judge it through that
+  widening, exactly as any other change.
+
 ## Result contract (v3)
 
 Return exactly one JSON object whose only top-level field is `findings`, an array. The engine owns

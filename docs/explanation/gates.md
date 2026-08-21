@@ -364,6 +364,23 @@ it to review. Any other amendment (an edited earlier line, an unrecorded task id
 fails that test and is graded in full. The plan body the rubrics judge against is unaffected: it
 still carries every appended remediation task.
 
+Because the plan body still shows those blocks, Scope carries its own remediation-lap calibration
+(see `skills/build-review-scope/SKILL.md`): the engine-appended `rem-*` blocks are never a finding
+— the diff exclusion above removes the append itself, and the calibration stops the grader from
+re-deriving the same objection from the plan body — and never authority. Remediation prose cannot
+admit a changed path; the authorization surface stays the original approved plan tasks, repair
+context, accepted scope widenings, and operator reseals, so it does not grow lap over lap. A repair
+that must touch a surface outside that set declares a per-commit scope widening, the same lever as
+any other change.
+
+The same no-growth bound holds for every rubric, each phrased for its own concern: Tautology — a
+remediation-authored test is judged under the same closed vocabulary, and `rem-*` prose neither
+exempts a changed test nor creates a new behavior to exercise; Root Cause — the stated defect comes
+from the approved plan and projection, never remediation prose, which can neither add a defect nor
+certify a mechanism; Completeness — a `rem-*` task's outcome is bounded by its own text and never
+enlarges any other task's outcome. Remediation-lap products are inputs to converge on, never a
+surface that expands what later laps must litigate.
+
 When a deterministic BUILD verification gate — `test_suite` or any other gate in that group —
 fails, the engine accumulates the sanitized failure in `.pipeline/build-review-rebase-repairs.json`.
 The ledger is outside rewritten Git history, so repeated rebases retain earlier entries without
