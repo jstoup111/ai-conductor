@@ -1092,7 +1092,7 @@ export class DefaultStepRunner implements StepRunner {
       providerStreamThrottle.heartbeat,
       resolveProviderStreamMinIntervalMs(this.config as ProviderStreamIntervalConfig),
     );
-    providerStreamHeartbeat.unref();
+    providerStreamHeartbeat.unref(); // portability-ok: dispatch-owned telemetry heartbeat is cleared in finally and must not keep the process alive
     const nextAttempt = () => ({
       logicalStep: step,
       id: `${this.runId}:${step}:${++this.providerLifecycleAttempt}`,
