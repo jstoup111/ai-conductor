@@ -46,13 +46,15 @@ set of stated defects does not grow lap over lap.
 
 ## Result contract (v3)
 
-Return exactly one JSON `judged` result for rubric `rootCause`: its top-level `kind` field is
-exactly the string `judged` (never `result` or any other field name), carrying contract version `v3`.
-It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings` array.
+Return exactly one JSON object whose only top-level field is `findings`, an array. The engine owns
+the `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot
+identity after validating this findings-only payload.
 Return every independent finding; an empty array means a PASS for this rubric. Each finding contains:
 
 **Closed vocabulary:** `root-cause-unaddressed`, `symptom-only-fix`,
 `provenance-sensitive-cache-identity`.
+
+**Reference grammar:** `anchor.locus` is a `content-region` reference.
 
 - a `concernKind` field (never `kind`) with one of: `root-cause-unaddressed`,
   `symptom-only-fix`, or `provenance-sensitive-cache-identity`;

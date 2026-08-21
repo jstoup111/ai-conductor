@@ -3678,7 +3678,7 @@ TIER: M`,
       })).toEqual({ allowed: true });
     });
 
-    it('leaves no verdict artifact after a vocabulary rejection survives its repair turn', async () => {
+    it('leaves no verdict artifact after a byte-identical vocabulary repair is rejected', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: true,
         output: JSON.stringify({
@@ -4112,10 +4112,43 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain('ONLY one JSON object');
     expect(repairPrompt).toContain('did not satisfy the judged-result contract');
     expect(repairPrompt).toContain('anchor');
-    expect(repairPrompt).toContain(`"lapId": "<echo the projection lapId verbatim>"`);
+    expect(repairPrompt).toContain('{"findings": [{');
+    expect([invoke.mock.calls[0][0], invoke.mock.calls[1][0]]
+      .map((options) => (options as InvokeOptions).prompt)
+      .join('\n')).not.toMatch(/\becho\b/i);
     expect(repairPrompt).toContain(
       'Your previous response (bounded excerpt):\nI read the referenced diff and measured each changed test.',
     );
+  });
+
+  it('diagnoses findings-only output through the same v3-stamped candidate it validates', async () => {
+    const findingsOnlyOutput = JSON.stringify({
+      findings: [{
+        concernKind: 'source-text-mirror',
+        summary: 'The assertion mirrors source text.',
+        evidenceLocations: ['test/engine/event-sinks.test.ts:519'],
+        anchor: {
+          rubric: 'tautology',
+          // This was valid under the old string-reference grammar.  The
+          // repair diagnosis must use the v3 candidate and its projection
+          // context, not fabricate causes for omitted provider envelope keys.
+          changedTest: 'test/engine/event-sinks.test.ts',
+          exercisedBehavior: 'EVENT_SINKS persisted routing',
+          violationKind: 'source-text-mirror',
+        },
+      }],
+    });
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: findingsOnlyOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', lapId, snapshotDigest });
+    const repairPrompt = (invoke.mock.calls[1][0] as InvokeOptions).prompt;
+    expect(repairPrompt).toContain('findings[0].anchor.changedTest must be a content-region reference');
+    expect(repairPrompt).not.toMatch(/top-level "kind"|"rubric" must be|"contractVersion" must be|"lapId" must echo|"snapshotDigest" must echo/);
   });
 
   it('embeds the exact per-rubric anchor schema in the initial dispatch prompt', async () => {
@@ -4130,14 +4163,15 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(prompt).toContain('never flattened');
   });
 
-  it('instructs graders with the current v3 structured-anchor contract, not the retired v2 plain-string one', async () => {
+  it('instructs graders with a findings-only structured-anchor payload', async () => {
     const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
     const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
 
     await dispatch(runner);
 
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('`contractVersion` is "v3"');
+    expect(prompt).toContain('only top-level field is `findings`');
+    expect(prompt).not.toContain('`contractVersion` is "v3"');
     expect(prompt).not.toContain('`contractVersion` is "v2"');
     expect(prompt).not.toContain('every anchor value is a plain string');
     expect(prompt).toContain('content-region');
@@ -4158,6 +4192,54 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(detail).toContain('Raw output excerpt: still prose');
     expect(detail).toContain('tail-marker');
     expect(detail).toContain('[...truncated');
+  });
+
+  it.each([
+    incidentShapedOutput,
+    '```json\n{"findings":[{}]}\n```',
+    'The anchor remains flattened after the repair instruction.',
+  ])('settles a byte-identical repair without another rubric dispatch', async (replayedOutput) => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: replayedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: replayedOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ kind: 'dispatch-failure', detail: expect.stringContaining('byte-identical') });
+  });
+
+  it('records the changed repair payload diagnosis rather than the initial diagnosis', async () => {
+    const initialOutput = '{"findings":[{}]}';
+    const repairedOutput = incidentShapedOutput;
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: initialOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: repairedOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      detail: expect.stringContaining('findings[0].anchor is required'),
+    });
+    expect((result as { detail: string }).detail).not.toContain('findings[0].concernKind must be a non-empty string');
+  });
+
+  it('keeps the initial diagnosis when the repair invocation returns no output', async () => {
+    const initialOutput = '{"findings":[{}]}';
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: initialOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke, invokeInteractive: vi.fn() }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      detail: expect.stringContaining('findings[0].concernKind must be a non-empty string'),
+    });
   });
 
   it('returns undefined (not a failure report) when the provider invocation itself fails', async () => {

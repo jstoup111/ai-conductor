@@ -94,13 +94,15 @@ attribution: judge only from plan text, diff content, and engine-derived removal
 
 ## Result contract (v3)
 
-Return exactly one JSON `judged` result for rubric `completeness`: its top-level `kind` field is
-exactly the string `judged` (never `result` or any other field name), carrying contract version `v3`.
-It echoes the projection's `lapId` and `snapshotDigest` verbatim, and it has a `findings`
-array. Return every independent finding; an empty array means no Completeness concern was found.
+Return exactly one JSON object whose only top-level field is `findings`, an array. The engine owns
+the `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot
+identity after validating this findings-only payload. Return every independent finding; an empty
+array means no Completeness concern was found.
 Each finding contains:
 
 **Closed vocabulary:** `missing-deliverable`.
+
+**Reference grammar:** `anchor.planTask` is a `plan-task` reference; `anchor.missingSurface` is a `path` reference.
 
 - a `concernKind` field (never `kind`) with the sole allowed member `missing-deliverable`;
 - typed logical anchors for the approved plan outcome/task and missing deliverable, carried in a

@@ -8,6 +8,9 @@ import {
   type BuildReviewCacheEntry,
   type BuildReviewCacheFilesystem,
 } from "../../src/engine/build-review-cache.js";
+import { coordinateBuildReviewRubrics } from "../../src/engine/build-review-coordinator.js";
+import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
+import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 
 function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   return {
@@ -228,6 +231,32 @@ describe("build-review semantic cache", () => {
       changedPolicy: { kind: "miss", reason: "policy-fingerprint-mismatch" },
       changedProjection: { kind: "miss", reason: "projection-digest-mismatch" },
     });
+  });
+
+  it("keeps a pre-change cache entry reusable when only lap provenance changes", async () => {
+    const policy = { enabled: true, llm_provider: "claude" as const, model: "sonnet", effort: "medium" as const, model_fallback_ladder: ["sonnet"], max_retries: 1, escalate: false };
+    const config = { enabled: true, perTaskFloor: true, scopeContainmentEnforced: false, maxParallel: 5, rubrics: { tautology: policy, scope: policy, rootCause: policy, completeness: policy } } as never;
+    const frozenInputs = {
+      diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", mergeBase: "base", baseRef: "origin/main", baseKind: "remote", trackingRefSha: "base", remoteHeadSha: "base", fresh: true,
+      repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" },
+      sourceSnapshot: { digest: "sha256:snapshot-current", contentDigest: "sha256:content", baseRef: "origin/main", mergeBase: "base", headSha: "head", diff: "diff --git a/src/a.ts b/src/a.ts", planBody: "# Plan\n", repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] } },
+    } as never;
+    const oldLap = parseBuildReviewLapId("lap-before")!;
+    const currentLap = parseBuildReviewLapId("lap-current")!;
+    const oldProjection = deriveBuildReviewRubricProjections({ lapId: oldLap, inputs: frozenInputs, tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" } } }).scope;
+    const currentProjection = deriveBuildReviewRubricProjections({ lapId: currentLap, inputs: frozenInputs, tautology: { changedTestSelectors: [], revertedProductionManifest: [], preflightEvidence: { classification: "not-requested" } } }).scope;
+    const dispatchModel = vi.fn(async (branch, projection) => ({ kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: "v3" as never, findings: [], verdict: "PASS" as const }));
+
+    const coordination = await coordinateBuildReviewRubrics({
+      config, inputs: frozenInputs, lapId: currentLap, preflight: async () => ({ classification: "approved-exception" as const, exception: "empty-test-set" as const, cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" } }),
+      readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? { ...entry(), projectionDigest: projection.digest, policyFingerprint, result: { ...entry().result, lapId: oldLap, snapshotDigest: oldProjection.snapshotDigest } } : undefined,
+      dispatchModel, writeArtifact: async (artifact) => ({ version: 1 as const, ...artifact }), writeCache: async () => undefined,
+    });
+
+    expect(oldProjection.digest).toBe(currentProjection.digest);
+    expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).not.toContain("scope");
+    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "scope") : undefined)
+      .toMatchObject({ kind: "cache-hit", result: { lapId: "lap-current", snapshotDigest: "sha256:snapshot-current" } });
   });
 
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {

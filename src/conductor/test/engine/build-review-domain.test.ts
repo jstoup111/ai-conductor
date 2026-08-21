@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import * as buildReviewDomain from '../../src/engine/build-review-domain.js';
 import {
+  describeBuildReviewDispatchedResultRejection,
+  stampBuildReviewDispatchedCandidate,
+} from '../../src/engine/build-review-coordinator.js';
+import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   buildReviewFindingReferenceContext,
   describeBuildReviewJudgedResultRejection,
@@ -461,8 +465,21 @@ describe('build-review domain', () => {
 
 describe('build-review judged-result contract rendering and rejection diagnosis', () => {
   const expected = { lapId: 'lap-a237', snapshotDigest: 'sha256:snap' };
+  const validScopeAnchor = () => ({ rubric: 'scope' as const, path: 'src/x.ts', relation: 'not-authorized-by-plan' });
+  const validScopeFinding = () => ({
+    concernKind: 'not-authorized-by-plan', summary: 'The file is outside the plan.', evidenceLocations: ['src/x.ts:1'],
+    anchor: validScopeAnchor(),
+  });
+  const validScopeResult = () => ({
+    kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+    findings: [],
+  });
 
   it('renders the exact per-rubric anchor schema', () => {
+    expect(renderBuildReviewJudgedResultShape('tautology')).toMatch(/^\{"findings": \[/);
+    expect(renderBuildReviewJudgedResultShape('tautology')).not.toContain('"lapId"');
+    expect(renderBuildReviewJudgedResultShape('tautology')).not.toContain('"snapshotDigest"');
+    expect(renderBuildReviewJudgedResultShape('tautology')).not.toContain('"contractVersion"');
     expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
       '"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
     );
@@ -569,6 +586,179 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
       kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
       findings: [], verdict: 'FAIL',
     }, 'scope', expected)).toContain('contradicts the findings array');
+  });
+
+  it('preserves a provider-owned tautology relocationAudit through the engine stamp', () => {
+    const projection = {
+      rubric: 'tautology', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      changedFiles: [], changedTestSelectors: [],
+    } as unknown as BuildReviewRubricProjection;
+    const relocationAudit = ['[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move'];
+
+    // The audit is contract-required evidence on fixture-relocation results
+    // (persisted in the artifact, consumed by the aggregate). The stamp must
+    // carry it through, not silently discard it with the other provider-owned
+    // envelope fields.
+    const stamped = stampBuildReviewDispatchedCandidate(
+      { findings: [], relocationAudit }, 'tautology', projection,
+    ) as Record<string, unknown>;
+    expect(stamped.relocationAudit).toEqual(relocationAudit);
+    expect(parseBuildReviewJudgedResult(stamped)).toMatchObject({ verdict: 'PASS', relocationAudit });
+
+    // Absent stays absent — the stamp never manufactures audit evidence.
+    const bare = stampBuildReviewDispatchedCandidate(
+      { findings: [] }, 'tautology', projection,
+    ) as Record<string, unknown>;
+    expect('relocationAudit' in bare).toBe(false);
+
+    // A non-tautology payload smuggling an audit is rejected with the named
+    // problem, not silently laundered by the stamp.
+    const smuggled = stampBuildReviewDispatchedCandidate(
+      { findings: [], relocationAudit }, 'scope', projection,
+    );
+    expect(describeBuildReviewJudgedResultRejection(smuggled, 'scope', expected))
+      .toContain('"relocationAudit" must be absent or empty for rubric scope');
+  });
+
+  it('diagnoses a findings-only provider response under its engine-stamped v3 envelope', () => {
+    const projection = {
+      rubric: 'tautology', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      changedFiles: [], changedTestSelectors: ['test/widget.test.ts'],
+    } as unknown as BuildReviewRubricProjection;
+    const candidate = stampBuildReviewDispatchedCandidate({
+      // Providers own findings only. Missing envelope keys must be restored
+      // from the projection before both validation and diagnosis.
+      findings: [{
+        concernKind: 'source-text-mirror', summary: 'The assertion mirrors source text.', evidenceLocations: ['test/widget.test.ts:8'],
+        anchor: {
+          rubric: 'tautology', changedTest: 'test/widget.test.ts',
+          exercisedBehavior: 'writes state', violationKind: 'source-text-mirror',
+        },
+      }],
+    }, 'tautology', projection);
+    const rejection = describeBuildReviewDispatchedResultRejection(candidate, 'tautology', projection);
+
+    expect(candidate).toMatchObject({
+      kind: 'judged', rubric: 'tautology', contractVersion: 'v3',
+      lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+    });
+    expect(rejection).not.toMatch(/top-level "kind"|"rubric" must be|"contractVersion" must be|"lapId" must echo|"snapshotDigest" must echo/);
+    // A string selector was accepted by the pre-v3 grammar. The v3-stamped
+    // candidate must diagnose it as the required content-region reference.
+    expect(rejection).toContain('findings[0].anchor.changedTest must be a content-region reference');
+  });
+
+  it('distinguishes an unexplained finding-classification rejection from a supplied verdict contradiction', () => {
+    const withoutVerdict = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'rootCause', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      // Both classifications are valid, but they must agree.
+      findings: [{
+        concernKind: 'symptom-only-fix', summary: 'The change repairs only a symptom.', evidenceLocations: ['src/x.ts:1'],
+        anchor: {
+          rubric: 'rootCause', statedDefect: 'The root cause remains.',
+          locus: { path: 'src/x.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'changed branch' },
+          relation: 'root-cause-unaddressed',
+        },
+      }],
+    }, 'rootCause', expected);
+    const withContradictoryVerdict = describeBuildReviewJudgedResultRejection({
+      kind: 'judged', rubric: 'scope', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [], verdict: 'FAIL',
+    }, 'scope', expected);
+
+    expect(withoutVerdict).toContain('no enumerated check explains why');
+    expect(withoutVerdict).not.toMatch(/contradicts the findings array/);
+    expect(withContradictoryVerdict).toContain('contradicts the findings array');
+  });
+
+  const diagnoseWithReferences = describeBuildReviewJudgedResultRejection as unknown as (
+    value: unknown,
+    rubric: 'scope' | 'completeness' | 'rootCause',
+    expected: { readonly lapId: string; readonly snapshotDigest: string },
+    references: unknown,
+  ) => string;
+  const membershipRejectionCases = [
+    ['changed path', 'scope', {
+      ...validScopeResult(),
+      findings: [{
+        ...validScopeFinding(), concernKind: 'not-authorized-by-plan',
+        anchor: { ...validScopeAnchor(), path: 'src/absent.ts' },
+      }],
+    }, { changedTests: [], changedPaths: ['src/changed.ts'], planTasks: [] }, 'findings[0].anchor.path must reference a changed path in the projection'],
+    ['plan task', 'completeness', {
+      kind: 'judged', rubric: 'completeness', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'missing-deliverable', summary: 'The requested output is absent.', evidenceLocations: ['src/task.ts:1'],
+        anchor: { rubric: 'completeness', planTask: '8', missingSurface: 'src/task.ts', missingOutcome: 'writes output', missingKind: 'missing-deliverable' },
+      }],
+    }, { changedTests: [], changedPaths: [], planTasks: ['7'], planTaskSurfaces: { '7': ['src/task.ts'] } }, 'findings[0].anchor.planTask must reference a plan task in the projection'],
+    ['missing surface ownership', 'completeness', {
+      kind: 'judged', rubric: 'completeness', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'missing-deliverable', summary: 'The requested output is absent.', evidenceLocations: ['src/not-owned.ts:1'],
+        anchor: { rubric: 'completeness', planTask: '7', missingSurface: 'src/not-owned.ts', missingOutcome: 'writes output', missingKind: 'missing-deliverable' },
+      }],
+    }, { changedTests: [], changedPaths: [], planTasks: ['7'], planTaskSurfaces: { '7': ['src/owned.ts'] } }, 'findings[0].anchor.missingSurface must be owned by the referenced plan task'],
+    ['content-region hash', 'rootCause', {
+      kind: 'judged', rubric: 'rootCause', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'root-cause-unaddressed', summary: 'The changed path does not repair the cause.', evidenceLocations: ['src/handler.ts:1'],
+        anchor: {
+          rubric: 'rootCause', statedDefect: 'the state is stale', relation: 'root-cause-unaddressed',
+          locus: { path: 'src/handler.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'stale state branch' },
+        },
+      }],
+    }, {
+      changedTests: [], changedPaths: [], planTasks: [],
+      rootCauseLoci: [{ path: 'src/handler.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'persisted state branch' }],
+    }, 'findings[0].anchor.locus must reference a projected content region'],
+  ] as const;
+  it.each(membershipRejectionCases)('diagnoses the rejected %s reference specifically', (_kind, rubric, result, references, diagnostic) => {
+    expect(diagnoseWithReferences(result, rubric, expected, references)).toContain(diagnostic);
+  });
+
+  it('distinguishes absent, wrong-type, non-canonical, and bounded anchor field values', () => {
+    const completenessResult = (planTask: unknown, includePlanTask = true) => ({
+      kind: 'judged', rubric: 'completeness', contractVersion: 'v3', lapId: expected.lapId, snapshotDigest: expected.snapshotDigest,
+      findings: [{
+        concernKind: 'missing-deliverable', summary: 'The requested output is absent.', evidenceLocations: ['src/task.ts:1'],
+        anchor: {
+          rubric: 'completeness', missingSurface: 'src/task.ts', missingOutcome: 'writes output', missingKind: 'missing-deliverable',
+          ...(includePlanTask ? { planTask } : {}),
+        },
+      }],
+    });
+    const longPlanTask = `the ${'x'.repeat(512)}`;
+
+    expect(describeBuildReviewJudgedResultRejection(completenessResult(undefined, false), 'completeness', expected)).toContain('findings[0].anchor.planTask is required');
+    expect(describeBuildReviewJudgedResultRejection(completenessResult(7), 'completeness', expected)).toContain('findings[0].anchor.planTask must be a string (got 7)');
+    expect(describeBuildReviewJudgedResultRejection(completenessResult('the install channel resolution step'), 'completeness', expected)).toContain('findings[0].anchor.planTask must be a canonical plan-task reference');
+    expect(describeBuildReviewJudgedResultRejection(completenessResult(longPlanTask), 'completeness', expected)).toMatch(/planTask.*"the x{59}…"/);
+  });
+
+  const rejectionCases: ReadonlyArray<readonly [string, () => unknown, string]> = [
+    ['non-object result', () => 'just prose', 'not a single JSON object'],
+    ['kind', () => ({ ...validScopeResult(), kind: 'result' }), 'top-level "kind"'],
+    ['rubric', () => ({ ...validScopeResult(), rubric: 'rootCause' }), '"rubric" must be "scope"'],
+    ['lap id', () => ({ ...validScopeResult(), lapId: 'lap-other' }), 'must echo the projection\'s lapId'],
+    ['contract version', () => ({ ...validScopeResult(), contractVersion: 'v2' }), '"contractVersion" must be "v3"'],
+    ['snapshot digest', () => ({ ...validScopeResult(), snapshotDigest: 'sha256:other' }), '"snapshotDigest" must echo'],
+    ['findings array', () => ({ ...validScopeResult(), findings: 'none' }), '"findings" must be an array'],
+    ['finding object', () => ({ ...validScopeResult(), findings: ['not an object'] }), 'findings[0] is not an object'],
+    ['concern kind presence', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), concernKind: '' }] }), 'findings[0].concernKind must be a non-empty string'],
+    ['concern kind vocabulary', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), concernKind: 'unknown' }] }), 'findings[0].concernKind must be one of'],
+    ['summary', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), summary: '' }] }), 'findings[0].summary must be a non-empty string'],
+    ['evidence locations', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), evidenceLocations: [] }] }), 'findings[0].evidenceLocations must be a non-empty array'],
+    ['anchor presence', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: undefined }] }), 'findings[0].anchor is required'],
+    ['anchor rubric', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), rubric: 'rootCause' } }] }), 'findings[0].anchor.rubric must be "scope"'],
+    ['anchor field presence', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), path: '' } }] }), 'findings[0].anchor.path must be a non-empty string'],
+    ['anchor classification vocabulary', () => ({ ...validScopeResult(), findings: [{ ...validScopeFinding(), anchor: { ...validScopeAnchor(), relation: 'unknown' } }] }), 'findings[0].anchor.relation must be one of'],
+    ['relocation audit', () => ({ ...validScopeResult(), relocationAudit: ['unexpected'] }), '"relocationAudit" must be absent or empty for rubric scope'],
+    ['verdict contradiction', () => ({ ...validScopeResult(), verdict: 'FAIL' }), 'contradicts the findings array'],
+    ['passed contradiction', () => ({ ...validScopeResult(), passed: false }), 'contradicts the findings array'],
+  ];
+  it.each(rejectionCases)('retains the %s rejection diagnosis', (_cause, candidate, diagnostic) => {
+    expect(describeBuildReviewJudgedResultRejection(candidate(), 'scope', expected)).toContain(diagnostic);
   });
 
   it('bounds the diagnosis to a fixed number of named problems', () => {

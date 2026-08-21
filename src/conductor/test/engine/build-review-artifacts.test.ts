@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { stampBuildReviewDispatchedCandidate, validateBuildReviewDispatchedResult } from '../../src/engine/build-review-coordinator.js';
 import {
   buildReviewBranchArtifactPath,
   parseBuildReviewBranchArtifact,
@@ -24,12 +25,46 @@ function filesystem(files: Record<string, string> = {}): BuildReviewArtifactFile
   };
 }
 
-function judged() {
+function judged(contractVersion: 'v1' | 'v2' = 'v1') {
   return {
     kind: 'judged' as const, rubric: 'scope' as const, lapId, snapshotDigest: 'sha256:snapshot',
-    contractVersion: 'v1' as never, findings: [], verdict: 'PASS' as const,
+    contractVersion: contractVersion as never, findings: [], verdict: 'PASS' as const,
   };
 }
+
+const persistedV1ScopeArtifact = {
+    version: 1,
+    rubric: 'scope',
+    lapId,
+    snapshotDigest: 'sha256:snapshot',
+    result: {
+      kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v1',
+      findings: [{
+        concernKind: 'out-of-plan-change', summary: 'A change is outside the approved plan.',
+        evidenceLocations: ['src/conductor/src/engine/build-review-artifacts.ts:1'],
+        anchor: { rubric: 'scope', path: 'src/conductor/src/engine/build-review-artifacts.ts', relation: 'out-of-plan-change' },
+      }],
+      verdict: 'FAIL',
+    },
+    provenance: { kind: 'fresh' },
+} as const;
+
+const persistedV2ScopeArtifact = {
+    version: 1,
+    rubric: 'scope',
+    lapId,
+    snapshotDigest: 'sha256:snapshot',
+    result: {
+      kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v2',
+      findings: [{
+        concernKind: 'out-of-plan-change', summary: 'A change is outside the approved plan.',
+        evidenceLocations: ['src/conductor/src/engine/build-review-artifacts.ts:1'],
+        anchor: { rubric: 'scope', path: 'src/conductor/src/engine/build-review-artifacts.ts', relation: 'not-authorized-by-plan' },
+      }],
+      verdict: 'FAIL',
+    },
+    provenance: { kind: 'fresh' },
+} as const;
 
 describe('build-review current-lap branch artifacts', () => {
   it('uses a write-disjoint path for every rubric and lap', () => {
@@ -53,6 +88,41 @@ describe('build-review current-lap branch artifacts', () => {
     expect(artifact).toMatchObject({ rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result: judged() });
     expect(Object.keys(fs.files)).toEqual(['/feature/.pipeline/build-review/lap-current/scope.json']);
     expect(await readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).toEqual(artifact);
+  });
+
+  async function exerciseLiveV3StampBoundary(fs: BuildReviewArtifactFilesystem): Promise<void> {
+    const projection = {
+      rubric: 'scope', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
+      contentDigest: 'sha256:content', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
+      removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, verifyOnlyContext: [],
+      planBody: '# Plan', repairContext: [], acceptedWidenings: [], operatorReseals: [],
+    } as never;
+    const stamped = stampBuildReviewDispatchedCandidate({ findings: [] }, 'scope', projection);
+    const result = validateBuildReviewDispatchedResult(stamped, 'scope', projection)!;
+    const artifact = await writeBuildReviewBranchArtifact('/feature', {
+      rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', result, provenance: { kind: 'fresh' },
+    }, fs);
+    expect(artifact.result).toMatchObject({ contractVersion: 'v3', lapId, snapshotDigest: 'sha256:snapshot', findings: [] });
+  }
+
+  it('stamps a live v3 envelope before parsing a persisted v1-only scope relation at rest', async () => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
+    const fs = filesystem({ [path]: JSON.stringify(persistedV1ScopeArtifact) });
+
+    await exerciseLiveV3StampBoundary(filesystem());
+    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { contractVersion: 'v1', findings: [{ anchor: { relation: 'out-of-plan-change' } }] },
+    });
+  });
+
+  it('stamps a live v3 envelope before parsing a persisted v2-only scope relation at rest', async () => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'scope');
+    const fs = filesystem({ [path]: JSON.stringify(persistedV2ScopeArtifact) });
+
+    await exerciseLiveV3StampBoundary(filesystem());
+    await expect(readBuildReviewBranchArtifact('/feature', 'scope', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { contractVersion: 'v2', findings: [{ anchor: { relation: 'not-authorized-by-plan' } }] },
+    });
   });
 
   it.each([

@@ -26,6 +26,22 @@ function documentedVocabulary(skill: string): string[] {
   return [...matched[1].matchAll(/`([^`]+)`/g)].map((entry) => entry[1]).sort();
 }
 
+function expectFindingsOnlyProviderPayload(skill: string, rubric: string): void {
+  if (rubric === 'Tautology') {
+    // Tautology alone carries a second provider-owned top-level field: the
+    // audit-only relocationAudit, contract-required on fixture-relocation
+    // results, persisted in the artifact, and consumed by the aggregate.
+    expect(skill).toContain('whose only top-level fields are `findings`, an array, and');
+    expect(skill).toContain('the audit-only `relocationAudit` array');
+  } else {
+    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
+  }
+  expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
+  expect(skill).toMatch(new RegExp(`empty\\s+array means (?:no ${rubric} concern was found|a PASS for this rubric)`, 'i'));
+  expect(skill).not.toMatch(/Return exactly one JSON `judged` result/i);
+  expect(skill).not.toMatch(/It echoes the projection's `lapId` and `snapshotDigest` verbatim/i);
+}
+
 describe('engine/build-review rubric skill contracts', () => {
   it('keeps every rubric skill’s closed vocabulary equal to the engine source in both directions', async () => {
     const skills = {
@@ -71,7 +87,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/neither exempts a changed\s+test.*nor creates a new behavior/is);
     expect(skill).toMatch(/judgement surface\s+does not grow lap over lap/i);
 
-    expect(skill).toMatch(/contract version.*`v3`/i);
+    expectFindingsOnlyProviderPayload(skill, 'Tautology');
     expect(skill).toMatch(/concern kind/i);
     expect(skill).toMatch(/changed test/i);
     expect(skill).toMatch(/exercised behavior\/assertion/i);
@@ -114,14 +130,14 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/unmatched paths?.*normally/i);
     expect(skill).toMatch(/does not.*exempt/i);
 
+    expectFindingsOnlyProviderPayload(skill, 'Scope');
+
     // Engine-appended rem-* plan blocks: never a finding, never authority. Both
     // directions are load-bearing — dropping either reopens the remediation
     // scope cycle (finding -> rem task -> new authority -> new findings).
     expect(skill).toContain('**Their presence is never a finding.**');
     expect(skill).toContain('**Their text is never authority.**');
     expect(skill).toMatch(/does not\s+grow lap over lap/i);
-
-    expect(skill).toMatch(/contract version.*`v3`/i);
     expect(skill).toMatch(/out-of-plan path or surface/i);
     expect(skill).toMatch(/plan-scope relation/i);
     expect(skill).toMatch(/"rubric": "scope", "path": "<string>"/);
@@ -154,7 +170,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/stated defect\/outcome/i);
     expect(skill).toMatch(/symptom-only/i);
     expect(skill).toMatch(/implementation mechanism or locus/i);
-    expect(skill).toMatch(/contract version.*`v3`/i);
+    expectFindingsOnlyProviderPayload(skill, 'Root Cause');
     expect(skill).toMatch(/"rubric": "rootCause", "statedDefect":/);
     expect(skill).toMatch(/"locus": \{"path": "<repository-relative path>",/);
     expect(skill).toMatch(/typed logical anchors/i);
@@ -190,7 +206,7 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/plan.*diff.*whole/i);
 
     expect(skill).toMatch(/default-enabled/i);
-    expect(skill).toMatch(/contract version.*`v3`/i);
+    expectFindingsOnlyProviderPayload(skill, 'Completeness');
     expect(skill).toMatch(/engine.*explicit disablement/i);
     expect(skill).toMatch(/missing deliverable/i);
     // Remediation-lap bound: a rem-* task never enlarges the delivery surface.

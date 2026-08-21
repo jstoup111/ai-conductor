@@ -47,7 +47,13 @@ import {
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
-import { coordinateBuildReviewRubrics, validateBuildReviewDispatchedResult, type BuildReviewDispatchableRubric } from './build-review-coordinator.js';
+import {
+  coordinateBuildReviewRubrics,
+  describeBuildReviewDispatchedResultRejection,
+  stampBuildReviewDispatchedCandidate,
+  validateBuildReviewDispatchedResult,
+  type BuildReviewDispatchableRubric,
+} from './build-review-coordinator.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
@@ -55,8 +61,6 @@ import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
-  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-  describeBuildReviewJudgedResultRejection,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   renderBuildReviewJudgedResultShape,
@@ -1823,14 +1827,16 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     // A result that still violates the judged contract after its one repair
-    // turn is not a reviewer decision about the diff.  Do not publish it as
-    // a fresh FAIL aggregate: completion deliberately classifies a missing
-    // verdict as `absent`, which re-dispatches this rubric without consuming
-    // the build_review kickback budget.
+    // turn — including a byte-identical repair that cannot converge — is not
+    // a reviewer decision about the diff. Do not publish it as a fresh FAIL
+    // aggregate: completion deliberately classifies a missing verdict as
+    // `absent`, which re-dispatches this rubric without consuming the
+    // build_review kickback budget.
     const rejectedAfterRepair = coordination.branches.find((branch): branch is Extract<typeof branch, { kind: 'infrastructure-failure' }> =>
       branch.kind === 'infrastructure-failure' &&
       branch.reason === 'invalid-provider-result' &&
-      branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true,
+      (branch.detail?.startsWith('judged-result contract not satisfied after one repair turn:') === true ||
+        branch.detail?.startsWith('judged-result repair was byte-identical to the rejected output;') === true),
     );
     if (rejectedAfterRepair) {
       return {
@@ -1912,7 +1918,7 @@ export class DefaultStepRunner implements StepRunner {
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
         'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
-        `Return exactly one JSON judged result for rubric ${branch.rubric}: a single JSON object whose top-level field \`kind\` is exactly the string "judged" (not \`result\`, not any other field name), whose \`rubric\` is "${branch.rubric}", whose \`contractVersion\` is "${CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION}", whose \`lapId\` and \`snapshotDigest\` echo the projection's values verbatim, and whose \`findings\` is an array. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        `Return exactly one JSON object whose only top-level field is \`findings\`, an array. The engine owns the judged envelope. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
         `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display}\` objects and every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
         JSON.stringify(projection),
       ].join('\n\n');
@@ -1990,11 +1996,16 @@ export class DefaultStepRunner implements StepRunner {
     const repairPrompt = [
       `Your previous response for the Build Review ${label[branch.rubric]} rubric did not satisfy the judged-result contract: ${validated.rejection}.`,
       `Re-emit your judgement as ONLY one JSON object — no prose, no markdown fences, no other text — of exactly this shape:\n${contractShape}`,
-      `Echo lapId "${projection.lapId}" and snapshotDigest "${projection.snapshotDigest}" verbatim. Preserve the semantic content of your previous findings; change only the shape.`,
+      'Preserve the semantic content of your previous findings; change only the shape.',
       `Your previous response (bounded excerpt):\n${boundedHeadTailExcerpt(initial.output, RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES)}`,
     ].join('\n\n');
     const repair = await invokeOnce(repairPrompt);
     if (repair.success && repair.output !== undefined) {
+      if (repair.output === initial.output) {
+        return makeBuildReviewDispatchFailure(
+          'judged-result repair was byte-identical to the rejected output; no further retry can act on the same payload',
+        );
+      }
       const repaired = this.validateRubricOutput(repair.output, branch.rubric, projection);
       if (repaired.result) return repaired.result;
       return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
@@ -2018,13 +2029,12 @@ export class DefaultStepRunner implements StepRunner {
     if (candidate === undefined) {
       return { rejection: 'no parseable JSON object was found in the response' };
     }
-    const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
+    const stampedCandidate = stampBuildReviewDispatchedCandidate(candidate, rubric, projection);
+    const result = validateBuildReviewDispatchedResult(stampedCandidate, rubric, projection);
     if (result) return { result, rejection: '' };
     try {
       return {
-        rejection: describeBuildReviewJudgedResultRejection(candidate, rubric, {
-          lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        }),
+        rejection: describeBuildReviewDispatchedResultRejection(stampedCandidate, rubric, projection),
       };
     } catch {
       // Diagnosis must never turn a repairable shape failure into a thrown

@@ -1,5 +1,7 @@
 import type { BuildReviewRubricId } from "../types/config.js";
 import {
+  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+  describeBuildReviewJudgedResultRejection,
   parseBuildReviewDispatchFailure,
   buildReviewFindingReferenceContext,
   parseBuildReviewJudgedResult,
@@ -24,6 +26,7 @@ import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import {
   deriveBuildReviewRubricProjections,
   type BuildReviewProjectionJson,
+  type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTautologyProjectionInput,
 } from "./build-review-projections.js";
@@ -93,6 +96,8 @@ export interface BuildReviewCoordinationInput {
   readonly config: ResolvedBuildReviewConfig;
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
+  /** Test seam for an engine-held projection corruption at branch settlement. */
+  readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
   readonly readCache: (
     branch: BuildReviewDispatchableRubric,
@@ -165,10 +170,40 @@ function infrastructure(rubric: BuildReviewRubricId, reason: string, detail?: st
 }
 
 /**
- * The single authority on whether a dispatched candidate is a usable judged
- * result for this projection. Exported so the dispatch layer's in-session
- * validate-and-repair loop accepts and rejects with exactly the same
- * predicate the coordinator settles branches with.
+ * Reconstruct the envelope from engine-held projection values before the
+ * provider result reaches either validation or repair diagnosis. Providers
+ * supply only findings, so provider-owned envelope fields must not influence
+ * either path.
+ */
+export function stampBuildReviewDispatchedCandidate(
+  candidate: unknown,
+  rubric: BuildReviewRubricId,
+  projection: BuildReviewRubricProjection,
+): unknown {
+  const source = typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
+    ? candidate as Record<string, unknown>
+    : undefined;
+  return {
+    kind: "judged",
+    rubric,
+    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+    lapId: projection.lapId,
+    snapshotDigest: projection.snapshotDigest,
+    findings: source?.findings,
+    // The relocation audit is provider-owned EVIDENCE, not an envelope field:
+    // the tautology contract requires it on fixture-relocation results, the
+    // artifact persists it, and the aggregate consumes it. Pass it through and
+    // let validation enforce rubric-appropriateness (non-tautology payloads
+    // carrying one are rejected with a named problem, never laundered here).
+    ...(source?.relocationAudit === undefined ? {} : { relocationAudit: source.relocationAudit }),
+  };
+}
+
+/**
+ * The single authority on whether an engine-stamped dispatched candidate is a
+ * usable judged result for this projection. Exported so the dispatch layer's
+ * in-session validate-and-repair loop accepts and rejects with exactly the
+ * same predicate the coordinator settles branches with.
  */
 export function validateBuildReviewDispatchedResult(
   candidate: unknown,
@@ -182,9 +217,25 @@ export function validateBuildReviewDispatchedResult(
   const canonical = result && canonicalizeBuildReviewFindingSet(result.findings.map((finding) => ({
     rubric: result.rubric, contractVersion: result.contractVersion, ...finding,
   })));
-  return result && canonical && canonical.length === result.findings.length &&
-    result.rubric === rubric && result.lapId === projection.lapId &&
-    result.snapshotDigest === projection.snapshotDigest ? result : undefined;
+  return result && canonical && canonical.length === result.findings.length ? result : undefined;
+}
+
+/**
+ * Diagnoses the same engine-stamped candidate that dispatch validation sees.
+ * Keeping the projection-derived reference context here prevents callers from
+ * accidentally diagnosing the raw provider envelope or a weaker parse.
+ */
+export function describeBuildReviewDispatchedResultRejection(
+  candidate: unknown,
+  rubric: BuildReviewRubricId,
+  projection: BuildReviewRubricProjection,
+): string {
+  return describeBuildReviewJudgedResultRejection(
+    candidate,
+    rubric,
+    projection,
+    buildReviewFindingReferenceContext(projection),
+  );
 }
 
 function validWrittenArtifact(
@@ -230,7 +281,7 @@ export async function coordinateBuildReviewRubrics(
       };
     }
   }
-  const projections = deriveBuildReviewRubricProjections({
+  const projections = input.projections ?? deriveBuildReviewRubricProjections({
     lapId: input.lapId,
     inputs: input.inputs,
     tautology: preflight ? preflightProjection(preflight) : {
@@ -246,6 +297,12 @@ export async function coordinateBuildReviewRubrics(
       await input.emit?.({ type: "build_review_rubric_skipped", rubric: branch.rubric, lapId: input.lapId, reason: branch.reason });
       continue;
     }
+    const projection = projections[branch.rubric];
+    if (projection.rubric !== branch.rubric) {
+      resolved.set(branch.rubric, infrastructure(branch.rubric, "projection-rubric-mismatch"));
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "projection-rubric-mismatch" });
+      continue;
+    }
     if (branch.rubric === "tautology" && preflight?.classification === "infrastructure-failure") {
       resolved.set(branch.rubric, infrastructure(branch.rubric, preflight.reason));
       await input.emit?.({
@@ -257,7 +314,6 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
-    const projection = projections[branch.rubric];
     const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
     let candidate: BuildReviewCacheEntryCandidate | undefined;
     try {
@@ -308,10 +364,19 @@ export async function coordinateBuildReviewRubrics(
       const projection = projections[rubric];
       try {
         const dispatched = await input.dispatchModel(branch, projection);
-        const result = validateBuildReviewDispatchedResult(dispatched, rubric, projection);
+        const candidate = stampBuildReviewDispatchedCandidate(dispatched, rubric, projection);
+        const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
         if (!result) {
           const failure = parseBuildReviewDispatchFailure(dispatched);
-          return { rubric, branch: infrastructure(rubric, "invalid-provider-result", failure?.detail) };
+          // No pre-formed dispatch failure: the engine derives the failed
+          // requirement itself from the stamped candidate, so the diagnosis
+          // is produced by the same validation surface that rejected it.
+          const detail = failure?.detail ?? (dispatched === undefined ? undefined : (
+            typeof dispatched !== "object" || dispatched === null || Array.isArray(dispatched)
+              ? "no parseable JSON object was found in the response"
+              : describeBuildReviewDispatchedResultRejection(candidate, rubric, projection)
+          ));
+          return { rubric, branch: infrastructure(rubric, "invalid-provider-result", detail) };
         }
         let written: BuildReviewJudgedResult | undefined;
         try {

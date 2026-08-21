@@ -287,6 +287,7 @@ function parseAnchorClassification(
 // character class never had to carry that job.
 const CANONICAL_PATH_REFERENCE = /^(?!\/)(?!.*(?:^|\/)\.?(?:\/|$))(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9.][A-Za-z0-9._/@+-]*(?:\/[A-Za-z0-9.][A-Za-z0-9._/@+-]*)*$/;
 const CANONICAL_PLAN_TASK_REFERENCE = new RegExp(`^${TASK_ID_PATTERN}$`);
+const TITLED_PLAN_TASK_REFERENCE = new RegExp(`^Task\\s+(${TASK_ID_PATTERN}):\\s+.+$`);
 
 /** A stable, unformatted path/reference token suitable for a finding identity. */
 export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined {
@@ -294,7 +295,9 @@ export function parseBuildReviewCanonicalPathReference(value: unknown): string |
 }
 
 export function parseBuildReviewCanonicalPlanTaskReference(value: unknown): string | undefined {
-  return typeof value === 'string' && CANONICAL_PLAN_TASK_REFERENCE.test(value) ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  return value.match(TITLED_PLAN_TASK_REFERENCE)?.[1] ??
+    (CANONICAL_PLAN_TASK_REFERENCE.test(value) ? value : undefined);
 }
 
 function verifiedReference(value: unknown, allowed: readonly string[] | undefined, parser: (value: unknown) => string | undefined): string | undefined {
@@ -517,14 +520,44 @@ export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId):
       ? renderFindingVocabularyMemberShape((BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields as Record<string, readonly string[]>)[field]!.filter((member) => member !== 'out-of-plan-change'))
       : '<canonical projection reference or report string>'}"`,
   ).join(', ');
-  return '{"kind": "judged", "rubric": "' + rubric + '", "contractVersion": "' + CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION + '", ' +
-    '"lapId": "<echo the projection lapId verbatim>", "snapshotDigest": "<echo the projection snapshotDigest verbatim>", ' +
-    `"findings": [{"concernKind": "${renderFindingVocabularyMemberShape(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds)}", "summary": "<non-empty actionable string>", ` +
+  return '{"findings": [{"concernKind": "' + renderFindingVocabularyMemberShape(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds) + '", "summary": "<non-empty actionable string>", ' +
     '"evidenceLocations": ["<path:line or path:line:column>"], ' +
     `"anchor": {"rubric": "${rubric}", ${anchorFields}}}]}`;
 }
 
 const MAX_REJECTION_PROBLEMS = 6;
+const MAX_REJECTION_VALUE_LENGTH = 63;
+
+function describeRejectionValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.length <= MAX_REJECTION_VALUE_LENGTH
+      ? JSON.stringify(value)
+      : `${JSON.stringify(value.slice(0, MAX_REJECTION_VALUE_LENGTH)).slice(0, -1)}…"`;
+  }
+  return JSON.stringify(value) ?? `a ${typeof value}`;
+}
+
+function anchorReferenceGrammar(
+  rubric: BuildReviewRubricId,
+  field: string,
+): { readonly description: string; readonly parse: (value: unknown) => string | undefined } | undefined {
+  if (rubric === 'scope' && field === 'path') {
+    return { description: 'canonical repository-relative path', parse: parseBuildReviewCanonicalPathReference };
+  }
+  if (rubric === 'completeness' && field === 'planTask') {
+    return { description: 'canonical plan-task reference', parse: parseBuildReviewCanonicalPlanTaskReference };
+  }
+  if (rubric === 'completeness' && field === 'missingSurface') {
+    return { description: 'canonical repository-relative path', parse: parseBuildReviewCanonicalPathReference };
+  }
+  if (rubric === 'tautology' && field === 'changedTest') {
+    return { description: 'canonical repository-relative path', parse: parseBuildReviewCanonicalPathReference };
+  }
+  if (rubric === 'rootCause' && field === 'locus') {
+    return { description: 'canonical repository-relative path', parse: parseBuildReviewCanonicalPathReference };
+  }
+  return undefined;
+}
 
 /**
  * Diagnose why a candidate fails `parseBuildReviewJudgedResult` (plus the
@@ -536,6 +569,7 @@ export function describeBuildReviewJudgedResultRejection(
   value: unknown,
   rubric: BuildReviewRubricId,
   expected: { readonly lapId: string; readonly snapshotDigest: string },
+  references?: BuildReviewFindingReferenceContext,
 ): string {
   const source = record(value);
   if (!source) return 'the result is not a single JSON object';
@@ -568,7 +602,24 @@ export function describeBuildReviewJudgedResultRejection(
       } else {
         if (anchor.rubric !== rubric) problems.push(`findings[${index}].anchor.rubric must be "${rubric}"`);
         for (const field of ANCHOR_FIELDS[rubric]) {
-          if (!nonEmptyString(anchor[field])) problems.push(`findings[${index}].anchor.${field} must be a non-empty string`);
+          const contentRegionField = source.contractVersion === 'v3' &&
+            ((rubric === 'tautology' && field === 'changedTest') || (rubric === 'rootCause' && field === 'locus'));
+          if (contentRegionField) {
+            const reference = parseContentRegionReference(anchor[field]);
+            const candidates = field === 'changedTest' ? references?.changedTestRegions : references?.rootCauseLoci;
+            if (!reference) problems.push(`findings[${index}].anchor.${field} must be a content-region reference`);
+            else if (candidates && !matchesContentRegion(candidates, reference)) {
+              problems.push(`findings[${index}].anchor.${field} must reference a projected content region`);
+            }
+            continue;
+          }
+          const grammar = anchorReferenceGrammar(rubric, field);
+          if (!Object.hasOwn(anchor, field)) problems.push(`findings[${index}].anchor.${field} is required`);
+          else if (typeof anchor[field] !== 'string') problems.push(`findings[${index}].anchor.${field} must be a string (got ${describeRejectionValue(anchor[field])})`);
+          else if (!nonEmptyString(anchor[field])) problems.push(`findings[${index}].anchor.${field} must be a non-empty string`);
+          else if (grammar && !grammar.parse(anchor[field])) {
+            problems.push(`findings[${index}].anchor.${field} must be a ${grammar.description} (got ${describeRejectionValue(anchor[field])})`);
+          }
           else if (field === CLASSIFICATION_ANCHOR_FIELDS[rubric] && !parseAnchorClassification(
             anchor[field], rubric, field as 'violationKind' | 'relation' | 'missingKind',
           )) {
@@ -576,6 +627,24 @@ export function describeBuildReviewJudgedResultRejection(
               (BUILD_REVIEW_FINDING_VOCABULARIES[rubric].anchorFields as Record<string, readonly string[]>)[field]!,
               `findings[${index}].anchor.${field}`,
             ));
+          }
+          else if (rubric === 'scope' && field === 'path') {
+            const path = parseBuildReviewCanonicalPathReference(anchor.path);
+            if (path && references?.changedPaths && !references.changedPaths.includes(path)) {
+              problems.push(`findings[${index}].anchor.path must reference a changed path in the projection`);
+            }
+          } else if (rubric === 'completeness' && field === 'planTask') {
+            const planTask = parseBuildReviewCanonicalPlanTaskReference(anchor.planTask);
+            if (planTask && references?.planTasks && !references.planTasks.includes(planTask)) {
+              problems.push(`findings[${index}].anchor.planTask must reference a plan task in the projection`);
+            }
+          } else if (rubric === 'completeness' && field === 'missingSurface') {
+            const planTask = parseBuildReviewCanonicalPlanTaskReference(anchor.planTask);
+            const surface = parseBuildReviewCanonicalPathReference(anchor.missingSurface);
+            const surfaces = planTask && references?.planTaskSurfaces?.[planTask];
+            if (surface && surfaces && !surfaces.includes(surface)) {
+              problems.push(`findings[${index}].anchor.missingSurface must be owned by the referenced plan task`);
+            }
           }
         }
       }
@@ -586,8 +655,18 @@ export function describeBuildReviewJudgedResultRejection(
       ? '"relocationAudit" entries must match "[relocation-audit] (EXEMPTED|MEASURED): old → new; production hunk(s) (do|do not) force the move"'
       : `"relocationAudit" must be absent or empty for rubric ${rubric}`);
   }
-  if (problems.length === 0 && parseBuildReviewJudgedResult(source) === undefined) {
+  const derivedVerdict = Array.isArray(source.findings)
+    ? (source.findings.length === 0 ? 'PASS' : 'FAIL')
+    : undefined;
+  const hasVerdictContradiction = derivedVerdict !== undefined && (
+    (source.verdict !== undefined && source.verdict !== derivedVerdict) ||
+    (source.passed !== undefined && source.passed !== (derivedVerdict === 'PASS'))
+  );
+  if (problems.length === 0 && hasVerdictContradiction) {
     problems.push('a supplied "verdict"/"passed" field contradicts the findings array — omit both; the engine derives the verdict');
+  }
+  if (problems.length === 0 && parseBuildReviewJudgedResult(source, references) === undefined) {
+    problems.push('the result did not satisfy the judged contract and no enumerated check explains why');
   }
   if (problems.length === 0) return 'the result parsed but did not satisfy the judged contract (duplicate finding identities are rejected)';
   const shown = problems.slice(0, MAX_REJECTION_PROBLEMS);

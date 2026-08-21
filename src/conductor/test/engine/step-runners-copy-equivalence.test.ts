@@ -130,7 +130,7 @@ describe('build_review copy equivalence', () => {
 
     await expect(subject.run('build_review', {})).resolves.toMatchObject({
       success: false,
-      output: expect.stringMatching(/judged-result contract not satisfied/i),
+      output: expect.stringMatching(/judged-result repair was byte-identical to the rejected output/i),
     });
 
     malformed = false;
