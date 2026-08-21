@@ -1960,7 +1960,7 @@ export class DefaultStepRunner implements StepRunner {
       (result) => result.kind === 'judged' && result.findings.length > 0,
     );
     return {
-      success: effective.effective.verdict === 'PASS' || (infrastructureFailure !== undefined && hasJudgedFinding),
+      success: effective.effective.verdict === 'PASS' || hasJudgedFinding,
       output: JSON.stringify(aggregate),
       ...(infrastructureFailure === undefined ? {} : { currentLapMechanicalFault: true }),
     };

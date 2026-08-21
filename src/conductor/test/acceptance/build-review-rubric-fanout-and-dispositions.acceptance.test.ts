@@ -333,7 +333,7 @@ describe('acceptance: independent build_review rubric execution', () => {
           evidenceLocations: ['src/feature.ts:1'],
           anchor: { rubric: 'scope', path: 'src/feature.ts', relation: 'not-authorized-by-plan' },
         }] : [];
-        return { success: true, output: JSON.stringify({ kind: 'judged', rubric: projection.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings, verdict: findings.length ? 'FAIL' : 'PASS' }), exitCode: 0 };
+        return { success: true, output: JSON.stringify({ findings }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const runner = new DefaultStepRunner(provider, 'maker-session', dir, { planPath, pipelineDir: join(dir, '.pipeline'), config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig, buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) } });
@@ -363,11 +363,7 @@ describe('acceptance: independent build_review rubric execution', () => {
           : [];
         return {
           success: true,
-          output: JSON.stringify({
-            kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-            snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings,
-            verdict: findings.length === 0 ? 'PASS' : 'FAIL',
-          }),
+          output: JSON.stringify({ findings }),
           exitCode: 0,
         };
       }),

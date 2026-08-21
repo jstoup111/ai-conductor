@@ -420,6 +420,7 @@ describe('engine/build-review verdict wiring contract', () => {
       result: {
         success: false,
         output: 'build_review mechanical fault in scope (malformed-artifact): invalid-provider-result: worker response unavailable',
+        currentLapMechanicalFault: true,
       },
       staleAggregate: null,
     });

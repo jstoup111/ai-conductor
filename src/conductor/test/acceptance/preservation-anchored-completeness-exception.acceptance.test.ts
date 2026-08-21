@@ -270,15 +270,7 @@ async function judgeScenario(scenario: Scenario): Promise<{
       const findings = syntheticFailure.map(finding);
       return {
         success: true,
-        output: JSON.stringify({
-          kind: 'judged',
-          rubric: projection.rubric,
-          lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v3',
-          findings,
-          verdict: findings.length === 0 ? 'PASS' : 'FAIL',
-        }),
+        output: JSON.stringify({ findings }),
         exitCode: 0,
       };
     }),
