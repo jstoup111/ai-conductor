@@ -835,14 +835,15 @@ Blocking plan-authoring check for tasks that name another feature's artifact und
 the named plan, resolves each task's `**Files:**` set (including `same` inheritance), and writes
 nothing. Own-feature paths and unsealed `.docs/` paths pass.
 
-A task with no `**Files:**` line is also scanned: a protected artifact cited in its prose (a backtick
-path, e.g. `` `.docs/specs/other-feature.md` ``) is reported too, since there is no declared scope to
-prove the reference is context rather than a target.
+Every task's prose is also scanned, whether or not it has a `**Files:**` line: a protected artifact
+cited in a backtick path (e.g. `` `.docs/specs/other-feature.md` ``) is reported alongside any
+declared `**Files:**` violation, since a `**Files:**` declaration does not resolve a foreign
+protected reference elsewhere in the task.
 
 | Outcome | Output | Exit |
 | --- | --- | --- |
 | No violations | `No protected-target violations found.` | 0 |
-| Violation | One line per offending path: `Task <id>: <path> — ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the task's targets.` | 1 |
+| Violation | One line per offending path: `Task <id>: <path> — return this amendment to DECIDE; BUILD tasks must not target protected artifacts.` | 1 |
 
 Run it before committing a plan. Correct the accepted artifact during DECIDE and re-author the task;
 do not hand the amendment to BUILD. The land gate repeats this check when a spec is landed.

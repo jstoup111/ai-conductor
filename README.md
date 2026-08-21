@@ -133,6 +133,7 @@ owns that call.
 - [Corrupt intake ledger or stuck ledger lease](docs/runbooks/corrupt-intake-ledger.md)
 - [Daemon recovery](docs/runbooks/daemon-recovery.md)
 - [Shipped-record reconciliation](docs/runbooks/shipped-record-reconciliation.md)
+- [Protected-artifact plan deadlock](docs/runbooks/protected-artifact-plan-deadlock.md)
 
 **Contributing** — modifying the harness itself
 
