@@ -436,10 +436,7 @@ async function finishRetryEventsFor(
     projectRoot: root,
     fromStep: 'finish',
     mode: 'auto',
-    // This fixture isolates the coordinator-to-Conductor disposition handoff.
-    // Daemon mode additionally requires fresh SHIP validator artifacts before
-    // it may enter FINISH, which is outside that boundary.
-    daemon: false,
+    daemon: true,
     verifyArtifacts: false,
     git: async () => ({ stdout: '' }),
     gh: async () => ({ stdout: '' }),

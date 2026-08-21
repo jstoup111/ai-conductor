@@ -99,9 +99,23 @@ run_case() {
 }
 
 run_pty_case() {
-  local case_home=$1 case_name=$2 install_args=$3
-  printf '3\n1\n1\n' | timeout -k 1s 8s script -qec "env HOME='$case_home' PATH='$STUBS:$PATH' '$CHECKOUT/bin/install' $install_args --allow-worktree-root" \
-    "$TMP_ROOT/${case_name}.log" < /dev/null 2>&1 || true
+  local case_home=$1 case_name=$2 install_args=$3 prompt_answers=${4:-'3\n1\n1\n'}
+  printf '%b' "$prompt_answers" | timeout -k 1s 8s script -qec "env HOME='$case_home' PATH='$STUBS:$PATH' '$CHECKOUT/bin/install' $install_args --allow-worktree-root" \
+    "$TMP_ROOT/${case_name}.log" 2>&1 || true
+}
+
+snapshot_home() {
+  local case_home=$1
+  (
+    cd "$case_home"
+    find . -mindepth 1 -printf '%y %p -> %l\n' | sort | while IFS= read -r entry; do
+      path=${entry#? }
+      path=${path%% -> *}
+      if [ -f "$path" ] && [ ! -L "$path" ]; then
+        sha256sum "$path"
+      fi
+    done
+  )
 }
 
 ENV_HOME="$TMP_ROOT/home-env"
@@ -114,7 +128,7 @@ PRECEDENCE_OUT=$(AI_CONDUCTOR_CHANNEL=main run_case "$PRECEDENCE_HOME" --channel
 if grep -Fxq '  update_channel: tagged' "$ENV_HOME/.ai-conductor/config.yml" \
   && grep -Fq 'AI_CONDUCTOR_CHANNEL environment variable' <<< "$ENV_OUT" \
   && grep -Fxq '  update_channel: stable' "$EMPTY_ENV_HOME/.ai-conductor/config.yml" \
-  && grep -Fq 'stable fallback' <<< "$EMPTY_ENV_OUT" \
+  && grep -Fq 'Stable was used as a fallback; choose explicitly with --channel, AI_CONDUCTOR_CHANNEL, or bin/update --set-channel.' <<< "$EMPTY_ENV_OUT" \
   && grep -Fxq '  update_channel: stable' "$PRECEDENCE_HOME/.ai-conductor/config.yml" \
   && grep -Fq -- '--channel flag' <<< "$PRECEDENCE_OUT"; then
   echo 'PASS environment fallback, whitespace fallback, and flag precedence choose the expected source'
@@ -126,6 +140,7 @@ for INVALID_CASE in 'flag:--channel bogus' 'missing:--channel' 'empty:--channel=
   IFS=':' read -r CASE_NAME INVALID_ARGS <<< "$INVALID_CASE"
   CASE_HOME="$TMP_ROOT/home-invalid-$CASE_NAME"
   mkdir -p "$CASE_HOME"
+  BEFORE_SNAPSHOT=$(snapshot_home "$CASE_HOME")
   set +e
   if [ "$CASE_NAME" = env ]; then
     INVALID_OUT=$(AI_CONDUCTOR_CHANNEL=bogus run_case "$CASE_HOME")
@@ -135,7 +150,21 @@ for INVALID_CASE in 'flag:--channel bogus' 'missing:--channel' 'empty:--channel=
   fi
   INVALID_CODE=$?
   set -e
+  AFTER_SNAPSHOT=$(snapshot_home "$CASE_HOME")
+  INVALID_SOURCE_OK=true
+  case "$CASE_NAME" in
+    flag)
+      grep -Fq "Unsupported channel 'bogus' from --channel flag" <<< "$INVALID_OUT" || INVALID_SOURCE_OK=false
+      ;;
+    env)
+      grep -Fq "Unsupported channel 'bogus' from AI_CONDUCTOR_CHANNEL environment variable" <<< "$INVALID_OUT" || INVALID_SOURCE_OK=false
+      ;;
+  esac
   if [ "$INVALID_CODE" -ne 0 ] && [ ! -e "$CASE_HOME/.ai-conductor/config.yml" ] \
+    && [ ! -L "$CASE_HOME/.ai-conductor/config.yml" ] \
+    && [ ! -e "$CASE_HOME/.claude/skills" ] && [ ! -L "$CASE_HOME/.claude/skills" ] \
+    && [ "$BEFORE_SNAPSHOT" = "$AFTER_SNAPSHOT" ] \
+    && [ "$INVALID_SOURCE_OK" = true ] \
     && grep -Fq 'stable, tagged, main' <<< "$INVALID_OUT"; then
     echo "PASS invalid ${CASE_NAME} channel is rejected before configuration"
   else
@@ -167,15 +196,20 @@ fi
 
 PTY_FLAG_HOME="$TMP_ROOT/home-pty-flag"
 PTY_ENV_HOME="$TMP_ROOT/home-pty-env"
-mkdir -p "$PTY_FLAG_HOME" "$PTY_ENV_HOME"
+PTY_INTERACTIVE_HOME="$TMP_ROOT/home-pty-interactive"
+mkdir -p "$PTY_FLAG_HOME" "$PTY_ENV_HOME" "$PTY_INTERACTIVE_HOME"
 PTY_FLAG_OUT=$(run_pty_case "$PTY_FLAG_HOME" pty-flag '--channel tagged')
 PTY_ENV_OUT=$(AI_CONDUCTOR_CHANNEL=main run_pty_case "$PTY_ENV_HOME" pty-env '')
+PTY_INTERACTIVE_OUT=$(run_pty_case "$PTY_INTERACTIVE_HOME" pty-interactive '' '3\n3\n1\n1\n')
 if ! grep -Fq 'Harness update channel' <<< "$PTY_FLAG_OUT" \
   && ! grep -Fq 'Harness update channel' <<< "$PTY_ENV_OUT" \
   && grep -Fq 'Created conductor configuration (channel: tagged, source: --channel flag' <<< "$PTY_FLAG_OUT" \
   && grep -Fq 'Created conductor configuration (channel: main, source: AI_CONDUCTOR_CHANNEL environment variable' <<< "$PTY_ENV_OUT" \
   && grep -Fxq '  update_channel: tagged' "$PTY_FLAG_HOME/.ai-conductor/config.yml" \
-  && grep -Fxq '  update_channel: main' "$PTY_ENV_HOME/.ai-conductor/config.yml"; then
+  && grep -Fxq '  update_channel: main' "$PTY_ENV_HOME/.ai-conductor/config.yml" \
+  && grep -Fq 'Harness update channel' <<< "$PTY_INTERACTIVE_OUT" \
+  && grep -Fq 'Created conductor configuration (channel: main, source: interactive prompt' <<< "$PTY_INTERACTIVE_OUT" \
+  && grep -Fxq '  update_channel: main' "$PTY_INTERACTIVE_HOME/.ai-conductor/config.yml"; then
   echo 'PASS explicit flag and environment channel choices suppress the TTY prompt'
 else
   FAILURES="${FAILURES}explicit channel choices did not suppress the TTY prompt\n"
