@@ -7,6 +7,18 @@ import { describe, expect, it } from 'vitest';
 
 const smokeCapability = 'credentialed:claude';
 
+/**
+ * Live probe outcome — 2026-08-21, Claude Code 2.1.238:
+ * - `Task` tool_use: absent; the CLI emitted `Agent` instead.
+ * - Matching `Task` tool_result: absent; the emitted `Agent` had a matching tool_result.
+ * - Non-null `parent_tool_use_id`: observed on the child record.
+ *
+ * Child attribution is therefore observed for the current CLI contract. If a future probe lacks
+ * parent attribution, Claude child observability must be recorded as unsupported rather than
+ * inferring an active-child count.
+ */
+const observedChildToolName = 'Agent';
+
 function claudeBinaryAvailable(): boolean {
   try {
     execFileSync('which', ['claude'], { stdio: 'pipe' });
@@ -39,14 +51,14 @@ function contentBlocks(record: Record<string, unknown>): Array<Record<string, un
 const shouldRun = Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN) && claudeBinaryAvailable();
 
 describe.skipIf(!shouldRun)('smoke/Claude subagent stream attribution', () => {
-  it('records a Task call, its matching result, and a child message attribution', async () => {
+  it('records the observed child-tool call, its matching result, and a child message attribution', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'claude-subagent-stream-smoke-'));
     try {
       const result = await execa(
         'claude',
         [
           '-p',
-          'Use the Task tool exactly once to ask a subagent to reply with "subagent-ok". Wait for its result, then reply with "parent-ok". Do not use any other tools.',
+          'Use the Agent tool exactly once to ask a subagent to reply with "subagent-ok". Wait for its result, then reply with "parent-ok". Do not use any other tools.',
           '--output-format',
           'stream-json',
           '--verbose',
@@ -54,23 +66,23 @@ describe.skipIf(!shouldRun)('smoke/Claude subagent stream attribution', () => {
         { cwd, reject: false, timeout: 240_000 },
       );
       const records = parseRecords(result.stdout);
-      const taskIds = records.flatMap(contentBlocks).flatMap((block) =>
-        block.type === 'tool_use' && block.name === 'Task' && typeof block.id === 'string' ? [block.id] : [],
+      const childToolIds = records.flatMap(contentBlocks).flatMap((block) =>
+        block.type === 'tool_use' && block.name === observedChildToolName && typeof block.id === 'string' ? [block.id] : [],
       );
       const hasMatchingResult = records
         .flatMap(contentBlocks)
         .some((block) => block.type === 'tool_result'
           && typeof block.tool_use_id === 'string'
-          && taskIds.includes(block.tool_use_id));
+          && childToolIds.includes(block.tool_use_id));
       const hasChildMessage = records.some((record) =>
         typeof record.parent_tool_use_id === 'string' && record.parent_tool_use_id.length > 0,
       );
 
       expect({
-        taskToolUse: taskIds.length > 0,
+        childToolUse: childToolIds.length > 0,
         matchingToolResult: hasMatchingResult,
         childMessage: hasChildMessage,
-      }).toEqual({ taskToolUse: true, matchingToolResult: true, childMessage: true });
+      }).toEqual({ childToolUse: true, matchingToolResult: true, childMessage: true });
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
