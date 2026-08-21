@@ -475,7 +475,9 @@ describe('build-review domain', () => {
       get detail(): never { throw new Error('detail must not contribute to the closed cause'); },
     };
 
-    expect(() => buildReviewDomain.deriveBuildReviewInfrastructureFailureReason(branch)).toThrow(/contract defect/i);
+    expect(() => buildReviewDomain.deriveBuildReviewInfrastructureFailureReason(
+      branch as unknown as { readonly reason: buildReviewDomain.BuildReviewCoordinatorFailureReason },
+    )).toThrow(/contract defect/i);
   });
 });
 

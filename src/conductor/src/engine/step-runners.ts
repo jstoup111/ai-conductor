@@ -1898,13 +1898,15 @@ export class DefaultStepRunner implements StepRunner {
       const hasJudgedFinding = Object.values(validResults).some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
       );
-      const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review');
-      if (!hasJudgedFinding && mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
-        return {
-          success: false,
-          output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
-          currentLapMechanicalFault: true,
-        };
+      if (!hasJudgedFinding) {
+        const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review');
+        if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+          return {
+            success: false,
+            output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
+            currentLapMechanicalFault: true,
+          };
+        }
       }
     }
 

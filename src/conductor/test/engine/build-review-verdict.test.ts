@@ -364,6 +364,67 @@ describe('engine/build-review verdict wiring contract', () => {
     expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(1);
   });
 
+  it('does not consume the mechanical allowance when a mixed lap publishes a judged finding', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-mixed-lap-'));
+    dirs.push(dir);
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, mechanicalFaults: 0, treeHash: null,
+          lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready',
+      branches: [
+        { kind: 'infrastructure-failure', rubric: 'scope', reason: 'invalid-provider-result', detail: 'worker response unavailable' },
+        ...(['tautology', 'rootCause', 'completeness'] as const).map((rubric) => ({ kind: 'dispatched' as const, rubric, result: {} as never })),
+      ],
+    });
+    const provider: LLMProvider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
+    const runner = new DefaultStepRunner(provider, 'mixed-lap', dir, {
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: dir, feature: 'mixed-lap' },
+        effective: {
+          rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: ['sha256:unresolved'],
+          skippedRubrics: [], infrastructureFailureRubrics: ['scope'],
+        },
+      }),
+      buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({
+        version: 1,
+        rubric,
+        lapId,
+        snapshotDigest,
+        result: rubric === 'rootCause'
+          ? {
+              kind: 'judged' as const, rubric, lapId, snapshotDigest, contractVersion: 'v1' as never,
+              findings: [{
+                concernKind: 'root-cause-unaddressed', summary: 'The defect remains.', evidenceLocations: ['src/engine.ts:1'],
+                anchor: { rubric: 'rootCause' as const, statedDefect: 'The defect is fixed.', locus: 'src/engine.ts', relation: 'root-cause-unaddressed' },
+              }], verdict: 'FAIL' as const,
+            }
+          : { kind: 'judged' as const, rubric, lapId, snapshotDigest, contractVersion: 'v3' as never, findings: [], verdict: 'PASS' as const },
+        provenance: { kind: 'fresh' as const },
+      }),
+    });
+    const inputs = {
+      sourceSnapshot: { headSha: 'mixed-lap', digest: 'sha256:mixed-lap', mergeBase: 'base' },
+    } as BuildReviewFrozenInputs;
+
+    const result = await (runner as unknown as {
+      runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; currentLapMechanicalFault?: boolean }>;
+    }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+    expect(result).toMatchObject({ success: true, currentLapMechanicalFault: true });
+    expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(0);
+    await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).resolves.toContain('The defect remains.');
+  });
+
   it('clears a prior-lap aggregate instead of using it as a mechanical lap rework hint', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'build-review-mechanical-stale-aggregate-'));
     dirs.push(dir);

@@ -44,6 +44,7 @@ export type BuildReviewCoordinatorFailureReason =
   | 'cache-read-failed'
   | 'cache-write-failed'
   | 'artifact-write-failed'
+  | 'projection-rubric-mismatch'
   | 'invalid-provider-result'
   | 'provider-error'
   | 'missing-settlement';
@@ -67,6 +68,7 @@ export const mapBuildReviewCoordinatorFailureReason: Readonly<Record<
   'cache-read-failed': 'artifact-read-failed',
   'cache-write-failed': 'artifact-write-failed',
   'artifact-write-failed': 'artifact-write-failed',
+  'projection-rubric-mismatch': 'malformed-artifact',
   'invalid-provider-result': 'malformed-artifact',
   'provider-error': 'provider-error',
   'missing-settlement': 'missing-artifact',
@@ -77,10 +79,10 @@ export const mapBuildReviewCoordinatorFailureReason: Readonly<Record<
  * reason. Diagnostics deliberately do not participate in this identity.
  */
 export function deriveBuildReviewInfrastructureFailureReason(
-  branch: { readonly reason: string },
+  branch: { readonly reason: BuildReviewCoordinatorFailureReason },
 ): BuildReviewInfrastructureFailureReason {
   if (Object.hasOwn(mapBuildReviewCoordinatorFailureReason, branch.reason)) {
-    return mapBuildReviewCoordinatorFailureReason[branch.reason as BuildReviewCoordinatorFailureReason];
+    return mapBuildReviewCoordinatorFailureReason[branch.reason];
   }
   throw new Error(`Build review coordinator contract defect: unmapped failure reason ${branch.reason}`);
 }
