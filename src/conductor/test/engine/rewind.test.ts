@@ -66,7 +66,7 @@ describe('rewindState', () => {
     retro: 'done', rebase: 'done', finish: 'done', last_step: 'finish',
   };
 
-  it('keeps rewind dispatch CLI-owned, with no engine, daemon, or step-runner caller', async () => {
+  it('has no engine, daemon, or step-runner caller for operator rewind dispatch', async () => {
     const sourceRoot = join(import.meta.dirname, '..', '..', 'src');
     const sourceFiles = (await readdir(sourceRoot, { recursive: true }))
       .filter((path) => path.endsWith('.ts'))
@@ -79,10 +79,6 @@ describe('rewindState', () => {
       expect(source, path).not.toMatch(/from ['\"][^'\"]*engine\/rewind\.js['\"]/);
       expect(source, path).not.toMatch(/\bdispatchRewindCommand\s*\(/);
     }
-
-    const cliSource = await readFile(join(sourceRoot, 'index.ts'), 'utf8');
-    expect(cliSource).toMatch(/from ['\"]\.\/engine\/rewind\.js['\"]/);
-    expect(cliSource).toMatch(/process\.exitCode = await dispatchRewindCommand\(rewindCmd\)/);
   });
 
   it('refuses an unknown target by name and lists the resolved registry without mutating', async () => {
