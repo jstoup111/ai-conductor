@@ -557,3 +557,5 @@ Release-Category: Fixed
 Release-Semver: minor
 Release-Note: A rebase that invalidates the aggregate test-suite proof now re-runs the suite instead of stranding the run at an unclearable HALT, and `conduct-ts rewind` returns a feature to a named earlier step without hand-editing pipeline state.
 ```
+### Task rem-root-cause-1: src/conductor/src/engine/conductor.ts:3905 — re-evaluate tree-attesting completion while selecting the resume entry so a satisfied verdict with a STALE proof pulls startIndex back to test_suite; src/conductor/test/engine/conductor-gate-loop.test.ts:96 — remove the findResumeIndex override and assert the production resume path dispatches test_suite before build_review
+### Task rem-completeness-1: src/conductor/test/engine/rewind.test.ts:123 — add a source-scan guard covering engine, daemon, and step-runner files that fails on any non-CLI import of or call into src/engine/rewind.js, preserving src/conductor/src/index.ts:516 as the CLI-owned invocation boundary
