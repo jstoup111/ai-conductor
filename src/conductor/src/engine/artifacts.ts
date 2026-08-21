@@ -1287,6 +1287,20 @@ function isManualTestFailRow(line: string): boolean {
 }
 
 /**
+ * True when a markdown table row records an explicit non-failing result.
+ * Manual-test completion is fail-closed: a row with an unrecognized result
+ * (for example MAYBE) is not evidence that the corresponding story passed.
+ * Individual SKIP rows remain valid for engine-internal criteria; a whole
+ * skipped attempt uses the separate sentinel below.
+ */
+function isManualTestNonFailRow(line: string): boolean {
+  return line
+    .split('|')
+    .map((cell) => cell.trim())
+    .some((cell) => /^(?:PASS|SKIP)$/i.test(cell));
+}
+
+/**
  * Fixed, greppable sentinel marking a manual-test attempt section as
  * deliberately SKIPPED (auto mode, no endpoint/UI stories to exercise) rather
  * than a normal PASS/FAIL verdict. Written on its own line inside the
@@ -2624,6 +2638,12 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return {
         done: false,
         reason: '.pipeline/manual-test-results.md contains FAIL rows (latest attempt) — fix the bugs (commits required) and re-run manual-test',
+      };
+    }
+    if (!isSkipAttempt(region) && !region.split('\n').some(isManualTestNonFailRow)) {
+      return {
+        done: false,
+        reason: '.pipeline/manual-test-results.md has no recognized PASS or SKIP rows in the latest attempt — record each story as PASS, FAIL, or SKIP before completing manual-test',
       };
     }
     if (!(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {

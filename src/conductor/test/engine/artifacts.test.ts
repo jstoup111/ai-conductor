@@ -2840,6 +2840,15 @@ describe('engine/artifacts', () => {
       expect(result).toEqual({ done: true });
     });
 
+    it('fails closed when the latest results contain no recognized result row', async () => {
+      await createFile(RESULTS, '| Story | Result |\n|---|---|\n| Foo | MAYBE |\n');
+      const result = await checkStepCompletion(dir, 'manual_test', {
+        sessionStartedAt: 0,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/no recognized PASS or SKIP rows/);
+    });
+
     it('rejects a stale results file when sessionStartedAt is newer than mtime', async () => {
       await createFile(RESULTS, '| Story | Result |\n|---|---|\n| Foo | PASS |\n');
       const past = new Date(Date.now() - 60_000);
