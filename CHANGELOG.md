@@ -49,6 +49,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Installed harness skills now stay explicit-only unless same-session workflow composition requires implicit invocation. ([implementation PR #1762](https://github.com/jstoup111/ai-conductor/pull/1762)).
 - Operators can accept build_review findings on every rubric; identity round-trip no longer rejects the engine's own output. ([implementation PR #1770](https://github.com/jstoup111/ai-conductor/pull/1770)).
 - FINISH no longer halts on genuine PR prose when the authoring pass leaves the engine's body-floor marker in place; a floored body is now recognized by its content, not by marker presence alone. ([implementation PR #1773](https://github.com/jstoup111/ai-conductor/pull/1773)).
+- prd-audit reads FR verdicts only from the report's Verdict Table section, so a prior-cycle history table can no longer block an all-ALIGNED audit. ([implementation PR #1780](https://github.com/jstoup111/ai-conductor/pull/1780)).
 
 ## [0.103.0] - 2026-08-17
 
