@@ -103,10 +103,10 @@ describe('build-review dispositions', () => {
       lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
     });
 
-    const appended = await store.appendReducedCoverage({
+    const appended = await store.appendReducedCoverageIfCurrent({
       feature, rubric: 'tautology', reason: 'preflight-failed',
       rationale: 'The merge-base fixture is unavailable in this worktree.', operator: 'james',
-    });
+    }, async () => true);
 
     expect(appended).toEqual({
       ok: true,
@@ -142,9 +142,9 @@ describe('build-review dispositions', () => {
       lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
     });
 
-    await expect(store.appendReducedCoverage({
+    await expect(store.appendReducedCoverageIfCurrent({
       feature, rubric: 'tautology', reason: 'preflight-failed', rationale: '   ', operator: 'james',
-    })).resolves.toMatchObject({ ok: false, kind: 'invalid' });
+    }, async () => true)).resolves.toMatchObject({ ok: false, kind: 'invalid' });
 
     expect(filesystem.writes).toEqual([]);
     await expect(store.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
@@ -180,7 +180,7 @@ describe('build-review dispositions', () => {
       feature, rubric: 'tautology' as const, reason: 'preflight-failed' as const, rationale: 'reason', operator: 'james',
     };
 
-    await expect(unreadable.appendReducedCoverage(input)).resolves.toMatchObject({ ok: false, kind: 'unreadable' });
+    await expect(unreadable.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: false, kind: 'unreadable' });
     expect(filesystem.writes).toEqual([]);
 
     const unwritableFilesystem = new MemoryFilesystem();
@@ -190,7 +190,7 @@ describe('build-review dispositions', () => {
       lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
     });
 
-    await expect(unwritable.appendReducedCoverage(input)).resolves.toMatchObject({ ok: false, kind: 'filesystem' });
+    await expect(unwritable.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: false, kind: 'filesystem' });
     await expect(unwritable.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
   });
 
@@ -200,9 +200,9 @@ describe('build-review dispositions', () => {
       filesystem,
       lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
     });
-    const accepted = await store.appendReducedCoverage({
+    const accepted = await store.appendReducedCoverageIfCurrent({
       feature, rubric: 'tautology', reason: 'preflight-failed', rationale: 'reason', operator: 'james',
-    });
+    }, async () => true);
     expect(accepted).toMatchObject({ ok: true });
     if (!accepted.ok) throw new Error('expected reduced-coverage record');
 

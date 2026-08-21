@@ -250,10 +250,17 @@ export function bumpMechanicalFaults(entry: KickbackGateEntry): KickbackGateEntr
 export async function bumpMechanicalFaultsInLedger(
   projectRoot: string,
   gate: string,
-): Promise<KickbackGateEntry | undefined> {
+): Promise<KickbackGateEntry> {
   const ledger = await readKickbackLedger(projectRoot);
-  const entry = ledger.gates[gate];
-  if (!entry) return undefined;
+  const entry = ledger.gates[gate] ?? {
+    count: 0,
+    cumulative: 0,
+    mechanicalFaults: 0,
+    treeHash: null,
+    lastReason: '',
+    priorVerdict: true,
+    resolvedBefore: 0,
+  };
 
   const nextEntry = bumpMechanicalFaults(entry);
   await writeKickbackLedger(projectRoot, {

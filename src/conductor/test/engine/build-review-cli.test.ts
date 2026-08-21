@@ -254,7 +254,7 @@ describe('build-review findings CLI', () => {
     });
     const deps = {
       cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
-      readFile: async () => JSON.stringify(faultOnly), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      readFile: async () => JSON.stringify(faultOnly), readMechanicalFaults: async () => 3, createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
     };
     const machine = vi.fn();
     const human = vi.fn();
@@ -269,6 +269,28 @@ describe('build-review findings CLI', () => {
       }),
       human: expect.stringMatching(/Blocked by exhausted mechanical faults, not unresolved findings\.[\s\S]*Exhausted mechanical fault: rootCause; cause: provider-error; diagnostic: offline/),
     });
+  });
+
+  it('does not label a mixed lap exhausted while allowance remains, and applies recorded reduced coverage to its effective verdict', async () => {
+    const print = vi.fn();
+    const decision = {
+      kind: 'reduced-coverage' as const, version: 'v1' as const,
+      feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' },
+      identity: { rubric: 'rootCause' as const, reason: 'provider-error' as const },
+      rationale: 'approved', operator: 'operator', acceptedAt: '2026-08-20T00:00:00.000Z',
+    };
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate), readMechanicalFaults: async () => 2,
+      createStore: () => ({
+        list: async () => ({ ok: true as const, records: [] }),
+        listReducedCoverage: async () => ({ ok: true as const, records: [decision] }),
+        append: vi.fn(),
+      }),
+      print,
+    })).resolves.toBe(0);
+    expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [expect.any(String)] });
+    expect(JSON.parse(print.mock.calls[0]![0]).exhaustedMechanicalFaults).toBeUndefined();
   });
 
   it('keeps a fault-free report byte-identical to the existing output', async () => {

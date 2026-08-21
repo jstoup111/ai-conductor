@@ -418,29 +418,6 @@ export class BuildReviewDispositionStore {
     }
   }
 
-  /** Persist a reduced-coverage decision under the same durable state lease. */
-  async appendReducedCoverage(input: BuildReviewReducedCoverageInput): Promise<BuildReviewReducedCoverageAppendResult> {
-    const feature = parseFeatureIdentity(input.feature);
-    const identity = parseReducedCoverageIdentity({ rubric: input.rubric, reason: input.reason });
-    if (!feature || !identity || !nonEmptyString(input.rationale) || !nonEmptyString(input.operator)) {
-      return { ok: false, kind: 'invalid', message: 'build-review reduced-coverage input is invalid' };
-    }
-    const acquired = await this.acquire();
-    if (!acquired.ok) return acquired;
-    try {
-      const loaded = await this.load();
-      if (!loaded.ok) return loaded;
-      const disposition: BuildReviewReducedCoverageDispositionRecord = {
-        kind: 'reduced-coverage', version: STORE_VERSION, feature, identity,
-        rationale: input.rationale, operator: input.operator, acceptedAt: new Date(this.clock()).toISOString(),
-      };
-      const replaced = await this.replace({ version: STORE_VERSION, records: [...loaded.state.records, disposition] });
-      return replaced.ok ? { ok: true, record: disposition } : replaced;
-    } finally {
-      await acquired.release();
-    }
-  }
-
   /**
    * Validates a reduced-coverage decision against current caller-owned state
    * and appends it under the aggregate publisher's shared lease.

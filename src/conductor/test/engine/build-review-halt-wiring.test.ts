@@ -781,7 +781,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
             join(repo, '.pipeline/build-review.json'),
             JSON.stringify(aggregate),
           );
-          return { success: false, output: 'scope rubric infrastructure failure' };
+          return { success: false, output: 'scope rubric infrastructure failure', currentLapMechanicalFault: true };
         }
         return { success: true };
       },

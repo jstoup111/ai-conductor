@@ -62,10 +62,8 @@ import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
-  bumpMechanicalFaults,
+  bumpMechanicalFaultsInLedger,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
-  readKickbackLedger,
-  writeKickbackLedger,
 } from './kickback-ledger.js';
 import {
   deriveBuildReviewInfrastructureFailureReason,
@@ -1900,24 +1898,12 @@ export class DefaultStepRunner implements StepRunner {
       const hasJudgedFinding = Object.values(validResults).some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
       );
-      const ledger = await readKickbackLedger(this.projectDir);
-      const mechanicalFaults = bumpMechanicalFaults(ledger.gates.build_review ?? {
-        count: 0,
-        cumulative: 0,
-        mechanicalFaults: 0,
-        treeHash: null,
-        lastReason: '',
-        priorVerdict: true,
-        resolvedBefore: 0,
-      });
-      await writeKickbackLedger(this.projectDir, {
-        ...ledger,
-        gates: { ...ledger.gates, build_review: mechanicalFaults },
-      });
+      const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review');
       if (!hasJudgedFinding && mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         return {
           success: false,
           output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
+          currentLapMechanicalFault: true,
         };
       }
     }
@@ -1974,8 +1960,9 @@ export class DefaultStepRunner implements StepRunner {
       (result) => result.kind === 'judged' && result.findings.length > 0,
     );
     return {
-      success: effective.effective.verdict === 'PASS' || hasJudgedFinding,
+      success: effective.effective.verdict === 'PASS' || (infrastructureFailure !== undefined && hasJudgedFinding),
       output: JSON.stringify(aggregate),
+      ...(infrastructureFailure === undefined ? {} : { currentLapMechanicalFault: true }),
     };
   }
 

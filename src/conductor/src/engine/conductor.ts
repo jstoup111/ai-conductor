@@ -542,6 +542,8 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** True only when this build-review lap observed an infrastructure fault. */
+  currentLapMechanicalFault?: boolean;
   /**
    * Typed only by the FINISH composition boundary. Kept unknown at this edge
    * so malformed adapter results fail closed instead of reaching remediation.
@@ -6778,6 +6780,7 @@ export class Conductor {
                 }
               }).catch(() => undefined);
               if (
+                result.currentLapMechanicalFault === true &&
                 (mechanicalEntry?.mechanicalFaults ?? 0) >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW &&
                 aggregateRaw !== undefined
               ) {
@@ -6923,7 +6926,7 @@ export class Conductor {
               const mechanicalFaults = (await readKickbackLedger(this.projectRoot))
                 .gates.build_review?.mechanicalFaults ?? 0;
               if (
-                result.output?.startsWith('build_review mechanical fault') &&
+                result.currentLapMechanicalFault === true &&
                 mechanicalFaults > 0 &&
                 mechanicalFaults < MAX_MECHANICAL_FAULTS_BUILD_REVIEW
               ) {

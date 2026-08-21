@@ -231,7 +231,9 @@ describe('build_review input isolation', () => {
     await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({
       success: false,
       output: 'build_review mechanical fault in scope (malformed-artifact): invalid-provider-result: the rubric worker lost its response payload',
+      currentLapMechanicalFault: true,
     });
+    await expect(readFile(join(dir, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
   });
 
   it('keeps a judged finding with environment-sounding prose in the blocking finding lane', async () => {
@@ -269,6 +271,7 @@ describe('build_review input isolation', () => {
     const result = await runner.run('build_review', {} as never);
 
     expect(result).toMatchObject({ success: false });
+    expect(result.currentLapMechanicalFault).toBeUndefined();
     expect(result.output).toContain('The environment cannot load this change safely.');
     await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
       'The environment cannot load this change safely.',

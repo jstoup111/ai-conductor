@@ -719,7 +719,10 @@ describe('production FINISH publication composition', () => {
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => undefined,
         resolveFeatureIdentity: async () => feature,
-        createDispositionStore: () => ({ list: async () => ({ ok: true, records: Object.freeze([accepted]) }) }),
+        createDispositionStore: () => ({
+          list: async () => ({ ok: true, records: Object.freeze([accepted]) }),
+          listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+        }),
       });
       const state = {
         feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
@@ -771,7 +774,10 @@ describe('production FINISH publication composition', () => {
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => { throw new Error('presentation repair must not run before the risk projection settles'); },
         resolveFeatureIdentity: async () => ({ version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' }),
-        createDispositionStore: () => ({ list: async () => ({ ok: false, kind: 'unreadable' as const, message: 'disposition store unreadable' }) }),
+        createDispositionStore: () => ({
+          list: async () => ({ ok: false, kind: 'unreadable' as const, message: 'disposition store unreadable' }),
+          listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+        }),
       });
       const state = {
         feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,

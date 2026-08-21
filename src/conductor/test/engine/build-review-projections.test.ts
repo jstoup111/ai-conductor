@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
-import { renderBuildReviewReducedCoverageEvidence } from '../../src/engine/artifacts.js';
+import { renderBuildReviewReducedCoverageEvidence } from '../../src/engine/build-review-projections.js';
 import {
   BUILD_REVIEW_PROVENANCE_KEYS,
   deriveBuildReviewRubricProjections,

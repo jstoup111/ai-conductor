@@ -7,6 +7,7 @@ import {
 } from './build-review-domain.js';
 import {
   matchesBuildReviewDisposition,
+  matchesBuildReviewReducedCoverageDisposition,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
   type BuildReviewReducedCoverageDispositionRecord,
@@ -233,9 +234,11 @@ export function deriveEffectiveBuildReviewVerdict(
     }
     if (result.kind === 'infrastructure-failure') {
       infrastructure.push(rubric);
-      if (!reducedCoverage.some((decision) =>
-        decision.identity.rubric === rubric && decision.identity.reason === result.reason,
-      )) uncoveredInfrastructureCount += 1;
+      if (!reducedCoverage.some((decision) => matchesBuildReviewReducedCoverageDisposition(
+        decision.feature,
+        { rubric, reason: result.reason },
+        [decision],
+      ))) uncoveredInfrastructureCount += 1;
       continue;
     }
     judgedCount += 1;
@@ -283,7 +286,10 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   return deriveEffectiveBuildReviewVerdict(
     aggregate,
     acceptedIds,
-    reducedCoverage.filter((decision) => decision.feature.version === feature.version &&
-      decision.feature.repository === feature.repository && decision.feature.feature === feature.feature),
+    reducedCoverage.filter((decision) => matchesBuildReviewReducedCoverageDisposition(
+      feature,
+      decision.identity,
+      [decision],
+    )),
   );
 }

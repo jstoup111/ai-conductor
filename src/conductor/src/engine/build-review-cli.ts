@@ -3,7 +3,7 @@ import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate } from './build-review-aggregate.js';
-import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { parseBuildReviewLapId } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
@@ -24,6 +24,7 @@ export interface BuildReviewFindingsDeps {
   readonly realpath?: (path: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<string>;
   readonly createStore?: (worktree: string) => DispositionStore;
+  readonly readMechanicalFaults?: (worktree: string) => Promise<number | undefined>;
   readonly print?: (output: string) => void;
 }
 
@@ -45,6 +46,7 @@ export interface BuildReviewRecordReducedCoverageCommand {
 
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
+  listReducedCoverage?(feature: unknown): Promise<BuildReviewReducedCoverageListResult>;
   append(input: Parameters<BuildReviewDispositionStore['append']>[0]): Promise<BuildReviewDispositionAppendResult>;
   appendIfCurrent?: BuildReviewDispositionStore['appendIfCurrent'];
 };
@@ -87,10 +89,12 @@ type ExhaustedMechanicalFault = {
   readonly diagnostic: string;
 };
 
-/** An aggregate carrying an infrastructure result is published only after the shared retry bound. */
+/** Only an infrastructure result published after its mechanical allowance is exhausted is terminal. */
 function exhaustedMechanicalFaults(
   aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
+  mechanicalFaults: number,
 ): readonly ExhaustedMechanicalFault[] {
+  if (mechanicalFaults < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) return [];
   return Object.values(aggregate.results).flatMap((result) => result.kind === 'infrastructure-failure'
     ? [{ rubric: result.rubric, cause: result.reason, diagnostic: result.detail }]
     : []);
@@ -172,13 +176,20 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate) throw new Error('aggregate is malformed');
-    const listed = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).list(feature);
+    const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
+    const listed = await store.list(feature);
     if (!listed.ok) throw new Error(listed.message);
     const records = listed.records;
-    const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records);
+    const reducedCoverage = store.listReducedCoverage
+      ? await store.listReducedCoverage(feature)
+      : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
+    if (!reducedCoverage.ok) throw new Error(reducedCoverage.message);
+    const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string) =>
+      (await readKickbackLedger(root)).gates.build_review?.mechanicalFaults);
+    const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, reducedCoverage.records);
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
-    const faults = exhaustedMechanicalFaults(aggregate);
+    const faults = exhaustedMechanicalFaults(aggregate, (await readMechanicalFaults(worktree)) ?? 0);
     const output = {
       feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...effective, acceptedDispositions: accepted,
       ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
