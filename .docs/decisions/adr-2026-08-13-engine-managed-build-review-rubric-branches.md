@@ -210,6 +210,8 @@ resolved provider/model/effort/fallback/retry policy fingerprint. Skips are comp
 cache and provider layers. Infrastructure failures and malformed or unsupported cache entries are
 never reusable.
 
+> **Amended 2026-08-21 by #1759:** the cache key gains a sixth component, `engineIdentity` (engine dist content stamp + per-rubric SKILL.md digest), so a changed judging engine or rubric text also invalidates deterministically. The five components above are unchanged. See [adr-2026-08-21-engine-identity-in-build-review-cache-key](adr-2026-08-21-engine-identity-in-build-review-cache-key.md).
+
 A cache hit reuses only a previously validated semantic `judged` result. The coordinator stamps it
 into the current lap's rubric artifact with its current lap and snapshot identities plus explicit
 cache provenance, emits a cache-hit event, and passes it through the same identity validation and
