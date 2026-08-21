@@ -146,7 +146,16 @@ depends on.
   as already recorded, and changes nothing.
 
 - **FR-15** Existing recorded state written before this change continues to be read
-  successfully, and reviews with no mechanical faults behave identically to today.
+  successfully, and reviews with no mechanical faults reach the same OUTCOME as today — a
+  fault-free judged FAIL still blocks the build and no reduced-coverage decision can clear it.
+
+  **Amended 2026-08-21 (operator).** This parity is on outcome, not on the step-result
+  routing contract. A grader that RAN and returned a not-PASS verdict returns
+  `success: true` (`src/conductor/src/engine/step-runners.ts:1962`), which is the contract
+  documented at `src/conductor/src/engine/conductor.ts:609`: the completion predicate catches
+  the FAIL and the #646 retry-routing kickback fires in one lap. Scoping that override to
+  mechanical laps would restore the pre-change retry-ladder burn on every judged FAIL — the
+  cost NFR-4 exists to bound — so it is explicitly out of scope for FR-15 and FR-12.
 
 ## Non-Functional Requirements
 
