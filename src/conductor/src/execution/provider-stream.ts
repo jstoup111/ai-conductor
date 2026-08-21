@@ -76,7 +76,14 @@ export function accumulateProviderStreamTokens(records: Iterable<unknown>): Prov
     // the per-message sum double counts every token, so accumulate only the
     // incremental records — the live burn is built from per-message usage.
     if ((record as Record<string, unknown>).type === 'result') continue;
-    const usage = (record as Record<string, unknown>).usage;
+    const recordFields = record as Record<string, unknown>;
+    const message = recordFields.message;
+    // Claude stream-json assistant records carry their incremental usage in
+    // the message envelope. Retain top-level usage for normalized records,
+    // while preferring the provider's real stream shape.
+    const usage = typeof message === 'object' && message !== null
+      ? (message as Record<string, unknown>).usage ?? recordFields.usage
+      : recordFields.usage;
     if (typeof usage !== 'object' || usage === null) continue;
 
     const fields = usage as Record<string, unknown>;

@@ -7,10 +7,12 @@ describe('accumulateProviderStreamTokens', () => {
     expect(accumulateProviderStreamTokens([
       {
         type: 'assistant',
-        usage: {
-          input_tokens: 100,
-          output_tokens: 10,
-          cache_read_input_tokens: 20,
+        message: {
+          usage: {
+            input_tokens: 100,
+            output_tokens: 10,
+            cache_read_input_tokens: 20,
+          },
         },
       },
       {

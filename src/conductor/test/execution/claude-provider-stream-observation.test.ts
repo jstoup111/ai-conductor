@@ -31,12 +31,14 @@ describe('ClaudeProvider provider stream observations', () => {
     await started;
     const agentToolUse = JSON.stringify({
       type: 'assistant',
-      message: { content: [{ type: 'tool_use', id: 'child-1', name: 'Agent' }] },
-      usage: {
-        input_tokens: 17,
-        cache_read_input_tokens: 5,
-        cache_creation_input_tokens: 3,
-        output_tokens: 7,
+      message: {
+        content: [{ type: 'tool_use', id: 'child-1', name: 'Agent' }],
+        usage: {
+          input_tokens: 17,
+          cache_read_input_tokens: 5,
+          cache_creation_input_tokens: 3,
+          output_tokens: 7,
+        },
       },
     });
     const agentToolResult = JSON.stringify({
