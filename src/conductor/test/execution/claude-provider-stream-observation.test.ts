@@ -5,7 +5,7 @@ import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 describe('ClaudeProvider provider stream observations', () => {
-  it('reports the live-probed Agent lifecycle with observed children and running token totals', async () => {
+  it('reports Agent records as child-unsupported with running token totals', async () => {
     const stdout = new PassThrough();
     let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
     let resolveStarted: () => void;
@@ -50,16 +50,20 @@ describe('ClaudeProvider provider stream observations', () => {
     await invocation;
 
     expect(observations).toHaveLength(2);
-    expect(observations[0]).toMatchObject({
-      childObservability: 'observed',
-      activeChildren: 1,
+    const providerObservations = observations as Array<Record<string, unknown>>;
+    expect(providerObservations[0]).toMatchObject({
+      childObservability: 'unsupported',
       uncachedInputTokens: 17,
       cachedInputTokens: 8,
       outputTokens: 7,
     });
-    expect(observations[1]).toMatchObject({
-      childObservability: 'observed',
-      activeChildren: 0,
+    expect(Object.hasOwn(providerObservations[0], 'activeChildren')).toBe(false);
+    expect(providerObservations[1]).toMatchObject({
+      childObservability: 'unsupported',
+      uncachedInputTokens: 17,
+      cachedInputTokens: 8,
+      outputTokens: 7,
     });
+    expect(Object.hasOwn(providerObservations[1], 'activeChildren')).toBe(false);
   });
 });
