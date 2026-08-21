@@ -270,8 +270,14 @@ What the draft window does and does not mean:
   release disposition is the pre-finish `release-disposition` step's job.
 - **The placeholder body is deliberately marked as one.** It carries the engine's body-floor marker,
   which is how FINISH knows deterministically that the body is unauthored and must be written before
-  anything judges it; FINISH never records completion from placeholder or halt content. If the completion gate still observes that marker on the recorded PR, it re-dispatches
+  anything judges it; FINISH never records completion from placeholder or halt content. If the completion gate still observes a floored body on the recorded PR, it re-dispatches
   `finish` for a body rewrite — never `/remediate`, and never a re-opened `build`.
+  The marker is **provenance, not a verdict**: it is an invisible HTML comment, so an authoring pass
+  can rewrite every word around it and leave it in place. FINISH therefore classifies a marked body
+  by its content — the intact "not yet authored" sections, the draft note, or free text no larger
+  than the one description slot a floor can fill. Authored prose that kept the marker counts as
+  authored, and an untouched floor still counts as a placeholder, without anyone having to instruct
+  the provider to delete the marker.
 - **It inherits the issue's criticality.** When the feature came from an intake issue, the engine
   copies that issue's `priority: <band>` labels onto the PR as it is adopted, so the PR list carries
   the same urgency the daemon dispatched on without anyone opening the linked issue. Only the

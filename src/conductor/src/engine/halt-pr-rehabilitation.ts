@@ -350,6 +350,86 @@ export async function readStaleHaltBanner(
 export const PR_BODY_FLOOR_MARKER = '<!-- conductor:pr-body-floor -->';
 
 /**
+ * Per-section "nobody wrote this yet" text the SHIP-entry draft body stamps
+ * into every template slot, and the reader note that same body carries. Both
+ * are literal engine output, so their presence is decisive evidence that the
+ * floor is intact.
+ */
+const FLOOR_UNAUTHORED_SECTION = /not yet authored/i;
+const FLOOR_DRAFT_NOTE = /draft opened automatically/i;
+
+/**
+ * Ceiling on the free text an engine floor can itself contain.
+ *
+ * Both floor generators emit exactly ONE free-text slot — the feature
+ * description ({@link bodyFloor}'s `## Summary`, and the SHIP-entry draft's
+ * `## Why`) — and {@link authoredProseLength} already discards the structured
+ * appendages the publication path adds to a still-unauthored body. Every
+ * shape the engine can produce therefore stays far under this bound, while an
+ * authored `/pr` body populates three template sections and runs an order of
+ * magnitude larger (the body that triggered #1703 was 3,988 characters). The
+ * bound sits in the wide gap between them rather than against either edge.
+ *
+ * It is deliberately generous in the conservative direction: a body too thin
+ * to clear it stays classified as a floor, so FINISH authors it again rather
+ * than shipping thin prose.
+ */
+const FLOOR_FREE_TEXT_MAX_CHARS = 400;
+
+/**
+ * Reader-facing prose only, with everything structural removed.
+ *
+ * Dropped because the engine — not an author — puts them there: fenced code
+ * blocks (the release `## Migration` fence), any `<!-- name:start -->` …
+ * `<!-- name:end -->` region the engine upserts (the accepted build-review
+ * risk section), every other HTML comment (the floor marker itself, the
+ * `Closes` hint, the remediation markers), ATX headings, horizontal rules,
+ * `Release-*` metadata fields, the injected issue reference, and the two
+ * literal floor texts above. What survives is content somebody chose to
+ * write, which is exactly what distinguishes an authored body from a floor.
+ */
+function authoredProseLength(body: string): number {
+  return body
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/<!--\s*[\w:-]+:start\s*-->[\s\S]*?<!--\s*[\w:-]+:end\s*-->/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+    .filter((line) => !/^#{1,6}\s/.test(line))
+    .filter((line) => !/^(?:-{3,}|\*{3,}|_{3,})$/.test(line))
+    .filter((line) => !/^Release-[A-Za-z]+:/.test(line))
+    .filter((line) => !/^(?:closes|fixes|resolves)\b/i.test(line))
+    .filter((line) => !FLOOR_UNAUTHORED_SECTION.test(line))
+    .filter((line) => !FLOOR_DRAFT_NOTE.test(line))
+    .reduce((total, line) => total + line.length, 0);
+}
+
+/**
+ * Is this PR body still the engine's own floor, rather than authored prose?
+ *
+ * {@link PR_BODY_FLOOR_MARKER} is PROVENANCE, not a verdict. It is an
+ * invisible HTML comment, and an authoring pass that rewrites the body around
+ * it — a natural thing for a model to do with a structural-looking marker —
+ * leaves it in place. Treating marker presence alone as proof of an
+ * unauthored body therefore classified 3,988 characters of genuine prose as a
+ * placeholder, and the non-advancing-transition guard halted FINISH on
+ * finished work (#1703). Prompting the authoring pass to delete the marker is
+ * not a fix: the marker's meaning has to hold mechanically whatever the
+ * provider writes.
+ *
+ * So the marker is NECESSARY but never SUFFICIENT. A marked body is a floor
+ * only while it still holds floor content: the intact per-section placeholder
+ * text, the SHIP-entry draft note, or free text no larger than the single
+ * description slot a floor can fill.
+ */
+export function isEngineFlooredBody(body: string): boolean {
+  if (!body.includes(PR_BODY_FLOOR_MARKER)) return false;
+  if (FLOOR_UNAUTHORED_SECTION.test(body) || FLOOR_DRAFT_NOTE.test(body)) return true;
+  return authoredProseLength(body) <= FLOOR_FREE_TEXT_MAX_CHARS;
+}
+
+/**
  * Invisible marker identifying the single harness-authored halt-history
  * comment on a rehabilitated PR (mirrors `NEEDS_REMEDIATION_MARKER`). Used to
  * keep {@link postHaltHistoryComment} idempotent across finish attempts.
@@ -372,7 +452,7 @@ export async function readFlooredBody(
   try {
     const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
     const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
-    return body.includes(PR_BODY_FLOOR_MARKER) ? PR_BODY_FLOOR_MARKER : null;
+    return isEngineFlooredBody(body) ? PR_BODY_FLOOR_MARKER : null;
   } catch (err) {
     log?.(`[halt-pr-rehab] floored-body read failed for ${prUrl} — fail-open: ${err}`);
     return null;
