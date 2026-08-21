@@ -101,6 +101,29 @@ describe('provider stream dispatch throttle', () => {
     expect(emit).toHaveBeenCalledTimes(3);
   });
 
+  it('wakes once at the next admissible point for a material change without another provider record', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const emit = vi.fn();
+      const throttle = createProviderStreamThrottle(emit, {
+        minIntervalMs: 100,
+        heartbeatMs: 1_000,
+      });
+
+      throttle({ activeChildren: 0 });
+      vi.setSystemTime(50);
+      throttle({ activeChildren: 1 });
+
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(emit).toHaveBeenCalledTimes(2);
+      expect(emit).toHaveBeenLastCalledWith({ activeChildren: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('flushes the final observed state once, including an open child, and skips an empty attempt', () => {
     const emit = vi.fn();
     const throttle = createProviderStreamThrottle(emit, { minIntervalMs: 100, now: () => 0 });

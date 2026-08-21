@@ -158,13 +158,33 @@ export function createProviderStreamThrottle<T>(
   let latestObservation: T | undefined;
   let pendingFlush = false;
   let flushed = false;
+  let wakeUp: ReturnType<typeof setTimeout> | undefined;
+  const clearWakeUp = () => {
+    if (wakeUp === undefined) return;
+    clearTimeout(wakeUp);
+    wakeUp = undefined;
+  };
+  const scheduleWakeUp = () => {
+    if (wakeUp !== undefined || flushed) return;
+    const remainingMs = Math.max(0, minIntervalMs - (now() - lastEmissionMs));
+    wakeUp = setTimeout(() => {
+      wakeUp = undefined;
+      if (latestObservation !== undefined) emitIfAdmissible(latestObservation);
+    }, remainingMs);
+    wakeUp.unref?.(); // portability-ok: candidate-owned wake-up is cleared at candidate close
+  };
   const emitIfAdmissible = (observation: T) => {
     if (flushed) return;
     const current = now();
-    if (current - lastEmissionMs < minIntervalMs) return;
     const serialized = JSON.stringify(observation);
     const changed = serialized !== lastObservation;
+    if (current - lastEmissionMs < minIntervalMs) {
+      if (changed) scheduleWakeUp();
+      else clearWakeUp();
+      return;
+    }
     if (!changed && current - lastEmissionMs < heartbeatMs) return;
+    clearWakeUp();
     lastEmissionMs = current;
     lastObservation = serialized;
     emit(observation);
@@ -182,6 +202,7 @@ export function createProviderStreamThrottle<T>(
   throttle.flush = () => {
     if (flushed || !pendingFlush || latestObservation === undefined) return;
     flushed = true;
+    clearWakeUp();
     try {
       emit(latestObservation);
     } catch {
