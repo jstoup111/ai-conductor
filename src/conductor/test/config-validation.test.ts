@@ -120,6 +120,65 @@ describe('LLM provider selection validation', () => {
 });
 
 describe('build_review rubric validation', () => {
+  it('normalizes causalIntegrity to the canonical rootCause rubric', () => {
+    const result = validateConfig({
+      build_review: {
+        rubrics: {
+          causalIntegrity: {
+            enabled: false,
+            llm_provider: 'claude',
+            model: 'opus',
+            effort: 'high',
+            model_fallback_ladder: ['opus', 'sonnet'],
+            max_retries: 2,
+            escalate: false,
+          },
+        },
+      },
+    });
+
+    const normalized = result.ok
+      ? {
+          rootCause: result.config.build_review?.rubrics?.rootCause,
+          hasCausalIntegrity: Object.hasOwn(
+            result.config.build_review?.rubrics ?? {},
+            'causalIntegrity',
+          ),
+        }
+      : result;
+
+    expect(normalized).toEqual({
+      rootCause: {
+        enabled: false,
+        llm_provider: 'claude',
+        model: 'opus',
+        effort: 'high',
+        model_fallback_ladder: ['opus', 'sonnet'],
+        max_retries: 2,
+        escalate: false,
+      },
+      hasCausalIntegrity: false,
+    });
+  });
+
+  it('rejects rootCause and causalIntegrity together as ambiguous', () => {
+    const result = validateConfig({
+      build_review: {
+        rubrics: {
+          rootCause: { effort: 'high' },
+          causalIntegrity: { effort: 'medium' },
+        },
+      },
+    });
+    const diagnostic = result.ok
+      ? 'accepted ambiguous rootCause and causalIntegrity rubric keys'
+      : result.error.message;
+
+    expect(diagnostic).toMatch(
+      /(?=.*build_review\.rubrics\.rootCause)(?=.*build_review\.rubrics\.causalIntegrity)(?=.*ambiguous)/i,
+    );
+  });
+
   it.each([
     {
       name: 'an unknown rubric ID',

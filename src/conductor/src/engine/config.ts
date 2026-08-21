@@ -1033,7 +1033,17 @@ export function validateConfig(
         ],
         warnings,
       );
-      const rubricError = validateBuildReviewRubrics(br.maxParallel, br.rubrics);
+      let rubricInput = br.rubrics;
+      if (isPlainObject(rubricInput) && Object.hasOwn(rubricInput, 'causalIntegrity')) {
+        if (Object.hasOwn(rubricInput, 'rootCause')) {
+          return errVal(
+            'Ambiguous rubric configuration: build_review.rubrics.rootCause and build_review.rubrics.causalIntegrity cannot both be defined',
+          );
+        }
+        const { causalIntegrity, ...canonicalRubrics } = rubricInput;
+        rubricInput = { ...canonicalRubrics, rootCause: causalIntegrity };
+      }
+      const rubricError = validateBuildReviewRubrics(br.maxParallel, rubricInput);
       if (rubricError) return { ok: false, error: rubricError };
       const resolvedBuildReview = {
         ...br,
@@ -1043,10 +1053,10 @@ export function validateConfig(
           BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
             rubricId,
             {
-              ...((br.rubrics as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
+              ...((rubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
               enabled:
-                typeof (br.rubrics as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
-                  ? (br.rubrics as Record<string, Record<string, unknown>>)[rubricId].enabled
+                typeof (rubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
+                  ? (rubricInput as Record<string, Record<string, unknown>>)[rubricId].enabled
                   : true,
             },
           ]),
