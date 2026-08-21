@@ -373,3 +373,8 @@ acceptance test), so parallelism would only create conflicts at no wall-clock ga
 - [ ] `test/test_harness_integrity.sh`, `test/lint_shell.sh`, and
       `test/check_update_flow_config_ownership.sh` all pass
 - [ ] No `CHANGELOG.md` or `VERSION` edit on the branch
+### Task rem-br-finish-fixture-1: src/conductor/test/acceptance/finish-publication-non-advancing-transition.acceptance.test.ts:436-442 — remove the added boundary comments, restore daemon: true, and rerun the affected acceptance test plus Task 10 validation
+### Task rem-br-task7-confirmation-1: test/test_install_channel_selection.sh:117 — replace the generic stable-fallback substring check with an assertion for the bin/install:963 guidance line naming --channel, AI_CONDUCTOR_CHANNEL, and bin/update --set-channel
+### Task rem-br-task7-confirmation-2: test/test_install_channel_selection.sh:171 — add a first-run PTY case with no flag or environment selection, choose a prompt option, and assert the recorded channel plus source: interactive prompt
+### Task rem-br-task5-rejection-1: test/test_install_channel_selection.sh:125-144 — make the bogus flag and environment cases assert bogus and their respective sources, --channel flag and AI_CONDUCTOR_CHANNEL environment variable, while retaining the supported-channel assertion
+### Task rem-br-task5-rejection-2: test/test_install_channel_selection.sh:125-144 — snapshot each invalid case's complete FAKE_HOME before and after, assert the snapshots are identical, and explicitly assert no ~/.claude/skills symlinks and no conductor config were created
