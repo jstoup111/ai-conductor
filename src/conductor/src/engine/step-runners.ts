@@ -1964,7 +1964,9 @@ export class DefaultStepRunner implements StepRunner {
     return {
       success: effective.effective.verdict === 'PASS' || hasJudgedFinding,
       output: JSON.stringify(aggregate),
-      ...(infrastructureFailure === undefined ? {} : { currentLapMechanicalFault: true }),
+      // A mixed lap publishes and routes its judged finding as semantic
+      // rework. Only a pure infrastructure lap owns the mechanical lane.
+      ...(infrastructureFailure === undefined || hasJudgedFinding ? {} : { currentLapMechanicalFault: true }),
     };
   }
 

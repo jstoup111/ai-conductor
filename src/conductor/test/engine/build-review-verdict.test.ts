@@ -420,7 +420,8 @@ describe('engine/build-review verdict wiring contract', () => {
       runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; currentLapMechanicalFault?: boolean }>;
     }).runRubricBuildReview(inputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
 
-    expect(result).toMatchObject({ success: true, currentLapMechanicalFault: true });
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(result.currentLapMechanicalFault).toBeUndefined();
     expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(0);
     await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).resolves.toContain('The defect remains.');
   });

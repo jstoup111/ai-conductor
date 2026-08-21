@@ -28,32 +28,8 @@ export type BuildReviewInfrastructureFailureReason =
   | 'artifact-read-failed'
   | 'artifact-write-failed';
 
-/** Every infrastructure-reason token emitted by the build-review coordinator. */
-export type BuildReviewCoordinatorFailureReason =
-  | 'no-changed-tests'
-  | 'no-production-changes'
-  | 'missing-scoped-configuration'
-  | 'materialization-failed'
-  | 'missing-merge-base-file'
-  | 'scoped-run-failed'
-  | 'scoped-run-launch-failed'
-  | 'scoped-run-timeout'
-  | 'scoped-run-signaled'
-  | 'aborted'
-  | 'cleanup-failed'
-  | 'cache-read-failed'
-  | 'cache-write-failed'
-  | 'artifact-write-failed'
-  | 'projection-rubric-mismatch'
-  | 'invalid-provider-result'
-  | 'provider-error'
-  | 'missing-settlement';
-
 /** Closed translation from coordinator diagnostics to persisted infrastructure identity. */
-export const mapBuildReviewCoordinatorFailureReason: Readonly<Record<
-  BuildReviewCoordinatorFailureReason,
-  BuildReviewInfrastructureFailureReason
->> = Object.freeze({
+export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
   'no-changed-tests': 'preflight-failed',
   'no-production-changes': 'preflight-failed',
   'missing-scoped-configuration': 'preflight-failed',
@@ -72,7 +48,10 @@ export const mapBuildReviewCoordinatorFailureReason: Readonly<Record<
   'invalid-provider-result': 'malformed-artifact',
   'provider-error': 'provider-error',
   'missing-settlement': 'missing-artifact',
-});
+} satisfies Record<string, BuildReviewInfrastructureFailureReason>);
+
+/** Every infrastructure-reason token the build-review coordinator may emit. */
+export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoordinatorFailureReason;
 
 /**
  * Derive a persisted infrastructure cause from the coordinator's closed
