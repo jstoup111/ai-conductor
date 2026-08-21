@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
+import ts from 'typescript';
 import type { ConductState, HarnessConfig } from '../../src/types/index.js';
 import type {
   ConductStateStore,
@@ -66,19 +67,23 @@ describe('rewindState', () => {
     retro: 'done', rebase: 'done', finish: 'done', last_step: 'finish',
   };
 
-  it('has no engine, daemon, or step-runner caller for operator rewind dispatch', async () => {
-    const sourceRoot = join(import.meta.dirname, '..', '..', 'src');
-    const sourceFiles = (await readdir(sourceRoot, { recursive: true }))
-      .filter((path) => path.endsWith('.ts'))
-      .map((path) => join(sourceRoot, path));
-    const forbiddenCallers = await Promise.all(sourceFiles
-      .filter((path) => path !== join(sourceRoot, 'index.ts') && path !== join(sourceRoot, 'engine', 'rewind.ts'))
-      .map(async (path) => ({ path, source: await readFile(path, 'utf8') })));
+  it('keeps the rewind command boundary reachable only from the CLI entry module', () => {
+    const sourceRoot = resolve(import.meta.dirname, '../../src');
+    const rewindModule = resolve(sourceRoot, 'engine/rewind.ts');
+    const configPath = resolve(import.meta.dirname, '../../tsconfig.json');
+    const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
+    const config = ts.parseJsonConfigFileContent(configFile.config, ts.sys, resolve(import.meta.dirname, '../..'));
+    const program = ts.createProgram(config.fileNames, config.options);
+    const checker = program.getTypeChecker();
 
-    for (const { path, source } of forbiddenCallers) {
-      expect(source, path).not.toMatch(/from ['\"][^'\"]*engine\/rewind\.js['\"]/);
-      expect(source, path).not.toMatch(/\bdispatchRewindCommand\s*\(/);
-    }
+    const importers = program.getSourceFiles().flatMap((sourceFile) => sourceFile.statements.flatMap((statement) => {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) return [];
+      const symbol = checker.getSymbolAtLocation(statement.moduleSpecifier);
+      const declaration = symbol?.declarations?.find(ts.isSourceFile);
+      return declaration?.fileName === rewindModule ? [sourceFile.fileName] : [];
+    }));
+
+    expect(importers).toEqual([resolve(sourceRoot, 'index.ts')]);
   });
 
   it('refuses an unknown target by name and lists the resolved registry without mutating', async () => {
