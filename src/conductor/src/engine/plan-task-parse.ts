@@ -291,7 +291,13 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
           references.add(path);
         }
       }
-      foreignProtectedReferencesByTaskId.set(id, references);
+      // Files-declared tasks need this metadata only when their prose names a
+      // foreign protected artifact. Preserve the established empty-entry
+      // contract for no-Files legacy-fallback tasks, whose section body has
+      // always been the parser's fallback source.
+      if (references.size > 0 || !s.hasFilesLine) {
+        foreignProtectedReferencesByTaskId.set(id, references);
+      }
       const existing = result.get(id);
       if (existing) {
         for (const p of resolved) existing.add(p);
