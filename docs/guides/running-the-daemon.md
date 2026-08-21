@@ -341,12 +341,13 @@ After spawn, activity is observation-only. While a step's provider subprocess is
 boundary (throttled to at most once every few seconds — activity telemetry, not a transcript or
 termination control).
 The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) shows
-the current dispatch's elapsed time, the latest validated aggregate test outcome, and the
-heartbeat's age when one exists:
+the current dispatch's elapsed time, the latest validated aggregate test outcome, its current
+input/output token totals when live provider observation is available, and the heartbeat's age when
+one exists:
 
 ```text
 IN-PROGRESS (1)
-  • my-feature [M] @build (working) (activity telemetry: 12s ago) (elapsed: 3m12s) (last test outcome: PASS) (children: unknown)
+  • my-feature [M] @build (working) (activity telemetry: 12s ago) (elapsed: 3m12s) (last test outcome: PASS) (children: 2) (tokens: 12 in / 34 out)
 ```
 
 A feature with no `(activity telemetry: … ago)` suffix hasn't produced its first activity pulse yet (a step
@@ -363,12 +364,15 @@ names its RED-evidence state and the completion predicate's unmet-condition reas
 
 ```text
 IN-PROGRESS (1)
-  • my-feature [M] @acceptance_specs (waiting; RED: rejected; completion condition: acceptance specs RED run shows 0 failed — RED not established) (children: unknown)
+  • my-feature [M] @acceptance_specs (waiting; RED: rejected; completion condition: acceptance specs RED run shows 0 failed — RED not established) (children: unknown) (tokens: unavailable)
 ```
 
 `completion condition: unavailable` means the completion predicate did not supply a reason. The
-`(children: unknown)` suffix is constant — the provider layer cannot observe work done by child
-processes it spawns, so the dashboard never fabricates a count.
+dashboard shows `(children: N)` only when the current live provider observation reports an active
+child count; otherwise it says `(children: unknown)`, never inventing a count. It likewise shows
+`(tokens: <input> in / <output> out)` only from that current live observation, and says
+`(tokens: unavailable)` when no live token observation exists. These figures are current totals for
+the dispatch, not a finish-time usage rollup.
 
 The heartbeat file is overwritten, never cleared, so a worktree keeps its last pulse after the step
 that wrote it ends. The dashboard ignores a heartbeat from another step or from before the current
