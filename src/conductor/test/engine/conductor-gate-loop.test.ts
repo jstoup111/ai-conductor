@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
-import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import type { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -314,52 +313,8 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
     expect(inspect).not.toHaveBeenCalled();
   });
 
-  it('does not submit a boundary mutation before dispatching stale test_suite', async () => {
-    const stateFilePath = await installFixture('unsatisfied-verdict');
-    const backing = createFilesystemConductStateStore(stateFilePath);
-    const mutations: string[] = [];
-    const stateStore: ConductStateStore<ConductState> = {
-      apply: async (mutation) => {
-        mutations.push(mutation.intent);
-        return backing.apply(mutation);
-      },
-      applyBatch: async (batch) => {
-        mutations.push(batch.name);
-        return backing.applyBatch(batch);
-      },
-      replace: async (replacement) => {
-        mutations.push(replacement.intent);
-        return backing.replace(replacement);
-      },
-    };
-    let mutationBatchesAtBoundary: string[] | undefined;
-    const inspect = vi.fn(async () => {
-      mutationBatchesAtBoundary ??= [...mutations];
-      return { status: 'STALE' as const, reason: 'fingerprint_mismatch' } as never;
-    });
-    const ensure = vi.fn(async () => {
-      throw new Error('stop after observing ordinary dispatch');
-    });
-    const conductor = new Conductor({
-      projectRoot,
-      stateFilePath,
-      stateStore,
-      stepRunner: { run: async () => ({ success: true }) },
-      events: new ConductorEventEmitter(),
-      resume: true,
-      verifyArtifacts: true,
-      fullSuiteVerifier: { inspect, ensure },
-    });
-
-    await conductor.run();
-
-    expect(inspect).toHaveBeenCalledTimes(2);
-    expect(ensure).toHaveBeenCalledTimes(1);
-    expect(mutationBatchesAtBoundary).toEqual(['initialize conductor run']);
-  });
-
   it.each(['unsatisfied-verdict', 'satisfied-verdict'] as const)(
-    'keeps the %s fixture byte-identical when inspecting a stale suite proof',
+    'reads the %s stale proof without mutating state or its gate before dispatching test_suite',
     async (fixture) => {
       const stateFilePath = await installFixture(fixture);
       const gatePath = join(projectRoot, '.pipeline', 'gates', 'test_suite.json');
@@ -367,16 +322,56 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
         state: await readFile(stateFilePath, 'utf8'),
         gate: await readFile(gatePath, 'utf8'),
       };
-
-      const completion = await checkStepCompletion(projectRoot, 'test_suite', {
-        fullSuiteInspect: async () => (
-          { status: 'STALE' as const, reason: 'fingerprint_mismatch' } as never
-        ),
+      const backing = createFilesystemConductStateStore(stateFilePath);
+      const mutations: string[] = [];
+      const stateStore: ConductStateStore<ConductState> = {
+        apply: async (mutation) => {
+          mutations.push(mutation.intent);
+          return backing.apply(mutation);
+        },
+        applyBatch: async (batch) => {
+          mutations.push(batch.name);
+          return backing.applyBatch(batch);
+        },
+        replace: async (replacement) => {
+          mutations.push(replacement.intent);
+          return backing.replace(replacement);
+        },
+      };
+      let beforeBoundaryCheck: { state: string; gate: string; mutations: string[] } | undefined;
+      const inspect = vi.fn(async () => {
+        beforeBoundaryCheck ??= {
+          state: await readFile(stateFilePath, 'utf8'),
+          gate: await readFile(gatePath, 'utf8'),
+          mutations: [...mutations],
+        };
+        return { status: 'STALE' as const, reason: 'fingerprint_mismatch' } as never;
+      });
+      const ensure = vi.fn(async () => {
+        throw new Error('stop after observing ordinary dispatch');
+      });
+      const conductor = new Conductor({
+        projectRoot,
+        stateFilePath,
+        stateStore,
+        stepRunner: { run: async () => ({ success: true }) },
+        events: new ConductorEventEmitter(),
+        resume: true,
+        verifyArtifacts: true,
+        fullSuiteVerifier: { inspect, ensure },
       });
 
-      expect(completion.done).toBe(false);
-      await expect(readFile(stateFilePath, 'utf8')).resolves.toBe(before.state);
-      await expect(readFile(gatePath, 'utf8')).resolves.toBe(before.gate);
+      await conductor.run();
+
+      expect(ensure).toHaveBeenCalledTimes(1);
+      expect(beforeBoundaryCheck).toBeDefined();
+      const snapshot = beforeBoundaryCheck!;
+      const stateAtBoundary = JSON.parse(snapshot.state) as Record<string, unknown>;
+      delete stateAtBoundary.session_started_at;
+      delete stateAtBoundary.run_started_at;
+      expect(stateAtBoundary).toEqual(JSON.parse(before.state));
+      expect(snapshot.gate).toBe(before.gate);
+      expect(snapshot.mutations).toEqual(['initialize conductor run']);
     },
   );
 });
