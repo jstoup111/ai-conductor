@@ -9,6 +9,13 @@ function taskUse(id: string) {
   };
 }
 
+function agentUse(id: string) {
+  return {
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', id, name: 'Agent' }] },
+  };
+}
+
 function toolResult(toolUseId: string) {
   return {
     type: 'user',
@@ -46,5 +53,24 @@ describe('ProviderStreamChildTracker', () => {
       { childObservability: 'observed', activeChildren: 1 },
       { childObservability: 'observed', activeChildren: 0 },
     ]);
+  });
+
+  it('tracks the live-probed Agent lifecycle by tool-use id', () => {
+    const tracker = new ProviderStreamChildTracker();
+
+    tracker.observe(agentUse('agent-child'));
+    expect({ childObservability: tracker.childObservability, activeChildren: tracker.activeChildren }).toEqual({
+      childObservability: 'observed',
+      activeChildren: 1,
+    });
+
+    tracker.observe(toolResult('other-child'));
+    expect(tracker.activeChildren).toBe(1);
+
+    tracker.observe(toolResult('agent-child'));
+    expect({ childObservability: tracker.childObservability, activeChildren: tracker.activeChildren }).toEqual({
+      childObservability: 'observed',
+      activeChildren: 0,
+    });
   });
 });
