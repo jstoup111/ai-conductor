@@ -855,7 +855,7 @@ is written back (`config.ts:898-927`).
 | `build_review.perTaskFloor` | boolean | `true` | Works |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
-| `build_review.rubrics` | object | `scope`, `rootCause`, `completeness` enabled; `tautology` off | Closed map: `tautology`, `scope`, `rootCause`, `completeness`. `tautology` is opt-in (`rubrics.tautology.enabled: true`): a zero exit code is green, every nonzero exit is counterfactual RED, and only launch, timeout, and signal outcomes are scoped-run infrastructure failures |
+| `build_review.rubrics` | object | `scope`, `rootCause`, `completeness` enabled; `tautology` off | Closed canonical map: `tautology`, `scope`, `rootCause`, `completeness`. `causalIntegrity` is an input-only alias for `rootCause`. `tautology` is opt-in (`rubrics.tautology.enabled: true`): a zero exit code is green, every nonzero exit is counterfactual RED, and only launch, timeout, and signal outcomes are scoped-run infrastructure failures |
 
 Normalization contract:
 
@@ -884,6 +884,10 @@ outer `steps.build_review` block authors an `effort`, per-rubric defaults apply:
 default to `medium`. Any authored effort, at either level, overrides the default. Unknown rubric IDs, including the retired
 `wiring` member, are rejected before dispatch. The resolved configuration always contains exactly
 the four retained policies.
+
+`causalIntegrity` is accepted only while reading configuration and is normalized immediately to
+canonical `rootCause`. Resolved configuration, review artifacts, findings, dispositions, and events
+continue to use `rootCause`. Defining both names in one `rubrics` block is rejected as ambiguous.
 
 `scopeContainmentEnforced` is resolved through the same block and read by the real
 `conduct-ts scope-check` command. It defaults to `false`, so verified violations are reported while
