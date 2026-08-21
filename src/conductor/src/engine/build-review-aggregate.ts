@@ -286,10 +286,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   return deriveEffectiveBuildReviewVerdict(
     aggregate,
     acceptedIds,
-    reducedCoverage.filter((decision) => matchesBuildReviewReducedCoverageDisposition(
-      feature,
-      decision.identity,
-      [decision],
-    )),
+    reducedCoverage.filter((decision) => decision.kind === 'reduced-coverage' &&
+      matchesBuildReviewReducedCoverageDisposition(feature, decision.identity, [decision])),
   );
 }

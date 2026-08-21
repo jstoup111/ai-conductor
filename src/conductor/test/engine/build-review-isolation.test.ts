@@ -58,6 +58,7 @@ const CURRENT_PROOF = {
 
 describe('build_review input isolation', () => {
   let dir: string;
+  let mainDir: string;
   let planPath: string;
 
   async function git(...args: string[]): Promise<string> {
@@ -78,23 +79,25 @@ describe('build_review input isolation', () => {
   }
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'build-review-isolation-'));
+    mainDir = await mkdtemp(join(tmpdir(), 'build-review-isolation-main-'));
+    const mainGit = async (...args: string[]) => {
+      await execFileAsync('git', ['-C', mainDir, ...args]);
+    };
+    await execFileAsync('git', ['init', '-b', 'main', mainDir]);
+    await mainGit('config', 'user.email', 'test@example.com');
+    await mainGit('config', 'user.name', 'Test');
+    await mainGit('config', 'commit.gpgsign', 'false');
+    await writeFile(join(mainDir, 'base.txt'), 'base\n');
+    await mainGit('add', '.');
+    await mainGit('commit', '-m', 'initial commit on base');
+    await mainGit('remote', 'add', 'origin', mainDir);
+    await mainGit('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+    await mainGit('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+
+    dir = join(mainDir, '.worktrees', 'feature');
+    await mainGit('worktree', 'add', '-b', 'feature/foo', dir);
     planPath = join(dir, 'plan.md');
     await writeFile(planPath, '# Plan body\n\nDo the isolated thing.\n', 'utf-8');
-
-    await execFileAsync('git', ['init', '-b', 'main', dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
-    await git('config', 'commit.gpgsign', 'false');
-
-    await writeFile(join(dir, 'base.txt'), 'base\n');
-    await git('add', '.');
-    await git('commit', '-m', 'initial commit on base');
-    await git('remote', 'add', 'origin', dir);
-    await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
-    await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
-
-    await git('checkout', '-b', 'feature/foo');
 
     // Commit an unrelated feature change — this is what should actually
     // appear in the graded diff.
@@ -121,7 +124,7 @@ describe('build_review input isolation', () => {
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(mainDir, { recursive: true, force: true });
   });
 
   it('never leaks task status, transcript, or maker-summary content into assembled inputs or the grader prompt', async () => {
@@ -306,7 +309,9 @@ describe('build_review input isolation', () => {
       }),
     });
 
-    await expect(runner.run('build_review', {} as never)).resolves.toMatchObject({ success: false });
+    const result = await runner.run('build_review', {} as never);
+    expect(result).toMatchObject({ success: true });
+    expect(result.currentLapMechanicalFault).toBeUndefined();
     await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
       '"kind": "skipped"',
     );

@@ -89,6 +89,19 @@ describe('guardDaemonSessionInvocation', () => {
     expect(guardDaemonSessionInvocation(argvFor('test-suite'), markedEnv()).allowed).toBe(false);
   });
 
+  it('never grants build-review operator authority to a daemon session', () => {
+    // These are intentionally not in the sanctioned worker-command set.  No
+    // daemon config or ordinary environment value may turn a maker session
+    // into the interactive operator who can record reduced coverage.
+    for (const argv of [
+      argvFor('build-review', 'findings', '--feature', 'slug'),
+      argvFor('build-review', 'record-reduced-coverage', '--feature', 'slug'),
+    ]) {
+      expect(guardDaemonSessionInvocation(argv, markedEnv({ CONDUCT_CONFIG: 'daemon.yml' })))
+        .toMatchObject({ allowed: false });
+    }
+  });
+
   it('permits the generated commit-msg hook to invoke scope-check inside a daemon session', () => {
     // git-hook-assets.ts embeds `conduct-ts scope-check "$COMMIT_MSG_FILE"` in
     // the commit-msg hook, which runs inside the daemon-managed maker session

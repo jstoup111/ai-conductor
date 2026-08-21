@@ -267,11 +267,17 @@ export function matchesBuildReviewReducedCoverageDisposition(
 ): boolean {
   const canonicalIdentity = parseReducedCoverageIdentity(identity);
   if (!canonicalIdentity) return false;
-  return dispositions.some((disposition) =>
-    sameFeature(disposition.feature, feature) &&
-    disposition.identity.rubric === canonicalIdentity.rubric &&
-    disposition.identity.reason === canonicalIdentity.reason,
-  );
+  return dispositions.some((disposition) => {
+    // Keep this reducer fail-closed even when a caller has decoded an older
+    // state file into an unrecognised record shape.  Such a record is never
+    // authority to reduce a current review.
+    if (disposition.kind !== 'reduced-coverage') return false;
+    const recordedIdentity = parseReducedCoverageIdentity(disposition.identity);
+    return recordedIdentity !== undefined &&
+      sameFeature(disposition.feature, feature) &&
+      recordedIdentity.rubric === canonicalIdentity.rubric &&
+      recordedIdentity.reason === canonicalIdentity.reason;
+  });
 }
 
 function errorMessage(error: unknown): string {

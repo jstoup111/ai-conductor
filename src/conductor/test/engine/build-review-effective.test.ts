@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
@@ -76,6 +76,25 @@ describe('live build-review effective resolver', () => {
       '  Rationale: mechanical fault is covered',
       '  Decision time: 2026-08-14T00:00:00.000Z',
     ].join('\n') });
+  });
+
+  it('uses the production effective reducer to reject unknown, foreign, and non-identical coverage', () => {
+    const raw = aggregate({ faults: { tautology: 'provider-error' }, includeScopeFinding: false });
+    const accepted = reducedCoverageDecision('tautology');
+    const resolve = (coverage: readonly unknown[]) => deriveEffectiveBuildReviewVerdictWithDispositions(
+      raw, feature, [], coverage as never,
+    );
+
+    for (const coverage of [
+      [{ kind: 'unrecognised-disposition' }],
+      [{ ...accepted, feature: { ...feature, feature: 'other' } }],
+      [{ ...accepted, identity: { rubric: 'scope', reason: 'provider-error' } }],
+      [{ ...accepted, identity: { rubric: 'tautology', reason: 'preflight-failed' } }],
+    ]) {
+      expect(resolve(coverage)).toMatchObject({
+        verdict: 'FAIL', infrastructureFailureRubrics: ['tautology'],
+      });
+    }
   });
 
   it('reports a stored superseded-contract disposition without letting it bind again', async () => {

@@ -8,7 +8,6 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import {
   BuildReviewDispositionStore,
   matchesBuildReviewDisposition,
-  matchesBuildReviewReducedCoverageDisposition,
   type BuildReviewReducedCoverageDispositionRecord,
   type BuildReviewDispositionFilesystem,
   type BuildReviewDispositionRecord,
@@ -94,6 +93,33 @@ describe('build-review dispositions', () => {
       ok: true,
       records: [expect.objectContaining({ finding, summary: 'stored before contract v2' })],
     });
+  });
+
+  it('reloads restored legacy state after a linked worktree is recreated without creating coverage', async () => {
+    const main = await mkdtemp(join(tmpdir(), 'build-review-dispositions-main-'));
+    const recreatedWorktree = join(main, '.worktrees', 'feature');
+    const legacyState = JSON.stringify({
+      version: 'v1',
+      records: [{
+        version: 'v1', feature, finding, sourceLapId: 'lap-7', summary: 'legacy finding',
+        rationale: 'accepted migration risk', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+      }],
+    });
+    try {
+      await mkdir(join(recreatedWorktree, '.pipeline'), { recursive: true });
+      await writeFile(join(recreatedWorktree, '.pipeline', 'build-review-dispositions.json'), legacyState);
+      await expect(new BuildReviewDispositionStore(recreatedWorktree).list(feature)).resolves.toMatchObject({
+        ok: true, records: [expect.objectContaining({ finding })],
+      });
+
+      await rm(recreatedWorktree, { recursive: true, force: true });
+      await mkdir(join(recreatedWorktree, '.pipeline'), { recursive: true });
+      await writeFile(join(recreatedWorktree, '.pipeline', 'build-review-dispositions.json'), legacyState);
+      const reloaded = await new BuildReviewDispositionStore(recreatedWorktree).listReducedCoverage(feature);
+      expect(reloaded).toEqual({ ok: true, records: [] });
+    } finally {
+      await rm(main, { recursive: true, force: true });
+    }
   });
 
   it('durably stores a reduced-coverage decision by its closed rubric-and-cause identity independent of the aggregate', async () => {
@@ -192,32 +218,6 @@ describe('build-review dispositions', () => {
 
     await expect(unwritable.appendReducedCoverageIfCurrent(input, async () => true)).resolves.toMatchObject({ ok: false, kind: 'filesystem' });
     await expect(unwritable.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
-  });
-
-  it('matches reduced coverage only for its feature, rubric, and closed cause', async () => {
-    const filesystem = new MemoryFilesystem();
-    const store = new BuildReviewDispositionStore('/repo', {
-      filesystem,
-      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
-    });
-    const accepted = await store.appendReducedCoverageIfCurrent({
-      feature, rubric: 'tautology', reason: 'preflight-failed', rationale: 'reason', operator: 'james',
-    }, async () => true);
-    expect(accepted).toMatchObject({ ok: true });
-    if (!accepted.ok) throw new Error('expected reduced-coverage record');
-
-    expect(matchesBuildReviewReducedCoverageDisposition(
-      feature, { rubric: 'tautology', reason: 'preflight-failed' }, [accepted.record],
-    )).toBe(true);
-    expect(matchesBuildReviewReducedCoverageDisposition(
-      feature, { rubric: 'scope', reason: 'preflight-failed' }, [accepted.record],
-    )).toBe(false);
-    expect(matchesBuildReviewReducedCoverageDisposition(
-      feature, { rubric: 'tautology', reason: 'artifact-read-failed' }, [accepted.record],
-    )).toBe(false);
-    expect(matchesBuildReviewReducedCoverageDisposition(
-      otherFeature, { rubric: 'tautology', reason: 'preflight-failed' }, [accepted.record],
-    )).toBe(false);
   });
 
   it('uses same-directory temporary replacement only after acquiring the shared lock', async () => {
