@@ -133,6 +133,9 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
 /** Default hard floor for live provider-stream observation emission. */
 export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = CONFIGURED_PROVIDER_STREAM_MIN_INTERVAL_MS;
 
+/** Slow cadence for unchanged provider-stream observations. */
+export const DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS = 5 * 60_000;
+
 /** Resolve the optional provider-stream cadence, rejecting non-positive values. */
 export function resolveProviderStreamMinIntervalMs(config: HarnessConfig | undefined): number {
   const value = config?.provider_stream?.min_interval_ms;
@@ -1107,7 +1110,7 @@ export class DefaultStepRunner implements StepRunner {
               },
               { minIntervalMs: providerStreamIntervalMs },
             );
-            const heartbeat = setInterval(throttle.heartbeat, providerStreamIntervalMs);
+            const heartbeat = setInterval(throttle.heartbeat, DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS);
             heartbeat.unref(); // portability-ok: candidate-owned telemetry heartbeat is cleared at candidate close
             return { onProviderStream: throttle, close: () => { clearInterval(heartbeat); throttle.flush(); } };
           },

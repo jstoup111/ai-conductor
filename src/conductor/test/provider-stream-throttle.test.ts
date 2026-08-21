@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createProviderStreamThrottle,
   DefaultStepRunner,
+  DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS,
   DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS,
   resolveProviderStreamMinIntervalMs,
 } from '../src/engine/step-runners.js';
@@ -126,27 +127,21 @@ describe('provider stream dispatch throttle', () => {
     expect(() => throttle.flush()).not.toThrow();
   });
 
-  it('re-emits a quiet stream on the dispatch-owned heartbeat and stops the timer on close', async () => {
-    vi.useFakeTimers();
+  it('uses a slow dispatch-owned heartbeat rather than the change-emission floor', async () => {
+    const interval = vi.spyOn(globalThis, 'setInterval');
     const events = new ConductorEventEmitter();
     const emitted: unknown[] = [];
     events.on('provider_stream_progress', (event) => { emitted.push(event); });
-    let resolveRun: ((result: ProviderExecutionResult) => void) | undefined;
     try {
-      const completion = dispatchWithProviderStream(events, async (options) => {
+      await expect(dispatchWithProviderStream(events, async (options) => {
         options.onProviderStream?.({ childObservability: 'unsupported', uncachedInputTokens: 1, outputTokens: 2 });
-        return new Promise<ProviderExecutionResult>((resolve) => { resolveRun = resolve; });
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS);
-      expect(emitted).toHaveLength(2);
+        return providerResult();
+      })).resolves.toMatchObject({ success: true, output: 'done' });
 
-      resolveRun!(providerResult());
-      await expect(completion).resolves.toMatchObject({ success: true, output: 'done' });
-      await vi.advanceTimersByTimeAsync(DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS * 2);
-      expect(emitted).toHaveLength(2);
+      expect(emitted).toHaveLength(1);
+      expect(interval).toHaveBeenCalledWith(expect.any(Function), DEFAULT_PROVIDER_STREAM_HEARTBEAT_MS);
     } finally {
-      vi.useRealTimers();
+      interval.mockRestore();
     }
   });
 

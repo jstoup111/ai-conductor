@@ -655,7 +655,9 @@ watcher at `src/conductor/src/engine/conductor.ts:3712`.
 
 Cadence for live `provider_stream_progress` events on the conductor event spine.
 `min_interval_ms` is a finite number; its default is `5000` milliseconds when the block is absent
-or the configured value is zero or negative. Unknown keys and non-finite values fail config loading.
+or the configured value is zero or negative. It is a hard floor for change-driven emissions, not
+the heartbeat cadence: unchanged observations re-emit every five minutes. Unknown keys and
+non-finite values fail config loading.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
