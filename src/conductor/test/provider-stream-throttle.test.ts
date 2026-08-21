@@ -7,8 +7,9 @@ import {
   resolveProviderStreamMinIntervalMs,
 } from '../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
+import { validateConfig } from '../src/engine/config.js';
 import type { ProviderExecutionResult } from '../src/engine/provider-execution.js';
-import type { ProviderStreamObservation } from '../src/execution/llm-provider.js';
+import type { InvokeOptions, ProviderStreamObservation } from '../src/execution/llm-provider.js';
 import type { StepName } from '../src/types/index.js';
 
 const providerResult = (output = 'done'): ProviderExecutionResult => ({
@@ -17,7 +18,7 @@ const providerResult = (output = 'done'): ProviderExecutionResult => ({
 
 function dispatchWithProviderStream(
   events: ConductorEventEmitter,
-  run: (options: { onProviderStream?: (observation: ProviderStreamObservation) => void }) => Promise<ProviderExecutionResult>,
+  run: (options: Pick<InvokeOptions, 'onProviderStream'>) => Promise<ProviderExecutionResult>,
 ): Promise<ProviderExecutionResult> {
   const runner = new DefaultStepRunner({
     invoke: vi.fn(),
@@ -27,10 +28,17 @@ function dispatchWithProviderStream(
     dispatchProviderWithLifecycleSupervision: (
       step: StepName,
       options: { prompt: string; cwd: string },
-        invoke: (options: { onProviderStream?: (observation: ProviderStreamObservation) => void }) => Promise<ProviderExecutionResult>,
+        invoke: (options: Pick<InvokeOptions, 'onProviderStream' | 'providerStreamObserverForCandidate'>) => Promise<ProviderExecutionResult>,
     ) => Promise<ProviderExecutionResult>;
   }).dispatchProviderWithLifecycleSupervision.bind(runner);
-  return dispatch('build', { prompt: 'test', cwd: '/tmp/provider-stream-throttle' }, run);
+  return dispatch('build', { prompt: 'test', cwd: '/tmp/provider-stream-throttle' }, async (options) => {
+    const observer = options.providerStreamObserverForCandidate?.('codex');
+    try {
+      return await run({ onProviderStream: observer?.onProviderStream });
+    } finally {
+      observer?.close();
+    }
+  });
 }
 
 describe('provider stream dispatch throttle', () => {
@@ -52,6 +60,22 @@ describe('provider stream dispatch throttle', () => {
       resolveProviderStreamMinIntervalMs({ provider_stream: { min_interval_ms: 0 } }),
       resolveProviderStreamMinIntervalMs({ provider_stream: { min_interval_ms: -1 } }),
     ]).toEqual([DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS, DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS, DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS]);
+  });
+
+  it('loads a valid provider_stream block, defaults non-positive values, and rejects unknown keys', () => {
+    const valid = validateConfig({ provider_stream: { min_interval_ms: 250 } });
+    expect(valid).toMatchObject({ ok: true, config: { provider_stream: { min_interval_ms: 250 } } });
+
+    for (const min_interval_ms of [0, -1]) {
+      expect(validateConfig({ provider_stream: { min_interval_ms } })).toMatchObject({
+        ok: true,
+        config: { provider_stream: { min_interval_ms: DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS } },
+      });
+    }
+    expect(validateConfig({ provider_stream: { unexpected: true } })).toMatchObject({
+      ok: false,
+      error: { message: 'Unknown key in provider_stream: "unexpected"' },
+    });
   });
 
   it('emits changed observations at the next admissible point and unchanged observations on the slow heartbeat', () => {
@@ -161,7 +185,7 @@ describe('provider stream dispatch throttle', () => {
       dispatchProviderWithLifecycleSupervision: (
         step: StepName,
         options: { prompt: string; cwd: string },
-        invoke: (options: { onProviderStream?: (observation: ProviderStreamObservation) => void }) => Promise<ProviderExecutionResult>,
+        invoke: (options: Pick<InvokeOptions, 'onProviderStream' | 'providerStreamObserverForCandidate'>) => Promise<ProviderExecutionResult>,
       ) => Promise<ProviderExecutionResult>;
     }).dispatchProviderWithLifecycleSupervision.bind(runner);
 

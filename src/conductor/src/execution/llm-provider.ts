@@ -31,6 +31,12 @@ export interface ProviderStreamObservation {
   outputTokens: number;
 }
 
+/** Candidate-owned provider-stream observer with a close-boundary flush. */
+export interface ProviderStreamCandidateObserver {
+  onProviderStream: (observation: ProviderStreamObservation) => void;
+  close: () => void;
+}
+
 export type ProviderUnavailableScope = 'run';
 
 /** The credential mechanism selected by the Codex provider for a run. */
@@ -288,6 +294,11 @@ export interface InvokeOptions {
    * callback must not affect provider dispatch.
    */
   onProviderStream?: (observation: ProviderStreamObservation) => void;
+  /**
+   * Internal candidate boundary: supplies a fresh observer for each invoked
+   * provider, preventing fallback candidates from inheriting stream state.
+   */
+  providerStreamObserverForCandidate?: (provider: string) => ProviderStreamCandidateObserver;
   /**
    * Optional, best-effort notification fired synchronously once the provider
    * subprocess has spawned. It is observation only: it grants no timeout,

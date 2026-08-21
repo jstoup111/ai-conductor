@@ -90,7 +90,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-38 top-level keys are allow-listed. Everything else fails the load.
+39 top-level keys are allow-listed. Everything else fails the load.
 
 | Key | Type | Default | Section |
 | --- | --- | --- | --- |
@@ -110,6 +110,7 @@ and the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `memory_provider` | string | `local` | [memory_provider](#memory_provider) |
 | `otel` | object | disabled | [otel](#otel) |
 | `build_progress` | object | see section | [build_progress](#build_progress) |
+| `provider_stream` | object | `{ min_interval_ms: 5000 }` | [provider_stream](#provider_stream) |
 | `spec_owner` | string | none | [spec_owner](#spec_owner) |
 | `owner_gate_cutover` | ISO-8601 string | `null` | [owner_gate_cutover](#owner_gate_cutover) |
 | `attribution_audit_sample_pct` | number | `10` | [attribution telemetry](#attribution-telemetry) |
@@ -649,6 +650,16 @@ once.
 
 Consumed by `src/conductor/src/engine/build-progress-watcher.ts:206`; `.enabled` gates the build step's
 watcher at `src/conductor/src/engine/conductor.ts:3712`.
+
+## provider_stream
+
+Cadence for live `provider_stream_progress` events on the conductor event spine.
+`min_interval_ms` is a finite number; its default is `5000` milliseconds when the block is absent
+or the configured value is zero or negative. Unknown keys and non-finite values fail config loading.
+
+| Key | Type | Validation | Default |
+| --- | --- | --- | --- |
+| `provider_stream.min_interval_ms` | number | Finite; zero and negative values select the default | `5000` ms |
 
 ## build_progress_halt
 

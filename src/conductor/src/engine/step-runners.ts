@@ -109,6 +109,7 @@ import {
   createProviderLifecycleEpisodeStore,
   type ProviderLifecycleEpisodeStore,
 } from './provider-lifecycle-store.js';
+import { DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS as CONFIGURED_PROVIDER_STREAM_MIN_INTERVAL_MS } from './config.js';
 import { parseFinishPrProseJudgment } from './finish-pr-prose-judgment.js';
 import { resolvePlanPatternSource } from './plan-pattern-source.js';
 import { runCopyEquivalence } from './copy-equivalence.js';
@@ -130,14 +131,10 @@ const AUTONOMOUS_STEPS: Set<StepName> = new Set([
 ]);
 
 /** Default hard floor for live provider-stream observation emission. */
-export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
-
-type ProviderStreamIntervalConfig = {
-  provider_stream?: { min_interval_ms?: unknown };
-};
+export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = CONFIGURED_PROVIDER_STREAM_MIN_INTERVAL_MS;
 
 /** Resolve the optional provider-stream cadence, rejecting non-positive values. */
-export function resolveProviderStreamMinIntervalMs(config: ProviderStreamIntervalConfig | undefined): number {
+export function resolveProviderStreamMinIntervalMs(config: HarnessConfig | undefined): number {
   const value = config?.provider_stream?.min_interval_ms;
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? value
@@ -1076,23 +1073,7 @@ export class DefaultStepRunner implements StepRunner {
     ) => Promise<ProviderExecutionResult>,
   ): Promise<ProviderExecutionResult> {
     const pulse = createHeartbeatPulse(this.projectDir, step);
-    const providerStreamThrottle = createProviderStreamThrottle<ProviderStreamObservation>(
-      (observation) => {
-        void this.events?.emit({
-          type: 'provider_stream_progress',
-          step,
-          provider: this.configuredProviders[0] ?? 'unknown',
-          ...observation,
-          ts: new Date().toISOString(),
-        }).catch(() => {});
-      },
-      { minIntervalMs: resolveProviderStreamMinIntervalMs(this.config as ProviderStreamIntervalConfig) },
-    );
-    const providerStreamHeartbeat = setInterval(
-      providerStreamThrottle.heartbeat,
-      resolveProviderStreamMinIntervalMs(this.config as ProviderStreamIntervalConfig),
-    );
-    providerStreamHeartbeat.unref(); // portability-ok: dispatch-owned telemetry heartbeat is cleared in finally and must not keep the process alive
+    const providerStreamIntervalMs = resolveProviderStreamMinIntervalMs(this.config);
     const nextAttempt = () => ({
       logicalStep: step,
       id: `${this.runId}:${step}:${++this.providerLifecycleAttempt}`,
@@ -1116,7 +1097,20 @@ export class DefaultStepRunner implements StepRunner {
         run({
           ...baseOptions,
           onActivity: pulse,
-          onProviderStream: providerStreamThrottle,
+          providerStreamObserverForCandidate: (provider) => {
+            const throttle = createProviderStreamThrottle<ProviderStreamObservation>(
+              (observation) => {
+                void this.events?.emit({
+                  type: 'provider_stream_progress', step, provider, ...observation,
+                  ts: new Date().toISOString(),
+                }).catch(() => {});
+              },
+              { minIntervalMs: providerStreamIntervalMs },
+            );
+            const heartbeat = setInterval(throttle.heartbeat, providerStreamIntervalMs);
+            heartbeat.unref(); // portability-ok: candidate-owned telemetry heartbeat is cleared at candidate close
+            return { onProviderStream: throttle, close: () => { clearInterval(heartbeat); throttle.flush(); } };
+          },
           spawnPermit: lease.spawnPermit,
         }),
       );
@@ -1125,8 +1119,6 @@ export class DefaultStepRunner implements StepRunner {
       }
       return result;
     } finally {
-      clearInterval(providerStreamHeartbeat);
-      providerStreamThrottle.flush();
     }
   }
 

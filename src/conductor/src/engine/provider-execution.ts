@@ -605,8 +605,13 @@ export async function executeProviderCandidates({
             : {}),
         }
       : options;
+    let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     const invoke = async (): Promise<InvokeResult> => {
+      candidateObserver = candidateOptions.providerStreamObserverForCandidate?.(providerKey);
+      const candidateInvocationOptions = candidateObserver
+        ? { ...candidateOptions, onProviderStream: candidateObserver.onProviderStream }
+        : candidateOptions;
       const candidate = {
         step,
         providerKey,
@@ -623,12 +628,20 @@ export async function executeProviderCandidates({
           runtime,
           sessions,
           resolved,
-          options: selfHost ? { ...candidateOptions, selfHost } : candidateOptions,
+          options: selfHost ? { ...candidateInvocationOptions, selfHost } : candidateInvocationOptions,
           modelFallbackLadder,
         });
         return invocation.result;
       } finally {
-        await selfHost?.teardown();
+        try {
+          await selfHost?.teardown();
+        } finally {
+          try {
+            candidateObserver?.close();
+          } catch {
+            // Observation close/flush is best effort and cannot affect fallback.
+          }
+        }
       }
     };
     const requiresLifecycleCapability = candidateOptions.spawnPermit !== undefined;

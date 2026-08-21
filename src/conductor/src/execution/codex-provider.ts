@@ -307,7 +307,11 @@ export class CodexProvider implements LLMProvider {
       let cachedInputTokens: number | undefined;
       let outputTokens = 0;
       subprocess.stdout?.on('data', (chunk: Buffer | string) => {
-        options.onActivity?.();
+        try {
+          options.onActivity?.();
+        } catch {
+          // Observation is best effort and must not affect provider execution.
+        }
         for (const record of streamAssembler.push(String(chunk))) {
           const usage = parseCodexJsonl(JSON.stringify(record)).tokenUsage;
           if (!usage) continue;
@@ -318,15 +322,25 @@ export class CodexProvider implements LLMProvider {
           if (usage.cacheRead !== undefined || usage.cacheCreation !== undefined) {
             cachedInputTokens = (cachedInputTokens ?? 0) + cachedTokens;
           }
-          options.onProviderStream?.({
-            childObservability: 'unsupported',
-            uncachedInputTokens,
-            ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
-            outputTokens,
-          });
+          try {
+            options.onProviderStream?.({
+              childObservability: 'unsupported',
+              uncachedInputTokens,
+              ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+              outputTokens,
+            });
+          } catch {
+            // Observation is best effort and must not affect provider execution.
+          }
         }
       });
-      subprocess.stderr?.on('data', () => options.onActivity?.());
+      subprocess.stderr?.on('data', () => {
+        try {
+          options.onActivity?.();
+        } catch {
+          // Observation is best effort and must not affect provider execution.
+        }
+      });
     } catch {
       // Watchdog wiring is best-effort; never affects provider dispatch.
     }

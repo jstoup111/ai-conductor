@@ -18,6 +18,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import { CodexProvider } from '../../src/execution/codex-provider.js';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -77,6 +78,16 @@ function invoke(
     ...options,
   };
   return provider.invoke(invokeOptions);
+}
+
+function invokeCodex(chunks: string[], stdout: string, options: Partial<InvokeOptions> = {}): Promise<InvokeResult> {
+  const provider = new CodexProvider(
+    async () => ({ stdout: '{not-json', stderr: '', exitCode: 0 }) as never,
+    'codex',
+    scriptedClock(1_000, 1_025),
+    (() => subprocessFactory(chunks, { stdout, stderr: '', exitCode: 0, failed: false })() as never) as never,
+  );
+  return provider.invoke({ prompt: 'observe this autonomous dispatch', sessionId: 'acceptance-session', resume: false, ...options });
 }
 
 describe('Story 7: stream observation never gains authority over an autonomous dispatch', () => {
@@ -160,5 +171,22 @@ describe('Story 7: stream observation never gains authority over an autonomous d
       tokenUsage: undefined,
       observedIntervals: [{ startedAtMs: 1_000, durationMs: 25 }],
     });
+  });
+
+  it('keeps the Codex result and completion evidence unchanged when activity and stream observers throw', async () => {
+    const turn = JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 7, output_tokens: 3 } });
+    const message = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'dispatch completed' } });
+    const stream = `${turn}\n${message}\n`;
+    const chunks = [stream.slice(0, 10), stream.slice(10)];
+    const baseline = await invokeCodex(chunks, stream);
+    const onActivity = vi.fn(() => { throw new Error('observer sink unavailable'); });
+    const onProviderStream = vi.fn(() => { throw new Error('observer sink unavailable'); });
+
+    const result = await invokeCodex(chunks, stream, { onActivity, onProviderStream });
+
+    expect(onActivity).toHaveBeenCalled();
+    expect(onProviderStream).toHaveBeenCalled();
+    expect(result).toEqual(baseline);
+    expect(result).toMatchObject({ success: true, output: 'dispatch completed' });
   });
 });
