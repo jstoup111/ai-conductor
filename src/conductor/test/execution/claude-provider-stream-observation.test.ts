@@ -44,12 +44,13 @@ describe('ClaudeProvider provider stream observations', () => {
     resolveProcess!({ stdout: record, stderr: '', exitCode: 0 });
     await invocation;
 
-    expect(observations).toEqual([{
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toMatchObject({
       childObservability: 'observed',
       activeChildren: 1,
       uncachedInputTokens: 17,
       cachedInputTokens: 8,
       outputTokens: 7,
-    }]);
+    });
   });
 });

@@ -51,11 +51,14 @@ describe('CodexProvider provider stream observations', () => {
     resolveProcess!({ stdout: record, stderr: '', exitCode: 0 });
     await invocation;
 
-    expect(observations).toEqual([{
+    expect(observations).toHaveLength(1);
+    const [observation] = observations as Array<Record<string, unknown>>;
+    expect(observation).toMatchObject({
       childObservability: 'unsupported',
       uncachedInputTokens: 12,
       cachedInputTokens: 8,
       outputTokens: 7,
-    }]);
+    });
+    expect(Object.hasOwn(observation, 'activeChildren')).toBe(false);
   });
 });

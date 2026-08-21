@@ -2,9 +2,36 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createProviderStreamThrottle,
+  DefaultStepRunner,
   DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS,
   resolveProviderStreamMinIntervalMs,
 } from '../src/engine/step-runners.js';
+import { ConductorEventEmitter } from '../src/ui/events.js';
+import type { ProviderExecutionResult } from '../src/engine/provider-execution.js';
+import type { ProviderStreamObservation } from '../src/execution/llm-provider.js';
+import type { StepName } from '../src/types/index.js';
+
+const providerResult = (output = 'done'): ProviderExecutionResult => ({
+  success: true, output, exitCode: 0, preferredProvider: 'codex', attempts: [],
+});
+
+function dispatchWithProviderStream(
+  events: ConductorEventEmitter,
+  run: (options: { onProviderStream?: (observation: ProviderStreamObservation) => void }) => Promise<ProviderExecutionResult>,
+): Promise<ProviderExecutionResult> {
+  const runner = new DefaultStepRunner({
+    invoke: vi.fn(),
+    invokeInteractive: vi.fn(),
+  }, 'stream-test', '/tmp/provider-stream-throttle', { events, configuredProviders: ['codex'] });
+  const dispatch = (runner as unknown as {
+    dispatchProviderWithLifecycleSupervision: (
+      step: StepName,
+      options: { prompt: string; cwd: string },
+        invoke: (options: { onProviderStream?: (observation: ProviderStreamObservation) => void }) => Promise<ProviderExecutionResult>,
+    ) => Promise<ProviderExecutionResult>;
+  }).dispatchProviderWithLifecycleSupervision.bind(runner);
+  return dispatch('build', { prompt: 'test', cwd: '/tmp/provider-stream-throttle' }, run);
+}
 
 describe('provider stream dispatch throttle', () => {
   it('admits one of one thousand observations per interval, for each fresh provider attempt', () => {
@@ -73,5 +100,78 @@ describe('provider stream dispatch throttle', () => {
     throttle({ activeChildren: 1 });
 
     expect(() => throttle.flush()).not.toThrow();
+  });
+
+  it('re-emits a quiet stream on the dispatch-owned heartbeat and stops the timer on close', async () => {
+    vi.useFakeTimers();
+    const events = new ConductorEventEmitter();
+    const emitted: unknown[] = [];
+    events.on('provider_stream_progress', (event) => { emitted.push(event); });
+    let resolveRun: ((result: ProviderExecutionResult) => void) | undefined;
+    try {
+      const completion = dispatchWithProviderStream(events, async (options) => {
+        options.onProviderStream?.({ childObservability: 'unsupported', uncachedInputTokens: 1, outputTokens: 2 });
+        return new Promise<ProviderExecutionResult>((resolve) => { resolveRun = resolve; });
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS);
+      expect(emitted).toHaveLength(2);
+
+      resolveRun!(providerResult());
+      await expect(completion).resolves.toMatchObject({ success: true, output: 'done' });
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS * 2);
+      expect(emitted).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('flushes one suppressed final observation at dispatch close without changing provider completion', async () => {
+    const events = new ConductorEventEmitter();
+    const emitted: unknown[] = [];
+    events.on('provider_stream_progress', (event) => { emitted.push(event); });
+
+    await expect(dispatchWithProviderStream(events, async (options) => {
+      options.onProviderStream?.({ childObservability: 'observed', activeChildren: 0, uncachedInputTokens: 1, outputTokens: 2 });
+      options.onProviderStream?.({ childObservability: 'observed', activeChildren: 1, uncachedInputTokens: 1, outputTokens: 2 });
+      return providerResult('provider result');
+    })).resolves.toMatchObject({ success: true, output: 'provider result' });
+
+    expect(emitted).toHaveLength(2);
+    expect(emitted.at(-1)).toMatchObject({ activeChildren: 1 });
+  });
+
+  it('emits nothing for a dispatch with no provider observation', async () => {
+    const events = new ConductorEventEmitter();
+    const emitted = vi.fn();
+    events.on('provider_stream_progress', emitted);
+
+    await dispatchWithProviderStream(events, async () => providerResult());
+
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it('preserves the provider result when the final telemetry flush fails', async () => {
+    const events = new ConductorEventEmitter();
+    const runner = new DefaultStepRunner({ invoke: vi.fn(), invokeInteractive: vi.fn() }, 'flush-failure', '/tmp/provider-stream-throttle', {
+      events,
+      configuredProviders: ['codex'],
+    });
+    const dispatch = (runner as unknown as {
+      dispatchProviderWithLifecycleSupervision: (
+        step: StepName,
+        options: { prompt: string; cwd: string },
+        invoke: (options: { onProviderStream?: (observation: ProviderStreamObservation) => void }) => Promise<ProviderExecutionResult>,
+      ) => Promise<ProviderExecutionResult>;
+    }).dispatchProviderWithLifecycleSupervision.bind(runner);
+
+    await expect(dispatch('build', { prompt: 'test', cwd: '/tmp/provider-stream-throttle' }, async (options) => {
+      options.onProviderStream?.({ childObservability: 'unsupported', uncachedInputTokens: 1, outputTokens: 2 });
+      (runner as unknown as { events: { emit: () => void } }).events = {
+        emit: () => { throw new Error('telemetry failure'); },
+      };
+      options.onProviderStream?.({ childObservability: 'unsupported', uncachedInputTokens: 2, outputTokens: 3 });
+      return providerResult('provider result');
+    })).resolves.toMatchObject({ success: true, output: 'provider result' });
   });
 });

@@ -147,7 +147,7 @@ export function resolveProviderStreamMinIntervalMs(config: ProviderStreamInterva
 export function createProviderStreamThrottle<T>(
   emit: (observation: T) => void,
   options: { minIntervalMs: number; heartbeatMs?: number; now?: () => number },
-): ((observation: T) => void) & { flush: () => void } {
+): ((observation: T) => void) & { flush: () => void; heartbeat: () => void } {
   const now = options.now ?? Date.now;
   const minIntervalMs = options.minIntervalMs > 0
     ? options.minIntervalMs
@@ -156,10 +156,10 @@ export function createProviderStreamThrottle<T>(
   let lastEmissionMs = Number.NEGATIVE_INFINITY;
   let lastObservation: string | undefined;
   let latestObservation: T | undefined;
+  let pendingFlush = false;
   let flushed = false;
-  const throttle = (observation: T) => {
+  const emitIfAdmissible = (observation: T) => {
     if (flushed) return;
-    latestObservation = observation;
     const current = now();
     if (current - lastEmissionMs < minIntervalMs) return;
     const serialized = JSON.stringify(observation);
@@ -168,9 +168,19 @@ export function createProviderStreamThrottle<T>(
     lastEmissionMs = current;
     lastObservation = serialized;
     emit(observation);
+    pendingFlush = false;
+  };
+  const throttle = (observation: T) => {
+    if (flushed) return;
+    latestObservation = observation;
+    pendingFlush = true;
+    emitIfAdmissible(observation);
+  };
+  throttle.heartbeat = () => {
+    if (latestObservation !== undefined) emitIfAdmissible(latestObservation);
   };
   throttle.flush = () => {
-    if (flushed || latestObservation === undefined) return;
+    if (flushed || !pendingFlush || latestObservation === undefined) return;
     flushed = true;
     try {
       emit(latestObservation);
@@ -1078,6 +1088,11 @@ export class DefaultStepRunner implements StepRunner {
       },
       { minIntervalMs: resolveProviderStreamMinIntervalMs(this.config as ProviderStreamIntervalConfig) },
     );
+    const providerStreamHeartbeat = setInterval(
+      providerStreamThrottle.heartbeat,
+      resolveProviderStreamMinIntervalMs(this.config as ProviderStreamIntervalConfig),
+    );
+    providerStreamHeartbeat.unref();
     const nextAttempt = () => ({
       logicalStep: step,
       id: `${this.runId}:${step}:${++this.providerLifecycleAttempt}`,
@@ -1096,18 +1111,23 @@ export class DefaultStepRunner implements StepRunner {
         createReplacementAttempt: () => nextAttempt(),
       },
     });
-    const result = await supervisor.supervise((lease) =>
-      run({
-        ...baseOptions,
-        onActivity: pulse,
-        onProviderStream: providerStreamThrottle,
-        spawnPermit: lease.spawnPermit,
-      }),
-    );
-    if (isProviderLifecycleHalted(result)) {
-      return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
+    try {
+      const result = await supervisor.supervise((lease) =>
+        run({
+          ...baseOptions,
+          onActivity: pulse,
+          onProviderStream: providerStreamThrottle,
+          spawnPermit: lease.spawnPermit,
+        }),
+      );
+      if (isProviderLifecycleHalted(result)) {
+        return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
+      }
+      return result;
+    } finally {
+      clearInterval(providerStreamHeartbeat);
+      providerStreamThrottle.flush();
     }
-    return result;
   }
 
   private withFeatureDiagnosticLog(
