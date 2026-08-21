@@ -35,6 +35,12 @@ ALLOW_WORKTREE_ROOT=false
 # validate it here so an invalid selection never begins a global installation.
 PROVIDER_SELECTION=""
 
+# CHANNEL_SELECTION is an optional first-run update-channel choice. It is
+# deliberately consulted only while creating conductor configuration, so a
+# re-run cannot overwrite a channel the operator already configured.
+CHANNEL_SELECTION=""
+CHANNEL_SOURCE=""
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -917,7 +923,7 @@ configure_conductor() {
     return 1
   fi
 
-  local channel="tagged"
+  local channel="tagged" channel_source=""
   if [ -f "$HARNESS_USER_CONFIG" ]; then
     channel=$(conductor_cfg_get updateChannel tagged) || return 1
   fi
@@ -926,8 +932,10 @@ configure_conductor() {
 
   if [ ! -f "$HARNESS_USER_CONFIG" ]; then
     # First run — pick a channel.
-    channel="stable"
-    if [ "$UPDATE_MODE" != true ] && [ -t 0 ]; then
+    if [ -n "$CHANNEL_SELECTION" ]; then
+      channel="$CHANNEL_SELECTION"
+      channel_source="$CHANNEL_SOURCE"
+    elif [ "$UPDATE_MODE" != true ] && [ -t 0 ]; then
       echo ""
       info "Harness update channel — which version should /conduct follow?"
       echo "    1) stable  — stable release channel (recommended)"
@@ -939,6 +947,10 @@ configure_conductor() {
         3) channel="main" ;;
         *) channel="stable" ;;
       esac
+      channel_source="interactive prompt"
+    else
+      channel="stable"
+      channel_source="stable fallback"
     fi
     local detected
     detected=$(detect_current_version "$channel")
@@ -946,13 +958,19 @@ configure_conductor() {
       conductor_cfg_set autoCheck true && \
       conductor_cfg_set currentVersion "$detected" && \
       conductor_cfg_set lastCheckedAt "$now"; then
-      ok "Created conductor configuration (channel: ${channel}, version: ${detected})"
+      ok "Created conductor configuration (channel: ${channel}, source: ${channel_source}, version: ${detected})"
+      if [ "$channel_source" = "stable fallback" ]; then
+        info "Stable was used as a fallback; choose explicitly with --channel, AI_CONDUCTOR_CHANNEL, or bin/update --set-channel."
+      fi
     else
       warn "Could not create conductor configuration (update checks off until bin/install re-runs)"
       return 1
     fi
   else
     # Update — refresh currentVersion + lastCheckedAt, preserve everything else.
+    if [ -n "$CHANNEL_SELECTION" ]; then
+      info "Ignoring ${CHANNEL_SOURCE} channel '${CHANNEL_SELECTION}': channel '${channel}' is already configured. Use bin/update --set-channel to change it."
+    fi
     local detected
     detected=$(detect_current_version "$channel")
     if conductor_cfg_set currentVersion "$detected" && \
@@ -1492,12 +1510,45 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       ;;
+    --channel)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then
+        fail "--channel requires one of: stable, tagged, main"
+        exit 1
+      fi
+      CHANNEL_SELECTION="$1"
+      CHANNEL_SOURCE="--channel flag"
+      ;;
+    --channel=*)
+      CHANNEL_SELECTION="${1#--channel=}"
+      if [ -z "$CHANNEL_SELECTION" ]; then
+        fail "--channel requires one of: stable, tagged, main"
+        exit 1
+      fi
+      CHANNEL_SOURCE="--channel flag"
+      ;;
     *)
       _filtered_args+=("$1")
       ;;
   esac
   shift
 done
+
+if [ -z "$CHANNEL_SELECTION" ] && [ -n "${AI_CONDUCTOR_CHANNEL:-}" ] && \
+  [[ ! "${AI_CONDUCTOR_CHANNEL}" =~ ^[[:space:]]*$ ]]; then
+  CHANNEL_SELECTION="$AI_CONDUCTOR_CHANNEL"
+  CHANNEL_SOURCE="AI_CONDUCTOR_CHANNEL environment variable"
+fi
+
+if [ -n "$CHANNEL_SELECTION" ]; then
+  case "$CHANNEL_SELECTION" in
+    stable|tagged|main) ;;
+    *)
+      fail "Unsupported channel '${CHANNEL_SELECTION}' from ${CHANNEL_SOURCE}. Supported channels: stable, tagged, main"
+      exit 1
+      ;;
+  esac
+fi
 
 if [ -n "$PROVIDER_SELECTION" ]; then
   case ",${PROVIDER_SELECTION}," in
@@ -1528,13 +1579,15 @@ case "${1:-}" in
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)
-    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--providers claude[,codex]] [--allow-worktree-root]"
+    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--providers claude[,codex]] [--channel stable|tagged|main] [--allow-worktree-root]"
     echo ""
     echo "  (no args)     Install/update harness skills and conduct script"
     echo "  --check       Check installation status"
     echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
     echo "  --uninstall   Remove all symlinks"
     echo "  --providers   Comma-separated selection of Claude and/or Codex"
+    echo "  --channel     First-run update channel: stable, tagged, or main"
+    echo "                AI_CONDUCTOR_CHANNEL provides the same first-run choice"
     echo "  --allow-worktree-root"
     echo "                Bypass the refusal to install from a .worktrees/ checkout"
     echo "                (installs from a worktree normally repoint global symlinks"
