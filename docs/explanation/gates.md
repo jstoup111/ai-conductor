@@ -145,6 +145,25 @@ existing `.pipeline/events.jsonl` event spine.
 
 Each predicate's exact file, format, and failure text is in [artifacts](../reference/artifacts.md).
 
+### Tree-attesting admission
+
+A step may declare itself tree-attesting only when its completion predicate re-verifies the current
+tree rather than trusting persisted step state. At the dispatch boundary, a persisted `done` status for
+such a step is fast-forwarded only when that predicate still passes; a stale or indeterminate result
+falls through to normal dispatch. The check reads evidence and does not reconcile or rewrite state.
+`skipped` remains a scheduling decision and is never re-evaluated by this rule.
+
+The same rule applies at resume entry (`--resume`, including a daemon restart): a `done` step with a
+satisfied on-disk gate verdict is re-checked against its tree-attesting predicate before resume clamps
+its starting index to a later step. A predicate that no longer passes, or that throws, pulls the resume
+entry back to that step instead of trusting the stale verdict — this is what lets a daemon restart
+after a rebase land on `test_suite` rather than resuming past it into `build_review`.
+
+The current tree-attesting set is `{build, test_suite}`. `build` re-derives task completion from the
+current history, and `test_suite` re-inspects its content fingerprint. This admission rule prevents a
+rebase-invalidated suite proof from allowing `build_review` to run ahead of `test_suite` while preserving
+the ordinary fast path for a current proof.
+
 ### BUILD-verification round authority
 
 `wiring_check` and `test_suite` remain the BUILD-verification group for topology compatibility.

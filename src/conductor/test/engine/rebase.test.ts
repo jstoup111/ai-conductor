@@ -1304,7 +1304,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       await mkdir(join(dirA, '.pipeline'), { recursive: true });
       try {
         const rA = await applyRebaseVerdicts(dirA, outcome, true, preVerifyDone);
-        expect(rA.reverified).toEqual(['build']);
+        expect(rA.reverified).toEqual(['build', 'test_suite']);
         expect(rA.kickedBack).not.toContain('build');
         const buildA = await readVerdict(dirA, 'build');
         expect(buildA?.satisfied).toBe(true);

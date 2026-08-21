@@ -35,6 +35,7 @@ import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import {
   assembleBuildReviewInputs,
+  TestSuiteProofError,
   type BuildReviewFrozenInputs,
   type BuildReviewInputOptions,
   type BuildReviewRepairProvenance,
@@ -2208,6 +2209,9 @@ export class DefaultStepRunner implements StepRunner {
       return {
         success: false,
         output: `build_review input assembly failed: ${err instanceof Error ? err.message : String(err)}`,
+        ...(err instanceof TestSuiteProofError
+          ? { unretryableInputs: { retryAfterStep: 'test_suite' as const } }
+          : {}),
       };
     }
 

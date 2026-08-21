@@ -154,6 +154,15 @@ describe('renderDaemonEvent', () => {
     ).toEqual(['↰ BACK: manual_test → build (operator)']);
   });
 
+  it('renders an operator rewind with its target and demoted steps', () => {
+    expect(lines({
+      type: 'operator_rewind',
+      operator: 'james',
+      target: 'build',
+      demoted: ['build', 'test_suite', 'build_review'],
+    })).toEqual(['↶ REWIND: build (operator; demoted build, test_suite, build_review)']);
+  });
+
   it('renders halt and convergence', () => {
     expect(lines({ type: 'loop_halt', reason: 'cap' })).toEqual(['· ✋ loop halted: cap']);
     expect(lines({

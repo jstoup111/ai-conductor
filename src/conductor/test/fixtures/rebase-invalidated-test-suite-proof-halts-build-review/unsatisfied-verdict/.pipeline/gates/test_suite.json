@@ -1,0 +1,8 @@
+{
+  "satisfied": false,
+  "checkedAt": 1724169600000,
+  "kickback": {
+    "from": "rebase",
+    "evidence": "rebase changed code/test paths"
+  }
+}

@@ -155,6 +155,7 @@ import {
   dispatchScopedRunCommand,
 } from './engine/scoped-run-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
+import { detectRewindCommand, dispatchRewindCommand } from './engine/rewind.js';
 import {
   detectMissingResealReasonCommand,
   detectResealCommand,
@@ -507,6 +508,12 @@ async function main(): Promise<void> {
   const decideGrantCmd = detectDecideGrantCommand(process.argv);
   if (decideGrantCmd) {
     process.exitCode = await dispatchDecideGrantCommand(decideGrantCmd);
+    return;
+  }
+
+  const rewindCmd = detectRewindCommand(process.argv);
+  if (rewindCmd) {
+    process.exitCode = await dispatchRewindCommand(rewindCmd);
     return;
   }
 

@@ -2009,6 +2009,133 @@ describe('engine/conductor', () => {
     expect(failedErrors[0].trim().length).toBeGreaterThan(0);
   });
 
+  it('routes a typed unretryable build_review runner failure on its first attempt', async () => {
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+      complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', stories: 'done', conflict_check: 'done',
+      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
+      wiring_check: 'done', test_suite: 'done',
+    } as ConductState);
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) =>
+        step === 'build_review'
+          ? {
+            success: false,
+            output: 'current suite proof is stale',
+            unretryableInputs: { retryAfterStep: 'test_suite' as const },
+          }
+          : { success: true },
+      ),
+    };
+    const retryDecisions: Array<{ step: StepName; attempt: number; decision: string; signal?: string }> = [];
+    events.on('retry_decision', (event) => {
+      if (event.type === 'retry_decision') retryDecisions.push(event);
+    });
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'build_review',
+      maxRetries: 3,
+    }).run();
+
+    expect({
+      calls: vi.mocked(runner.run).mock.calls.map(([step]) => step),
+      retryDecisions,
+    }).toEqual({
+      calls: ['build_review'],
+      retryDecisions: [{ type: 'retry_decision', step: 'build_review', attempt: 1, decision: 'route', signal: 'unretryable-inputs' }],
+    });
+  });
+
+  it('keeps typed runner failures on the ordinary retry ladder when retry routing is disabled', async () => {
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+      complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', stories: 'done', conflict_check: 'done',
+      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
+      wiring_check: 'done', test_suite: 'done',
+    } as ConductState);
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) =>
+        step === 'build_review'
+          ? {
+            success: false,
+            output: 'current suite proof is stale',
+            unretryableInputs: { retryAfterStep: 'test_suite' as const },
+          }
+          : { success: true },
+      ),
+    };
+    const retryDecisions: ConductorEvent[] = [];
+    events.on('retry_decision', (event) => {
+      if (event.type === 'retry_decision') retryDecisions.push(event);
+    });
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'build_review',
+      maxRetries: 3,
+      config: { retry_routing: { enabled: false } },
+    }).run();
+
+    expect({
+      calls: vi.mocked(runner.run).mock.calls.map(([step]) => step),
+      retryDecisions,
+    }).toEqual({
+      calls: ['build_review', 'build_review', 'build_review'],
+      retryDecisions: [],
+    });
+  });
+
+  it('keeps an untyped build_review runner failure on the ordinary retry ladder', async () => {
+    await writeState(statePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+      complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', stories: 'done', conflict_check: 'done',
+      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
+      wiring_check: 'done', test_suite: 'done',
+    } as ConductState);
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) =>
+        step === 'build_review' ? { success: false, output: 'transient assembly failure' } : { success: true },
+      ),
+    };
+    const retryDecisions: ConductorEvent[] = [];
+    events.on('retry_decision', (event) => {
+      if (event.type === 'retry_decision') retryDecisions.push(event);
+    });
+
+    await new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      mode: 'auto',
+      daemon: true,
+      fromStep: 'build_review',
+      maxRetries: 3,
+    }).run();
+
+    expect({
+      calls: vi.mocked(runner.run).mock.calls.map(([step]) => step),
+      retryDecisions,
+    }).toEqual({
+      calls: ['build_review', 'build_review', 'build_review'],
+      retryDecisions: [],
+    });
+  });
+
   it('#814: an ordinary step failure gets a non-empty reason but no grader backoff (scoping)', async () => {
     // A normal runner failure with EMPTY output must still render a diagnosable
     // reason (the empty-string fix is general), but must NOT incur the

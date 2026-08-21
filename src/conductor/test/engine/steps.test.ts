@@ -175,6 +175,7 @@ describe('engine/steps', () => {
         skippableForTiers: [],
         isCheckpoint: false,
         loopGate: true,
+        treeAttestingCompletion: true,
       });
     });
 
@@ -566,6 +567,25 @@ describe('engine/steps', () => {
   // --- buildStepRegistry ---
 
   describe('buildStepRegistry', () => {
+    it('declares exactly build and test_suite as tree-attesting gates', () => {
+      const defaultConfig: HarnessConfig = {};
+
+      expect(
+        buildStepRegistry(defaultConfig)
+          .filter((step) => step.treeAttestingCompletion)
+          .map((step) => step.name),
+      ).toEqual(['build', 'test_suite']);
+    });
+
+    it('does not declare the inert wiring_check no-op as tree-attesting', () => {
+      const defaultConfig: HarnessConfig = {};
+
+      expect(
+        buildStepRegistry(defaultConfig).find((step) => step.name === 'wiring_check')
+          ?.treeAttestingCompletion,
+      ).toBeUndefined();
+    });
+
     it('inserts custom step after specified step', () => {
       const config: HarnessConfig = {
         steps: {

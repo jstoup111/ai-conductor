@@ -233,6 +233,9 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
         verifyArtifacts: true,
         maxRetries: 1, // a retry-ladder spin on this failure would need > 1
         sleepFn,
+        // This fixture observes the SHIP validation join. Start at its first
+        // member so an unrelated persisted BUILD gate is not revalidated.
+        fromStep: 'manual_test',
         config: selfHostConfig(tokenPath),
         selfHostGuardrails: makeGuardrails(dir),
       });

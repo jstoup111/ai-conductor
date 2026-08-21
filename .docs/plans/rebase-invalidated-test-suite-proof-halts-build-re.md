@@ -117,6 +117,40 @@ Task 14 (rewind: port mutations, demotion set, refusals)
    which is a design change, not a task.
 5. Commit an empty commit carrying `Evidence: skipped establishes findings only`.
 
+> **Amended 2026-08-20 (operator decision; resolves architecture-review condition 3):**
+> Step 4's stop fired and has been adjudicated. **No memoization is required. ADR-1 D2's placement
+> stands unchanged and implementation proceeds from Task 1.** Step 4 is satisfied by this note;
+> steps 1-3 and 5 stand as written.
+>
+> Measured in-tree over 20 warm runs, and reproduced independently on 2026-08-20:
+>
+> | Predicate | median | p95 |
+> |---|---|---|
+> | `FullSuiteVerifier.inspect()` | 175.85 ms | 185.19 ms |
+> | `checkStepCompletion(root, 'build', ctx)` | 0.16 ms | 2.65 ms |
+>
+> Step 4 compared two *predicate* costs. That ratio is not what the decision turns on:
+>
+> 1. **The cost is not new.** `test_suite`'s completion predicate already calls
+>    `FullSuiteVerifier.inspect()` (`artifacts.ts:3076-3081`), and already runs on every
+>    `computeAndWriteVerdict('test_suite')`. ADR-1 D2 adds one further evaluation per loop pass; it
+>    does not introduce the ~178 ms.
+> 2. **A loop pass is dominated by provider dispatch.** `stepLoop` (`conductor.ts:4327`) visits each
+>    step index once per pass, so the `test_suite` re-check fires once per pass. A representative
+>    91-minute daemon session (`subagent-activity-and-live-per-step-token-burn-are`, its
+>    `.pipeline/events.jsonl`, 2026-08-20) recorded 5 step dispatches and 2 kickbacks — on the order
+>    of 10 passes, so ~1.8 s of re-check against 5478 s of wall-clock: **~0.03%**.
+>
+> The seam exists should this ever become load-bearing: `CompletionContext.fullSuiteInspect`
+> (`artifacts.ts:3080`), already populated at `conductor.ts:1737`. Adopting it later is a local
+> change, not a redesign. It is deliberately **not** adopted now — a per-pass memo must be
+> invalidated on every dispatch or it masks exactly the mid-pass tree change this feature exists to
+> catch, and that correctness risk is not worth ~178 ms per pass.
+>
+> Note: the architecture-review artifact's condition 3 still reads "the plan must add memoization".
+> It is resolved here by operator decision rather than by editing that artifact, which is sealed
+> under `.docs/decisions/` and whose stem does not name this feature's bare slug.
+
 **Files likely touched:**
 - none
 
@@ -523,3 +557,5 @@ Release-Category: Fixed
 Release-Semver: minor
 Release-Note: A rebase that invalidates the aggregate test-suite proof now re-runs the suite instead of stranding the run at an unclearable HALT, and `conduct-ts rewind` returns a feature to a named earlier step without hand-editing pipeline state.
 ```
+### Task rem-root-cause-1: src/conductor/src/engine/conductor.ts:3905 — re-evaluate tree-attesting completion while selecting the resume entry so a satisfied verdict with a STALE proof pulls startIndex back to test_suite; src/conductor/test/engine/conductor-gate-loop.test.ts:96 — remove the findResumeIndex override and assert the production resume path dispatches test_suite before build_review
+### Task rem-completeness-1: src/conductor/test/engine/rewind.test.ts:123 — add a source-scan guard covering engine, daemon, and step-runner files that fails on any non-CLI import of or call into src/engine/rewind.js, preserving src/conductor/src/index.ts:516 as the CLI-owned invocation boundary

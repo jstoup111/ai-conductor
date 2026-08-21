@@ -458,11 +458,22 @@ A prior passing suite result on disk is not a reason to skip the member, and the
 satisfaction.
 
 **Recovery:** do not create an operator park for the historical terminal-less stale-verdict path;
-it is retired. Let the re-verification round settle. If it halts, use the marker's explicit reason
-and [clear a halt and let the feature resume](#clear-a-halt-and-let-the-feature-resume).
+it is retired. The common stale-proof case re-dispatches `test_suite` automatically, so let the
+re-verification round settle. If `build_review` instead HALTs `needs-human` because its inputs cannot
+change, rewind from the feature worktree rather than editing pipeline state:
+
+```bash
+cd .worktrees/<slug>
+conduct-ts rewind --to test_suite
+```
+
+`rewind` clears the affected gate verdicts and both halt markers only after it has atomically demoted
+the feature to `test_suite`. It refuses a target that is not earlier than the recorded step. Do not
+hand-edit `conduct-state.json`, gate files, `HALT`, or `HALT.class`.
 
 **Verification:** the log contains the `wiring_check` deprecation notice and one `test_suite` settle
-line, followed by the normal group join or an explicit HALT.
+line, followed by the normal group join or an explicit HALT. After a rewind, confirm it also prints
+`Rewound to test_suite.` and that the next dispatch starts at `test_suite`.
 
 #### Setup failures
 

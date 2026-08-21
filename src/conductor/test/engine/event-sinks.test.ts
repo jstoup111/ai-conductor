@@ -106,6 +106,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 const PINNED_PERSISTED_EVENT_TYPES = [
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
+  'operator_rewind',
   'contained_live_checkout_drift',
   'self_host_containment_verdict',
 ] satisfies Array<ConductorEvent['type']>;
@@ -133,9 +134,11 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'loop_halt',
   'step_completed',
   'halt_cleared',
+  'operator_rewind',
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
+  'operator_rewind',
   'contained_live_checkout_drift',
   'self_host_containment_verdict',
   'step_started',

@@ -147,6 +147,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // friction-mapped via `step_retry`, so it writes no record of its own.
   unattributed_progress: 'not-audited-by-design',
   halt_cleared: 'friction-mapped',
+  operator_rewind: 'friction-mapped',
   ci_failed: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
   acceptance_red: 'not-audited-by-design',
@@ -434,6 +435,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     headAfter: 'b'.repeat(40),
   },
   halt_cleared: { type: 'halt_cleared', step: 'build', cause: 'operator' },
+  operator_rewind: { type: 'operator_rewind', operator: 'operator', target: 'build', demoted: ['build', 'test_suite'] },
   ci_failed: {
     type: 'ci_failed',
     prUrl: 'https://github.com/acme/repo/pull/1',

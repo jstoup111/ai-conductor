@@ -162,6 +162,10 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 1,
+      // This fixture observes the SHIP validation join. Start at its first
+      // member so the test does not re-verify the unrelated tree-attesting
+      // BUILD test_suite proof that precedes it.
+      fromStep: 'manual_test',
       ...extra,
     });
   }

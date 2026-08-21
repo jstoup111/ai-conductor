@@ -549,6 +549,13 @@ export interface StepRunResult {
   observedIntervals?: readonly ObservedInterval[];
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
   fullSuiteVerification?: FullSuiteVerifierResult;
+  /**
+   * Set when re-dispatching this step cannot change its inputs. The named
+   * prerequisite must complete before another attempt can make progress.
+   */
+  unretryableInputs?: {
+    retryAfterStep: StepName;
+  };
   /** Provider routing identity and ordered candidate-attempt accounting. */
   preferredProvider?: string;
   actualProvider?: string;
@@ -3915,6 +3922,40 @@ export class Conductor {
         // Fall through to the candidate startIndex derived from state alone.
       }
 
+      // A satisfied gate verdict is not sufficient to skip a tree-attesting
+      // gate on resume: its completion predicate is the authority for the
+      // current tree. Re-check only verdict-satisfied gates before the
+      // candidate entry so a stale proof cannot let resume begin downstream.
+      // Do not inspect a terminal no-op resume; there is no downstream entry
+      // to protect in that case.
+      if (resumeClamp && this.verifyArtifacts && startIndex < steps.length) {
+        for (let i = 0; i < startIndex; i++) {
+          const step = steps[i];
+          if (
+            state[step.name] !== 'done' ||
+            !step.treeAttestingCompletion ||
+            resumeClamp.verdicts[step.name]?.satisfied !== true
+          ) continue;
+
+          try {
+            const completion = await checkStepCompletion(
+              this.projectRoot,
+              step.name,
+              await this.completionCtx(state),
+            );
+            if (!completion.done) {
+              startIndex = i;
+              break;
+            }
+          } catch {
+            // An indeterminate tree-attesting predicate must be refreshed,
+            // rather than allowing a downstream gate to consume stale proof.
+            startIndex = i;
+            break;
+          }
+        }
+      }
+
       // Clamp backward (min) only — never move startIndex forward.
       // If earliestGateIdx is valid and precedes the candidate, use it.
       // The clamp on the local startIndex is the ONLY resume-entry mechanism
@@ -4349,9 +4390,35 @@ export class Conductor {
         const alreadyResolved = currentStatus === 'done' || currentStatus === 'skipped';
         const explicitlyTargeted = this.fromStep === step.name;
         if (alreadyResolved && !explicitlyTargeted) {
-          // No event — the step simply isn't re-dispatched. Dashboard renders
-          // the persisted status verbatim.
-          continue;
+          // A declared tree-attesting predicate is the authority for a
+          // persisted `done` status only when artifact verification is on.
+          // `skipped` remains an explicit scheduling decision, not evidence
+          // to re-evaluate. A stale or indeterminate predicate must fall
+          // through so the normal dispatch path can refresh it.
+          if (
+            currentStatus === 'done' &&
+            this.verifyArtifacts &&
+            step.treeAttestingCompletion
+          ) {
+            try {
+              const completion = await checkStepCompletion(
+                this.projectRoot,
+                step.name,
+                await this.completionCtx(state),
+              );
+              if (!completion.done) {
+                // Continue into the ordinary scheduling and dispatch path.
+              } else {
+                continue;
+              }
+            } catch {
+              // On doubt, dispatch rather than silently skipping a stale gate.
+            }
+          } else {
+            // No event — the step simply isn't re-dispatched. Dashboard renders
+            // the persisted status verbatim.
+            continue;
+          }
         }
 
         // Read complexity tier from state each iteration (may change after complexity step)
@@ -5851,6 +5918,10 @@ export class Conductor {
         // the routed-halt reason below instead of the generic "retries
         // exhausted" message when that route dead-ends in a HALT.
         let unchangedInputNote: string | undefined;
+        // A typed runner failure whose inputs cannot change on re-dispatch.
+        // Kept separately from human-facing output so the terminal HALT is
+        // composed from the classified recovery contract, not message text.
+        let unretryableInputFailure: { failingStep: StepName; retryAfterStep: StepName } | undefined;
         // An incompatible build-review verdict is a stable schema failure,
         // not an exhausted-work retry. Keep its validator diagnostic for the
         // terminal HALT instead of replacing it with the generic fallback.
@@ -6684,6 +6755,46 @@ export class Conductor {
             // so we back off between re-dispatches below.
             if (result.graderDispatchFailed) {
               graderDispatchFailureReason = `step '${step.name}' grader could not be dispatched: ${lastError}`;
+            }
+
+            // A runner can classify its own inputs as unretryable before it
+            // ever reaches a completion predicate. Route that typed failure
+            // on attempt one rather than spending the ordinary retry budget.
+            // Keep `build` outside this classifier: its progress accounting
+            // owns its retry policy.
+            const retryRoutingEnabled =
+              this.config.retry_routing?.enabled ?? RETRY_ROUTING_DEFAULTS.enabled;
+            const isVerdictStep =
+              step.name === 'architecture_review_as_built' ||
+              step.name === 'prd_audit' ||
+              step.name === 'build_review';
+            if (
+              this.daemon &&
+              retryRoutingEnabled &&
+              isVerdictStep &&
+              result.unretryableInputs !== undefined
+            ) {
+              const retryDecision = classifyRetryDecision({
+                step: step.name,
+                completion: { done: false },
+                attempt,
+                inputsUnchanged: false,
+                unretryableInputs: result.unretryableInputs,
+              });
+              await emitTracked({
+                type: 'retry_decision',
+                step: step.name,
+                attempt,
+                decision: retryDecision.decision,
+                ...(retryDecision.decision === 'route' ? { signal: retryDecision.signal } : {}),
+              });
+              if (retryDecision.decision === 'route') {
+                unretryableInputFailure = {
+                  failingStep: step.name,
+                  retryAfterStep: result.unretryableInputs.retryAfterStep,
+                };
+                break;
+              }
             }
 
             // Preflight opt-out halt (TR-16): if a HALT marker was written by the
@@ -8400,6 +8511,9 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
+                : unretryableInputFailure
+                  ? `step '${unretryableInputFailure.failingStep}' cannot make progress: its inputs cannot change on a re-dispatch. ` +
+                    `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
                 : uncommittedPathsReason
                   ? uncommittedPathsReason
                   : acceptanceRedHealFailureReason

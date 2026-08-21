@@ -78,6 +78,19 @@ describe('engine/gates', () => {
         expect(result.reason).toContain('rebase');
       }
     });
+
+    it('uses only the Task 2-style state when test_suite is marked done', () => {
+      // The stale proof belongs to the tree-attesting boundary re-check, not
+      // prerequisite evaluation. checkGate must preserve its state-only D4
+      // contract and let build_review's already-done prerequisites pass.
+      const state: ConductState = {
+        wiring_check: 'done',
+        test_suite: 'done',
+        build_review: 'failed',
+      };
+
+      expect(checkGate('build_review', state)).toEqual({ passed: true });
+    });
   });
 
   // --- isGatingStep ---
