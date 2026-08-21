@@ -45,6 +45,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A Codex dispatch whose shell tool calls could not be spawned is now reported as a failed dispatch instead of a success, so a build_review rubric that could not read the diff raises an infrastructure failure rather than a hollow PASS. ([implementation PR #1758](https://github.com/jstoup111/ai-conductor/pull/1758)).
 - build_review rubrics no longer treat engine-appended remediation tasks as findings or as authority, so remediation laps converge instead of expanding their own judgement surface each round. ([implementation PR #1761](https://github.com/jstoup111/ai-conductor/pull/1761)).
 - Installed harness skills now stay explicit-only unless same-session workflow composition requires implicit invocation. ([implementation PR #1762](https://github.com/jstoup111/ai-conductor/pull/1762)).
+- Operators can accept build_review findings on every rubric; identity round-trip no longer rejects the engine's own output. ([implementation PR #1770](https://github.com/jstoup111/ai-conductor/pull/1770)).
 
 ## [0.103.0] - 2026-08-17
 
