@@ -271,7 +271,12 @@ export function parseBuildReviewFindingConcernKind(value: unknown, rubric: Build
   return parseFindingVocabularyMember(value, BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds);
 }
 
-function parseAnchorClassification(
+/**
+ * Resolves an anchor field against its own role vocabulary. Exported so the
+ * canonical-payload parser validates anchor classifications through the same
+ * closed sets the grader-facing anchor parser uses.
+ */
+export function parseBuildReviewFindingAnchorClassification(
   value: unknown,
   rubric: BuildReviewRubricId,
   field: 'violationKind' | 'relation' | 'missingKind',
@@ -360,7 +365,7 @@ export function parseBuildReviewFindingAnchor(
   if (!source || !rubricId(source.rubric)) return undefined;
   switch (source.rubric) {
     case 'tautology': {
-      const violationKind = parseAnchorClassification(source.violationKind, source.rubric, 'violationKind');
+      const violationKind = parseBuildReviewFindingAnchorClassification(source.violationKind, source.rubric, 'violationKind');
       const changedTest = contractVersion === 'v3'
         ? parseContentRegionReference(source.changedTest)
         : verifiedReference(source.changedTest, references?.changedTests, parseBuildReviewCanonicalPathReference);
@@ -374,14 +379,14 @@ export function parseBuildReviewFindingAnchor(
         : undefined;
     }
     case 'scope': {
-      const relation = parseAnchorClassification(source.relation, source.rubric, 'relation');
+      const relation = parseBuildReviewFindingAnchorClassification(source.relation, source.rubric, 'relation');
       const path = verifiedReference(source.path, references?.changedPaths, parseBuildReviewCanonicalPathReference);
       return path && relation && (contractVersion === 'v1' || relation === 'not-authorized-by-plan')
         ? { rubric: source.rubric, path, relation }
         : undefined;
     }
     case 'rootCause': {
-      const relation = parseAnchorClassification(source.relation, source.rubric, 'relation');
+      const relation = parseBuildReviewFindingAnchorClassification(source.relation, source.rubric, 'relation');
       const locus = contractVersion === 'v3'
         ? parseContentRegionReference(source.locus)
         : verifiedReference(source.locus, references?.changedPaths, parseBuildReviewCanonicalPathReference);
@@ -397,7 +402,7 @@ export function parseBuildReviewFindingAnchor(
     case 'completeness': {
       const missingKind = source.missingKind === undefined
         ? 'missing-deliverable'
-        : parseAnchorClassification(source.missingKind, source.rubric, 'missingKind');
+        : parseBuildReviewFindingAnchorClassification(source.missingKind, source.rubric, 'missingKind');
       const planTask = verifiedReference(source.planTask, references?.planTasks, parseBuildReviewCanonicalPlanTaskReference);
       const missingSurface = verifiedReference(
         source.missingSurface,
@@ -620,7 +625,7 @@ export function describeBuildReviewJudgedResultRejection(
           else if (grammar && !grammar.parse(anchor[field])) {
             problems.push(`findings[${index}].anchor.${field} must be a ${grammar.description} (got ${describeRejectionValue(anchor[field])})`);
           }
-          else if (field === CLASSIFICATION_ANCHOR_FIELDS[rubric] && !parseAnchorClassification(
+          else if (field === CLASSIFICATION_ANCHOR_FIELDS[rubric] && !parseBuildReviewFindingAnchorClassification(
             anchor[field], rubric, field as 'violationKind' | 'relation' | 'missingKind',
           )) {
             problems.push(describeFindingVocabularyRejection(

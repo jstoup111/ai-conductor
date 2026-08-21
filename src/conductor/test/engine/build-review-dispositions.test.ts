@@ -195,4 +195,100 @@ describe('build-review dispositions', () => {
     await expect(acceptance).resolves.toMatchObject({ ok: true });
     expect(validate).toHaveBeenCalledOnce();
   });
+
+  const currentContractFindings = [
+    ['tautology', {
+      rubric: 'tautology', contractVersion: 'v3', concernKind: 'assertion-insensitive-to-production',
+      anchor: {
+        rubric: 'tautology', exercisedBehavior: 'persists state', violationKind: 'assertion-insensitive-to-production',
+        changedTest: {
+          path: 'test/widget.test.ts',
+          contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          display: 'widget persists state',
+        },
+      },
+    }],
+    ['scope', {
+      rubric: 'scope', contractVersion: 'v3', concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope', path: 'src/a.ts', relation: 'not-authorized-by-plan' },
+    }],
+    ['rootCause', {
+      rubric: 'rootCause', contractVersion: 'v3', concernKind: 'root-cause-unaddressed',
+      anchor: {
+        rubric: 'rootCause', statedDefect: 'state is not persisted', relation: 'root-cause-unaddressed',
+        locus: {
+          path: 'src/handler.ts',
+          contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          display: 'persistence return branch',
+        },
+      },
+    }],
+    ['completeness', {
+      rubric: 'completeness', contractVersion: 'v3', concernKind: 'missing-deliverable',
+      anchor: { rubric: 'completeness', planTask: '11', missingSurface: 'src/state.ts', missingOutcome: 'writes state', missingKind: 'missing-deliverable' },
+    }],
+  ] as const;
+
+  // Regression for #1769: the store validated an engine-produced canonical
+  // payload with the grader-facing anchor parser, so only `scope` — whose
+  // canonical anchor happens to equal its grader anchor — could be accepted.
+  it.each(currentContractFindings)('accepts, persists, and re-matches an engine-produced %s identity', async (_rubric, input) => {
+    const engineIdentity = canonicalizeBuildReviewFindingIdentity(input)!;
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, clock: () => Date.parse('2026-08-21T12:00:00.000Z'),
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    const appended = await store.appendIfCurrent({
+      feature, finding: engineIdentity, sourceLapId: parseBuildReviewLapId('lap-7')!,
+      summary: 'summary', rationale: 'accepted risk', operator: 'james',
+    }, async () => true);
+    const listed = await store.list(feature);
+
+    expect(appended).toMatchObject({ ok: true, record: { finding: engineIdentity } });
+    expect(listed).toMatchObject({ ok: true, records: [{ finding: engineIdentity }] });
+    expect(matchesBuildReviewDisposition(feature, engineIdentity, listed.ok ? listed.records : [])).toBe(true);
+  });
+
+  it('still refuses an identity whose id or canonical JSON disagrees with its payload', async () => {
+    const engineIdentity = canonicalizeBuildReviewFindingIdentity(currentContractFindings[0][1])!;
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    const input = {
+      feature, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james',
+    };
+
+    const forgedId = await store.append({ ...input, finding: { ...engineIdentity, id: 'sha256:0000000000000000000000000000000000000000000000000000000000000000' } });
+    const forgedJson = await store.append({ ...input, finding: { ...engineIdentity, canonicalJson: '{}' } });
+    const forgedPayload = await store.append({
+      ...input,
+      finding: { ...engineIdentity, canonicalPayload: { ...engineIdentity.canonicalPayload, anchor: { rubric: 'tautology', violationKind: 'source-text-mirror' } } as never },
+    });
+
+    expect(forgedId).toEqual({ ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' });
+    expect(forgedJson).toEqual({ ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' });
+    expect(forgedPayload).toEqual({ ok: false, kind: 'invalid', message: 'build-review disposition input is invalid' });
+    expect(filesystem.writes).toEqual([]);
+  });
+
+  it('keeps a stored disposition matched when the same finding is re-reported with drifted prose', () => {
+    const original = canonicalizeBuildReviewFindingIdentity(currentContractFindings[2][1])!;
+    const reReported = canonicalizeBuildReviewFindingIdentity({
+      ...currentContractFindings[2][1],
+      anchor: {
+        ...currentContractFindings[2][1].anchor,
+        statedDefect: 'a differently worded account of the same defect',
+        locus: { ...currentContractFindings[2][1].anchor.locus, display: 'persistence return branch after rebase' },
+      },
+    })!;
+    const accepted: BuildReviewDispositionRecord = {
+      version: 'v1', feature, finding: original, sourceLapId: parseBuildReviewLapId('lap-7')!,
+      summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-21T12:00:00.000Z',
+    };
+
+    expect(matchesBuildReviewDisposition(feature, reReported, [accepted])).toBe(true);
+  });
 });

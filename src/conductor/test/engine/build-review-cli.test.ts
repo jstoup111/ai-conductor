@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings } from '../../src/engine/build-review-cli.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
@@ -187,5 +191,129 @@ describe('build-review findings CLI', () => {
     })).resolves.toBe(0);
     expect(store.list).toHaveBeenCalledWith({ version: 'v1', repository: '/main', feature: 'review-rubrics' });
     expect(JSON.parse(print.mock.calls[0]![0]).acceptedFindingIds).toEqual([]);
+  });
+});
+
+describe('build-review accept on every rubric', () => {
+  const tautologyFinding = {
+    concernKind: 'assertion-insensitive-to-production',
+    summary: 'the assertion cannot fail',
+    evidenceLocations: ['test/widget.test.ts:12'],
+    anchor: {
+      rubric: 'tautology' as const,
+      exercisedBehavior: 'persists state',
+      violationKind: 'assertion-insensitive-to-production',
+      changedTest: {
+        path: 'test/widget.test.ts',
+        contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        display: 'widget persists state',
+      },
+    },
+  };
+  const tautologyAggregate = joinBuildReviewRubricOutcomes({
+    lapId, snapshotDigest: 'sha256:snapshot',
+    results: {
+      tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [tautologyFinding], verdict: 'FAIL' },
+      scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+    },
+  });
+  const tautologyIdentity = canonicalizeBuildReviewFindingIdentity({
+    rubric: 'tautology', contractVersion: 'v3', concernKind: tautologyFinding.concernKind, anchor: tautologyFinding.anchor,
+  })!;
+
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'build-review-accept-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function deps(overrides: Record<string, unknown> = {}) {
+    return {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator',
+      resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(tautologyAggregate),
+      createStore: () => new BuildReviewDispositionStore(root),
+      appendEvent: vi.fn(),
+      ...overrides,
+    };
+  }
+
+  // Regression for #1769: only `scope` findings could be accepted, because the
+  // store re-validated the engine's canonical payload with the grader-facing
+  // anchor parser.
+  it('accepts a current tautology finding through the real disposition store and reports it accepted', async () => {
+    const print = vi.fn();
+    const appendEvent = vi.fn();
+
+    await expect(dispatchBuildReviewAccept(
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: tautologyIdentity.id, rationale: 'Accepted risk' },
+      deps({ print, appendEvent }),
+    )).resolves.toBe(0);
+
+    expect(print).toHaveBeenCalledWith(`build-review accept: accepted ${tautologyIdentity.id} for lap lap-current.`);
+    expect(appendEvent).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', expect.objectContaining({
+      type: 'build_review_disposition_accepted', findingId: tautologyIdentity.id,
+    }));
+
+    const findings = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, deps({ print: findings }))).resolves.toBe(0);
+    expect(JSON.parse(findings.mock.calls[0]![0] as string)).toMatchObject({
+      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [tautologyIdentity.id], unresolvedFindingIds: [],
+      acceptedDispositions: [{ findingId: tautologyIdentity.id }],
+    });
+  });
+
+  it('names the failed check in the refusal and in its event reason', async () => {
+    const refusals: Array<{ readonly reason: string; readonly message: string }> = [];
+    const collect = () => {
+      let reason = '';
+      return {
+        appendEvent: (_root: string, event: { type: string; reason?: string }) => { reason = event.reason ?? ''; },
+        print: (message: string) => refusals.push({ reason, message }),
+      };
+    };
+
+    const unreadable = collect();
+    await expect(dispatchBuildReviewAccept(
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: tautologyIdentity.id, rationale: 'risk' },
+      deps({ readFile: async () => 'not json', ...unreadable }),
+    )).resolves.toBe(1);
+
+    const staleLap = collect();
+    await expect(dispatchBuildReviewAccept(
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-previous', findingId: tautologyIdentity.id, rationale: 'risk' },
+      deps({ ...staleLap }),
+    )).resolves.toBe(1);
+
+    const unknownFinding = collect();
+    await expect(dispatchBuildReviewAccept(
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: 'sha256:unknown', rationale: 'risk' },
+      deps({ ...unknownFinding }),
+    )).resolves.toBe(1);
+
+    await expect(dispatchBuildReviewAccept(
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: tautologyIdentity.id, rationale: 'risk' },
+      deps({ print: vi.fn() }),
+    )).resolves.toBe(0);
+    const alreadyAccepted = collect();
+    await expect(dispatchBuildReviewAccept(
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: tautologyIdentity.id, rationale: 'risk' },
+      deps({ ...alreadyAccepted }),
+    )).resolves.toBe(1);
+
+    expect(refusals.map(({ reason }) => reason)).toEqual([
+      'aggregate-unreadable', 'requested-lap-not-current', 'finding-not-current', 'disposition-store-invalid',
+    ]);
+    expect(refusals[0]!.message).toContain('aggregate is missing or malformed');
+    expect(refusals[1]!.message).toContain("is not the current lap ('lap-current')");
+    expect(refusals[2]!.message).toContain('is not a current judged finding');
+    expect(refusals[3]!.message).toContain('the disposition store rejected the acceptance');
+    expect(new Set(refusals.map(({ message }) => message)).size).toBe(4);
   });
 });
