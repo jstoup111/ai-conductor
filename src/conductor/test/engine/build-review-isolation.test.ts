@@ -273,7 +273,10 @@ describe('build_review input isolation', () => {
 
     const result = await runner.run('build_review', {} as never);
 
-    expect(result).toMatchObject({ success: false });
+    // A judged finding is deliberately surfaced as a successful runner
+    // dispatch: the conductor consumes the persisted FAIL aggregate and
+    // routes it through the normal build-review kickback lane.
+    expect(result).toMatchObject({ success: true });
     expect(result.currentLapMechanicalFault).toBeUndefined();
     expect(result.output).toContain('The environment cannot load this change safely.');
     await expect(readFile(join(dir, '.pipeline', 'build-review.json'), 'utf8')).resolves.toContain(
