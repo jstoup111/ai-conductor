@@ -3922,6 +3922,40 @@ export class Conductor {
         // Fall through to the candidate startIndex derived from state alone.
       }
 
+      // A satisfied gate verdict is not sufficient to skip a tree-attesting
+      // gate on resume: its completion predicate is the authority for the
+      // current tree. Re-check only verdict-satisfied gates before the
+      // candidate entry so a stale proof cannot let resume begin downstream.
+      // Do not inspect a terminal no-op resume; there is no downstream entry
+      // to protect in that case.
+      if (resumeClamp && this.verifyArtifacts && startIndex < steps.length) {
+        for (let i = 0; i < startIndex; i++) {
+          const step = steps[i];
+          if (
+            state[step.name] !== 'done' ||
+            !step.treeAttestingCompletion ||
+            resumeClamp.verdicts[step.name]?.satisfied !== true
+          ) continue;
+
+          try {
+            const completion = await checkStepCompletion(
+              this.projectRoot,
+              step.name,
+              await this.completionCtx(state),
+            );
+            if (!completion.done) {
+              startIndex = i;
+              break;
+            }
+          } catch {
+            // An indeterminate tree-attesting predicate must be refreshed,
+            // rather than allowing a downstream gate to consume stale proof.
+            startIndex = i;
+            break;
+          }
+        }
+      }
+
       // Clamp backward (min) only — never move startIndex forward.
       // If earliestGateIdx is valid and precedes the candidate, use it.
       // The clamp on the local startIndex is the ONLY resume-entry mechanism

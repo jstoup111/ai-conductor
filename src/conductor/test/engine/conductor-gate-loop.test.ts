@@ -78,10 +78,12 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
   it('re-enters test_suite when the persisted verdict says satisfied but inspection is stale', async () => {
     const stateFilePath = await installFixture('satisfied-verdict');
     const observed: StepName[] = [];
+    let current = false;
     const runner: StepRunner = {
       run: async (step) => {
         observed.push(step);
-        throw new Error(`stop after dispatching ${step}`);
+        if (step === 'build_review') throw new Error('stop after build-review dispatch');
+        return { success: true };
       },
     };
     const conductor = new Conductor({
@@ -91,18 +93,20 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       events: new ConductorEventEmitter(),
       resume: true,
       verifyArtifacts: true,
-      fullSuiteVerifier: staleSuiteVerifier(observed),
+      fullSuiteVerifier: {
+        inspect: async () => (current
+          ? ({ status: 'CURRENT' as const, evidence: {} as never })
+          : ({ status: 'STALE' as const, reason: 'fingerprint_mismatch' } as never)),
+        ensure: async () => {
+          observed.push('test_suite');
+          current = true;
+          return { status: 'EXECUTED', evidence: {} as never } as never;
+        },
+      },
     });
-    // The persisted satisfied verdict alone cannot move resume backward; Task
-    // 9 supplies that pre-verification route. Force its resulting entry here
-    // so this test isolates Task 3's boundary behavior over the second
-    // observed on-disk fixture without making test_suite an explicit target.
-    (conductor as unknown as { findResumeIndex: () => number }).findResumeIndex = () =>
-      ALL_STEPS.findIndex((step) => step.name === 'test_suite');
-
     await conductor.run();
 
-    expect(observed).toEqual(['test_suite']);
+    expect(observed).toEqual(['test_suite', 'build_review']);
   });
 
   it('advances to build_review after test_suite refreshes the stale proof to CURRENT', async () => {

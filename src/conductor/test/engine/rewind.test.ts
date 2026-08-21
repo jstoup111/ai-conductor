@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -65,6 +65,25 @@ describe('rewindState', () => {
     manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
     retro: 'done', rebase: 'done', finish: 'done', last_step: 'finish',
   };
+
+  it('keeps rewind dispatch CLI-owned, with no engine, daemon, or step-runner caller', async () => {
+    const sourceRoot = join(import.meta.dirname, '..', '..', 'src');
+    const sourceFiles = (await readdir(sourceRoot, { recursive: true }))
+      .filter((path) => path.endsWith('.ts'))
+      .map((path) => join(sourceRoot, path));
+    const forbiddenCallers = await Promise.all(sourceFiles
+      .filter((path) => path !== join(sourceRoot, 'index.ts') && path !== join(sourceRoot, 'engine', 'rewind.ts'))
+      .map(async (path) => ({ path, source: await readFile(path, 'utf8') })));
+
+    for (const { path, source } of forbiddenCallers) {
+      expect(source, path).not.toMatch(/from ['\"][^'\"]*engine\/rewind\.js['\"]/);
+      expect(source, path).not.toMatch(/\bdispatchRewindCommand\s*\(/);
+    }
+
+    const cliSource = await readFile(join(sourceRoot, 'index.ts'), 'utf8');
+    expect(cliSource).toMatch(/from ['\"]\.\/engine\/rewind\.js['\"]/);
+    expect(cliSource).toMatch(/process\.exitCode = await dispatchRewindCommand\(rewindCmd\)/);
+  });
 
   it('refuses an unknown target by name and lists the resolved registry without mutating', async () => {
     const store = new RecordingStateStore();
