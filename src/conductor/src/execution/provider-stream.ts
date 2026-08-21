@@ -71,6 +71,11 @@ export function accumulateProviderStreamTokens(records: Iterable<unknown>): Prov
 
   for (const record of records) {
     if (typeof record !== 'object' || record === null) continue;
+    // The terminal `result` record repeats the whole run's usage as an
+    // aggregate at the same top level per-message records use. Adding it to
+    // the per-message sum double counts every token, so accumulate only the
+    // incremental records — the live burn is built from per-message usage.
+    if ((record as Record<string, unknown>).type === 'result') continue;
     const usage = (record as Record<string, unknown>).usage;
     if (typeof usage !== 'object' || usage === null) continue;
 
