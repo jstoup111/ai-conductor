@@ -434,6 +434,18 @@ async function readDispatchActivity(
       };
       completionUnmet = event.state === 'pending' || event.state === 'rejected';
     }
+    if (
+      startedAtMs !== undefined
+      && event.type === 'provider_attempt'
+      && event.invoked === true
+      && (event.outcome === 'failure' || event.outcome === 'unavailable')
+    ) {
+      // A fallback candidate owns fresh live totals. Until it emits an
+      // observation, retaining the failed candidate's data would misreport
+      // stale children and token burn as current progress.
+      providerStreamProgress = undefined;
+      continue;
+    }
     if (startedAtMs !== undefined && event.type === 'provider_stream_progress'
       && (event.childObservability === 'observed' || event.childObservability === 'unsupported')
       && typeof event.uncachedInputTokens === 'number' && typeof event.outputTokens === 'number') {

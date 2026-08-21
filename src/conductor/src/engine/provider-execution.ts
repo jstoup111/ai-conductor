@@ -618,11 +618,12 @@ export async function executeProviderCandidates({
         model: resolved.model,
         effort: resolved.effort,
       };
-      const selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
-        runId,
-        attempt: index,
-      });
+      let selfHost: SelfHostInvocation | undefined;
       try {
+        selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
+          runId,
+          attempt: index,
+        });
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
