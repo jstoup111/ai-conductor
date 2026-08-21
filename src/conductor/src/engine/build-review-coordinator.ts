@@ -190,6 +190,12 @@ export function stampBuildReviewDispatchedCandidate(
     lapId: projection.lapId,
     snapshotDigest: projection.snapshotDigest,
     findings: source?.findings,
+    // The relocation audit is provider-owned EVIDENCE, not an envelope field:
+    // the tautology contract requires it on fixture-relocation results, the
+    // artifact persists it, and the aggregate consumes it. Pass it through and
+    // let validation enforce rubric-appropriateness (non-tautology payloads
+    // carrying one are rejected with a named problem, never laundered here).
+    ...(source?.relocationAudit === undefined ? {} : { relocationAudit: source.relocationAudit }),
   };
 }
 
@@ -362,6 +368,9 @@ export async function coordinateBuildReviewRubrics(
         const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
         if (!result) {
           const failure = parseBuildReviewDispatchFailure(dispatched);
+          // No pre-formed dispatch failure: the engine derives the failed
+          // requirement itself from the stamped candidate, so the diagnosis
+          // is produced by the same validation surface that rejected it.
           const detail = failure?.detail ?? (dispatched === undefined ? undefined : (
             typeof dispatched !== "object" || dispatched === null || Array.isArray(dispatched)
               ? "no parseable JSON object was found in the response"

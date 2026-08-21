@@ -61,9 +61,19 @@ test's lines reference that task's plan-declared files or the behavior the task 
 the change adds no assertion about behavior this diff introduces. A non-qualifying
 pre-diff-passing test, including an unanchored test, is measured normally.
 
+For every changed test evaluated under the fixture-relocation exception, return exactly one
+audit-only `relocationAudit` entry on PASS or FAIL:
+`[relocation-audit] (EXEMPTED|MEASURED): old path → new path; production hunk(s) (do|do not) force the move`.
+`EXEMPTED` proves the complete exception qualified; `MEASURED` proves it did not and the test was
+judged normally. This is not a finding: it must name both paths and whether production forces the
+move, which distinguishes relocation from deletion or masking. Unevaluated tests and non-Tautology
+results must not manufacture relocation-audit evidence.
+
 ## Result contract (v3)
 
-Return exactly one JSON object whose only top-level field is `findings`, an array. The engine owns
+Return exactly one JSON object whose only top-level fields are `findings`, an array, and — only
+when the fixture-relocation exception was evaluated — the audit-only `relocationAudit` array
+described above. The engine owns
 the `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot
 identity after validating this findings-only payload.
 Return every independent finding; an empty array means no Tautology concern was found. Each finding

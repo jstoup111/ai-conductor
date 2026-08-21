@@ -55,7 +55,7 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
   const expected = candidate.kind === 'judged'
-    ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', 'verdict']
+    ? ['kind', 'rubric', 'lapId', 'snapshotDigest', 'contractVersion', 'findings', ...(candidate.relocationAudit === undefined ? [] : ['relocationAudit']), 'verdict']
     : candidate.kind === 'skipped'
       ? ['kind', 'rubric', 'reason']
       : candidate.kind === 'infrastructure-failure'

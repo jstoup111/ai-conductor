@@ -43,6 +43,23 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
   });
 
+  it('preserves validated relocation-only audit evidence in a qualifying Tautology PASS reason', () => {
+    const relocationAudit = '[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move';
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:snapshot',
+      results: results({
+        tautology: {
+          ...judged('tautology'),
+          relocationAudit: [relocationAudit],
+        },
+      }),
+    });
+
+    expect(aggregate).toMatchObject({ verdict: 'PASS', reasons: [relocationAudit] });
+    expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
+  });
+
   it('retains complete named findings and derives FAIL without folding the rubric result', () => {
     const finding = { concernKind: 'out-of-plan-change', summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' } };
     const aggregate = joinBuildReviewRubricOutcomes({

@@ -613,6 +613,36 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
   // keyed BY the union, so `typecheck:test` fails on a missing key when a member
   // is added and on an excess key when one is removed; the runtime assertions
   // then prove the parser admits exactly these members and nothing else.
+  it("persists a tautology relocation audit from a findings-only live dispatch", async () => {
+    const relocationAudit = [
+      "[relocation-audit] EXEMPTED: test/fixture/c.md → test/fixture/docs/c.md; production hunk(s) do force the move",
+    ];
+    const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
+    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
+
+    const coordination = await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      preflight: async () => ({
+        classification: "approved-exception" as const, exception: "empty-test-set" as const,
+        cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
+        revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" },
+      }),
+      readCache: async () => undefined,
+      dispatchModel: async (branch) => branch.rubric === "tautology"
+        ? { findings: [], relocationAudit }
+        : { findings: [] },
+      writeArtifact,
+      writeCache,
+    });
+
+    expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "tautology") : undefined)
+      .toMatchObject({ kind: "dispatched", rubric: "tautology", result: { relocationAudit } });
+    expect(writeArtifact.mock.calls.find(([artifact]) => artifact.rubric === "tautology")?.[0].result)
+      .toMatchObject({ relocationAudit });
+    expect(writeCache.mock.calls.find(([entry]) => entry.rubric === "tautology")?.[0].result)
+      .toMatchObject({ relocationAudit });
+  });
+
   it("pins the closed infrastructure-reason vocabulary against silent growth", () => {
     const pinned: Record<BuildReviewInfrastructureFailureReason, true> = {
       "provider-error": true,
@@ -753,7 +783,10 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     ["omitted lap and snapshot identity", { findings: [] }, "PASS", []],
     ["different rubric", { findings: [], rubric: "rootCause" }, "PASS", []],
     ["v1 contract version", { findings: [scopeFinding], contractVersion: "v1" }, "FAIL", [scopeFinding]],
-    ["unrecognized top-level keys", { findings: [], extra: "ignored", source: "provider", relocationAudit: ["ignored"] }, "PASS", []],
+    // relocationAudit is deliberately NOT here: it is a recognized provider-owned
+    // evidence field — a non-tautology payload carrying one is rejected with the
+    // named problem (pinned in build-review-domain.test.ts), never laundered.
+    ["unrecognized top-level keys", { findings: [], extra: "ignored", source: "provider" }, "PASS", []],
   ] as const)("settles a provider payload with %s under the engine-owned v3 envelope", async (_shape, payload, verdict, findings) => {
     expect(await settleScopePayload(payload)).toMatchObject({
       kind: "dispatched", rubric: "scope",
