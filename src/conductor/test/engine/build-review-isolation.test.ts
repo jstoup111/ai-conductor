@@ -216,7 +216,7 @@ describe('build_review input isolation', () => {
     });
     const runner = new DefaultStepRunner(provider, 'build-review-isolation', dir, {
       gitRunner: realGit(), planPath,
-      config: { build_review: { enabled: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+      config: { build_review: { enabled: true, rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } } } as HarnessConfig,
       buildReviewInputOptions: { inspectTestSuite: async () => CURRENT_PROOF },
       buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest) => ({
         version: 1,

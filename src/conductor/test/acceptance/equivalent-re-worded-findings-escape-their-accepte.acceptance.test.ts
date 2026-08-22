@@ -230,7 +230,7 @@ async function runVocabularyRepairEffectivePassScenario() {
   const realBuildReviewRunner = new DefaultStepRunner(provider, 'acceptance-session', dir, {
     planPath: join(dir, planPath),
     pipelineDir,
-    config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
+    config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
     buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' } } as never) },
     buildReviewEffectiveResolver: async () => effective(false),
   });
