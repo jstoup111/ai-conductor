@@ -25,4 +25,24 @@ describe('validatePlanDoneWhen', () => {
       { taskId: '4', reason: 'too-many' },
     ]);
   });
+
+  it('accepts a compliant block and distinguishes an explicit blank criterion from an empty block', () => {
+    expect(validatePlanDoneWhen(`### Task 1: compliant
+**Done when:**
+- one observable result
+- another observable result
+### Task 2: blank
+**Done when:**
+- 
+- another result
+### Task 3: fenced example
+**Done when:**
+\`\`\`
+- not a criterion
+- not a criterion
+\`\`\`
+- first real criterion
+- second real criterion
+`)).toEqual([{ taskId: '2', reason: 'blank' }]);
+  });
 });

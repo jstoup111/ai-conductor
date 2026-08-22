@@ -23,7 +23,7 @@ export function validatePlanDoneWhen(planText: string): readonly PlanDoneWhenVio
   for (const taskId of taskIds(planText)) {
     if (!parsed.has(taskId)) { violations.push({ taskId, reason: 'missing' }); continue; }
     const criteria = parsed.get(taskId) ?? [];
-    if (criteria.length === 0 || criteria.every((criterion) => !criterion.trim())) violations.push({ taskId, reason: 'blank' });
+    if (criteria.length === 0 || criteria.some((criterion) => !criterion.trim())) violations.push({ taskId, reason: 'blank' });
     else if (criteria.length < 2) violations.push({ taskId, reason: 'too-few' });
     else if (criteria.length > 5) violations.push({ taskId, reason: 'too-many' });
   }

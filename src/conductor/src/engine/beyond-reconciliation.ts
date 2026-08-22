@@ -25,14 +25,24 @@ export async function reconcileBeyondRecords(input: {
       if (!listed.ok) throw new Error(listed.message);
       for (const record of listed.records) {
         if (record.status === 'filed') continue;
-        const filed = await fileIntakeIssue({
+        try {
+        const sourceRef = `${slug}:${record.findingId}`;
+        const issueUrl = record.issueUrl ?? (await fileIntakeIssue({
           title: `Build-review finding beyond plan criteria: ${record.summary}`,
           body: `Feature: ${slug}\nFinding: ${record.findingId}\nRubric: ${record.rubric}\n\n${record.summary}\n\nEvidence:\n${record.evidenceLocations.map((location) => `- ${location}`).join('\n')}`,
           interactive: false,
-        }, { tracker: input.tracker, gh: input.gh, cwd: input.projectRoot });
-        const stamped = await store.markBeyondFiled(feature, record.findingId, filed.issueUrl);
+          sourceRef,
+        }, { tracker: input.tracker, gh: input.gh, cwd: input.projectRoot })).issueUrl;
+        if (!record.issueUrl) {
+          const remembered = await store.rememberBeyondIssueUrl(feature, record.findingId, issueUrl);
+          if (!remembered.ok) throw new Error(remembered.message);
+        }
+        const stamped = await store.markBeyondFiled(feature, record.findingId, issueUrl);
         if (!stamped.ok) throw new Error(stamped.message);
-        await input.emit?.({ type: 'build_review_beyond_filed', feature: slug, lapId: 'reconciled', rubric: record.rubric, findingId: record.findingId, issueUrl: filed.issueUrl });
+        await input.emit?.({ type: 'build_review_beyond_filed', feature: slug, lapId: 'reconciled', rubric: record.rubric, findingId: record.findingId, issueUrl });
+        } catch (error) {
+          input.log(`beyond reconciliation for ${slug}/${record.findingId} deferred: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     } catch (error) {
       input.log(`beyond reconciliation for ${slug} deferred: ${error instanceof Error ? error.message : String(error)}`);

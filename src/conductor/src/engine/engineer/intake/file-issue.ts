@@ -25,6 +25,8 @@ export interface FileIntakeIssueOpts {
   dependsOn?: string[];
   interactive?: boolean;
   repo?: string;
+  /** Caller-owned stable filing key, included in the public issue body. */
+  sourceRef?: string;
 }
 
 export interface FileIntakeIssueDeps {
@@ -143,7 +145,7 @@ export async function fileIntakeIssue(
   // is asked to remember. Size/priority inference above deliberately reads the
   // ORIGINAL body: a redaction must never change how the issue is labelled.
   const cleanTitle = sanitizeIntakeText(opts.title);
-  const cleanBody = sanitizeIntakeText(opts.body);
+  const cleanBody = sanitizeIntakeText(`${opts.body}${opts.sourceRef ? `\n\nSource-Ref: ${opts.sourceRef}` : ''}`);
   const redactions = [...cleanTitle.redactions, ...cleanBody.redactions];
 
   // ── Create the issue ─────────────────────────────────────────────────────

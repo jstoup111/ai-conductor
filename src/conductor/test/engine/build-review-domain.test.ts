@@ -24,6 +24,18 @@ import {
 import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
 
 describe('build-review domain', () => {
+  it('diagnoses malformed and unresolved boundTo values with a finding index', () => {
+    const value = {
+      kind: 'judged', rubric: 'completeness', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      findings: [{ concernKind: 'missing-deliverable', summary: 'x', evidenceLocations: ['src/x.ts:1'],
+        anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/x.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' },
+        boundTo: 'src/x.ts:1' }],
+    };
+    expect(describeBuildReviewJudgedResultRejection(value, 'completeness', {
+      lapId: 'lap-1', snapshotDigest: 'sha256:abc',
+    }, { changedTests: [], changedPaths: [], planTasks: ['1'], doneWhenContext: [] }))
+      .toMatch(/findings\[0\].boundTo.*beyond.*content-region/i);
+  });
   it('brands lap and rubric-contract identities from their closed grammars', () => {
     expect(parseBuildReviewLapId('lap-20260813-01')).toBe('lap-20260813-01');
     expect(parseBuildReviewLapId('')).toBeUndefined();

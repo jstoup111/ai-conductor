@@ -70,6 +70,7 @@ export interface BuildReviewBeyondDispositionRecord {
   readonly summary: string;
   readonly evidenceLocations: readonly string[];
   readonly status: BuildReviewBeyondStatus;
+  /** Durable recovery URL after issue creation but before the filed stamp. */
   readonly issueUrl?: string;
   readonly recordedAt: string;
   readonly filedAt?: string;
@@ -258,13 +259,14 @@ function parseBeyondDispositionRecord(value: unknown): BuildReviewBeyondDisposit
     !nonEmptyString(source.recordedAt) || Number.isNaN(Date.parse(source.recordedAt))) return undefined;
   const feature = parseFeatureIdentity(source.feature);
   if (!feature) return undefined;
-  if (source.status === 'unfiled' && exactKeys(source, [
-    'kind', 'version', 'feature', 'findingId', 'rubric', 'summary', 'evidenceLocations', 'status', 'recordedAt',
-  ])) {
+  if (source.status === 'unfiled' &&
+    (exactKeys(source, ['kind', 'version', 'feature', 'findingId', 'rubric', 'summary', 'evidenceLocations', 'status', 'recordedAt']) ||
+      (exactKeys(source, ['kind', 'version', 'feature', 'findingId', 'rubric', 'summary', 'evidenceLocations', 'status', 'issueUrl', 'recordedAt']) && nonEmptyString(source.issueUrl)))) {
     return {
       kind: 'beyond', version: STORE_VERSION, feature, findingId: source.findingId,
       rubric: source.rubric as BuildReviewRubricId, summary: source.summary,
-      evidenceLocations: Object.freeze([...source.evidenceLocations]), status: 'unfiled', recordedAt: source.recordedAt,
+      evidenceLocations: Object.freeze([...source.evidenceLocations]), status: 'unfiled',
+      ...(nonEmptyString(source.issueUrl) ? { issueUrl: source.issueUrl } : {}), recordedAt: source.recordedAt,
     };
   }
   if (source.status === 'filed' && exactKeys(source, [
@@ -531,6 +533,33 @@ export class BuildReviewDispositionStore {
       const records = loaded.state.records.map((entry) => entry === existing ? filed : entry);
       const replaced = await this.replace({ version: STORE_VERSION, records });
       return replaced.ok ? { ok: true, record: filed } : replaced;
+    } finally {
+      await acquired.release();
+    }
+  }
+
+  /**
+   * Persist the tracker result before changing status.  If the later filed
+   * stamp is interrupted, the next reconciliation cycle stamps this URL and
+   * never creates a second issue.
+   */
+  async rememberBeyondIssueUrl(featureInput: unknown, findingId: string, issueUrl: string): Promise<BuildReviewBeyondAppendResult> {
+    const feature = parseFeatureIdentity(featureInput);
+    if (!feature || !nonEmptyString(findingId) || !nonEmptyString(issueUrl)) {
+      return { ok: false, kind: 'invalid', message: 'build-review beyond filing input is invalid' };
+    }
+    const acquired = await this.acquire();
+    if (!acquired.ok) return acquired;
+    try {
+      const loaded = await this.load();
+      if (!loaded.ok) return loaded;
+      const existing = loaded.state.records.filter(isBeyondDispositionRecord)
+        .find((entry) => sameFeature(entry.feature, feature) && entry.findingId === findingId);
+      if (!existing) return { ok: false, kind: 'invalid', message: 'build-review beyond record does not exist for this feature' };
+      if (existing.status === 'filed' || existing.issueUrl === issueUrl) return { ok: true, record: existing };
+      const remembered: BuildReviewBeyondDispositionRecord = { ...existing, issueUrl };
+      const replaced = await this.replace({ version: STORE_VERSION, records: loaded.state.records.map((entry) => entry === existing ? remembered : entry) });
+      return replaced.ok ? { ok: true, record: remembered } : replaced;
     } finally {
       await acquired.release();
     }

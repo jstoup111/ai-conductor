@@ -233,7 +233,7 @@ function backlogFixture(status: 'APPROVED' | 'Proposed') {
   for (const slug of slugs) {
     files.set(
       `.docs/plans/${slug}.md`,
-      `# Plan\n**Stories:** .docs/stories/${slug}.md\n### Task 1\n**Dependencies:** none\n`,
+      `# Plan\n**Stories:** .docs/stories/${slug}.md\n### Task 1\n**Dependencies:** none\n**Done when:**\n- The fixture plan reaches the ADR approval assertion.\n- The fixture plan remains valid at land time.\n`,
     );
     files.set(`.docs/stories/${slug}.md`, '# Stories\n\n**Status:** Accepted\n');
     files.set(`.docs/complexity/${slug}.md`, '# Complexity\n\nTier: S\n');

@@ -151,6 +151,12 @@ spec from `/writing-system-tests`, and the existing daemon integration harness f
 > `test/acceptance/engineer-worktree-isolation.test.ts:91`, and
 > `test/engine/engineer/engineer-cli-launch-intake.test.ts:106`.
 
+> **Amended 2026-08-22 by #1785:** Task 6 additionally authorizes the additive
+> `Done when:` fixture text in
+> `test/acceptance/verify-only-anchored-tautology-exception.acceptance.test.ts`.
+> Its plan is consumed by the new frozen criteria projection and must remain
+> land-valid; the existing verify-only assertions are retained unchanged.
+
 **Files:**
 - src/conductor/src/engine/engineer/land-spec.ts
 - src/conductor/test/engine/engineer/land-spec.test.ts

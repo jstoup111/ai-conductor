@@ -172,11 +172,13 @@ export function parsePlanTaskDoneWhen(text: string): Map<string, string[]> {
       collecting = false;
       continue;
     }
+    // A whitespace-only separator is not a criterion, but an explicitly
+    // empty list item is evidence of a blank criterion.  Preserve that
+    // distinction so the land-time validator can report `blank` rather than
+    // silently treating it as a missing/short block.
     if (!line.trim()) continue;
-
-    const criterion = stripMarkdownEmphasis(
-      (line.match(/^\s*(?:[-*]|\d+[.)])\s*(.*)$/)?.[1] ?? line).trim(),
-    );
+    const listItem = line.match(/^\s*(?:[-*]|\d+[.)])\s*(.*)$/);
+    const criterion = stripMarkdownEmphasis((listItem?.[1] ?? line).trim());
     for (const id of currentIds) result.get(id)?.push(criterion);
   }
 

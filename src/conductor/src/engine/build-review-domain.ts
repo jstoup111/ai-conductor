@@ -716,6 +716,24 @@ export function describeBuildReviewJudgedResultRejection(
           }
         }
       }
+      if (entry.boundTo !== undefined) {
+        const boundTo = entry.boundTo === 'beyond' ? 'beyond' as const : parseContentRegionReference(entry.boundTo);
+        if (!boundTo) {
+          problems.push(`findings[${index}].boundTo must be "beyond" or a content-region reference to a Done when: criterion`);
+        } else if (boundTo !== 'beyond') {
+          const planTask = anchor?.rubric === 'completeness'
+            ? parseBuildReviewCanonicalPlanTaskReference(anchor.planTask)
+            : undefined;
+          const candidates = references?.doneWhenContext ?? [];
+          const taskCriteria = planTask === undefined ? candidates : candidates.filter((entry) => entry.taskId === planTask);
+          if (planTask !== undefined && taskCriteria.length === 0) {
+            problems.push(`findings[${index}].boundTo cannot resolve because task ${planTask} has no criteria`);
+          } else if (!taskCriteria.some((entry) => entry.criteria.some((criterion) =>
+            criterion.contentHash === boundTo.contentHash && (criterion.occurrence ?? 0) === (boundTo.occurrence ?? 0)))) {
+            problems.push(`findings[${index}].boundTo must reference a Done when: criterion${planTask ? ` for task ${planTask}` : ''}; allowed forms are "beyond" or content-region`);
+          }
+        }
+      }
     });
   }
   if (source.relocationAudit !== undefined && parseRelocationAudit(source.relocationAudit, rubric) === undefined) {
