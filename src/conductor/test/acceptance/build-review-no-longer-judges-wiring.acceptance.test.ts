@@ -69,6 +69,9 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
         '',
         '### Task 1: add production behavior',
         '**Files:** `src/orphan.ts`',
+        '**Done when:**',
+        '- The fixture contains the planned production behavior.',
+        '- The land gate accepts the plan fixture.',
         '',
       ].join('\n'),
     );
@@ -228,6 +231,9 @@ describe('acceptance: legacy wiring notation no longer blocks plan land (ST-1496
         '**Files:** `src/example.ts`',
         '**Wired-into:** `src/missing.ts#missingCaller`',
         '**Wired-into:** this is malformed legacy prose',
+        '**Done when:**',
+        '- Legacy wiring prose remains accepted by land.',
+        '- The plan reaches the later land validation boundary.',
         '',
       ].join('\n'),
     );

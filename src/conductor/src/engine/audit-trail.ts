@@ -176,6 +176,12 @@ export class AuditTrailWriter {
           event: event.type,
           reason: `${event.rubric} disposition ${event.findingId} uses superseded ${event.contractVersion}`,
         };
+      case 'build_review_beyond_filed':
+        return {
+          origin: 'build',
+          event: event.type,
+          reason: `${event.rubric} finding ${event.findingId} filed at ${event.issueUrl}`,
+        };
       case 'kickback':
         return {
           origin: event.to,

@@ -68,7 +68,7 @@ async function writeDocsArtifacts(dir: string, idea: string): Promise<void> {
   );
   await writeFile(
     join(plansDir, `${slug}.md`),
-    `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n`,
+    `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n**Done when:**\n- The plan's intended behavior is represented by the fixture.\n- The land operation can validate and commit the fixture.\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n`,
     'utf-8',
   );
 }
@@ -422,7 +422,11 @@ describe('dispatchEngineer({kind:"land"})', () => {
     await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
     await writeFile(join(wt.worktreePath, '.docs', 'specs', `${slug}.md`), `# PRD: ${idea}\n`, 'utf-8');
     await writeFile(join(wt.worktreePath, '.docs', 'stories', `${slug}.md`), `# Stories\n\n**Status:** DRAFT\n`, 'utf-8');
-    await writeFile(join(wt.worktreePath, '.docs', 'plans', `${slug}.md`), `# Plan\n\n### Task 1\n**Dependencies:** none\n`, 'utf-8');
+    await writeFile(
+      join(wt.worktreePath, '.docs', 'plans', `${slug}.md`),
+      `# Plan\n\n### Task 1\n**Dependencies:** none\n**Done when:**\n- The plan's intended behavior is represented by the fixture.\n- The land operation can validate and commit the fixture.\n`,
+      'utf-8',
+    );
 
     const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
     const err: string[] = [];
@@ -681,7 +685,11 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     await mkdir(join(wt.worktreePath, '.docs', 'plans'), { recursive: true });
     await writeFile(join(wt.worktreePath, '.docs', 'specs', `${slug}.md`), `# PRD\n\nApproved spec content.\n`, 'utf-8');
     await writeFile(join(wt.worktreePath, '.docs', 'stories', `${slug}.md`), `# Stories: ${idea}\n\n## Story: main\n\n### AC\n- Given x, when y, then z.\n`, 'utf-8');
-    await writeFile(join(wt.worktreePath, '.docs', 'plans', `${slug}.md`), `# Plan\n\n### Task 1\n**Dependencies:** none\n`, 'utf-8');
+    await writeFile(
+      join(wt.worktreePath, '.docs', 'plans', `${slug}.md`),
+      `# Plan\n\n### Task 1\n**Dependencies:** none\n**Done when:**\n- The plan's intended behavior is represented by the fixture.\n- The land operation can validate and commit the fixture.\n`,
+      'utf-8',
+    );
 
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
     await expect(

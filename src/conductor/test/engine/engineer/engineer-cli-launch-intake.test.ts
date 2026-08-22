@@ -103,7 +103,7 @@ async function writeDocsArtifacts(repoPath: string, idea: string): Promise<void>
   );
   await writeFile(
     join(plansDir, `${slug}.md`),
-    `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n`,
+    `# Plan: ${idea}\n\n## Tasks\n\n### Task 1\n**Dependencies:** none\n**Done when:**\n- The plan's intended behavior is represented by the fixture.\n- The land operation can validate and commit the fixture.\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n`,
     'utf-8',
   );
 }
