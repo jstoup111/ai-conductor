@@ -8,6 +8,10 @@ import {
   type BuildReviewJudgedResult,
   type BuildReviewRubricContractVersion,
 } from "./build-review-domain.js";
+import {
+  parseBuildReviewEngineIdentity,
+  type BuildReviewEngineIdentity,
+} from "./build-review-engine-identity.js";
 
 const CACHE_VERSION = 1;
 const CACHE_DIRECTORY = ".pipeline/build-review/cache";
@@ -20,6 +24,7 @@ export interface BuildReviewCacheEntry {
   projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
+  engineIdentity: BuildReviewEngineIdentity;
   result: BuildReviewJudgedResult;
 }
 
@@ -43,9 +48,10 @@ export interface BuildReviewCacheLookup {
 }
 
 /** Safely parsed persisted state, including legacy entries that must miss closed. */
-export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "contractVersion" | "projectionVersion"> {
+export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "contractVersion" | "projectionVersion" | "engineIdentity"> {
   contractVersion: BuildReviewRubricContractVersion;
   projectionVersion: "v1" | "v2";
+  engineIdentity?: BuildReviewEngineIdentity;
 }
 
 /** Explicit cache provenance accompanies a newly materialized current-lap result. */
@@ -98,7 +104,8 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
     "version", "rubric", "contractVersion", "projectionVersion", "projectionDigest",
     "policyFingerprint", "result",
   ];
-  if (Object.keys(candidate).length !== keys.length || Object.keys(candidate).some((key) => !keys.includes(key))) {
+  const allowedKeys = [...keys, "engineIdentity"];
+  if (keys.some((key) => !(key in candidate)) || Object.keys(candidate).some((key) => !allowedKeys.includes(key))) {
     return undefined;
   }
   const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
@@ -111,6 +118,10 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
   if (!result || result.rubric !== candidate.rubric || result.contractVersion !== candidate.contractVersion) {
     return undefined;
   }
+  const engineIdentity = "engineIdentity" in candidate
+    ? parseBuildReviewEngineIdentity(candidate.engineIdentity)
+    : undefined;
+  if ("engineIdentity" in candidate && !engineIdentity) return undefined;
   return {
     version: CACHE_VERSION,
     rubric: candidate.rubric,
@@ -118,6 +129,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
     projectionVersion: candidate.projectionVersion,
     projectionDigest: candidate.projectionDigest,
     policyFingerprint: candidate.policyFingerprint,
+    engineIdentity,
     result,
   };
 }
@@ -125,9 +137,15 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
 /** Strictly parses entries current code may persist or reuse. */
 export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
   const entry = parseBuildReviewCacheEntryCandidate(value);
-  return entry?.contractVersion === "v3" && entry.projectionVersion === "v2"
-    ? { ...entry, contractVersion: "v3", projectionVersion: "v2" }
-    : undefined;
+  if (entry?.contractVersion !== "v3" || entry.projectionVersion !== "v2" || !entry.engineIdentity) {
+    return undefined;
+  }
+  return {
+    ...entry,
+    contractVersion: "v3",
+    projectionVersion: "v2",
+    engineIdentity: entry.engineIdentity,
+  };
 }
 
 /** Reads a cached semantic judgement, treating every read/parse error as a miss. */

@@ -10,6 +10,7 @@ import {
 } from "../../src/engine/build-review-cache.js";
 import { coordinateBuildReviewRubrics } from "../../src/engine/build-review-coordinator.js";
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
+import type { BuildReviewEngineIdentity } from "../../src/engine/build-review-engine-identity.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 
 function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
@@ -20,6 +21,10 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
     projectionVersion: "v2",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
+    engineIdentity: {
+      engineStamp: "31b5c81beaec",
+      skillDigest: "sha256:skill-a",
+    } as BuildReviewEngineIdentity,
     result: {
       kind: "judged",
       rubric: "scope",
@@ -61,6 +66,46 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
+  it("stages legacy entries without engineIdentity for closed classification", async () => {
+    const root = "/feature";
+    const path = cacheEntryPath(root, "scope");
+    const { engineIdentity: _engineIdentity, ...legacy } = entry();
+    const fs = memoryFilesystem({ [path]: JSON.stringify(legacy) });
+
+    const candidate = await readBuildReviewCacheEntry(root, "scope", fs);
+
+    expect(candidate).toMatchObject(legacy);
+    expect((candidate as { engineIdentity?: unknown } | undefined)?.engineIdentity).toBeUndefined();
+  });
+
+  it("rejects a malformed or extended engineIdentity cache entry", async () => {
+    const root = "/feature";
+    const path = cacheEntryPath(root, "scope");
+    const malformed = {
+      ...entry(),
+      engineIdentity: { engineStamp: "", skillDigest: "sha256:skill-a" },
+    };
+    const extended = { ...entry(), unexpected: true };
+
+    await expect(readBuildReviewCacheEntry(root, "scope", memoryFilesystem({
+      [path]: JSON.stringify(malformed),
+    }))).resolves.toBeUndefined();
+    await expect(readBuildReviewCacheEntry(root, "scope", memoryFilesystem({
+      [path]: JSON.stringify(extended),
+    }))).resolves.toBeUndefined();
+  });
+
+  it("refuses to write a legacy entry without engineIdentity", async () => {
+    const fs = memoryFilesystem();
+    const { engineIdentity: _engineIdentity, ...legacy } = entry();
+
+    await expect(writeBuildReviewCacheEntry("/feature", legacy as never, fs)).rejects.toThrow(
+      "build-review cache: entry must contain a valid judged result",
+    );
+    expect(fs.writeCalls).toEqual([]);
+    expect(fs.renameCalls).toEqual([]);
+  });
+
   it("rejects v1 entries at the current public parse boundary", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v1" })).toBeUndefined();
   });
@@ -105,11 +150,13 @@ describe("build-review semantic cache", () => {
     expect({
       path,
       entry: await readBuildReviewCacheEntry(root, "scope", fs),
+      persistedEngineIdentity: JSON.parse(fs.files[path]!).engineIdentity,
       renameCalls: fs.renameCalls,
       files: Object.keys(fs.files),
     }).toEqual({
       path: "/feature/.pipeline/build-review/cache/scope.json",
       entry: entry("snapshot-b"),
+      persistedEngineIdentity: entry().engineIdentity,
       renameCalls: [
         ["/feature/.pipeline/build-review/cache/scope.json.tmp", "/feature/.pipeline/build-review/cache/scope.json"],
         ["/feature/.pipeline/build-review/cache/scope.json.tmp", "/feature/.pipeline/build-review/cache/scope.json"],
