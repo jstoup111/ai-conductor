@@ -37,6 +37,22 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   };
 }
 
+function lookup() {
+  return {
+    rubric: "scope" as const,
+    contractVersion: "v3" as const,
+    projectionVersion: "v2" as const,
+    projectionDigest: "sha256:projection-a",
+    policyFingerprint: "sha256:policy-a",
+    engineIdentity: {
+      engineStamp: "31b5c81beaec",
+      skillDigest: "sha256:skill-a",
+    } as BuildReviewEngineIdentity,
+    lapId: "lap-current" as never,
+    snapshotDigest: "snapshot-current",
+  };
+}
+
 function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheFilesystem & {
   files: Record<string, string>;
   writeCalls: Array<[string, string]>;
@@ -66,6 +82,27 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
+  it("classifies an engine-version mismatch after the existing cache identity checks", () => {
+    const request = lookup();
+    const { engineIdentity: _engineIdentity, ...legacy } = entry();
+
+    expect([
+      classifyBuildReviewCacheLookup({ ...entry(), engineIdentity: { ...entry().engineIdentity, engineStamp: "other-engine" } }, request),
+      classifyBuildReviewCacheLookup(legacy, request),
+      classifyBuildReviewCacheLookup({ ...entry(), engineIdentity: { ...entry().engineIdentity, engineStamp: "dev" } }, request),
+      classifyBuildReviewCacheLookup({ ...entry(), policyFingerprint: "sha256:other", engineIdentity: { ...entry().engineIdentity, engineStamp: "other-engine" } }, request),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionDigest: "sha256:other", engineIdentity: { ...entry().engineIdentity, engineStamp: "other-engine" } }, request),
+      classifyBuildReviewCacheLookup({ ...legacy, contractVersion: "v2", result: { ...entry().result, contractVersion: "v2" } }, request),
+    ]).toEqual([
+      { kind: "miss", reason: "engine-version-mismatch" },
+      { kind: "miss", reason: "engine-version-mismatch" },
+      { kind: "miss", reason: "engine-version-mismatch" },
+      { kind: "miss", reason: "policy-fingerprint-mismatch" },
+      { kind: "miss", reason: "projection-digest-mismatch" },
+      { kind: "miss", reason: "contract-version-mismatch" },
+    ]);
+  });
+
   it("stages legacy entries without engineIdentity for closed classification", async () => {
     const root = "/feature";
     const path = cacheEntryPath(root, "scope");
@@ -229,15 +266,7 @@ describe("build-review semantic cache", () => {
         verdict: "FAIL" as const,
       },
     };
-    const request = {
-      rubric: "scope" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v2" as const,
-      projectionDigest: "sha256:projection-a",
-      policyFingerprint: "sha256:policy-a",
-      lapId: "lap-current" as never,
-      snapshotDigest: "snapshot-current",
-    };
+    const request = lookup();
 
     expect({
       hit: classifyBuildReviewCacheLookup(cached, request),
@@ -307,15 +336,7 @@ describe("build-review semantic cache", () => {
   });
 
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {
-    const request = {
-      rubric: "scope" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v2" as const,
-      projectionDigest: "sha256:projection-a",
-      policyFingerprint: "sha256:policy-a",
-      lapId: "lap-current" as never,
-      snapshotDigest: "snapshot-current",
-    };
+    const request = lookup();
     const unsafeInfrastructure = {
       ...entry(),
       result: { kind: "infrastructure-failure", rubric: "scope", reason: "retry-exhausted", detail: "provider exhausted" },

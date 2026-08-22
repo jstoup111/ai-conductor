@@ -43,6 +43,7 @@ export interface BuildReviewCacheLookup {
   projectionVersion: "v2";
   projectionDigest: string;
   policyFingerprint: string;
+  engineIdentity: BuildReviewEngineIdentity;
   lapId: BuildReviewLapId;
   snapshotDigest: string;
 }
@@ -73,7 +74,8 @@ export type BuildReviewCacheMissReason =
   | "contract-version-mismatch"
   | "projection-version-mismatch"
   | "projection-digest-mismatch"
-  | "policy-fingerprint-mismatch";
+  | "policy-fingerprint-mismatch"
+  | "engine-version-mismatch";
 
 export type BuildReviewCacheLookupResolution =
   | { kind: "hit"; hit: BuildReviewCacheHit }
@@ -185,6 +187,10 @@ export function classifyBuildReviewCacheLookup(
   }
   if (entry.policyFingerprint !== lookup.policyFingerprint) {
     return { kind: "miss", reason: "policy-fingerprint-mismatch" };
+  }
+  if (!entry.engineIdentity || (lookup.engineIdentity !== undefined &&
+    entry.engineIdentity.engineStamp !== lookup.engineIdentity.engineStamp)) {
+    return { kind: "miss", reason: "engine-version-mismatch" };
   }
   return {
     kind: "hit",
