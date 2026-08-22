@@ -394,7 +394,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |
-| `manual-test-results.md` | Per-story PASS/FAIL rows. The gate fails on any FAIL row in the latest attempt, and on an mtime older than session start | `manual-test` skill |
+| `manual-test-results.md` | Per-story PASS/FAIL/SKIP rows. The gate fails on any FAIL row in the latest attempt, on a latest attempt with no recognized PASS or SKIP row (unless the whole attempt is marked skipped), and on an mtime older than session start | `manual-test` skill |
 | `manual-test-fail-evidence.json` | Failure detail for the above | engine |
 | `per-task-floor.json` | Per-task commit-floor telemetry | `step-runners.ts` |
 | `prd-audit.md` | Markdown table `\| FR \| Verdict \| Gap-class \| Evidence \| Accepted? \|`. Verdicts `ALIGNED`, `MISSING`, `PARTIAL`, `DIVERGED`; gap classes `impl-gap`, `intended-drift`, `plan-gap`, `unknown`. The verdict is read from the verdict **cell**, not from anywhere else in the row | `prd-audit` skill |
