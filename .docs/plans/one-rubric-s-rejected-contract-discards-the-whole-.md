@@ -265,3 +265,8 @@ Task 6 ─┬─ Task 7             │
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+### Task rem-completeness-1: src/conductor/test/engine/artifacts.test.ts:4136 — add Task 7 case (a) for a stamped PASS at a different HEAD whose codeStamp delta misses the gate surface; assert done true, verdictFreshness preserved_surface_miss, and no staleLap
+### Task rem-completeness-2: src/conductor/test/engine/artifacts.test.ts:4136 — add Task 7 case (b) for a matching-lap FAIL whose mtime predates the session; assert the existing mtime rejection, verdictFreshness stale_invalidated, and no staleLap
+### Task rem-completeness-3: src/conductor/test/engine/artifacts.test.ts:4136 — add Task 7 case (d) for a pre-session PASS aggregate without codeStamp; assert the existing stale_invalidated absent result and no staleLap
+### Task rem-completeness-4: src/conductor/test/engine/conductor-gate-loop.test.ts:1 — add the Task 8 stale-FAIL regression test that snapshots .pipeline/build-review.json bytes and gates.build_review count, cumulative, and lastReason before processing, then asserts unchanged bytes, a deep-equal ledger entry, and no kickback event afterward
+### Task rem-completeness-5: src/conductor/test/engine/conductor-gate-loop.test.ts:1 — add Task 9 conductor assertions that a stale completion emits exactly one build_review_stale_aggregate carrying completion.staleLap storedLapId and currentLapId, while a current-lap aggregate emits zero such events
