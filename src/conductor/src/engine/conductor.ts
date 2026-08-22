@@ -1771,6 +1771,7 @@ export class Conductor {
       },
       projectRoot: this.projectRoot,
       planPath,
+      git: makeGitRunner(this.projectRoot),
       gh: this.gh,
       buildReviewEffectiveResolver: this.buildReviewEffectiveResolver,
       repairFinishPr,
@@ -7036,6 +7037,12 @@ export class Conductor {
                 type: 'verdict_freshness',
                 step: step.name,
                 ...completion.verdictFreshness,
+              });
+            }
+            if (step.name === 'build_review' && completion.staleLap) {
+              await emitTracked({
+                type: 'build_review_stale_aggregate',
+                ...completion.staleLap,
               });
             }
             // Consumed for this attempt's completion check above — clear so
