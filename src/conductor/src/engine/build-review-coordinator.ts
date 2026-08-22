@@ -19,6 +19,7 @@ import {
   type BuildReviewCacheEntry,
   type BuildReviewCacheEntryCandidate,
 } from "./build-review-cache.js";
+import type { BuildReviewEngineIdentity } from "./build-review-engine-identity.js";
 import {
   parseBuildReviewBranchArtifact,
   type BuildReviewBranchArtifact,
@@ -46,6 +47,15 @@ const BUILD_REVIEW_RUBRICS: readonly BuildReviewRubricId[] = [
   "rootCause",
   "completeness",
 ];
+
+// The runner supplies the actual identity once per dispatch.  Keep this
+// transition fallback so callers compiled before that wiring lands still
+// produce schema-valid cache entries rather than turning a cache write into an
+// infrastructure failure.
+const TRANSITIONAL_ENGINE_IDENTITY = {
+  engineStamp: "dev",
+  skillDigest: "unresolved",
+} as BuildReviewEngineIdentity;
 
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
@@ -97,6 +107,8 @@ export interface BuildReviewCoordinationInput {
   readonly config: ResolvedBuildReviewConfig;
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
+  /** Identity supplied once by the dispatch site and shared by every rubric. */
+  readonly engineIdentity?: BuildReviewEngineIdentity;
   /** Test seam for an engine-held projection corruption at branch settlement. */
   readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
@@ -121,6 +133,7 @@ export interface BuildReviewCoordinationInput {
     | "build_review_rubric_result"
     | "build_review_rubric_skipped"
     | "build_review_cache_hit"
+    | "build_review_cache_discarded"
     | "build_review_rubric_infrastructure_failure" }>) => Promise<void>;
 }
 
@@ -264,6 +277,7 @@ function validWrittenArtifact(
 export async function coordinateBuildReviewRubrics(
   input: BuildReviewCoordinationInput,
 ): Promise<BuildReviewCoordination> {
+  const engineIdentity = input.engineIdentity ?? TRANSITIONAL_ENGINE_IDENTITY;
   const classification = classifyBuildReviewRubricBranches(input.config, []);
   if (classification.kind !== "ready") return classification;
 
@@ -330,6 +344,7 @@ export async function coordinateBuildReviewRubrics(
       projectionVersion: projection.projectionVersion,
       projectionDigest: projection.digest,
       policyFingerprint,
+      engineIdentity,
       lapId: input.lapId,
       snapshotDigest: projection.snapshotDigest,
     });
@@ -355,6 +370,16 @@ export async function coordinateBuildReviewRubrics(
       }
       if (result) await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
     } else {
+      if (cache.reason === "engine-version-mismatch" || cache.reason === "skill-digest-mismatch") {
+        await input.emit?.({
+          type: "build_review_cache_discarded",
+          rubric: branch.rubric,
+          lapId: input.lapId,
+          reason: cache.reason,
+          ...(candidate?.engineIdentity === undefined ? {} : { cachedEngineStamp: candidate.engineIdentity.engineStamp }),
+          currentEngineStamp: engineIdentity.engineStamp,
+        });
+      }
       await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
       misses.push(branch);
     }
@@ -400,6 +425,7 @@ export async function coordinateBuildReviewRubrics(
             projectionVersion: projection.projectionVersion,
             projectionDigest: projection.digest,
             policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
+            engineIdentity,
             result: written,
           });
         } catch {

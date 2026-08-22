@@ -12,6 +12,7 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
 import type { BuildReviewCacheEntry } from "../../src/engine/build-review-cache.js";
+import type { BuildReviewEngineIdentity } from "../../src/engine/build-review-engine-identity.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 import type { ResolvedBuildReviewConfig } from "../../src/engine/resolved-config.js";
@@ -123,6 +124,11 @@ function contentDigestFor(content: {
   })).digest("hex")}`;
 }
 
+const engineIdentity = {
+  engineStamp: "current-engine",
+  skillDigest: "sha256:current-skill",
+} as BuildReviewEngineIdentity;
+
 describe("build-review coordinator: frozen fan-out", () => {
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput['emit']>>[0]) => undefined);
@@ -160,7 +166,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     }));
 
     await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
@@ -195,6 +201,104 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(writeCache.mock.calls.every(([entry]) => entry.result.kind === "judged")).toBe(true);
   });
 
+  it.each([
+    ["engine-version-mismatch", { engineStamp: "old-engine", skillDigest: engineIdentity.skillDigest }, "old-engine"],
+    ["skill-digest-mismatch", { engineStamp: engineIdentity.engineStamp, skillDigest: "sha256:old-skill" }, engineIdentity.engineStamp],
+  ] as const)("discards a %s cache entry before dispatching it", async (reason, cachedIdentity, cachedEngineStamp) => {
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const dispatchModel = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
+    }));
+    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
+
+    const result = await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+      preflight: vi.fn(),
+      readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
+        version: 1, rubric: "scope", contractVersion: "v3", projectionVersion: "v2",
+        projectionDigest: projection.digest, policyFingerprint,
+        engineIdentity: cachedIdentity as BuildReviewEngineIdentity,
+        result: {
+          kind: "judged", rubric: "scope", lapId: parseBuildReviewLapId("cached")!, snapshotDigest: "cached-snapshot",
+          contractVersion: "v3" as never, findings: [], verdict: "PASS",
+        },
+      } : undefined,
+      dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache,
+      emit,
+    });
+
+    expect(emit.mock.calls.map(([event]) => event)).toEqual(expect.arrayContaining([
+      {
+        type: "build_review_cache_discarded", rubric: "scope", lapId: "lap-current", reason,
+        cachedEngineStamp, currentEngineStamp: engineIdentity.engineStamp,
+      },
+      { type: "build_review_rubric_started", rubric: "scope", lapId: "lap-current" },
+    ]));
+    const events = emit.mock.calls.map(([event]) => event);
+    expect(events.findIndex((event) => event.type === "build_review_cache_discarded"))
+      .toBeLessThan(events.findIndex((event) => event.type === "build_review_rubric_started" && event.rubric === "scope"));
+    expect(dispatchModel.mock.calls.map(([branch]) => branch.rubric)).toContain("scope");
+    expect(writeCache.mock.calls.find(([entry]) => entry.rubric === "scope")?.[0].engineIdentity).toEqual(engineIdentity);
+    expect(result).toMatchObject({ kind: "ready" });
+  });
+
+  it("emits no discard for legacy or unrelated cache misses and completes without an emitter", async () => {
+    const cases: Array<[string, unknown]> = [
+      ["missing", undefined],
+      ["projection", { projectionDigest: "sha256:other" }],
+      ["policy", { policyFingerprint: "sha256:other" }],
+      ["invalid", {}],
+    ];
+
+    for (const [name, override] of cases) {
+      const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+      const dispatched = vi.fn(async (branch, projection) => ({
+        kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
+      }));
+      await coordinateBuildReviewRubrics({
+        config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+        preflight: vi.fn(),
+        readCache: async (branch, projection, policyFingerprint) => branch.rubric !== "scope"
+          ? undefined
+          : name === "invalid" ? {} as never
+          : override === undefined ? undefined : {
+            version: 1, rubric: "scope", contractVersion: "v3", projectionVersion: "v2",
+            projectionDigest: projection.digest, policyFingerprint, engineIdentity,
+            result: { kind: "judged", rubric: "scope", lapId: parseBuildReviewLapId("cached")!, snapshotDigest: "cached", contractVersion: "v3" as never, findings: [], verdict: "PASS" },
+            ...(override as object),
+          },
+        dispatchModel: dispatched,
+        writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+        writeCache: async () => undefined,
+        emit,
+      });
+      expect(emit.mock.calls.map(([event]) => event).filter((event) => event.type === "build_review_cache_discarded")).toEqual([]);
+      expect(dispatched.mock.calls.map(([branch]) => branch.rubric)).toContain("scope");
+    }
+
+    const dispatched = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
+    }));
+    await expect(coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+      preflight: vi.fn(),
+      readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
+        version: 1, rubric: "scope", contractVersion: "v3", projectionVersion: "v2", projectionDigest: projection.digest,
+        policyFingerprint, engineIdentity: { ...engineIdentity, engineStamp: "old-engine" } as BuildReviewEngineIdentity,
+        result: { kind: "judged", rubric: "scope", lapId: parseBuildReviewLapId("cached")!, snapshotDigest: "cached", contractVersion: "v3" as never, findings: [], verdict: "PASS" },
+      } : undefined,
+      dispatchModel: dispatched,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache: async () => undefined,
+    })).resolves.toMatchObject({ kind: "ready" });
+    expect(dispatched.mock.calls.map(([branch]) => branch.rubric)).toContain("scope");
+  });
+
   it("rematerializes an exact cache hit with provenance without rewriting its semantic entry", async () => {
     const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
@@ -203,7 +307,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
     }));
     const result = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
@@ -211,7 +315,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       }),
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
         version: 1 as const, rubric: "scope" as const, contractVersion: "v3" as const, projectionVersion: "v2" as const,
-        projectionDigest: projection.digest, policyFingerprint,
+        projectionDigest: projection.digest, policyFingerprint, engineIdentity,
         result: {
           kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
           snapshotDigest: "cached-snapshot", contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
@@ -407,13 +511,13 @@ describe("build-review coordinator: frozen fan-out", () => {
     }));
     const cachedScope = {
       version: 1 as const, rubric: "scope" as const, contractVersion: "v3" as const, projectionVersion: "v2" as const,
-      projectionDigest: "", policyFingerprint: "", result: {
+      projectionDigest: "", policyFingerprint: "", engineIdentity, result: {
         kind: "judged" as const, rubric: "scope" as const, lapId: parseBuildReviewLapId("cached")!,
         snapshotDigest: "old", contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
       },
     };
     const result = await coordinateBuildReviewRubrics({
-      config: config({ maxParallel: 2 }), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, preflight,
+      config: config({ maxParallel: 2 }), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity, preflight,
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope"
         ? { ...cachedScope, projectionDigest: projection.digest, policyFingerprint }
         : undefined,
