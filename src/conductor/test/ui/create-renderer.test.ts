@@ -113,6 +113,21 @@ describe('createRenderer', () => {
     expect(stream.output()).toContain('closeout evaluator (40ms)');
   });
 
+  it('renders a discarded build-review cache verdict with rubric, cause, and current engine stamp', async () => {
+    await renderer({
+      type: 'build_review_cache_discarded',
+      rubric: 'scope',
+      lapId: 'lap-1',
+      reason: 'skill-digest-mismatch',
+      cachedEngineStamp: 'old-engine',
+      currentEngineStamp: 'current-engine',
+    });
+
+    expect(stream.output()).toContain('scope');
+    expect(stream.output()).toContain('skill-digest-mismatch');
+    expect(stream.output()).toContain('current-engine');
+  });
+
   it('renders step_failed with error output', async () => {
     await renderer({
       type: 'step_failed',

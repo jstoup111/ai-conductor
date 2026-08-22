@@ -1,7 +1,9 @@
 import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { join, relative } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { LLMProvider, ProviderStreamObservation } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
@@ -54,7 +56,15 @@ import {
   stampBuildReviewDispatchedCandidate,
   validateBuildReviewDispatchedResult,
   type BuildReviewDispatchableRubric,
+  type BuildReviewRubricIdentities,
 } from './build-review-coordinator.js';
+import { BUILD_REVIEW_RUBRIC_REGISTRY } from './build-review-registry.js';
+import {
+  digestRubricSkill,
+  engineStampFromEngineDir,
+  SkillDigestUnavailable,
+  type RubricSkillFileReader,
+} from './build-review-engine-identity.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
@@ -87,6 +97,7 @@ import {
   executeProviderCandidates,
   executeAuxiliaryProviderCandidates,
   type ExecuteProviderCandidatesInput,
+  type OnCandidateSelfHostPrepared,
   type ProviderExecutionResult,
   type ProviderExecutionContext,
   type WithCandidateSafety,
@@ -461,7 +472,12 @@ export interface StepRunnerOptions {
   buildReviewCoordinator?: (
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
+    engineIdentity: BuildReviewRubricIdentities,
   ) => Promise<StepRunResult>;
+  /** Injected identity seams keep build_review runner tests filesystem-free. */
+  resolveBuildReviewSkillRoot?: (providerKey: string, env?: NodeJS.ProcessEnv) => Promise<string | null>;
+  resolveBuildReviewEngineStamp?: (engineDir: string) => string;
+  readBuildReviewRubricSkill?: RubricSkillFileReader;
   /** Shared raw-aggregate/disposition join. Tests inject a bounded fake store. */
   buildReviewEffectiveResolver?: typeof resolveEffectiveBuildReviewVerdict;
   /** Test seam for a missing or malformed current-lap branch artifact. */
@@ -532,6 +548,22 @@ export const RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES = 8_192;
 /** Byte cap for the raw-output diagnostic detail on a final rubric shape failure. */
 export const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
 
+/**
+ * Return the provider home whose installed `skills/` directory the rubric
+ * invocation will load from. Self-host dispatches set the provider home to a
+ * throwaway directory containing that same `skills/` directory; normal Codex
+ * installs use the active ~/.agents home.
+ */
+async function resolveInstalledBuildReviewSkillRoot(providerKey: string, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  if (providerKey === 'claude') {
+    return env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+  }
+  if (providerKey === 'codex') {
+    return env.CODEX_HOME ?? join(homedir(), '.agents');
+  }
+  return null;
+}
+
 export function extractJudgedResultCandidate(output: string): unknown {
   const candidates: string[] = [output.trim()];
   const fence = output.match(/```(?:json)?\s*\n([\s\S]*?)\n```/);
@@ -570,6 +602,9 @@ export class DefaultStepRunner implements StepRunner {
   private planPathOverride?: string;
   private buildReviewInputOptions?: BuildReviewInputOptions;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
+  private resolveBuildReviewSkillRoot: NonNullable<StepRunnerOptions['resolveBuildReviewSkillRoot']>;
+  private resolveBuildReviewEngineStamp: NonNullable<StepRunnerOptions['resolveBuildReviewEngineStamp']>;
+  private readBuildReviewRubricSkill: RubricSkillFileReader;
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
   private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
   private events?: ConductorEventEmitter;
@@ -593,6 +628,8 @@ export class DefaultStepRunner implements StepRunner {
   private providerLifecycleAttempt = 0;
   /** Bounded per-run evidence cache; failed preflights never enter it. */
   private readonly tautologyPreflightCache = new Map<string, import('./build-review-tautology-preflight.js').TautologyCompletedPreflight>();
+  /** Concrete successful-candidate identities, scoped to one rubric fan-out. */
+  private readonly buildReviewDispatchIdentities = new Map<string, import('./build-review-engine-identity.js').BuildReviewEngineIdentity>();
   callCount = 0;
 
   constructor(
@@ -624,6 +661,9 @@ export class DefaultStepRunner implements StepRunner {
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
+    this.resolveBuildReviewSkillRoot = options?.resolveBuildReviewSkillRoot ?? resolveInstalledBuildReviewSkillRoot;
+    this.resolveBuildReviewEngineStamp = options?.resolveBuildReviewEngineStamp ?? engineStampFromEngineDir;
+    this.readBuildReviewRubricSkill = options?.readBuildReviewRubricSkill ?? (async (path) => readFile(path));
     this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
     this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
     this.events = options?.events;
@@ -1889,6 +1929,7 @@ export class DefaultStepRunner implements StepRunner {
   private async runRubricBuildReview(
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
+    engineIdentity: BuildReviewRubricIdentities,
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -1899,10 +1940,12 @@ export class DefaultStepRunner implements StepRunner {
     const effectivePipelineDir = this.pipelineDir ?? join(this.projectDir, '.pipeline');
     await rm(join(effectivePipelineDir, 'build-review.json'), { force: true });
 
+    this.buildReviewDispatchIdentities.clear();
     const coordination = await coordinateBuildReviewRubrics({
       config,
       inputs,
       lapId,
+      engineIdentity,
       preflight: async () => this.runTautologyPreflight(inputs),
       readCache: async (branch) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
         readFile: async (path) => readFile(path, 'utf-8'),
@@ -1910,7 +1953,11 @@ export class DefaultStepRunner implements StepRunner {
         writeFile,
         rename,
       }),
-      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection),
+      dispatchModel: async (branch, projection) => {
+        const result = await this.dispatchBuildReviewRubric(branch, projection);
+        const identity = this.buildReviewDispatchIdentities.get(branch.rubric);
+        return identity === undefined ? result : { result, engineIdentity: identity };
+      },
       writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
         readFile: async (path) => readFile(path, 'utf-8'),
         mkdir: async (path) => { await mkdir(path, { recursive: true }); },
@@ -2071,6 +2118,49 @@ export class DefaultStepRunner implements StepRunner {
     };
   }
 
+  /** Resolve one cache identity per enabled rubric for this build_review dispatch. */
+  private async resolveBuildReviewRubricIdentities(
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ): Promise<BuildReviewRubricIdentities> {
+    const engineDir = dirname(fileURLToPath(import.meta.url));
+    const engineStamp = this.resolveBuildReviewEngineStamp(engineDir);
+    const identities = {} as Record<keyof typeof BUILD_REVIEW_RUBRIC_REGISTRY, BuildReviewRubricIdentities[keyof BuildReviewRubricIdentities]>;
+
+    for (const [rubric, descriptor] of Object.entries(BUILD_REVIEW_RUBRIC_REGISTRY) as Array<
+      [keyof typeof BUILD_REVIEW_RUBRIC_REGISTRY, (typeof BUILD_REVIEW_RUBRIC_REGISTRY)[keyof typeof BUILD_REVIEW_RUBRIC_REGISTRY]]
+    >) {
+      // Skipped rubrics never reach the cache boundary, so no byte read is
+      // warranted. The coordinator will only inspect identities for enabled branches.
+      if (!config.rubrics[rubric].enabled) {
+        identities[rubric] = { kind: 'ready', identity: { engineStamp, skillDigest: 'disabled' } as never };
+        continue;
+      }
+      try {
+        const providerKey = normalizeProviderSelection(config.rubrics[rubric].llm_provider)[0];
+        const skillRoot = providerKey === undefined
+          ? null
+          : await this.resolveBuildReviewSkillRoot(providerKey);
+        if (skillRoot === null) {
+          identities[rubric] = {
+            kind: 'unavailable',
+            path: `<unresolved ${providerKey ?? 'provider'} skill root>/skills/${descriptor.skillName}/SKILL.md`,
+          };
+          continue;
+        }
+        const skillDigest = await digestRubricSkill({
+          harnessRoot: skillRoot,
+          skillName: descriptor.skillName,
+          readFile: this.readBuildReviewRubricSkill,
+        });
+        identities[rubric] = { kind: 'ready', identity: { engineStamp, skillDigest } as never };
+      } catch (error) {
+        if (!(error instanceof SkillDigestUnavailable)) throw error;
+        identities[rubric] = { kind: 'unavailable', path: error.path };
+      }
+    }
+    return identities as BuildReviewRubricIdentities;
+  }
+
   private async dispatchBuildReviewRubric(
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
@@ -2094,8 +2184,23 @@ export class DefaultStepRunner implements StepRunner {
       lapId: projection.lapId,
       promptBytes: Buffer.byteLength(rubricPrompt, 'utf8'),
     });
+    let successfulCandidateIdentity: import('./build-review-engine-identity.js').BuildReviewEngineIdentity | undefined;
     const invokeOnce = async (prompt: string): Promise<{ success: boolean; output?: string }> => {
       if (this.providerRuntimes && this.sessionStore) {
+        const preparedIdentities = new Map<string, import('./build-review-engine-identity.js').BuildReviewEngineIdentity>();
+        const onCandidateSelfHostPrepared: OnCandidateSelfHostPrepared = async (candidate, selfHost) => {
+          const skillRoot = await this.resolveBuildReviewSkillRoot(candidate.providerKey, selfHost?.env);
+          if (skillRoot === null) return;
+          const skillDigest = await digestRubricSkill({
+            harnessRoot: skillRoot,
+            skillName: branch.skillName,
+            readFile: this.readBuildReviewRubricSkill,
+          });
+          preparedIdentities.set(candidate.providerKey, {
+            engineStamp: this.resolveBuildReviewEngineStamp(dirname(fileURLToPath(import.meta.url))),
+            skillDigest,
+          } as never);
+        };
         const safety = this.candidateSafetyFor('build_review');
         const result = await this.dispatchProviderWithLifecycleSupervision(
           'build_review',
@@ -2116,6 +2221,7 @@ export class DefaultStepRunner implements StepRunner {
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            onCandidateSelfHostPrepared,
             onAttempt: this.providerAttempt,
             warn: this.providerWarn,
             options,
@@ -2126,6 +2232,9 @@ export class DefaultStepRunner implements StepRunner {
           }),
         );
         const verified = safety?.verify(result) ?? result;
+        successfulCandidateIdentity = verified.actualProvider === undefined
+          ? undefined
+          : preparedIdentities.get(verified.actualProvider);
         this.callCount++;
         return typeof verified.output === 'string'
           ? { success: verified.success, output: verified.output }
@@ -2156,7 +2265,10 @@ export class DefaultStepRunner implements StepRunner {
     const initial = await invokeOnce(rubricPrompt);
     if (!initial.success || initial.output === undefined) return undefined;
     const validated = this.validateRubricOutput(initial.output, branch.rubric, projection);
-    if (validated.result) return validated.result;
+    if (validated.result) {
+      if (successfulCandidateIdentity) this.buildReviewDispatchIdentities.set(branch.rubric, successfulCandidateIdentity);
+      return validated.result;
+    }
     const repairPrompt = [
       `Your previous response for the Build Review ${label[branch.rubric]} rubric did not satisfy the judged-result contract: ${validated.rejection}.`,
       `Re-emit your judgement as ONLY one JSON object — no prose, no markdown fences, no other text — of exactly this shape:\n${contractShape}`,
@@ -2171,7 +2283,10 @@ export class DefaultStepRunner implements StepRunner {
         );
       }
       const repaired = this.validateRubricOutput(repair.output, branch.rubric, projection);
-      if (repaired.result) return repaired.result;
+      if (repaired.result) {
+        if (successfulCandidateIdentity) this.buildReviewDispatchIdentities.set(branch.rubric, successfulCandidateIdentity);
+        return repaired.result;
+      }
       return makeBuildReviewDispatchFailure(boundedHeadTailExcerpt(
         `judged-result contract not satisfied after one repair turn: ${repaired.rejection}. Raw output excerpt: ${repair.output}`,
         RUBRIC_FAILURE_DETAIL_CAP_BYTES,
@@ -2513,14 +2628,15 @@ export class DefaultStepRunner implements StepRunner {
         ? { output: `${floorAdvisoryLines.join('\n')}\n\n${result.output}` }
         : {}),
     });
+    const engineIdentity = await this.resolveBuildReviewRubricIdentities(buildReviewConfig);
     if (this.buildReviewCoordinator) {
       return withBaseFreshness(withFloorAdvisory(
-        await this.buildReviewCoordinator(inputs, buildReviewConfig),
+        await this.buildReviewCoordinator(inputs, buildReviewConfig, engineIdentity),
       ));
     }
 
     return withBaseFreshness(withFloorAdvisory(
-      await this.runRubricBuildReview(inputs, buildReviewConfig),
+      await this.runRubricBuildReview(inputs, buildReviewConfig, engineIdentity),
     ));
   }
 

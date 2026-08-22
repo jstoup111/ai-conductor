@@ -233,7 +233,8 @@ export default async function setup() {
   // the operator's REAL tmpdir from it — every guard below is defined against
   // the real one, and the fallback keeps this file runnable as a globalSetup
   // even if the config-level install is ever missing.
-  const runTmpRoot = process.env[RUN_TMP_ROOT_ENV] ?? (await createRunTmpRoot(tmpdir()));
+  const inheritedRunTmpRoot = process.env[RUN_TMP_ROOT_ENV];
+  const runTmpRoot = inheritedRunTmpRoot ?? (await createRunTmpRoot(tmpdir()));
   process.env[RUN_TMP_ROOT_ENV] = runTmpRoot;
   process.env.TMPDIR = runTmpRoot;
   const realTmpdir = dirname(runTmpRoot);

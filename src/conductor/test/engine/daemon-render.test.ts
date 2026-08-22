@@ -66,6 +66,18 @@ describe('renderDaemonEvent', () => {
     })).toEqual(['·   wiring_check [wiring_check, test_suite] ✓ done']);
   });
 
+  it('renders discarded build-review cache verdicts with their rubric and cause', () => {
+    expect(lines({
+      type: 'build_review_cache_discarded',
+      rubric: 'scope',
+      lapId: 'lap-1',
+      reason: 'skill-digest-mismatch',
+      currentEngineStamp: 'new-engine',
+    })).toEqual([
+      '· ↻ build review cache discarded: scope — skill-digest-mismatch (current engine: new-engine)',
+    ]);
+  });
+
   it('renders failures', () => {
     expect(lines({ type: 'step_failed', step: 'build', error: 'boom', retryCount: 2 })).toEqual([
       '· ✗ build failed (try 2): boom',

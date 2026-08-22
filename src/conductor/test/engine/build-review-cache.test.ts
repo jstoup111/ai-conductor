@@ -10,6 +10,7 @@ import {
 } from "../../src/engine/build-review-cache.js";
 import { coordinateBuildReviewRubrics } from "../../src/engine/build-review-coordinator.js";
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
+import type { BuildReviewEngineIdentity } from "../../src/engine/build-review-engine-identity.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 
 function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
@@ -20,6 +21,10 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
     projectionVersion: "v2",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
+    engineIdentity: {
+      engineStamp: "31b5c81beaec",
+      skillDigest: "sha256:skill-a",
+    } as BuildReviewEngineIdentity,
     result: {
       kind: "judged",
       rubric: "scope",
@@ -29,6 +34,22 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
       findings: [],
       verdict: "PASS",
     },
+  };
+}
+
+function lookup() {
+  return {
+    rubric: "scope" as const,
+    contractVersion: "v3" as const,
+    projectionVersion: "v2" as const,
+    projectionDigest: "sha256:projection-a",
+    policyFingerprint: "sha256:policy-a",
+    engineIdentity: {
+      engineStamp: "31b5c81beaec",
+      skillDigest: "sha256:skill-a",
+    } as BuildReviewEngineIdentity,
+    lapId: "lap-current" as never,
+    snapshotDigest: "snapshot-current",
   };
 }
 
@@ -61,6 +82,103 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
+  it("classifies an engine-version mismatch after the existing cache identity checks", () => {
+    const request = lookup();
+    const { engineIdentity: _engineIdentity, ...legacy } = entry();
+
+    expect([
+      classifyBuildReviewCacheLookup({ ...entry(), engineIdentity: { ...entry().engineIdentity, engineStamp: "other-engine" } }, request),
+      classifyBuildReviewCacheLookup(legacy, request),
+      classifyBuildReviewCacheLookup({ ...entry(), engineIdentity: { ...entry().engineIdentity, engineStamp: "dev" } }, request),
+      classifyBuildReviewCacheLookup({ ...entry(), policyFingerprint: "sha256:other", engineIdentity: { ...entry().engineIdentity, engineStamp: "other-engine" } }, request),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionDigest: "sha256:other", engineIdentity: { ...entry().engineIdentity, engineStamp: "other-engine" } }, request),
+      classifyBuildReviewCacheLookup({ ...legacy, contractVersion: "v2", result: { ...entry().result, contractVersion: "v2" } }, request),
+    ]).toEqual([
+      { kind: "miss", reason: "engine-version-mismatch" },
+      { kind: "miss", reason: "engine-version-mismatch" },
+      { kind: "miss", reason: "engine-version-mismatch" },
+      { kind: "miss", reason: "policy-fingerprint-mismatch" },
+      { kind: "miss", reason: "projection-digest-mismatch" },
+      { kind: "miss", reason: "contract-version-mismatch" },
+    ]);
+  });
+
+  it("classifies a changed rubric skill digest only after the engine stamp matches", () => {
+    const request = lookup();
+
+    expect([
+      classifyBuildReviewCacheLookup({
+        ...entry(),
+        engineIdentity: { ...entry().engineIdentity, skillDigest: "sha256:other-skill" },
+      }, request),
+      classifyBuildReviewCacheLookup({
+        ...entry(),
+        engineIdentity: { engineStamp: "other-engine", skillDigest: "sha256:other-skill" },
+      }, request),
+      classifyBuildReviewCacheLookup(entry(), request),
+    ]).toEqual([
+      { kind: "miss", reason: "skill-digest-mismatch" },
+      { kind: "miss", reason: "engine-version-mismatch" },
+      {
+        kind: "hit",
+        hit: {
+          result: {
+            ...entry().result,
+            lapId: "lap-current",
+            snapshotDigest: "snapshot-current",
+          },
+          provenance: {
+            kind: "cache-hit",
+            cachedLapId: "lap-a",
+            cachedSnapshotDigest: "snapshot-a",
+            projectionDigest: "sha256:projection-a",
+            policyFingerprint: "sha256:policy-a",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("stages legacy entries without engineIdentity for closed classification", async () => {
+    const root = "/feature";
+    const path = cacheEntryPath(root, "scope");
+    const { engineIdentity: _engineIdentity, ...legacy } = entry();
+    const fs = memoryFilesystem({ [path]: JSON.stringify(legacy) });
+
+    const candidate = await readBuildReviewCacheEntry(root, "scope", fs);
+
+    expect(candidate).toMatchObject(legacy);
+    expect((candidate as { engineIdentity?: unknown } | undefined)?.engineIdentity).toBeUndefined();
+  });
+
+  it("rejects a malformed or extended engineIdentity cache entry", async () => {
+    const root = "/feature";
+    const path = cacheEntryPath(root, "scope");
+    const malformed = {
+      ...entry(),
+      engineIdentity: { engineStamp: "", skillDigest: "sha256:skill-a" },
+    };
+    const extended = { ...entry(), unexpected: true };
+
+    await expect(readBuildReviewCacheEntry(root, "scope", memoryFilesystem({
+      [path]: JSON.stringify(malformed),
+    }))).resolves.toBeUndefined();
+    await expect(readBuildReviewCacheEntry(root, "scope", memoryFilesystem({
+      [path]: JSON.stringify(extended),
+    }))).resolves.toBeUndefined();
+  });
+
+  it("refuses to write a legacy entry without engineIdentity", async () => {
+    const fs = memoryFilesystem();
+    const { engineIdentity: _engineIdentity, ...legacy } = entry();
+
+    await expect(writeBuildReviewCacheEntry("/feature", legacy as never, fs)).rejects.toThrow(
+      "build-review cache: entry must contain a valid judged result",
+    );
+    expect(fs.writeCalls).toEqual([]);
+    expect(fs.renameCalls).toEqual([]);
+  });
+
   it("rejects v1 entries at the current public parse boundary", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v1" })).toBeUndefined();
   });
@@ -105,11 +223,13 @@ describe("build-review semantic cache", () => {
     expect({
       path,
       entry: await readBuildReviewCacheEntry(root, "scope", fs),
+      persistedEngineIdentity: JSON.parse(fs.files[path]!).engineIdentity,
       renameCalls: fs.renameCalls,
       files: Object.keys(fs.files),
     }).toEqual({
       path: "/feature/.pipeline/build-review/cache/scope.json",
       entry: entry("snapshot-b"),
+      persistedEngineIdentity: entry().engineIdentity,
       renameCalls: [
         ["/feature/.pipeline/build-review/cache/scope.json.tmp", "/feature/.pipeline/build-review/cache/scope.json"],
         ["/feature/.pipeline/build-review/cache/scope.json.tmp", "/feature/.pipeline/build-review/cache/scope.json"],
@@ -182,15 +302,7 @@ describe("build-review semantic cache", () => {
         verdict: "FAIL" as const,
       },
     };
-    const request = {
-      rubric: "scope" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v2" as const,
-      projectionDigest: "sha256:projection-a",
-      policyFingerprint: "sha256:policy-a",
-      lapId: "lap-current" as never,
-      snapshotDigest: "snapshot-current",
-    };
+    const request = lookup();
 
     expect({
       hit: classifyBuildReviewCacheLookup(cached, request),
@@ -249,6 +361,12 @@ describe("build-review semantic cache", () => {
 
     const coordination = await coordinateBuildReviewRubrics({
       config, inputs: frozenInputs, lapId: currentLap, preflight: async () => ({ classification: "approved-exception" as const, exception: "empty-test-set" as const, cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" } }),
+      engineIdentity: {
+        tautology: { kind: "ready", identity: entry().engineIdentity },
+        scope: { kind: "ready", identity: entry().engineIdentity },
+        rootCause: { kind: "ready", identity: entry().engineIdentity },
+        completeness: { kind: "ready", identity: entry().engineIdentity },
+      },
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? { ...entry(), projectionDigest: projection.digest, policyFingerprint, result: { ...entry().result, lapId: oldLap, snapshotDigest: oldProjection.snapshotDigest } } : undefined,
       dispatchModel, writeArtifact: async (artifact) => ({ version: 1 as const, ...artifact }), writeCache: async () => undefined,
     });
@@ -260,15 +378,7 @@ describe("build-review semantic cache", () => {
   });
 
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {
-    const request = {
-      rubric: "scope" as const,
-      contractVersion: "v3" as const,
-      projectionVersion: "v2" as const,
-      projectionDigest: "sha256:projection-a",
-      policyFingerprint: "sha256:policy-a",
-      lapId: "lap-current" as never,
-      snapshotDigest: "snapshot-current",
-    };
+    const request = lookup();
     const unsafeInfrastructure = {
       ...entry(),
       result: { kind: "infrastructure-failure", rubric: "scope", reason: "retry-exhausted", detail: "provider exhausted" },

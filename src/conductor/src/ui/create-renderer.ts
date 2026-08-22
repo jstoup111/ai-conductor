@@ -273,6 +273,14 @@ export function createRenderer(
         break;
       }
 
+      case 'build_review_cache_discarded':
+        region.log(
+          chalk.yellow(
+            `  ↻ build review cache discarded: ${event.rubric} — ${event.reason} (current engine: ${event.currentEngineStamp})`,
+          ),
+        );
+        break;
+
       case 'build_no_progress': {
         const task = event.currentTaskId ? ` — stuck on ${event.currentTaskId}` : '';
         const displayResolved = displayBuildPosition(

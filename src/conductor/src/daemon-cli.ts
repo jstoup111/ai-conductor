@@ -2185,6 +2185,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // to answer by summing a hundred log lines by hand.
       log(`${dot}   ${chalk.dim(formatFeatureUsageTotal(event))}`);
       break;
+    case 'build_review_cache_discarded':
+      log(
+        `${dot} ${chalk.yellow(
+          `↻ build review cache discarded: ${event.rubric} — ${event.reason} (current engine: ${event.currentEngineStamp})`,
+        )}`,
+      );
+      break;
     case 'scratch_cleanup_reclaimed':
       log(`${dot} ${chalk.green('✓')} scratch reclaimed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
       break;

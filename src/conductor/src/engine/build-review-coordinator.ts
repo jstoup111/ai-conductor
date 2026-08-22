@@ -19,6 +19,7 @@ import {
   type BuildReviewCacheEntry,
   type BuildReviewCacheEntryCandidate,
 } from "./build-review-cache.js";
+import type { BuildReviewEngineIdentity } from "./build-review-engine-identity.js";
 import {
   parseBuildReviewBranchArtifact,
   type BuildReviewBranchArtifact,
@@ -46,6 +47,15 @@ const BUILD_REVIEW_RUBRICS: readonly BuildReviewRubricId[] = [
   "rootCause",
   "completeness",
 ];
+
+export type BuildReviewRubricIdentity =
+  | { readonly kind: "ready"; readonly identity: BuildReviewEngineIdentity }
+  | { readonly kind: "unavailable"; readonly path: string };
+
+export type BuildReviewRubricIdentities = Readonly<Record<
+  BuildReviewRubricId,
+  BuildReviewRubricIdentity
+>>;
 
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
@@ -97,6 +107,8 @@ export interface BuildReviewCoordinationInput {
   readonly config: ResolvedBuildReviewConfig;
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
+  /** Per-rubric cache identity resolved by the dispatch site before coordination. */
+  readonly engineIdentity: BuildReviewRubricIdentities;
   /** Test seam for an engine-held projection corruption at branch settlement. */
   readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
@@ -108,7 +120,7 @@ export interface BuildReviewCoordinationInput {
   readonly dispatchModel: (
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
-  ) => Promise<unknown>;
+  ) => Promise<unknown | { readonly result: unknown; readonly engineIdentity: BuildReviewEngineIdentity }>;
   /** Persist and return the validated, current-lap branch evidence. */
   readonly writeArtifact: (
     artifact: Omit<BuildReviewBranchArtifact, "version">,
@@ -121,6 +133,7 @@ export interface BuildReviewCoordinationInput {
     | "build_review_rubric_result"
     | "build_review_rubric_skipped"
     | "build_review_cache_hit"
+    | "build_review_cache_discarded"
     | "build_review_rubric_infrastructure_failure" }>) => Promise<void>;
 }
 
@@ -290,7 +303,7 @@ export async function coordinateBuildReviewRubrics(
     },
   });
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
-  const misses: BuildReviewDispatchableRubric[] = [];
+  const misses: Array<{ branch: BuildReviewDispatchableRubric; identity: BuildReviewEngineIdentity }> = [];
 
   for (const branch of classification.branches) {
     if ("kind" in branch) {
@@ -315,6 +328,12 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
+    const identity = input.engineIdentity[branch.rubric];
+    if (identity.kind === "unavailable") {
+      resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed", identity.path));
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });
+      continue;
+    }
     const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
     let candidate: BuildReviewCacheEntryCandidate | undefined;
     try {
@@ -330,6 +349,7 @@ export async function coordinateBuildReviewRubrics(
       projectionVersion: projection.projectionVersion,
       projectionDigest: projection.digest,
       policyFingerprint,
+      engineIdentity: identity.identity,
       lapId: input.lapId,
       snapshotDigest: projection.snapshotDigest,
     });
@@ -355,17 +375,39 @@ export async function coordinateBuildReviewRubrics(
       }
       if (result) await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
     } else {
+      if (cache.reason === "engine-version-mismatch" || cache.reason === "skill-digest-mismatch") {
+        await input.emit?.({
+          type: "build_review_cache_discarded",
+          rubric: branch.rubric,
+          lapId: input.lapId,
+          reason: cache.reason,
+          ...(candidate?.engineIdentity === undefined ? {} : { cachedEngineStamp: candidate.engineIdentity.engineStamp }),
+          currentEngineStamp: identity.identity.engineStamp,
+        });
+      }
       await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
-      misses.push(branch);
+      misses.push({ branch, identity: identity.identity });
     }
   }
 
-  const dispatched = await runAuxiliaryGroupBranches(misses.map((branch) => ({ memberId: branch.rubric, policy: branch })), input.config.maxParallel,
-    async (rubric, branch) => {
+  const dispatched = await runAuxiliaryGroupBranches(misses.map(({ branch, identity }) => ({
+    memberId: branch.rubric,
+    policy: { branch, identity },
+  })), input.config.maxParallel,
+    async (rubric, { branch, identity }) => {
       const projection = projections[rubric];
       try {
         const dispatched = await input.dispatchModel(branch, projection);
-        const candidate = stampBuildReviewDispatchedCandidate(dispatched, rubric, projection);
+        const dispatchedWithIdentity = typeof dispatched === "object" && dispatched !== null &&
+          "engineIdentity" in dispatched && "result" in dispatched;
+        const dispatchedIdentity = dispatchedWithIdentity
+          ? dispatched.engineIdentity as BuildReviewEngineIdentity
+          : identity;
+        const candidate = stampBuildReviewDispatchedCandidate(
+          dispatchedWithIdentity ? dispatched.result : dispatched,
+          rubric,
+          projection,
+        );
         const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
         if (!result) {
           const failure = parseBuildReviewDispatchFailure(dispatched);
@@ -400,6 +442,7 @@ export async function coordinateBuildReviewRubrics(
             projectionVersion: projection.projectionVersion,
             projectionDigest: projection.digest,
             policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
+            engineIdentity: dispatchedIdentity,
             result: written,
           });
         } catch {
