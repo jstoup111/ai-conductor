@@ -5782,11 +5782,17 @@ export class Conductor {
         const gate = checkGate(step, state);
         if (!gate.passed) {
           await emitTracked({ type: 'gate_blocked', step: step.name, reason: gate.reason });
-          const reason =
-            `Prerequisite gate blocked ${step.name}: ` +
-            gate.unsatisfied.map(({ step: prereq, status }) => `${prereq} (status: ${status})`).join(', ');
-          await this.writeHaltMarker(reason + '\n', 'needs-human');
-          await this.emitLoopHalt(reason);
+          // A failed prerequisite is irrecoverable from this cursor: it is
+          // the residual that resume clamping cannot route around. Pending
+          // prerequisites, including operator-targeted --from-step runs,
+          // retain the terminal-marker backstop's diagnostic contract.
+          if (this.daemon && gate.unsatisfied.every(({ status }) => status === 'failed')) {
+            const reason =
+              `Prerequisite gate blocked ${step.name}: ` +
+              gate.unsatisfied.map(({ step: prereq, status }) => `${prereq} (status: ${status})`).join(', ');
+            await this.writeHaltMarker(reason + '\n', 'needs-human');
+            await this.emitLoopHalt(reason);
+          }
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
           return;
@@ -6115,6 +6121,7 @@ export class Conductor {
           }
         }
 
+        let executionStarted = false;
         if (!acceptanceRedPreHealed)
         while (attempt < stepMaxRetries) {
           attempt++;
@@ -6324,7 +6331,10 @@ export class Conductor {
           // Mark in_progress only once pre-dispatch refusals have cleared.
           // A refusal is not a started step and must leave its prior status intact.
           await this.saveConductorStepStatus(state, step.name, 'in_progress');
-          await emitTracked({ type: 'step_started', step: step.name, index: i });
+          if (!executionStarted) {
+            await emitTracked({ type: 'step_started', step: step.name, index: i });
+            executionStarted = true;
+          }
           if (step.deprecated && step.name !== 'wiring_check') {
             await emitTracked({
               type: 'deprecated_step',
