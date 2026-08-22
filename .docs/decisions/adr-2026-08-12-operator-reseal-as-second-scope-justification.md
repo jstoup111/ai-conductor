@@ -178,3 +178,5 @@ hard step failure.
 - [ ] Out of scope, possibly its own ticket: #1502's Notes report no `protected_artifact_reseal`
       record in the worktree's `.pipeline/events.jsonl`. The event *is* emitted through
       `AuditTrailWriter`; confirm whether the operator read a different sink or a real gap exists.
+
+> **Amended 2026-08-22 by #1805:** prd_audit now runs on every feature/tier/track, judges stories' acceptance criteria as authority, declares .docs/stories and .docs/specs in its gate surface, grades findings PASS/FIXABLE/PLAN_GAP/OVER_SCOPE, and owns the only bounded plan-task kickback; reseal-rationale and scope-containment judgement move to its OVER_SCOPE grade (adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback).

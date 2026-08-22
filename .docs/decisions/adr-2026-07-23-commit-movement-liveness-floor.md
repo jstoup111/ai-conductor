@@ -100,3 +100,5 @@ re-kick reads, does not parse semantics).
   attempts and a review pass before resolution — the cost of never killing real work.
 
 Status: APPROVED
+
+> **Amended 2026-08-22 by #1805:** build_review's completeness rubric is retired; prd_audit at SHIP is the completion authority (adr-2026-08-22-one-owner-per-review-question). Every other decision here stands.

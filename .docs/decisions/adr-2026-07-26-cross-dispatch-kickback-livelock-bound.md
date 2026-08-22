@@ -234,3 +234,5 @@ was toggleable.
   its own intake.
 - **No blocking of empty commits.** This ADR stops an empty commit from *counting as progress*; it
   does not police whether one may be made.
+
+> **Amended 2026-08-22 by #1805:** prd_audit now runs on every feature/tier/track, judges stories' acceptance criteria as authority, declares .docs/stories and .docs/specs in its gate surface, grades findings PASS/FIXABLE/PLAN_GAP/OVER_SCOPE, and owns the only bounded plan-task kickback; reseal-rationale and scope-containment judgement move to its OVER_SCOPE grade (adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback).

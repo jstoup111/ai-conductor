@@ -220,3 +220,5 @@ reference grammars, so the next tightening cannot ship without its instruction.
 - [ ] Add the additive amendment note to `adr-2026-08-13-engine-managed-build-review-rubric-branches` §2
 - [ ] Update `docs/explanation/gates.md`, which currently documents `invalid-provider-result` as the single settled reason for a contract miss
 - [ ] Coordinate with `review-infrastructure-failures-are-operator-unreco` at implementation time: read the current branch-reason mapping rather than trusting this ADR's description of it
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).

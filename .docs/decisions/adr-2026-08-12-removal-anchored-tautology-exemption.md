@@ -1,7 +1,7 @@
 # ADR: the Tautology rubric exempts removal maintenance, anchored to engine-computed removal evidence
 
 **Date:** 2026-08-12
-**Status:** APPROVED
+**Status:** SUPERSEDED by adr-2026-08-22-one-owner-per-review-question
 **Deciders:** Engineer (DECIDE phase, #1521), operator-confirmed
 **Relates to:** `adr-2026-08-09-recorded-red-exception-for-remediation.md` (the precedent this copies
 — an exception is valid only when it is recorded, attributable, and observable),
@@ -170,3 +170,5 @@ of prose for machinery.
 - **Provider neutrality.** The new prompt block is host-neutral text. It names no host, no
   host-specific tool, and no provider path, so a Codex grader session reads it identically to a
   Claude one.
+
+> **Amended 2026-08-22 by #1805:** superseded by adr-2026-08-22-one-owner-per-review-question — the rubric this ADR governs is retired; prd_audit is the completion authority.

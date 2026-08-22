@@ -127,3 +127,5 @@ store or reduced-coverage keys (adr-2026-08-18 D7).
 ### Follow-up Actions
 - [ ] Stories and plan for #1759 implement D1–D6 (engineer loop).
 - [ ] Amendment note recorded beside adr-2026-08-13 §7 (done in this spec).
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).

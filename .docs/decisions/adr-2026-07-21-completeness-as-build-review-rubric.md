@@ -1,7 +1,7 @@
 # ADR: Plan-completeness judgement as a default-on build_review rubric item
 
 **Date:** 2026-07-21
-**Status:** APPROVED — PARTIALLY SUPERSEDED by
+**Status:** SUPERSEDED by adr-2026-08-22-one-owner-per-review-question
 `adr-2026-08-13-engine-managed-build-review-rubric-branches` for unconditional enablement and
 single-dispatch topology; Completeness meaning and default-on behavior remain approved
 **Deciders:** Operator (jstoup111), via /engineer DECIDE for #773
@@ -107,3 +107,5 @@ Adopt **Option A**. Fold the plan-completeness judgement into the existing `buil
 - [ ] Sequence: completeness dimension enforcing BEFORE the `build` predicate's `evidenceStamps.has`
       check is removed (no completion hole) — unchanged from the demotion ADR.
 - [ ] Update HARNESS.md model table / docs for build_review's changed default activation.
+
+> **Amended 2026-08-22 by #1805:** superseded by adr-2026-08-22-one-owner-per-review-question — the rubric this ADR governs is retired; prd_audit is the completion authority.

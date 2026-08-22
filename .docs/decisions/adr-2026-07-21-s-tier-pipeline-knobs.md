@@ -136,3 +136,5 @@ the machinery that already satisfies them*.
   D4). Small already skips the right things (authoring ceremony) via `skippableForTiers: ['S']`; the
   gap was cost tuning, not more skipping.
 - **Cut S retry budgets to 1-2.** Rejected — breaks the #188 model-bump rung (D2).
+
+> **Amended 2026-08-22 by #1805:** architecture_review_as_built runs on every tier with per-check policy, gains a PLAN_GAP verdict, and never kicks back to BUILD (adr-2026-08-22-as-built-review-runs-always-with-plan-gap).

@@ -214,3 +214,5 @@ PR/shipped visibility. No unconfirmed load-bearing assumption remains.
 - [ ] Add disposition/effective-verdict event rendering and report/KPI metrics.
 - [ ] Add deterministic PR/shipped accepted-risk projection.
 - [ ] Document CLI, configuration, rubric skills, gate semantics, recovery, and publication evidence.
+
+> **Amended 2026-08-22 by #1805:** rubric membership is now the registry with test-quality as the only member (default off), an empty enabled set is a valid no-dispatch PASS, and retired rubric keys are accepted as no-ops; four-rubric enumerations here narrow to the registry (adr-2026-08-22-build-review-opt-in-rubric-container).
