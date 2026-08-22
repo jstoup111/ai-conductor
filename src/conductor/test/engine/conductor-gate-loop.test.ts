@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execa } from 'execa';
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
@@ -11,6 +12,8 @@ import type { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js'
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 
 const FIXTURES = join(
   import.meta.dirname,
@@ -48,6 +51,56 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
         throw new Error('stop after test-suite dispatch');
       }),
     };
+  }
+
+  function buildReviewAggregate(lap: string, verdict: 'PASS' | 'FAIL') {
+    const lapId = parseBuildReviewLapId(lap)!;
+    const judged = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness') => ({
+      kind: 'judged' as const,
+      rubric,
+      lapId,
+      snapshotDigest: 'sha256:snapshot',
+      contractVersion: 'v2' as never,
+      findings: rubric === 'scope' && verdict === 'FAIL' ? [{
+        concernKind: 'out-of-plan-change' as const,
+        summary: 'stale finding',
+        evidenceLocations: ['src/a.ts:1'],
+        anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' as const },
+      }] : [],
+      verdict: rubric === 'scope' ? verdict : 'PASS' as const,
+    });
+    return joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:snapshot',
+      results: {
+        tautology: judged('tautology'),
+        scope: judged('scope'),
+        rootCause: judged('rootCause'),
+        completeness: judged('completeness'),
+      },
+    });
+  }
+
+  async function prepareBuildReviewLoop(): Promise<{ stateFilePath: string; head: string }> {
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.name', 'Test User'], { cwd: projectRoot });
+    await writeFile(join(projectRoot, 'initial.ts'), 'export {};\n');
+    await execa('git', ['add', 'initial.ts'], { cwd: projectRoot });
+    await execa('git', ['commit', '-q', '-m', 'initial'], { cwd: projectRoot });
+    const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim();
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({
+      run_started_at: 1,
+      complexity_tier: 'S',
+      track: 'technical',
+      worktree: 'done', memory: 'done', explore: 'done', prd: 'done', stories: 'done',
+      conflict_check: 'skipped', plan: 'done', architecture_diagram: 'skipped',
+      architecture_review: 'skipped', acceptance_specs: 'skipped',
+      build: 'done', wiring_check: 'skipped', test_suite: 'done', build_review: 'pending',
+    } satisfies Partial<ConductState>));
+    return { stateFilePath, head };
   }
 
   it('re-enters test_suite, rather than build_review, for the rebase kickback verdict fixture', async () => {
@@ -374,4 +427,98 @@ describe('conductor gate loop: stale test-suite proof after rebase', () => {
       expect(snapshot.mutations).toEqual(['initialize conductor run']);
     },
   );
+
+  it('consumes a stale build-review FAIL without mutating its artifact or kickback ledger', async () => {
+    const { stateFilePath } = await prepareBuildReviewLoop();
+    const verdictPath = join(projectRoot, '.pipeline', 'build-review.json');
+    const ledgerPath = join(projectRoot, '.pipeline', 'kickback-ledger.json');
+    const ledger = {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 1,
+          cumulative: 4,
+          treeHash: 'tree-before',
+          lastReason: 'existing semantic failure',
+          priorVerdict: true,
+          resolvedBefore: 7,
+        },
+      },
+    };
+    await writeFile(ledgerPath, JSON.stringify(ledger, null, 2));
+    const ledgerBefore = JSON.parse(await readFile(ledgerPath, 'utf8')) as typeof ledger;
+    let verdictBefore: string | undefined;
+    const staleEvents: Array<{ storedLapId: string; currentLapId: string }> = [];
+    const kickbacks: unknown[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('build_review_stale_aggregate', (event) => {
+      staleEvents.push(event as typeof staleEvents[number]);
+    });
+    events.on('kickback', (event) => {
+      kickbacks.push(event);
+    });
+
+    await new Conductor({
+      projectRoot,
+      stateFilePath,
+      events,
+      fromStep: 'build_review',
+      maxRetries: 1,
+      verifyArtifacts: true,
+      config: { build_review: { enabled: true } },
+      stepRunner: {
+        run: async (step: StepName) => {
+          expect(step).toBe('build_review');
+          await writeFile(verdictPath, JSON.stringify(buildReviewAggregate('lap-stored', 'FAIL'), null, 2));
+          verdictBefore = await readFile(verdictPath, 'utf8');
+          return { success: true };
+        },
+      },
+      onRecovery: async () => 'quit',
+    } as never).run();
+
+    expect(await readFile(verdictPath, 'utf8')).toBe(verdictBefore);
+    const ledgerAfter = JSON.parse(await readFile(ledgerPath, 'utf8')) as typeof ledger;
+    expect(ledgerAfter.gates.build_review).toEqual(ledgerBefore.gates.build_review);
+    expect(staleEvents).toEqual([
+      {
+        type: 'build_review_stale_aggregate',
+        storedLapId: 'lap-stored',
+        currentLapId: expect.stringMatching(/^lap-/),
+      },
+    ]);
+    expect(kickbacks).toEqual([]);
+  });
+
+  it('emits no stale-aggregate event for a current build-review aggregate', async () => {
+    const { stateFilePath, head } = await prepareBuildReviewLoop();
+    const staleEvents: unknown[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('build_review_stale_aggregate', (event) => {
+      staleEvents.push(event);
+    });
+
+    await new Conductor({
+      projectRoot,
+      stateFilePath,
+      events,
+      fromStep: 'build_review',
+      maxRetries: 1,
+      verifyArtifacts: true,
+      config: { build_review: { enabled: true } },
+      stepRunner: {
+        run: async (step: StepName) => {
+          expect(step).toBe('build_review');
+          await writeFile(
+            join(projectRoot, '.pipeline', 'build-review.json'),
+            JSON.stringify(buildReviewAggregate(`lap-${head}`, 'FAIL'), null, 2),
+          );
+          return { success: true };
+        },
+      },
+      onRecovery: async () => 'quit',
+    } as never).run();
+
+    expect(staleEvents).toEqual([]);
+  });
 });

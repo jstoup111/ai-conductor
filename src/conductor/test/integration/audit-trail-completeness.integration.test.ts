@@ -67,6 +67,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_disposition_refused: 'not-audited-by-design',
   build_review_disposition_version_invalidated: 'friction-mapped',
   build_review_outer_verdict: 'not-audited-by-design',
+  build_review_stale_aggregate: 'not-audited-by-design',
   step_started: 'not-audited-by-design',
   deprecated_step: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
@@ -187,6 +188,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_review_disposition_refused: { type: 'build_review_disposition_refused', feature: 'feature', reason: 'non-tty' },
   build_review_disposition_version_invalidated: { type: 'build_review_disposition_version_invalidated', feature: 'feature', findingId: 'sha256:x', rubric: 'scope', contractVersion: 'v1' },
   build_review_outer_verdict: { type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
+  build_review_stale_aggregate: { type: 'build_review_stale_aggregate', storedLapId: 'lap-old', currentLapId: 'lap-new' },
   step_started: { type: 'step_started', step: 'build', index: 0 },
   deprecated_step: {
     type: 'deprecated_step',

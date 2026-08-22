@@ -232,10 +232,11 @@ Close the gap in `adr-2026-08-18` D3's premise: a below-cap mechanical fault sti
 **Steps:**
 1. In `src/conductor/test/engine/step-runners.test.ts`, drive the real lap join (faked provider adapters) through: lap 1 — rubric X judged FAIL with one finding, aggregate published, kickback reason names that finding; lap 2 (new HEAD) — X and two others judged PASS, the fourth returns a post-repair `dispatch-failure` below cap. Assert: three branch artifacts exist under `.pipeline/build-review/<lap2>/`; no aggregate for `<lap2>`; `currentLapMechanicalFault: true`; ledger `count`/`cumulative` unchanged from after lap 1; completion on the lap-1 aggregate at HEAD `<lap2>` returns `absent` (Task 6) and its reason contains no lap-1 finding id. Lap 3 — the fourth rubric judged PASS → a four-judged PASS aggregate is published.
 2. Also assert the at-cap variant (three prior faults) publishes the aggregate with `coverage.<rubric>: infrastructure-failure` and effective FAIL, and the mixed variant (one judged finding + one rejection) publishes with only the current lap's finding in the reasons.
-3. If every assertion passes without a production change, complete with an empty commit carrying `Evidence: skipped already-satisfied-by-tasks-3-and-6`.
+3. Also assert the all-infrastructure variant below cap (Story 2's third negative path): every rubric on the lap returns an infrastructure failure with the ledger below the allowance cap; assert no aggregate is written for that lap and the step result names the first failing rubric and its closed reason.
+4. If every assertion passes without a production change, complete with an empty commit carrying `Evidence: skipped already-satisfied-by-tasks-3-and-6`.
 
 **Done when:**
-- The three-lap test and both variants pass.
+- The three-lap test and all three variants pass — at-cap, mixed, and all-infrastructure-below-cap.
 - No production file changes in this task's commit range.
 
 **Files:**
@@ -264,3 +265,9 @@ Task 6 ─┬─ Task 7             │
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+### Task rem-completeness-1: src/conductor/test/engine/artifacts.test.ts:4136 — add Task 7 case (a) for a stamped PASS at a different HEAD whose codeStamp delta misses the gate surface; assert done true, verdictFreshness preserved_surface_miss, and no staleLap
+### Task rem-completeness-2: src/conductor/test/engine/artifacts.test.ts:4136 — add Task 7 case (b) for a matching-lap FAIL whose mtime predates the session; assert the existing mtime rejection, verdictFreshness stale_invalidated, and no staleLap
+### Task rem-completeness-3: src/conductor/test/engine/artifacts.test.ts:4136 — add Task 7 case (d) for a pre-session PASS aggregate without codeStamp; assert the existing stale_invalidated absent result and no staleLap
+### Task rem-completeness-4: src/conductor/test/engine/conductor-gate-loop.test.ts:1 — add the Task 8 stale-FAIL regression test that snapshots .pipeline/build-review.json bytes and gates.build_review count, cumulative, and lastReason before processing, then asserts unchanged bytes, a deep-equal ledger entry, and no kickback event afterward
+### Task rem-completeness-5: src/conductor/test/engine/conductor-gate-loop.test.ts:1 — add Task 9 conductor assertions that a stale completion emits exactly one build_review_stale_aggregate carrying completion.staleLap storedLapId and currentLapId, while a current-lap aggregate emits zero such events
+### Task rem-completeness-6: src/conductor/test/engine/step-runners.test.ts:3426 — add Task 10's all-infrastructure below-cap lap variant in which every rubric returns an infrastructure failure; assert no .pipeline/build-review.json is written for that lapId and the step result names the first failing rubric with its closed reason

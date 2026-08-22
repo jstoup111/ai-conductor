@@ -164,6 +164,11 @@ function git(dir: string, ...args: string[]): void {
   execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
 }
 
+async function currentHead(dir: string): Promise<string> {
+  const ref = (await readFile(join(dir, '.git', 'HEAD'), 'utf8')).trim().replace(/^ref: /, '');
+  return (await readFile(join(dir, '.git', ref), 'utf8')).trim();
+}
+
 function projectionFromPrompt(prompt: string): {
   rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness';
   lapId: string;
@@ -193,6 +198,7 @@ async function runVocabularyRepairEffectivePassScenario() {
   await writeFile(join(dir, 'src', 'feature.ts'), 'export const reviewed = true;\n');
   git(dir, 'add', 'src/feature.ts');
   git(dir, 'commit', '-qm', 'implement reviewed behavior', '-m', 'Task: 1');
+  const head = await currentHead(dir);
   await writeFile(join(pipelineDir, 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
   await writeFile(join(pipelineDir, 'task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }));
 
@@ -225,7 +231,7 @@ async function runVocabularyRepairEffectivePassScenario() {
     planPath: join(dir, planPath),
     pipelineDir,
     config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig,
-    buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) },
+    buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' } } as never) },
     buildReviewEffectiveResolver: async () => effective(false),
   });
   let buildReviewRuns = 0;

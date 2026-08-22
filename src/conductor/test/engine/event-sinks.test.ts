@@ -97,6 +97,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_mechanical_allowance_exhausted',
   'build_review_disposition_version_invalidated',
   'build_review_outer_verdict',
+  'build_review_stale_aggregate',
   'loop_halt',
   'halt_marker_write_failed',
   'rebase_conflict_halt',

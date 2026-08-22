@@ -310,6 +310,25 @@ A remediation gap that requires amending another feature's sealed DECIDE artifac
 `build` or `acceptance_specs`. It returns to the owning DECIDE step; in daemon mode the existing
 DECIDE kickback policy reaches the operator gate rather than attempting a BUILD-side bypass.
 
+### A prior lap's FAIL is not a fresh verdict
+
+`build_review` completion reads `.pipeline/build-review.json` and compares its `lapId` against
+`lap-<HEAD>`. A non-`PASS` aggregate whose `lapId` names an earlier HEAD is scored `absent` — "no
+fresh verdict" — rather than reused as the current lap's outcome: a rubric that FAILed a prior lap
+never kicks back findings the current lap has not itself judged, and the run instead re-dispatches
+`build_review` to produce a verdict for the code actually at HEAD. A `git rev-parse HEAD` failure
+skips the check and preserves the older behavior rather than blocking on an unresolvable HEAD. PASS
+aggregates are unaffected — they keep the existing code-stamp preservation path that lets a
+same-surface PASS survive re-dispatch. The stale condition is recorded on the event spine as
+`build_review_stale_aggregate` (telemetry only; never consulted for routing) and consumes no
+kickback budget.
+
+A below-cap mechanical (infrastructure) fault publishes no aggregate at all, so it cannot be stale
+by this check; the last such fault is instead recorded on the kickback ledger's `build_review` gate
+entry (`lastMechanicalFault`) and surfaces in `conduct-ts build-review findings` and in the
+exhausted-mechanical-allowance HALT when the current lap has no readable diagnostic of its own — see
+[the runbook](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-exhausted-mechanical-fault-allowance).
+
 ### Where a `build_review` FAIL goes
 
 A `build_review` effective FAIL is not an unconditional kickback to `build`. The engine reads the raw rubric and its

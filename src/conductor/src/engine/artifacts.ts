@@ -891,6 +891,12 @@ export interface CompletionResult {
    */
   routeClass?: 'named-route' | 'absent';
   /**
+   * A fresh aggregate from an earlier build-review lap. This is telemetry for
+   * the conductor; it is deliberately separate from the human reason so
+   * routing never has to parse prose.
+   */
+  staleLap?: { storedLapId: string; currentLapId: string };
+  /**
    * Why acceptance_specs RED evidence was refused. The conductor uses this
    * machine-readable class to decide whether its bounded pre-heal can repair
    * missing or malformed recording without re-running a real observed result.
@@ -3030,6 +3036,30 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // Legacy scalar verdicts intentionally retain their historical predicate.
     const aggregate = parseBuildReviewAggregate(parsed);
     if (aggregate) {
+      // A non-PASS aggregate is a verdict for exactly the HEAD that formed
+      // its lap. Reusing it after a repair would resurrect findings that the
+      // current lap may already have disproved. PASS remains governed by the
+      // earlier code-stamp preservation path.
+      if (aggregate.verdict !== 'PASS') {
+        try {
+          const git = ctx.git ?? makeGitRunner(dir);
+          const head = await git(['rev-parse', 'HEAD']);
+          const currentLapId = head.exitCode === 0 && head.stdout.trim()
+            ? `lap-${head.stdout.trim()}`
+            : undefined;
+          if (currentLapId && aggregate.lapId !== currentLapId) {
+            return {
+              done: false,
+              routeClass: 'absent',
+              reason: `build-review aggregate belongs to lap ${aggregate.lapId}, current lap is ${currentLapId} — scoring 'no fresh verdict'; a prior lap's FAIL is never kicked back`,
+              staleLap: { storedLapId: aggregate.lapId, currentLapId },
+            };
+          }
+        } catch {
+          // A HEAD probe is advisory here: preserve the established fresh
+          // aggregate behavior when git is unavailable.
+        }
+      }
       const effectiveResolution = await (
         ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
       )(dir, aggregate);

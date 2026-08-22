@@ -947,7 +947,18 @@ Current lap <lap>: <rubric> closed cause <reason> (<detail>).
 2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
 
-and its class is `needs-human` — deliberately, so the daemon's automatic re-kick sweep does
+When the current lap has no readable aggregate (for example, its verdict came from an earlier
+lap and the completion guard scored it `absent`), the halt instead reads:
+
+```text
+build_review mechanical fault allowance exhausted: <consumed> of 3 shared faults consumed; current-lap diagnostic is unavailable; Last recorded fault: <rubric> closed cause <reason> on lap <lap> (<detail>).
+```
+
+naming the ledger's `lastMechanicalFault` record — the most recent rubric/reason/lap the
+allowance was actually charged against — instead of the numbered recovery steps. Recovery is the
+same: record reduced coverage for the named rubric and lap, then clear the halt.
+
+Both forms carry class `needs-human` — deliberately, so the daemon's automatic re-kick sweep does
 not clear it on its own.
 
 **Diagnosis:** a `build_review` rubric kept reporting an infrastructure failure (a tool crash,

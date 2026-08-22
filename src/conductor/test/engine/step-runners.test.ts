@@ -3423,6 +3423,38 @@ TIER: M`,
       });
     });
 
+    it('withholds an aggregate for an all-infrastructure below-cap lap and reports its first closed failure', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath,
+        ...tautologyOptIn(),
+        ...currentBuildReviewProof(),
+      });
+      const dispatch = vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any) => ({
+        kind: 'dispatch-failure', detail: `${branch.rubric} omitted the required verdict`,
+      }));
+
+      const result = await runner.run('build_review', emptyState);
+      expect(result).toMatchObject({
+        success: false,
+        currentLapMechanicalFault: true,
+        output: 'build_review mechanical fault in tautology (malformed-artifact): invalid-provider-result: tautology omitted the required verdict',
+      });
+      expect(dispatch.mock.calls.map(([branch]) => (branch as { rubric: string }).rubric)).toEqual([
+        'tautology', 'scope', 'rootCause', 'completeness',
+      ]);
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await readKickbackLedger(dir)).gates.build_review).toMatchObject({
+        mechanicalFaults: 1,
+        lastMechanicalFault: {
+          rubric: 'tautology',
+          reason: 'malformed-artifact',
+          detail: 'invalid-provider-result: tautology omitted the required verdict',
+          lapId: 'lap-head',
+        },
+      });
+    });
+
     it.each([
       {
         // #1682: tautology defaults to disabled; only the other three rubrics dispatch.

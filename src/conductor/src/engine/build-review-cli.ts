@@ -9,7 +9,7 @@ import { parseBuildReviewLapId } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
-import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, readKickbackLedger } from './kickback-ledger.js';
+import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 
 export interface BuildReviewFindingsCommand {
@@ -24,6 +24,7 @@ export interface BuildReviewFindingsDeps {
   readonly realpath?: (path: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<string>;
   readonly createStore?: (worktree: string) => DispositionStore;
+  readonly readKickbackGateEntry?: (worktree: string) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
   readonly readMechanicalFaults?: (worktree: string) => Promise<number | undefined>;
   readonly print?: (output: string) => void;
 }
@@ -126,7 +127,7 @@ function acceptedDispositions(
   });
 }
 
-function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], faults: readonly ExhaustedMechanicalFault[]): string {
+function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {
   return [
     `Build review findings: ${feature}`,
     `Lap: ${aggregate.lapId}`,
@@ -137,6 +138,9 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
+    ...(lastMechanicalFault === undefined ? [] : [
+      `Last mechanical fault: ${lastMechanicalFault.rubric}; cause: ${lastMechanicalFault.reason}; lap: ${lastMechanicalFault.lapId}; diagnostic: ${lastMechanicalFault.detail}`,
+    ]),
     ...(faults.length === 0 ? [] : [
       ...(effective.unresolvedFindingIds.length === 0 ? ['Blocked by exhausted mechanical faults, not unresolved findings.'] : []),
       ...faults.map((fault) => `Exhausted mechanical fault: ${fault.rubric}; cause: ${fault.cause}; diagnostic: ${fault.diagnostic}`),
@@ -184,17 +188,21 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       ? await store.listReducedCoverage(feature)
       : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
     if (!reducedCoverage.ok) throw new Error(reducedCoverage.message);
-    const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string) =>
-      (await readKickbackLedger(root)).gates.build_review?.mechanicalFaults);
+    const gateEntry = deps.readKickbackGateEntry
+      ? await deps.readKickbackGateEntry(worktree)
+      : deps.readMechanicalFaults
+        ? { mechanicalFaults: await deps.readMechanicalFaults(worktree) }
+        : (await readKickbackLedger(worktree)).gates.build_review;
     const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, reducedCoverage.records);
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
-    const faults = exhaustedMechanicalFaults(aggregate, (await readMechanicalFaults(worktree)) ?? 0);
+    const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);
     const output = {
       feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...effective, acceptedDispositions: accepted,
+      ...(gateEntry?.lastMechanicalFault === undefined ? {} : { lastMechanicalFault: gateEntry.lastMechanicalFault }),
       ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
     };
-    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, faults));
+    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, faults, gateEntry?.lastMechanicalFault));
     return 0;
   } catch {
     print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}'.`);
