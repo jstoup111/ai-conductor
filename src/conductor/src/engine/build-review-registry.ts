@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 
-import type { BuildReviewRubricId } from '../types/config.js';
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
 } from './build-review-domain.js';
@@ -17,38 +16,21 @@ export interface BuildReviewRubricDescriptor {
   readonly prerequisite: BuildReviewRubricPrerequisite;
 }
 
+export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
+
+type RegisteredBuildReviewRubricId = (typeof BUILD_REVIEW_RUBRIC_IDS)[number];
+
 /**
  * The closed, auxiliary rubric catalog for the public build_review gate.
  *
  * Rubrics are explicitly not lifecycle steps: their identifiers remain
- * `BuildReviewRubricId`s throughout this auxiliary catalog.
+ * registry identifiers throughout this auxiliary catalog.
  */
 export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
-  Record<BuildReviewRubricId, BuildReviewRubricDescriptor>
+  Record<RegisteredBuildReviewRubricId, BuildReviewRubricDescriptor>
 > = Object.freeze({
-  tautology: Object.freeze({
-    skillName: 'build-review-tautology',
-    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-    projectionVersion: 'v2',
-    cachePolicy: 'content-addressed',
-    prerequisite: 'none',
-  }),
-  scope: Object.freeze({
-    skillName: 'build-review-scope',
-    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-    projectionVersion: 'v2',
-    cachePolicy: 'content-addressed',
-    prerequisite: 'none',
-  }),
-  rootCause: Object.freeze({
-    skillName: 'build-review-root-cause',
-    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-    projectionVersion: 'v2',
-    cachePolicy: 'content-addressed',
-    prerequisite: 'none',
-  }),
-  completeness: Object.freeze({
-    skillName: 'build-review-completeness',
+  testQuality: Object.freeze({
+    skillName: 'build-review-test-quality',
     contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
     projectionVersion: 'v2',
     cachePolicy: 'content-addressed',
@@ -56,8 +38,12 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
   }),
 });
 
+export function isRegisteredRubric(rubric: string): rubric is RegisteredBuildReviewRubricId {
+  return Object.hasOwn(BUILD_REVIEW_RUBRIC_REGISTRY, rubric);
+}
+
 export function getBuildReviewRubricDescriptor(
-  rubric: BuildReviewRubricId,
+  rubric: RegisteredBuildReviewRubricId,
 ): BuildReviewRubricDescriptor {
   return BUILD_REVIEW_RUBRIC_REGISTRY[rubric];
 }
