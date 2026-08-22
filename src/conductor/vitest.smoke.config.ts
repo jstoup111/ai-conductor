@@ -15,7 +15,7 @@ export default defineConfig({
     setupFiles: ['./test/setup.ts'],
     globalSetup: ['./test/global-setup.ts'],
     pool: 'forks',
-    poolOptions: { forks: { maxForks: 3, minForks: 1 } },
+    maxWorkers: 3,
     testTimeout: 20000,
     hookTimeout: 30000,
   },

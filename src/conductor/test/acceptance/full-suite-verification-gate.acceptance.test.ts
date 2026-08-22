@@ -149,7 +149,7 @@ function invokeScriptWithFakeVitest(
     'sh',
     ['-c', `${script} ${argumentsToForward.map(shellQuote).join(' ')}`],
     {
-      cwd: repo,
+      cwd: CONDUCTOR_ROOT,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -291,7 +291,10 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     const testScript = JSON.parse(packageJson).scripts.test as string;
     // Signal simulation needs a thread worker, but runs concurrently with the
     // fork-pool batch rather than after it.
-    expect(testScript.match(/vitest run/g)).toHaveLength(3);
+    // Every invocation goes through the Node 26 temp-dir wrapper
+    // (`scripts/run-vitest.mjs`), so no bare `vitest run` survives.
+    expect(testScript.match(/run-vitest\.mjs run/g)).toHaveLength(3);
+    expect(testScript).not.toMatch(/(^|[^-])vitest run/);
     expect(testScript).toContain('vitest.signal.config.ts');
     expect(testScript).toContain('wait "$ordinary"');
     expect(testScript).toContain('wait "$signals"');

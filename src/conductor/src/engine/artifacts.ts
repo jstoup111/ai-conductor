@@ -47,6 +47,7 @@ import {
 } from './build-review-aggregate.js';
 import {
   resolveEffectiveBuildReviewVerdict,
+  type BuildReviewEffectiveResolverDeps,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 
@@ -1104,6 +1105,7 @@ export interface CompletionContext {
   buildReviewEffectiveResolver?: (
     projectRoot: string,
     aggregate: unknown,
+    dependencies?: BuildReviewEffectiveResolverDeps,
   ) => Promise<BuildReviewEffectiveResolution>;
 }
 

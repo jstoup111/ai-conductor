@@ -33,7 +33,7 @@ import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
-import { mkdtemp, rmdir } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { runCiFix } from '../../src/engine/ci-fix.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
@@ -160,7 +160,7 @@ describe('CF-2: a no-op fix outcome skips guards/suite/push', () => {
       expect(logs.some((l) => l.toLowerCase().includes('refreshed'))).toBe(false);
       expect(logs.some((l) => l.toLowerCase().includes('escalated'))).toBe(false);
     } finally {
-      await rmdir(tmpDir, { recursive: true }).catch(() => {});
+      await rm(tmpDir, { recursive: true }).catch(() => {});
     }
   });
 });
@@ -214,7 +214,7 @@ describe('CF-4: spawn/exec failures are classified, never a bare unclassified Ex
         `expected a classified reason (flag-invalid|auth|spawn-env|unknown) in the log, got: ${combined}`,
       ).toBe(true);
     } finally {
-      await rmdir(tmpDir, { recursive: true }).catch(() => {});
+      await rm(tmpDir, { recursive: true }).catch(() => {});
     }
   }, 20000);
 });
