@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
   checkStepCompletion,
@@ -12,6 +13,28 @@ import {
   sweepStaleReviewArtifacts,
   type ArtifactResolutionContext,
 } from '../src/engine/artifacts.js';
+
+const prdAuditSkillPath = fileURLToPath(
+  new URL('../../../skills/prd-audit/SKILL.md', import.meta.url),
+);
+
+describe('prd-audit skill contract', () => {
+  it('renders a graded per-criterion report with PRD intent context', async () => {
+    const skill = await readFile(prdAuditSkillPath, 'utf8');
+    const report = skill.match(/```markdown\n(# PRD Audit:[\s\S]*?)\n```/)?.[1];
+
+    expect(report).toEqual(expect.any(String));
+    expect(report).toMatch(/^# PRD Audit: <Feature Name>/m);
+    expect(report).toMatch(/^\*\*PRD:\*\* present \| none/m);
+    expect(report).toMatch(/^\*\*Intent sources:\*\* /m);
+    expect(report).toMatch(/^\| Criterion \| Grade \| Plan task \| PRD: \| Evidence \|/m);
+    expect(report).toMatch(/^\| S6\.1 \| PASS \| — \| FR-7 \| /m);
+    expect(report).toMatch(/^\| S6\.2 \| FIXABLE \| 4 \| FR-7 \| /m);
+
+    expect(skill).toContain('PASS | FIXABLE | PLAN_GAP | OVER_SCOPE');
+    expect(skill).toContain('FIXABLE names an owning plan task');
+  });
+});
 
 describe('parsePrdAuditReport', () => {
   it('reads criterion grades, optional plan ownership, and the PRD-presence marker', () => {

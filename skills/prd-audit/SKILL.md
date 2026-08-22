@@ -1,7 +1,7 @@
 ---
 name: prd-audit
 disable-model-invocation: true
-description: "Use at SHIP, after manual-test and before retro/finish. Audits shipped implementation against the PRD's functional requirements (FR-N); gates on gaps and kicks back to BUILD or DECIDE."
+description: "Use at SHIP to judge the shipped implementation against the feature stories' acceptance criteria, with PRD and plan intent as context. Produces graded, criterion-level findings; does not implement or route work."
 enforcement: gating
 phase: ship
 standalone: true
@@ -11,164 +11,106 @@ model: opus
 
 ## Purpose
 
-Audits the **shipped** implementation against the **approved PRD's functional requirements
-(FR-N)**, after the work is built. Every FR gets a verdict — `ALIGNED | PARTIAL | DIVERGED |
-MISSING` — backed by `file:line` evidence. Any un-accepted, non-`ALIGNED` FR blocks the SHIP tail
-and kicks the feature back to the right phase: **BUILD** to close an implementation gap, or
-**DECIDE** to amend a stale PRD.
+At SHIP, judge whether the implementation was built as the feature stories specify. The stories'
+acceptance criteria are the authority. PRD functional requirements are intent context when a PRD
+exists; the plan's stated outcome is also intent context. This is a finding-authority: report
+grounded judgement and do not implement, amend DECIDE artifacts, append remediation tasks, or choose
+the gate route. The engine owns those mechanical outcomes.
 
-**Correctness gate:** each per-FR verdict is a claim that gates the ship. Per the `/verify-claims`
-protocol, every verdict is `verified` against `file:line` evidence, never asserted on an assumption
-about what the code does — if the evidence is ambiguous, mark the verdict **tentative** with its
-confidence rather than declaring `ALIGNED`/`DIVERGED` as fact. A confident-but-wrong verdict is
-exactly a false ship or a false kickback.
+Each finding is keyed to one story criterion and carries exactly one grade:
+`PASS | FIXABLE | PLAN_GAP | OVER_SCOPE`.
 
-This is the final intent-vs-implementation compliance check. It differs from `code-review`, which
-checks code against stories/AC *during* build; prd-audit checks the as-shipped system against the
-PRD's stated intent *after the fact*, and classifies each gap so the kickback lands in the right
-place.
+Per the `/verify-claims` protocol, cite concrete `file:line` evidence and give a confidence when
+evidence is ambiguous. Do not turn uncertainty into a PASS.
 
-**Run at SHIP as a member of the concurrent validation group — fanned out alongside
-`/manual-test` and `/architecture-review --as-built` in daemon/auto runs. In interactive
-runs it runs serially, after `/manual-test` and before `/retro` and `/finish`.**
+Run at SHIP alongside the other SHIP validators. The configured step decides whether it is enabled;
+this skill does not infer a skip from feature tier, track, or the absence of a PRD.
 
-## Practices
+## Inputs and authority
 
-### 1. Load Input
+1. Resolve the feature's committed stories through the active plan's `**Stories:**` reference.
+   Read every happy and negative criterion. If criteria cannot be read, report a BLOCKED audit that
+   names the stories file; never pass by default.
+2. Read the active plan, including its stated outcome and task ownership. Where a committed
+   coherence mapping exists, use it to understand criterion-to-intent traceability.
+3. Read the matching non-`SUPERSEDED-` PRD when present. Its FRs explain intent; they do not replace
+   story criteria as the audit key. A PRD requirement without story coverage is a `PLAN_GAP` finding
+   against that requirement's missing criterion/traceability, not a silently omitted FR.
+4. Read the implementation, changed tests, and relevant BUILD `Scope:` trailers. Trace each
+   criterion to concrete behavior or its absence.
 
-- Read the approved PRD(s) from `.docs/specs/` — **exclude** files prefixed with `SUPERSEDED-`.
-  If multiple specs apply to this feature, audit against all of them.
-- Enumerate every functional requirement. FRs are the `FR-N` items in the PRD. If the PRD uses a
-  different label, treat each discrete functional requirement as one FR and number it `FR-1`,
-  `FR-2`, … in document order so the report and gate are stable.
-- Read the stories in `.docs/stories/` to establish FR → story traceability (which stories were
-  written to satisfy which FR, including their happy AND negative paths).
+Use focused context per criterion. A broad codebase search is warranted only when targeted evidence
+cannot establish whether that criterion was delivered.
 
-If there is no approved (non-SUPERSEDED) PRD, this gate cannot run meaningfully — report that the
-PRD is missing and BLOCK; a feature reaching SHIP with no PRD is itself a finding to surface.
+## Judge each criterion
 
-### 2. Trace Each FR → Code
+For every story criterion, record one row.
 
-For every `FR-N`, map the requirement to the code that implements it:
-- Use the FR's stories and their Done-When/acceptance criteria as the trail head.
-- Grep the codebase for the relevant routes, models, services, jobs, and tests.
-- Record the concrete `file:line` ranges that implement each FR. Where you find nothing, record the
-  place it *should* live (the route/model/service with no handler) — absence is evidence.
+- **PASS** — the shipped behavior satisfies the criterion. Cite the code and/or behavioral proof.
+- **FIXABLE** — the criterion is unmet and an existing active-plan task owns the repair.
+  **FIXABLE names an owning plan task.** It also names the criterion it repairs; do not invent a
+  task, and do not use this grade when the required work is outside the approved plan.
+- **PLAN_GAP** — the criterion is unmet and no existing task owns its repair. Describe why the plan
+  is insufficient. For a PRD requirement with no traced story criterion, make that missing coverage
+  explicit as a PLAN_GAP rather than assessing the FR as though it were a criterion.
+- **OVER_SCOPE** — shipped behavior goes beyond the planned implementation. Judge it against intent:
+  PRD Goals/Non-Goals and In/Out Scope when available, otherwise the stories plus the plan outcome.
+  State whether the widening is within intent, outside intent but not user-visible, or outside intent
+  and user-visible. Include any `Scope:` trailer rationale and operator-reseal rationale in the
+  evidence. A reseal rationale that does not justify the protected-artifact change is an OVER_SCOPE
+  finding; a rationale that does justify it is evidence for no finding.
 
-Keep the mapping per-FR and tight: each FR's audit should see only its own FR text, its stories,
-and the diff/files relevant to it — not the whole codebase.
+Do not conflate grades: an unmet criterion with an existing owner is FIXABLE even if another
+criterion is a PLAN_GAP. One row carries one grade.
 
-### 3. Dispatch `prd-auditor` Per FR
+## Report
 
-Dispatch the **`prd-auditor`** agent once per FR, with scoped context (one FR + its stories + the
-mapped diff/files). Each dispatch returns:
-- a verdict: `ALIGNED | PARTIAL | DIVERGED | MISSING`,
-- `file:line` evidence, and
-- a **gap-class**: `impl-gap` (PRD right, code wrong/missing) vs `intended-drift` (code right, PRD
-  stale).
-
-Dispatch per FR so each audit runs on focused context (mirrors the evaluator's scoped-context
-model). Do not collapse multiple FRs into one dispatch — per-FR verdicts are what the gate and the
-report key on.
-
-### 4. Aggregate Report
-
-Write the audit to `.pipeline/prd-audit.md` (run evidence — gitignored, stable
-filename, overwritten each run; NOT a committed design artifact):
+Write `.pipeline/prd-audit.md` as current run evidence, overwriting the prior run. Declare whether a
+PRD was present, name all intent sources, and use the criterion-grade Verdict Table as the routing
+contract. Per-FR evidence may appear below the table, but never replaces the criterion rows.
 
 ```markdown
 # PRD Audit: <Feature Name>
 **Date:** YYYY-MM-DD
-**PRD(s) audited:** [.docs/specs/...]
+**PRD:** present | none
+**Intent sources:** stories: .docs/stories/<feature>.md; PRD: .docs/specs/<feature>.md | none; plan outcome: <outcome>
 **Overall:** PASS | BLOCKED
 
 ## Verdict Table
 
-| FR | Verdict | Gap-class | Evidence (file:line) | Accepted? |
-|----|---------|-----------|----------------------|-----------|
-| FR-1 | ALIGNED | n/a | app/foo.rb:42 | — |
-| FR-2 | MISSING | impl-gap | (no handler in app/controllers/bar.rb) | no |
-| FR-3 | DIVERGED | intended-drift | app/baz.rb:88 | ACCEPTED |
+| Criterion | Grade | Plan task | PRD: | Evidence |
+| --- | --- | --- | --- | --- |
+| S6.1 | PASS | — | FR-7 | src/engine/example.ts:42 — implements the criterion |
+| S6.2 | FIXABLE | 4 | FR-7 | src/engine/example.ts:58 — missing guard |
+| S6.3 | PLAN_GAP | — | FR-7 | No active task owns the missing behavior |
+| S9.2 | OVER_SCOPE | — | FR-9 | src/engine/example.ts:77 — outside intent, user-visible |
 
-## Per-FR Detail
-### FR-2 — <title>
-[verdict, stages, evidence, rationale from the auditor]
+## Criterion detail
+### S6.2 — <criterion summary>
+**Grade:** FIXABLE
+**Confidence:** 95% (verified)
+**Evidence:** `src/engine/example.ts:58` — <what it proves or lacks>
+**Rationale:** <why this grade follows from the criterion, its intent context, and task ownership>
 ```
 
-The verdict table MUST contain exactly one row for every enumerated `FR-N`. A missing FR row blocks
-the gate identically to an un-`ALIGNED` row, even when every row that is present is `ALIGNED`. A
-row is also **blocking** when it carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is
-**not** marked `ACCEPTED`. Mark a row `ACCEPTED` only after the human has explicitly accepted that
-divergence (see §5). The report is overwritten on re-run — it reflects the CURRENT state; git
-holds the history.
+The Verdict Table needs one row for every readable story criterion. Use `—` for an absent Plan task,
+but only FIXABLE rows may name a task and that task must exist in the active plan. `PRD:` records the
+intent FR(s) when known and `none` when there is no PRD. If report evidence is malformed or
+incomplete, surface it as BLOCKED rather than fabricating a grade.
 
-**The `## Verdict Table` heading is required, and it is the ONLY table that may carry a verdict
-keyword next to an `FR-N` id.** The gate scans that section for verdict rows. Elsewhere in the
-report — a "what moved since cycle N" summary, a remediation log, a per-FR narrative — you MUST NOT
-put a PRIOR-cycle verdict (`ALIGNED`/`PARTIAL`/`DIVERGED`/`MISSING`) in a table cell beside an
-`FR-N` id. Write prior-cycle history as PROSE instead:
-
-> The single row that changed is FR-15. Its cycle-4 state was a blocking intended-drift divergence;
-> its cycle-5 state is recorded in the Verdict Table below.
-
-A history table like `| FR-15 | DIVERGED (intended-drift) | **ALIGNED** | … |` reads as a current
-`DIVERGED` verdict and blocks an all-`ALIGNED` audit.
-
-### 5. Gate + Kickback
-
-**GATE: Loop until every FR is `ALIGNED` or a human-`ACCEPTED` divergence.** Any other state
-BLOCKS the SHIP tail — the conductor will not advance to retro/finish.
-
-For each blocking FR, route by its gap-class:
-- **`impl-gap`** (`MISSING` / `PARTIAL`, or an accidental `DIVERGED`) → instruct a return to
-  **BUILD**: re-open the build to implement or correct the requirement, then re-run prd-audit.
-- **`intended-drift`** (`DIVERGED` where the code is deliberately right and the PRD is stale) →
-  route to **DECIDE**: the PRD is amended (human-driven) so intent matches reality, then re-run
-  prd-audit. Only after the human confirms the divergence is intended may the row be marked
-  `ACCEPTED`. Never self-accept a divergence — that defeats the gate.
-
-The `Gap-class` column is load-bearing under the **daemon** (autonomous, no human): the conductor
-routes a blocking audit by class automatically. An **all-`impl-gap`** audit self-heals — it routes
-back to BUILD, rebuilds, and re-audits (bounded; then HALTs if still unresolved). **Any** non-impl
-blocking row (`intended-drift`, or an unclassifiable one) HALTs the daemon for a human, because the
-DECIDE amendment it needs can't be made autonomously. So classify accurately — a mislabeled
-`impl-gap` makes the daemon churn BUILD on a gap only a human can close.
-
-**Rework budget:** allow **3 audit→rework cycles**. If the feature is still blocked after the third
-cycle, **escalate to the operator** with the full report and the list of still-blocking FRs — do
-not loop further. This respects the engine's anti-ping-pong caps (`MAX_GATE_SELECTIONS`); the
-3-cycle skill budget sits under the engine cap, so the escalation message is what the operator
-sees, not a silent stall.
-
-### 6. Signal Review Requirement
-
-Review mode for this step is **conditional** — auto-approved unless you write a marker file.
-
-Write `.pipeline/review-required-prd_audit` (any content; the file's existence is the signal) if
-ANY of the following is true:
-- Any FR was non-`ALIGNED` (even if later closed — the operator should see what was reconciled)
-- Any FR was marked `ACCEPTED` as an intended divergence
-- Any PRD amendment happened during this audit's kickback loop
-
-If every FR is `ALIGNED` with zero divergences and zero amendments, do NOT write the marker — the
-conductor auto-approves and moves to the next step.
-
-```bash
-# Example: write the marker when the audit found or reconciled gaps
-mkdir -p .pipeline
-echo "non-aligned FRs: 2, accepted divergences: 1, PRD amended: yes" > .pipeline/review-required-prd_audit
-```
+For OVER_SCOPE rows, add the intent judgement and reseal rationale to the detail: which source was
+consulted, whether the behavior is user-visible, and why any Scope/reseal rationale does or does not
+justify the widening. Do not self-accept, halt, or otherwise route the finding; the engine applies
+the policy to this evidence.
 
 ## Verification
 
-- [ ] Approved PRD(s) loaded from `.docs/specs/` (SUPERSEDED- excluded)
-- [ ] Every FR enumerated and traced to implementing code (or its absence)
-- [ ] One `prd-auditor` dispatch per FR with scoped context
-- [ ] Each FR has a verdict, gap-class, and file:line evidence
-- [ ] Report written to `.pipeline/prd-audit.md` with the verdict table under a `## Verdict Table` heading
-- [ ] No prior-cycle verdict appears in a table cell beside an `FR-N` id outside that section — history is prose
-- [ ] Every blocking FR routed by gap-class (impl-gap → BUILD, intended-drift → DECIDE)
-- [ ] Loop continues until all FRs ALIGNED or human-ACCEPTED; no row self-accepted
-- [ ] 3-cycle rework budget enforced, then escalate to operator (no infinite loop)
-- [ ] `.pipeline/review-required-prd_audit` marker written IF any FR was non-ALIGNED, accepted, or
-      the PRD was amended (skip only on a truly clean all-ALIGNED pass)
+- [ ] Active-plan stories loaded; each readable criterion has one Verdict Table row
+- [ ] Stories treated as authority; PRD FRs and plan outcome recorded only as intent context
+- [ ] `**PRD:** present | none` and the intent-sources line state what was available
+- [ ] Each row has exactly one of PASS, FIXABLE, PLAN_GAP, or OVER_SCOPE
+- [ ] Every FIXABLE row names its existing owning plan task and its criterion
+- [ ] Unreadable criteria and PRD-to-story coverage gaps are surfaced, never silently passed
+- [ ] Each finding cites `file:line` evidence and has calibrated confidence where ambiguous
+- [ ] OVER_SCOPE detail judges intent, user visibility, Scope trailers, and reseal rationale
+- [ ] Report written to `.pipeline/prd-audit.md`; no implementation, plan mutation, or routing performed
