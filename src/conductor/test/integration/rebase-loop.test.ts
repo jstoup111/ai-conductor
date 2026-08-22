@@ -17,8 +17,6 @@ import {
   emitGateInvalidationEvents,
   makeGitRunner as makeRebaseGitRunner,
 } from '../../src/engine/rebase.js';
-import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
-import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 
 const gitCommandSpy = vi.hoisted(() => vi.fn());
 const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
@@ -68,20 +66,6 @@ const execFileAsync = promisify(execFile);
 // default-branch name is deterministic regardless of the host git config, and
 // read it back where the production code is expected to discover it.
 const BASE = 'main';
-
-function passingBuildReviewAggregate() {
-  const lapId = parseBuildReviewLapId('fixture-lap')!;
-  return joinBuildReviewRubricOutcomes({
-    lapId,
-    snapshotDigest: 'sha256:fixture',
-    results: {
-      testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:fixture',
-        contractVersion: 'v3', findings: [], verdict: 'PASS',
-      },
-    },
-  });
-}
 
 const FRONT_DONE: ConductState = {
   complexity_tier: 'M',
@@ -225,7 +209,15 @@ describe('integration/rebase-loop', () => {
     );
     await writeFile(
       join(dir, '.docs/stories/add-foo.md'),
-      '## Happy Path\n\n- Given a feature, when it runs, then it succeeds.\n',
+      [
+        '**Status:** Accepted',
+        '',
+        '## Story 1-1: add foo',
+        '**Requirements:** FR-1',
+        '',
+        '### Happy Path',
+        '- Given a feature, when it runs, then it succeeds.',
+      ].join('\n'),
     );
   });
   afterEach(async () => {
@@ -238,7 +230,7 @@ describe('integration/rebase-loop', () => {
     prospectiveMergeFixture.forceIndeterminate = true;
   }
 
-  function conductorWith(runner: StepRunner): Conductor {
+  function conductorWith(runner: StepRunner, fromStep: 'build' | 'retro' = 'build'): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
         ? { stdout: 'refs/remotes/origin/feature/x\n' }
@@ -255,11 +247,24 @@ describe('integration/rebase-loop', () => {
       daemon: true,
       verifyArtifacts: true,
       mode: 'auto',
-      fromStep: 'build',
+      fromStep,
       maxRetries: 1,
       git: fakeGit,
       shipmentEvidence: validShipmentEvidence,
     });
+  }
+
+  async function runThroughShip(runner: StepRunner): Promise<void> {
+    // Validation runs as its own phase. A rebase can send the feature through
+    // validation once more, so play the SHIP phase forward until it finishes
+    // or deliberately parks.
+    await conductorWith(runner).run();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const done = await access(join(dir, '.pipeline/DONE')).then(() => true).catch(() => false);
+      const halted = await access(join(dir, '.pipeline/HALT')).then(() => true).catch(() => false);
+      if (done || halted) return;
+      await conductorWith(runner, 'retro').run();
+    }
   }
 
   // Per-step artifact creation so each gate's objective verdict passes (matches
@@ -278,7 +283,7 @@ describe('integration/rebase-loop', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/build-review.json'),
-        JSON.stringify(passingBuildReviewAggregate()),
+        JSON.stringify({ verdict: 'PASS', rubric: { testQuality: false } }),
       );
     } else if (step === 'manual_test') {
       await writeFile(
@@ -289,13 +294,26 @@ describe('integration/rebase-loop', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/prd-audit.md'),
-        '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
+        [
+          '# PRD Audit',
+          '',
+          '**PRD:** present',
+          '',
+          '## Verdict Table',
+          '| Criterion | Grade | Plan task | Evidence |',
+          '|---|---|---|---|',
+          '| S1.1 | PASS | 1 | foo.ts:1 |',
+          '',
+          '| FR | Verdict | Evidence |',
+          '|---|---|---|',
+          '| FR-1 | ALIGNED | foo.ts:1 |',
+        ].join('\n'),
       );
     } else if (step === 'architecture_review_as_built') {
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/architecture-review-as-built.md'),
-        '# As-Built Review\n\nVerdict: APPROVED\n',
+        '# As-Built Review\n\nVerdict: APPROVED\n\nOutcome delivered: yes\n',
       );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
@@ -335,7 +353,7 @@ describe('integration/rebase-loop', () => {
       completed = true;
     });
 
-    await conductorWith(passthroughRunner(ran)).run();
+    await runThroughShip(passthroughRunner(ran));
 
     expect(completed).toBe(true);
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
@@ -375,7 +393,7 @@ describe('integration/rebase-loop', () => {
         translateAfterRebase,
       } as unknown as StepRunner;
 
-      await conductorWith(runner).run();
+      await runThroughShip(runner);
 
       expect(translateAfterRebase).toHaveBeenCalledTimes(1);
     });
@@ -454,7 +472,7 @@ describe('integration/rebase-loop', () => {
       halted = true;
     });
 
-    await conductorWith(passthroughRunner(ran)).run();
+    await runThroughShip(passthroughRunner(ran));
 
     // Park for a human: HALT written, NO DONE, finish never ran, rebase paused.
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
@@ -487,7 +505,7 @@ describe('integration/rebase-loop', () => {
       completed = true;
     });
 
-    await conductorWith(passthroughRunner(ran)).run();
+    await runThroughShip(passthroughRunner(ran));
 
     expect(completed).toBe(true);
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
@@ -617,7 +635,7 @@ describe('integration/rebase-loop', () => {
       completed = true;
     });
 
-    await conductorWith(passthroughRunner(ran)).run();
+    await runThroughShip(passthroughRunner(ran));
 
     expect(completed).toBe(true);
     expect(ran).toContain('finish');
@@ -674,7 +692,7 @@ describe('integration/rebase-loop', () => {
       if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
     });
 
-    await conductorWith(runner).run();
+    await runThroughShip(runner);
 
     expect(completed).toBe(true);
     expect(halted).toBe(false);
@@ -727,7 +745,7 @@ describe('integration/rebase-loop', () => {
       halted = true;
     });
 
-    await conductorWith(passthroughRunner(ran)).run();
+    await runThroughShip(passthroughRunner(ran));
 
     // Re-parked: HALT re-written, NO DONE, finish never ran, rebase still paused.
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
@@ -784,7 +802,7 @@ describe('integration/rebase-loop', () => {
       halted = true;
     });
 
-    await conductorWith(passthroughRunner(ran)).run();
+    await runThroughShip(passthroughRunner(ran));
 
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
     await expect(access(join(dir, '.pipeline/DONE'))).rejects.toThrow();
@@ -1049,7 +1067,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         // Preserved: each judged audit gate ran exactly ONCE (never
@@ -1065,13 +1083,14 @@ describe('integration/rebase-loop', () => {
         expect(archVerdict?.kickback).toBeUndefined();
 
         // Audit trail: a rebase_gate_preserved event per preserved gate, with
-        // a non-empty declared surface and an EMPTY feature-src delta that
-        // justified the preservation.
+        // a non-empty declared surface. The always-run PRD audit records the
+        // foreign runtime delta it considered, while the as-built review's
+        // own surface excludes that foreign file.
         const prdPreserved = preserved.find((p) => p.gate === 'prd_audit');
         const archPreserved = preserved.find((p) => p.gate === 'architecture_review_as_built');
         expect(prdPreserved).toBeDefined();
         expect(prdPreserved!.surface.length).toBeGreaterThan(0);
-        expect(prdPreserved!.deltaConsidered).toEqual([]);
+        expect(prdPreserved!.deltaConsidered).toEqual(['src/foreign-sibling.ts']);
         expect(archPreserved).toBeDefined();
         expect(archPreserved!.surface.length).toBeGreaterThan(0);
         expect(archPreserved!.deltaConsidered).toEqual([]);
@@ -1140,7 +1159,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         // Re-run, NOT preserved: a single feature-owned runtime path in D
@@ -1170,13 +1189,13 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith({
+        await runThroughShip({
           run: async (step) => {
             dispatches.push(step);
             counts[step] = (counts[step] ?? 0) + 1;
             return satisfy(step);
           },
-        }).run();
+        });
 
         expect(completed).toBe(true);
         expect(counts.prd_audit).toBe(2);
@@ -1226,7 +1245,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         expect(counts.prd_audit).toBe(1);
@@ -1253,7 +1272,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         expect(counts.manual_test).toBe(2);
@@ -1285,7 +1304,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         expect(counts.manual_test).toBeUndefined();
@@ -1308,7 +1327,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         expect(counts.manual_test).toBe(1);
@@ -1349,7 +1368,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         // manual_test WAS re-opened (invalidated, re-dispatched)...
@@ -1375,7 +1394,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         // The delta-gating must not accidentally preserve a gate the
@@ -1480,7 +1499,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
         expect(counts.prd_audit).toBe(2);
