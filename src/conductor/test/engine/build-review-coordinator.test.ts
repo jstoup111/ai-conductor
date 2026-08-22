@@ -140,26 +140,16 @@ const rubricIdentities: BuildReviewRubricIdentities = {
   completeness: { kind: "ready", identity: engineIdentity },
 };
 
-// Most coordinator scenarios predate identity injection and are concerned with
-// another branch. Give those fixtures the same complete dispatch-site value;
-// tests that exercise identity behavior pass their explicit per-rubric value.
-function coordinateBuildReviewRubrics(
-  input: Omit<BuildReviewCoordinationInput, "engineIdentity"> & {
-    engineIdentity?: BuildReviewRubricIdentities | BuildReviewEngineIdentity;
-  },
-) {
-  const identity = input.engineIdentity === undefined
-    ? rubricIdentities
-    : "tautology" in input.engineIdentity
-      ? input.engineIdentity
-      : {
-        tautology: { kind: "ready" as const, identity: input.engineIdentity },
-        scope: { kind: "ready" as const, identity: input.engineIdentity },
-        rootCause: { kind: "ready" as const, identity: input.engineIdentity },
-        completeness: { kind: "ready" as const, identity: input.engineIdentity },
-      };
-  return coordinateBuildReviewRubricsImpl({ ...input, engineIdentity: identity });
+function identitiesFor(identity: BuildReviewEngineIdentity): BuildReviewRubricIdentities {
+  return {
+    tautology: { kind: "ready", identity },
+    scope: { kind: "ready", identity },
+    rootCause: { kind: "ready", identity },
+    completeness: { kind: "ready", identity },
+  };
 }
+
+const coordinateBuildReviewRubrics = coordinateBuildReviewRubricsImpl;
 
 describe("build-review coordinator: frozen fan-out", () => {
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
@@ -167,7 +157,7 @@ describe("build-review coordinator: frozen fan-out", () => {
 
     await coordinateBuildReviewRubrics({
       config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => ({
         kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
@@ -198,7 +188,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     }));
 
     await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identitiesFor(engineIdentity),
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
@@ -283,7 +273,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
 
     const result = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identitiesFor(engineIdentity),
       preflight: vi.fn(),
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
         version: 1, rubric: "scope", contractVersion: "v3", projectionVersion: "v2",
@@ -330,7 +320,7 @@ describe("build-review coordinator: frozen fan-out", () => {
         contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
       }));
       await coordinateBuildReviewRubrics({
-        config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+        config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identitiesFor(engineIdentity),
         preflight: vi.fn(),
         readCache: async (branch, projection, policyFingerprint) => branch.rubric !== "scope"
           ? undefined
@@ -355,7 +345,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
     }));
     await expect(coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identitiesFor(engineIdentity),
       preflight: vi.fn(),
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
         version: 1, rubric: "scope", contractVersion: "v3", projectionVersion: "v2", projectionDigest: projection.digest,
@@ -377,7 +367,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     }));
 
     await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identitiesFor(engineIdentity),
       preflight: vi.fn(),
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? {
         version: 1, rubric: "scope", contractVersion: "v3", projectionVersion: "v2",
@@ -413,7 +403,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
     }));
     const result = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identitiesFor(engineIdentity),
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
@@ -474,7 +464,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       },
     };
     const run = (lapId: string, snapshot: BuildReviewFrozenInputs) => coordinateBuildReviewRubrics({
-      config: config(), inputs: snapshot, lapId: parseBuildReviewLapId(lapId)!, preflight,
+      config: config(), inputs: snapshot, lapId: parseBuildReviewLapId(lapId)!, preflight, engineIdentity: rubricIdentities,
       readCache: async (branch) => cache.get(branch.rubric), dispatchModel, writeArtifact, writeCache, emit,
     });
 
@@ -654,7 +644,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     const dispatchModel = vi.fn();
     const result = await coordinateBuildReviewRubrics({
       config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false }, rootCause: { ...config().rubrics.rootCause, enabled: false }, completeness: { ...config().rubrics.completeness, enabled: false } } }),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identity,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identitiesFor(identity),
       preflight: vi.fn(),
       readCache: async (branch, projection, policyFingerprint) => ({
         version: 1, rubric: branch.rubric, contractVersion: "v3", projectionVersion: "v2",
@@ -687,7 +677,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
     const result = await coordinateBuildReviewRubrics({
       config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => ({
         kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
@@ -709,7 +699,7 @@ describe("build-review coordinator: frozen fan-out", () => {
 
   it("turns a cache write failure into an owning infrastructure result", async () => {
     const result = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
@@ -757,7 +747,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       },
     };
     const result = await coordinateBuildReviewRubrics({
-      config: config({ maxParallel: 2 }), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity, preflight,
+      config: config({ maxParallel: 2 }), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: identitiesFor(engineIdentity), preflight,
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope"
         ? { ...cachedScope, projectionDigest: projection.digest, policyFingerprint }
         : undefined,
@@ -787,7 +777,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
     const rawRunOutput = `raw runner output ${"x".repeat(4_096)}`;
     await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: async () => ({
         classification: "red" as const, cacheable: true as const, cacheProvenance: "miss" as const,
         changedPaths: ["src/a.ts", "test/a.test.ts"], changedTestSelectors: ["test/a.test.ts"],
@@ -839,7 +829,7 @@ describe("build-review coordinator: frozen fan-out", () => {
       contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
     }));
     const result = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: async () => ({
         classification: "infrastructure-failure", reason: "scoped-run-timeout", changedPaths: [], changedTestSelectors: [],
         sourceIdentities: { mergeBase: "base", headSha: "head" },
@@ -873,7 +863,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) =>
         branch.rubric === "scope"
@@ -906,7 +896,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
   it("settles an undefined dispatch result as invalid-provider-result with no detail (unchanged behavior)", async () => {
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) =>
         branch.rubric === "rootCause" ? undefined : {
@@ -935,7 +925,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
   ])("carries the engine-produced failed requirement when a provider result %s", async (_shape, payload, detail) => {
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => branch.rubric === "scope"
         ? payload
@@ -965,7 +955,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
 
     const coordination = await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: async () => ({
         classification: "approved-exception" as const, exception: "empty-test-set" as const,
         cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [],
@@ -1025,7 +1015,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => branch.rubric === "scope"
         ? { findings: [] }
@@ -1056,7 +1046,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
     };
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => branch.rubric === "scope"
         ? { findings: [finding] }
@@ -1078,7 +1068,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
   it("stamps one projection identity onto concurrent findings-only rubric results", async () => {
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async () => ({ findings: [] }),
       writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
@@ -1102,7 +1092,7 @@ describe("build-review coordinator: findings-only provider payloads", () => {
   const settleScopePayload = async (payload: Record<string, unknown>) => {
     const coordination = await coordinateBuildReviewRubrics({
       config: noTautology(),
-      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async (branch, projection) => branch.rubric === "scope"
         ? payload
@@ -1157,7 +1147,7 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
     });
     const coordination = await coordinateBuildReviewRubrics({
       config: config({ rubrics: { ...config().rubrics, tautology: { ...config().rubrics.tautology, enabled: false } } }),
-      inputs: frozenInputs, lapId,
+      inputs: frozenInputs, lapId, engineIdentity: rubricIdentities,
       projections: { ...projections, scope: projections.rootCause as never },
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async () => ({ findings: [] }),
@@ -1177,7 +1167,7 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
   it("writes four concurrent rubric results only under their own branch identities", async () => {
     const writeArtifact = vi.fn(async (artifact) => ({ version: 1 as const, ...artifact }));
     await coordinateBuildReviewRubrics({
-      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!, engineIdentity: rubricIdentities,
       preflight: vi.fn(), readCache: async () => undefined,
       dispatchModel: async () => ({ findings: [] }),
       writeArtifact,
