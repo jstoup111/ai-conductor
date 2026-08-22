@@ -43,8 +43,8 @@ Binding decisions found by a full sweep of `.docs/decisions/` (504 files):
   record kind in the same store (D6), coarsest identity (D7), one reducer relaxation (D8), spine
   event (D10). Its D8 sentence "a rubric that ran and found something blocks exactly as today" is
   read here as covering bound and unbound findings; `beyond` is a class D8 did not contemplate
-  (conflict-check 2026-08-21, accepted degrading). An additive amendment note is owed to that ADR
-  once it is on main.
+  (conflict-check 2026-08-21, accepted degrading). The additive amendment note is on that ADR in this
+  spec change set.
 - adr-2026-07-26-event-sink-registry-exhaustiveness — a new `ConductorEvent` member obliges a sink
   row.
 - adr-2026-08-12-fail-closed-intake-ledger-durability, adr-012, adr-2026-07-21-intake-only —

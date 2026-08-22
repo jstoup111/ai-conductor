@@ -27,7 +27,7 @@ supersession was encountered among the examined set.
 ## Conflict: "A judged finding blocks exactly as today" vs beyond findings leaving the blocking set
 
 **Stories involved:** Story 4 (Beyond findings never block) vs #1629 Story 11 (A real finding still blocks)
-**Files:** `.docs/stories/plan-tasks-lack-falsifiable-done-criteria-so-revie.md` vs `.docs/stories/review-infrastructure-failures-are-operator-unreco.md`; and vs `.docs/decisions/adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane.md` (on PR #1734's branch, not yet on main)
+**Files:** `.docs/stories/plan-tasks-lack-falsifiable-done-criteria-so-revie.md` vs `.docs/stories/review-infrastructure-failures-are-operator-unreco.md`; and vs `.docs/decisions/adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane.md` (on main since spec PR #1724)
 **Type:** overlap
 **Severity:** degrading
 **ADR filename stem:** adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane
@@ -46,10 +46,8 @@ unbound findings blocking, keep `accept` refusing beyond, and keep infrastructur
 **Resolution Options:**
 1. Scope #1629's sentence: "a rubric that ran and found something" means a bound or unbound finding;
    `beyond` is the rubric's own verdict that the finding is outside the task, which #1629 never
-   contemplated. Record the scoping in this feature's ADR now; add the additive amendment note to
-   adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane when it exists on main (it is on PR
-   #1734's branch, which this feature is sequenced after — the note cannot be written to a file
-   this worktree does not have).
+   contemplated. Record the scoping in this feature's ADR and add the additive amendment note beside D8 in
+   adr-2026-08-18-mechanical-rubric-faults-are-their-own-lane in this spec change set.
 2. Make beyond findings block until an operator accepts each one — defeats #1763 outcome 4 (zero
    operator interventions) and re-creates the exact babysitting the issue documents.
 3. Supersede adr-2026-08-18's D8 with a new ADR — disproportionate; D8's decision (reduced coverage
@@ -57,8 +55,7 @@ unbound findings blocking, keep `accept` refusing beyond, and keep infrastructur
 
 **Recommendation:** Option 1 — the two decisions are about different objects (an operator decision
 on an un-run rubric vs a rubric's own verdict on a finding), so D8 stands; only its "exactly as
-today" phrasing needs scoping. Accepted as degrading: until the amendment note lands, a reader of
-#1629's ADR alone would over-read D8.
+today" phrasing needs scoping. Accepted as degrading: D8's wording is scoped by an amendment note rather than rewritten.
 
 ## Examined overlaps found compatible
 
