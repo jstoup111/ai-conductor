@@ -153,6 +153,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   unattributed_progress: 'not-audited-by-design',
   halt_cleared: 'friction-mapped',
   operator_rewind: 'friction-mapped',
+  plan_growth: 'not-audited-by-design',
   ci_failed: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
   acceptance_red: 'not-audited-by-design',
@@ -459,6 +460,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   halt_cleared: { type: 'halt_cleared', step: 'build', cause: 'operator' },
   operator_rewind: { type: 'operator_rewind', operator: 'operator', target: 'build', demoted: ['build', 'test_suite'] },
+  plan_growth: { type: 'plan_growth', authored: 19, added: 3, byGate: { prd_audit: 3 }, remaining: 1 },
   ci_failed: {
     type: 'ci_failed',
     prUrl: 'https://github.com/acme/repo/pull/1',

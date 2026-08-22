@@ -156,6 +156,14 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 export type ConductorEvent =
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
+      /** Durable plan-task growth accounting after a remediation append. */
+      type: 'plan_growth';
+      authored: number;
+      added: number;
+      byGate: Record<string, number>;
+      remaining: number;
+    }
+  | {
       /** A retired configuration key was accepted as a compatibility no-op. */
       type: 'config_deprecated_key';
       key: string;

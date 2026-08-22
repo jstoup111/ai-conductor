@@ -1,7 +1,8 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import type { ConductorEvent } from '../types/events.js';
 import {
   parseBuildReviewInfrastructureFailure,
   type BuildReviewInfrastructureFailureReason,
@@ -28,10 +29,27 @@ export interface KickbackGateEntry {
   resolvedBefore: number;
 }
 
+/** Durable accounting for plan tasks added after the original plan was authored. */
+export interface PlanGrowthRecord {
+  authored: number;
+  added: number;
+  byGate: Record<string, number>;
+}
+
+/** Growth accounting with the caller's current task-addition cap applied. */
+export interface PlanGrowth extends PlanGrowthRecord {
+  remaining: number;
+}
+
+export interface PlanGrowthEventSink {
+  emit(event: Extract<ConductorEvent, { type: 'plan_growth' }>): void | Promise<void>;
+}
+
 /** Durable, per-feature kickback state stored outside the feature branch. */
 export interface KickbackLedger {
   version: 1;
   gates: Record<string, KickbackGateEntry>;
+  growth?: PlanGrowthRecord;
 }
 
 type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative' | 'mechanicalFaults'> & {
@@ -42,6 +60,7 @@ type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative' | 'mechan
 interface PersistedKickbackLedger {
   version: 1;
   gates: Record<string, PersistedKickbackGateEntry>;
+  growth?: PlanGrowthRecord;
 }
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
@@ -137,6 +156,23 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
   );
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isPlanGrowthRecord(value: unknown): value is PlanGrowthRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const growth = value as Record<string, unknown>;
+  return isNonNegativeInteger(growth.authored) &&
+    isNonNegativeInteger(growth.added) &&
+    typeof growth.byGate === 'object' &&
+    growth.byGate !== null &&
+    !Array.isArray(growth.byGate) &&
+    Object.entries(growth.byGate).every(([gate, count]) =>
+      gate.trim().length > 0 && isNonNegativeInteger(count),
+    );
+}
+
 function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
@@ -145,7 +181,8 @@ function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
     return false;
   }
 
-  return Object.values(ledger.gates).every(isKickbackGateEntry);
+  return Object.values(ledger.gates).every(isKickbackGateEntry) &&
+    (ledger.growth === undefined || isPlanGrowthRecord(ledger.growth));
 }
 
 function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedger {
@@ -213,6 +250,94 @@ export async function writeKickbackLedger(
 /** Remove the ledger when a genuinely fresh feature session begins. */
 export async function clearKickbackLedger(projectRoot: string): Promise<void> {
   await rm(join(projectRoot, KICKBACK_LEDGER_PATH), { force: true });
+}
+
+function withRemaining(growth: PlanGrowthRecord, cap: number): PlanGrowth {
+  return {
+    ...growth,
+    byGate: { ...growth.byGate },
+    remaining: Math.max(0, cap - growth.added),
+  };
+}
+
+function growthTotalsAgree(growth: PlanGrowthRecord): boolean {
+  return Object.values(growth.byGate).reduce((total, count) => total + count, 0) === growth.added;
+}
+
+async function deriveGrowthFromActivePlan(
+  projectRoot: string,
+): Promise<{ growth: PlanGrowthRecord; resolved: boolean }> {
+  let activePlanPath: string | undefined;
+  try {
+    const state = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf-8'),
+    ) as { activePlanPath?: unknown };
+    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
+      activePlanPath = state.activePlanPath;
+    }
+  } catch {
+    // The absent legacy state has no authoritative plan path; do not guess.
+  }
+
+  if (!activePlanPath) {
+    return { growth: { authored: 0, added: 0, byGate: {} }, resolved: false };
+  }
+
+  try {
+    const plan = await readFile(
+      isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath),
+      'utf-8',
+    );
+    const authored = [...plan.matchAll(/^#{1,6}\s+Task\s+[A-Za-z0-9._-]+(?::|\s[—–]|\s*$)/gim)].length;
+    return { growth: { authored, added: 0, byGate: {} }, resolved: true };
+  } catch (error) {
+    console.warn(
+      `[kickback-ledger] unable to derive growth from active plan ${activePlanPath}: ` +
+      `${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { growth: { authored: 0, added: 0, byGate: {} }, resolved: false };
+  }
+}
+
+/**
+ * Read growth accounting, deriving its initial authored denominator only from
+ * the engine-recorded active plan. Existing rem-* headers are intentionally
+ * included in that denominator: they predate this feature's growth record.
+ */
+export async function readGrowth(projectRoot: string, cap: number): Promise<PlanGrowth> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const derived = await deriveGrowthFromActivePlan(projectRoot);
+  const stored = ledger.growth;
+
+  if (!stored) return withRemaining(derived.growth, cap);
+
+  const matchesPlan = !derived.resolved || stored.authored + stored.added === derived.growth.authored;
+  if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
+
+  console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
+  await writeKickbackLedger(projectRoot, { ...ledger, growth: derived.growth });
+  return withRemaining(derived.growth, cap);
+}
+
+/** Persist a growth update and publish the resulting cap state on the event spine. */
+export async function recordGrowth(
+  projectRoot: string,
+  growth: PlanGrowthRecord,
+  options: { cap?: number; events?: PlanGrowthEventSink } = {},
+): Promise<PlanGrowth> {
+  if (!isPlanGrowthRecord(growth) || !growthTotalsAgree(growth)) {
+    throw new Error('plan growth must have non-negative counts whose gate total equals added');
+  }
+
+  const ledger = await readKickbackLedger(projectRoot);
+  const cap = options.cap ?? growth.added;
+  const recorded = withRemaining(growth, cap);
+  await writeKickbackLedger(projectRoot, {
+    ...ledger,
+    growth: { authored: growth.authored, added: growth.added, byGate: { ...growth.byGate } },
+  });
+  await options.events?.emit({ type: 'plan_growth', ...recorded });
+  return recorded;
 }
 
 /**

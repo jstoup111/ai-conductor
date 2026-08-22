@@ -109,6 +109,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'operator_rewind',
+  'plan_growth',
   'contained_live_checkout_drift',
   'provider_stream_progress',
   'self_host_containment_verdict',
