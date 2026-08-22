@@ -21,7 +21,7 @@ Run everything from `src/conductor` unless stated otherwise.
 | --- | --- |
 | Install dependencies | `cd src/conductor && npm ci` |
 | Full suite (what CI runs) | `cd src/conductor && npm test` |
-| One file while authoring | `cd src/conductor && npx vitest run test/<path>.test.ts --reporter=dot --silent` |
+| One file while authoring | `cd src/conductor && npm test -- test/<path>.test.ts` |
 | Watch mode | `cd src/conductor && npm run test:watch` |
 | Type check (`src/` only) | `cd src/conductor && npm run typecheck` |
 | Type check including `test/` | `cd src/conductor && npm run typecheck:test` |
@@ -34,13 +34,13 @@ Run everything from `src/conductor` unless stated otherwise.
 `npm test` expands to:
 
 ```bash
-vitest run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'
+node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'
 ```
 
 `AGGREGATE_TEST_SUITE_PASS` is a human-readable shell success indicator. The pre-SHIP `test_suite`
 gate classifies the aggregate command's exit code and records its evidence; it does not inspect this
-sentinel. A raw `vitest run` may therefore satisfy the gate when it exits successfully, though the npm
-script remains the repository's canonical full-suite command.
+sentinel. The package script is also the containment boundary that creates the run-scoped temp root
+before Vitest loads, so use `npm test -- <selectors>` rather than invoking `vitest run` directly.
 
 ### The engine-dist guard
 
@@ -99,7 +99,7 @@ makes that provider leg gate-enforced. Run either leg directly from
 `src/conductor`:
 
 ```bash
-npx vitest run --config vitest.smoke.config.ts test/engine/daemon-e2e-live-claude.smoke.test.ts
+npm run smoke -- test/engine/daemon-e2e-live-claude.smoke.test.ts
 ```
 
 The reusable [Live daemon E2E workflow](../../.github/workflows/live-daemon-e2e.yml)
@@ -165,21 +165,22 @@ except smoke runs under a bare `npm test`.
 
 | Directory | Files | Covers | Run just this tier |
 | --- | --- | --- | --- |
-| `test/engine/` | 371 | Mirrors `src/engine/`, including subdirectories for `engineer/`, `engineer/intake/`, `self-host/`, `otel/`, `halt-issues/`, `owner-gate/`. | `npx vitest run test/engine` |
-| `test/acceptance/` | 96 | Observable story and gate behavior across the minimum real internal path, with third-party boundaries faked. | `npx vitest run test/acceptance` |
-| `test/` (top level) | 41 | Cross-cutting suites not owned by one layer: `wiring-*`, `build-progress-*`, `backlog-priority`, `config-validation`, and tests of the leak guards themselves. | `npx vitest run test/*.test.ts` |
-| `test/integration/` | 39 | Real collaboration between internal components; real temp files or local git only where git semantics are the subject. | `npx vitest run test/integration` |
-| `test/ui/` | 14 | Renderers, subscribers, dashboard snapshot and text, live region, prompt host. | `npx vitest run test/ui` |
-| `test/execution/` | 11 | Provider adapters, the `LLMProvider` contract, token usage, rate-limit parsing, sessions. | `npx vitest run test/execution` |
+| `test/engine/` | 371 | Mirrors `src/engine/`, including subdirectories for `engineer/`, `engineer/intake/`, `self-host/`, `otel/`, `halt-issues/`, `owner-gate/`. | `npm test -- test/engine` |
+| `test/acceptance/` | 96 | Observable story and gate behavior across the minimum real internal path, with third-party boundaries faked. | `npm test -- test/acceptance` |
+| `test/` (top level) | 41 | Cross-cutting suites not owned by one layer: `wiring-*`, `build-progress-*`, `backlog-priority`, `config-validation`, and tests of the leak guards themselves. | `npm test -- 'test/*.test.ts'` |
+| `test/integration/` | 39 | Real collaboration between internal components; real temp files or local git only where git semantics are the subject. | `npm test -- test/integration` |
+| `test/ui/` | 14 | Renderers, subscribers, dashboard snapshot and text, live region, prompt host. | `npm test -- test/ui` |
+| `test/execution/` | 11 | Provider adapters, the `LLMProvider` contract, token usage, rate-limit parsing, sessions. | `npm test -- test/execution` |
 | `test/smoke/` | 5 | Real binaries and real third parties. Excluded by default. | See [Smoke tests](#smoke-tests). |
-| `test/cli/` | 3 | `index.test.ts`, `mode-derivation.test.ts`, `report-flag.test.ts`. | `npx vitest run test/cli` |
-| `test/structural/` | 2 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npx vitest run test/structural` |
-| `test/types/` | 2 | Type-level contracts: `plugin-kind.test.ts`, `test-suite-config-type.test.ts`. | `npx vitest run test/types` |
-| `test/fixtures/` | 1 test + helpers | `git-repo.ts` and its test, plus child-process scripts and recorded session-hook payloads. | `npx vitest run test/fixtures` |
+| `test/cli/` | 3 | `index.test.ts`, `mode-derivation.test.ts`, `report-flag.test.ts`. | `npm test -- test/cli` |
+| `test/structural/` | 2 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
+| `test/types/` | 2 | Type-level contracts: `plugin-kind.test.ts`, `test-suite-config-type.test.ts`. | `npm test -- test/types` |
+| `test/fixtures/` | 1 test + helpers | `git-repo.ts` and its test, plus child-process scripts and recorded session-hook payloads. | `npm test -- test/fixtures` |
 
-Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with `maxForks: 3` / `minForks: 1`,
+Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with top-level `maxWorkers: 3`,
 `testTimeout: 20000`, `hookTimeout: 30000`, `environment: 'node'`. No reporter is configured in the file
-— it comes from the command line.
+— it comes from the command line. Vitest 4 removed `poolOptions` and `minWorkers`; isolated generated
+smoke fixtures set `maxWorkers: 1`.
 
 `npm run typecheck` covers `src/` only — `src/conductor/tsconfig.json` sets
 `"exclude": ["node_modules", "dist", "test"]`. `npm run typecheck:test` (`tsconfig.test.json`) covers
@@ -210,7 +211,7 @@ boundaries. The hook's environment, ordering before removal, contained non-zero 
 worktree skip, and configured timeout are observable assertions. Run it with:
 
 ```bash
-cd src/conductor && npx vitest run test/acceptance/project-teardown-hook.acceptance.test.ts
+cd src/conductor && npm test -- test/acceptance/project-teardown-hook.acceptance.test.ts
 ```
 
 ### Worktree-removal classification guard
@@ -232,7 +233,7 @@ standard suite. This is the enforcement described by
 `.docs/decisions/adr-2026-08-07-worktree-removal-coverage-guard.md`. Run it directly with:
 
 ```bash
-cd src/conductor && npx vitest run test/structural/worktree-removal-coverage.test.ts
+cd src/conductor && npm test -- test/structural/worktree-removal-coverage.test.ts
 ```
 
 ## Global guards
@@ -241,8 +242,8 @@ Four files run automatically and exist because each one prevented a real inciden
 
 ### vitest.config.ts — the run-scoped `TMPDIR`
 
-The config module calls `ensureRunTmpRootSync(tmpdir())` before Vitest constructs anything. That creates
-one `ai-conductor-vitest-run-*` root inside the real tmpdir and points `TMPDIR` at it.
+`scripts/run-vitest.mjs` creates one `ai-conductor-vitest-run-*` root inside the real tmpdir and points
+`TMPDIR` at it before loading Vitest. The config module then idempotently reuses that root.
 
 `os.tmpdir()` reads `TMPDIR` on every call, so all ~1,426 `mkdtemp(join(tmpdir(), '<prefix>-'))` call
 sites across the suite — including ones written later — land inside that root with no test-file changes,
@@ -250,8 +251,8 @@ and `global-setup.ts` deletes the root wholesale at teardown. Before this, the t
 up left tens of thousands of directories in the operator's real `/tmp`; on a tmpfs that exhausted inodes
 and broke unrelated production processes with `ENOSPC`.
 
-It is installed in the config rather than in `globalSetup` because Vitest's own project `tmpDir` is
-`join(tmpdir(), nanoid())`, evaluated between the two — a redirect any later leaves Vitest's own
+The package runner must install it before Vitest loads because Vitest 4 creates its root `tmpDir`
+before evaluating the config; `globalSetup` is later still. A later redirect leaves Vitest's own
 random-named SSR cache in the real tmpdir every run. `test/tmpdir-redirect-propagation.test.ts` runs
 inside a forked worker and asserts `os.tmpdir()` resolves to the run root, so the env propagation this
 all depends on is proven rather than assumed.
@@ -444,5 +445,5 @@ checker carrying the same gate would inherit that hole. Leaving it ungated also 
 survives any future widening of the predicate, and it costs about six seconds with no npm install and
 no network.
 
-Node comes from `src/conductor/.tool-versions` (`nodejs 20.19.2`) and the npm cache keys on
+Node comes from `src/conductor/.tool-versions` (`nodejs 26.7.0`) and the npm cache keys on
 `src/conductor/package-lock.json`.

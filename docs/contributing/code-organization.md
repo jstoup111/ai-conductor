@@ -192,7 +192,7 @@ Intended layering is `types ← execution ← engine ← ui ← entry points`. M
 `npm run build` in `src/conductor` runs `scripts/publish-engine.mjs`, which stages the bundle, finalizes
 it into an immutable `dist-versions/<id>/`, and atomically flips the `dist` symlink. Running `npx tsup`
 directly is refused: `tsup.config.ts:8` calls `assertPublishWrapperEnv(process.env)`, because raw tsup
-output would clobber the versioned layout. Node is pinned to `20.19.2` by `src/conductor/.tool-versions`.
+output would clobber the versioned layout. Node is pinned to `26.7.0` by `src/conductor/.tool-versions`.
 
 ## Extending any of this
 
