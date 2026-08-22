@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { reconcileBeyondRecords } from '../../src/engine/beyond-reconciliation.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
+import type { TrackerClient } from '../../src/engine/tracker-client.js';
 
 const roots: string[] = [];
 
@@ -24,7 +25,7 @@ describe('reconcileBeyondRecords', () => {
     await store.appendBeyondIfAbsent({
       feature, findingId: 'sha256:one', rubric: 'scope', summary: 'outside the plan', evidenceLocations: ['src/x.ts:1'],
     });
-    const createIssue = vi.fn(async () => 'https://github.com/acme/repo/issues/1');
+    const createIssue = vi.fn<TrackerClient['createIssue']>(async () => 'https://github.com/acme/repo/issues/1');
     const emitted = vi.fn();
 
     await reconcileBeyondRecords({
@@ -33,8 +34,9 @@ describe('reconcileBeyondRecords', () => {
     });
 
     expect(createIssue).toHaveBeenCalledOnce();
-    expect(createIssue.mock.calls[0]?.[0].body).toContain('Source-Ref: feature:sha256:one');
-    expect((await store.listBeyond(feature)).records).toMatchObject([{ status: 'filed', issueUrl: 'https://github.com/acme/repo/issues/1' }]);
+    expect(createIssue.mock.calls[0]?.[0]?.body).toContain('Source-Ref: feature:sha256:one');
+    const listed = await store.listBeyond(feature);
+    expect(listed).toMatchObject({ ok: true, records: [{ status: 'filed', issueUrl: 'https://github.com/acme/repo/issues/1' }] });
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'build_review_beyond_filed', findingId: 'sha256:one' }));
   });
 });

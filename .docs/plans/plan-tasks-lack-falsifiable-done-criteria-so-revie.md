@@ -518,25 +518,116 @@ presence of the block and 2–5 non-blank criteria — per approved ADR D1 ("mec
 the quality-word rule stays prompt", adr-2026-07-22). `validatePlanDoneWhen` neither reads criterion
 prose nor judges falsifiability, and no task in this plan asks it to._
 ### Task rem-scope-001: src/conductor/test/acceptance/adr-approval-gate-before-build.acceptance.test.ts:49 — add the existing plan fixture to the approved Done-when compatibility-migration scope and pin that ADR approval behavior still reaches its intended assertion
+**Done when:**
+- The plan fixture includes a two-item `Done when:` block.
+- The ADR approval assertion still passes.
+
 ### Task rem-scope-002: src/conductor/test/acceptance/build-review-no-longer-judges-wiring.acceptance.test.ts:72 — authorize and verify both cited Done-when fixture migrations while preserving the legacy-wiring scenarios
+**Done when:**
+- Both cited plan fixtures include a two-item `Done when:` block.
+- The legacy-wiring scenarios still pass.
+
 ### Task rem-scope-003: src/conductor/test/acceptance/build-tasks-can-amend-protected-docs-artifacts-ame.acceptance.test.ts:111 — authorize and verify the cited Done-when fixture migrations without changing protected-artifact behavior
+**Done when:**
+- Each cited plan fixture includes a two-item `Done when:` block.
+- The protected-artifact assertions still pass unchanged.
+
 ### Task rem-scope-004: src/conductor/test/acceptance/decide-artifact-coherence-check.acceptance.test.ts:114 — authorize and verify both cited Done-when fixture migrations so the cases still reach coherence validation
+**Done when:**
+- Both cited plan fixtures include a two-item `Done when:` block.
+- Each scenario reaches and passes its coherence-validation assertion.
+
 ### Task rem-scope-005: src/conductor/test/acceptance/engineer-agent-hosted.test.ts:71 — authorize and verify all three cited Done-when fixture migrations while retaining each hosted-engineer scenario
+**Done when:**
+- All three cited plan fixtures include a two-item `Done when:` block.
+- Every hosted-engineer scenario still passes.
+
 ### Task rem-scope-006: src/conductor/test/acceptance/engineer-worktree-isolation.test.ts:91 — authorize and verify the Done-when fixture migration while preserving worktree-isolation assertions
+**Done when:**
+- The cited plan fixture includes a two-item `Done when:` block.
+- The worktree-isolation assertions still pass.
+
 ### Task rem-scope-007: src/conductor/test/engine/engineer/engineer-cli-launch-intake.test.ts:106 — authorize and verify the Done-when fixture migration while preserving the CLI intake launch scenario
+**Done when:**
+- The cited plan fixture includes a two-item `Done when:` block.
+- The CLI intake launch scenario still passes.
+
 ### Task rem-rootcause-001: src/conductor/src/engine/build-review-domain.ts:492 and src/conductor/test/engine/build-review-domain.test.ts:1 — derive owning-task identity for all four rubric anchor shapes and add cross-task rejection coverage for each
+**Done when:**
+- Each of the four anchor shapes resolves its owning task before binding validation.
+- A binding to a different task is rejected for every anchor shape.
+
 ### Task rem-rootcause-002: src/conductor/src/engine/beyond-reconciliation.ts:23 and src/conductor/test/engine/beyond-reconciliation.test.ts:1 — isolate failures inside each record iteration and prove a failed first record does not skip the next
+**Done when:**
+- A filing failure for the first record leaves that record unfiled.
+- A later record is still filed during the same reconciliation pass.
+
 ### Task rem-rootcause-003: src/conductor/src/engine/beyond-reconciliation.ts:28 and src/conductor/test/engine/beyond-reconciliation.test.ts:1 — file with sourceRef `<slug>:<findingId>`, recover an existing issue on duplicate, and prove a post-file stamp retry creates no second issue
+**Done when:**
+- New filings use sourceRef `<slug>:<findingId>` and duplicate sourceRefs recover the existing issue.
+- A retry after a post-file stamp failure creates no second issue.
+
 ### Task rem-completeness-001: src/conductor/src/engine/build-review-effective.ts:128, shipped-record.ts:261, finish-publication-production.ts:289 and their Task 14 tests — render filed/unfiled beyond evidence beside reduced coverage and fail closed when it is unrenderable
+**Done when:**
+- Findings, PR body, and shipped record render filed and unfiled beyond evidence beside reduced coverage.
+- An unrenderable beyond record fails the publication path closed.
+
 ### Task rem-completeness-002: src/conductor/src/engine/build-review-domain.ts:490 and src/conductor/test/engine/build-review-domain.test.ts:1 — preserve the finding index and diagnose all four malformed/unresolvable boundTo cases with allowed `beyond` and `content-region` forms
+**Done when:**
+- Each malformed or unresolvable binding reports its original finding index.
+- Every diagnosis lists the allowed `beyond` and `content-region` forms.
+
 ### Task rem-completeness-003: src/conductor/test/engine/build-review-coordinator.test.ts:1 and src/conductor/src/engine/build-review-domain.ts:497 — add both empty-doneWhenContext coordinator cases and make the rejected binding say the task has no criteria
+**Done when:**
+- Unbound findings against empty criteria continue to block.
+- Bound findings against empty criteria are rejected with a no-criteria diagnosis.
+
 ### Task rem-completeness-004: src/conductor/src/engine/beyond-reconciliation.ts:26 and src/conductor/test/engine/beyond-reconciliation.test.ts:1 — implement and cover ledger refusal, tracker failure with continuation, duplicate-sourceRef recovery, and stamp-failure idempotency
+**Done when:**
+- Ledger refusal, tracker failure, duplicate recovery, and stamp-failure retry are each covered by a focused test.
+- A failure in one record does not prevent a subsequent record from being reconciled.
+
 ### Task rem-completeness-005: src/conductor/src/engine/beyond-reconciliation.ts:28, src/conductor/src/daemon-cli.ts:1755, and src/conductor/test/engine/beyond-reconciliation.test.ts:1 — deliver Task 16's three reconciliation cases, sourceRef filing, filed event, and same-cycle daemon assertion
+**Done when:**
+- Reconciliation files the required records with sourceRef and emits the filed event.
+- The daemon observes the filing in the same reconciliation cycle.
+
 ### Task rem-completeness-006: skills/build-review-scope/SKILL.md:1, skills/build-review-root-cause/SKILL.md:1, skills/build-review-completeness/SKILL.md:103, skills/build-review-tautology/SKILL.md:1, and src/conductor/test/engine/build-review-rubric-skills.test.ts:1 — add the criteria-evidence and blocking-vs-beyond instructions to all four contracts and pin the full grammar in the drift guard
+**Done when:**
+- All four rubric contracts state the criteria-evidence and blocking-versus-beyond rules.
+- The drift-guard test fails if any contract loses a required grammar clause.
+
 ### Task rem-completeness-007: src/conductor/test/engine/build-review-effective.test.ts:1, build-review-verdict.test.ts:1, and conductor-kickback-ledger.test.ts:1 — add Task 10's five effective/verdict cases and prove a beyond-only lap advances no kickback
+**Done when:**
+- The five effective/verdict cases pass.
+- A beyond-only lap advances without adding a kickback.
+
 ### Task rem-completeness-008: src/conductor/test/engine/conductor.test.ts:1 — prove two beyond ids append two unfiled records, a rerun appends none, and lease failure logs without changing the verdict
+**Done when:**
+- Two distinct beyond identifiers append two unfiled records and a rerun appends none.
+- Lease failure is logged without changing the lap verdict.
+
 ### Task rem-completeness-009: src/conductor/test/engine/build-review-cli.test.ts:345 and src/conductor/test/engine/conductor.test.ts:1 — pin the beyond-id accept refusal and prove a fresh-base-discarded lap appends no beyond record
+**Done when:**
+- The accept command refuses an identifier for a beyond finding.
+- A fresh-base-discarded lap appends no beyond record.
+
 ### Task rem-completeness-010: src/conductor/test/engine/build-review-finding-identity.test.ts:1 — prove beyond, content-region, and absent boundTo variants share an id, the canonical payload keeps four keys, and a pre-change disposition rehydrates
+**Done when:**
+- Beyond, content-region, and absent bindings share one finding identity and the canonical payload has four keys.
+- A disposition written before the binding field exists rehydrates successfully.
+
 ### Task rem-completeness-011: src/conductor/test/engine/build-review-domain.test.ts:1 — add parsing cases for `beyond`, a resolving content-region binding, and absent boundTo, and assert the rendered result shape includes boundTo
+**Done when:**
+- `beyond`, resolving content-region, and absent binding payloads parse successfully.
+- Rendered findings include the optional `boundTo` field.
+
 ### Task rem-completeness-012: src/conductor/test/engine/build-review-inputs.test.ts:1 — add the three-criteria, same-hash/distinct-task, repeated-occurrence, empty-array, and legacy-snapshot cases required by Task 5
+**Done when:**
+- Each of the five named criteria-input cases passes.
+- Legacy snapshots without criteria remain accepted.
+
 ### Task rem-completeness-013: src/conductor/src/engine/plan-done-when.ts:24 and src/conductor/test/engine/plan-done-when.test.ts:5 — preserve blank-block evidence and add separate compliant, blank, and fenced-example cases alongside all existing reason coverage
+**Done when:**
+- Blank blocks retain blank evidence rather than becoming missing blocks.
+- Compliant, blank, and fenced-example validation cases pass alongside existing reason coverage.
