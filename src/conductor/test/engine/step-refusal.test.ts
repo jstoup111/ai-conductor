@@ -12,12 +12,21 @@ import {
 import { EventPersister } from '../../src/engine/event-persister.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 describe('step refusal event spine', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  const buildReviewState = (buildReview: 'done' | 'pending') => ({
+    ...Object.fromEntries(
+      ALL_STEPS.slice(0, ALL_STEPS.findIndex((step) => step.name === 'build_review'))
+        .map((step) => [step.name, 'done']),
+    ),
+    build_review: buildReview,
   });
 
   it('returns the protected-artifact refusal result used by the seal dispatch seam', () => {
@@ -180,6 +189,95 @@ describe('step refusal event spine', () => {
       });
     } finally {
       persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a missing build-review worktree without changing its completed status', async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), 'step-refusal-missing-worktree-'));
+    const statePath = join(stateDir, 'conduct-state.json');
+    const missingRoot = join(stateDir, 'removed-worktree');
+    const events = new ConductorEventEmitter();
+    const reason = `Cannot dispatch 'build_review': its working directory ${missingRoot} does not exist. ` +
+      'The feature worktree was removed while the run was in flight. The BRANCH is the ' +
+      'source of truth — recreate the worktree from it and recover the .pipeline evidence ' +
+      'before resuming, so completed work is not redone.';
+    await writeFile(statePath, JSON.stringify(buildReviewState('done')), 'utf8');
+    const run = vi.fn(async () => {
+      throw new Error('missing worktree refusal must prevent dispatch');
+    });
+    const refusals: ConductorEvent[] = [];
+    const failures: ConductorEvent[] = [];
+    const haltReasons: string[] = [];
+    events.on('step_refused', (event) => {
+      refusals.push(event);
+    });
+    events.on('step_failed', (event) => {
+      failures.push(event);
+    });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') haltReasons.push(event.reason);
+    });
+
+    try {
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run },
+        events,
+        projectRoot: missingRoot,
+        config: {} as never,
+        fromStep: 'build_review',
+        mode: 'auto',
+        daemon: true,
+      }).run();
+
+      expect({
+        buildReview: JSON.parse(await readFile(statePath, 'utf8')).build_review,
+        runnerCalls: run.mock.calls,
+        refusals,
+        failures,
+        haltReason: haltReasons[0],
+      }).toEqual({
+        buildReview: 'done',
+        runnerCalls: [],
+        refusals: [expect.objectContaining({ step: 'build_review', kind: 'missing-worktree', reason })],
+        failures: [],
+        haltReason: reason,
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('dispatches build review normally when its worktree is present', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'step-refusal-present-worktree-'));
+    const statePath = join(projectRoot, 'conduct-state.json');
+    const events = new ConductorEventEmitter();
+    await writeFile(statePath, JSON.stringify(buildReviewState('pending')), 'utf8');
+    const run = vi.fn(async () => ({ success: false, output: 'expected fixture failure' }));
+    const refusals: ConductorEvent[] = [];
+    events.on('step_refused', (event) => {
+      refusals.push(event);
+    });
+
+    try {
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run },
+        events,
+        projectRoot,
+        config: {} as never,
+        fromStep: 'build_review',
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+      }).run();
+
+      expect({ runnerCalls: run.mock.calls, refusals }).toEqual({
+        runnerCalls: [expect.any(Array)],
+        refusals: [],
+      });
+    } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
   });

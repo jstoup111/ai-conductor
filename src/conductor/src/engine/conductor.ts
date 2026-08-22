@@ -3209,14 +3209,16 @@ export class Conductor {
       () => false,
     );
     if (present) return undefined;
+    const reason =
+      `Cannot dispatch '${step}': its working directory ${this.projectRoot} does not exist. ` +
+      'The feature worktree was removed while the run was in flight. The BRANCH is the ' +
+      'source of truth — recreate the worktree from it and recover the .pipeline evidence ' +
+      'before resuming, so completed work is not redone.';
     return {
       success: false,
       worktreeMissing: true,
-      output:
-        `Cannot dispatch '${step}': its working directory ${this.projectRoot} does not exist. ` +
-        'The feature worktree was removed while the run was in flight. The BRANCH is the ' +
-        'source of truth — recreate the worktree from it and recover the .pipeline evidence ' +
-        'before resuming, so completed work is not redone.',
+      output: reason,
+      refused: { kind: 'missing-worktree', reason },
     };
   }
 
@@ -6154,8 +6156,12 @@ export class Conductor {
             resolved.escalate,
             stepModelPolicy,
           );
+          // Check the worktree before any per-attempt bookkeeping can create
+          // `.pipeline` beneath an absent path. This is a refusal, not a
+          // started step, so it must retain the prior status unchanged.
+          const missingWorktree = await this.missingWorktreeResult(step.name);
 
-          if (step.name === 'build') {
+          if (!missingWorktree && step.name === 'build') {
             await seedBuildTaskTelemetry(
               this.projectRoot,
               state.feature_desc ?? this.featureDesc ?? '',
@@ -6174,7 +6180,7 @@ export class Conductor {
           // a no-op), so operators who disable the feature pay zero overhead
           // and the existing post-hoc stall-breaker (below) is unaffected.
           const buildWatcher: BuildProgressWatcher | null =
-            step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
+            !missingWorktree && step.name === 'build' && resolveBuildProgressConfig(this.config).enabled
               ? new BuildProgressWatcher({
                   projectRoot: this.projectRoot,
                   events: this.events,
@@ -6197,7 +6203,7 @@ export class Conductor {
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
           let protectedArtifactIssue: string | null = null;
-          if (step.phase === 'BUILD' || step.phase === 'SHIP') {
+          if (!missingWorktree && (step.phase === 'BUILD' || step.phase === 'SHIP')) {
             const currentCommit = await currentCommitSha(this.projectRoot);
             const baselineCommit = step.phase === 'BUILD' ? currentCommit : undefined;
             // Legacy/test-only non-git roots cannot establish an approved
@@ -6236,7 +6242,7 @@ export class Conductor {
           // session-hook write-guard can distinguish "docs/spec artifacts
           // changed mid-BUILD/SHIP" from DECIDE-phase edits. Independent of
           // written for every BUILD/SHIP step, not just `build`.
-          if (step.phase === 'BUILD' || step.phase === 'SHIP') {
+          if (!missingWorktree && (step.phase === 'BUILD' || step.phase === 'SHIP')) {
             writePhaseMarker(this.projectRoot, {
               step: step.name,
               phase: step.phase,
@@ -6247,7 +6253,7 @@ export class Conductor {
           // The repository-local release-disposition gate writes machine-owned
           // metadata into the retained SHIP draft. Capture it immediately
           // before finish dispatches, because finish may replace the body.
-          if (step.name === 'finish') {
+          if (!missingWorktree && step.name === 'finish') {
             await this.snapshotFinishReleaseMetadata(state.worktree_branch);
           }
           // Whatever this dispatch writes supersedes any earlier capture — a
@@ -6255,12 +6261,14 @@ export class Conductor {
           // over the freshly authored one.
           // `release-disposition` is a repository-local custom step, so it is
           // outside the built-in `StepName` union and compared as a plain string.
-          if ((step.name as string) === 'release-disposition') {
+          if (!missingWorktree && (step.name as string) === 'release-disposition') {
             await this.clearFinishReleaseMetadataSnapshot();
           }
 
           let result: StepRunResult;
-          if (protectedArtifactIssue) {
+          if (missingWorktree) {
+            result = missingWorktree;
+          } else if (protectedArtifactIssue) {
             buildWatcher?.stop();
             closeoutTail?.stop();
             const dispatchIssue = protectedArtifactIssue;
@@ -6346,7 +6354,6 @@ export class Conductor {
               });
             }
             result =
-              (await this.missingWorktreeResult(step.name)) ??
               (step.name === 'complexity'
                 ? await this.runComplexityStep(state)
                 : step.name === 'worktree'
@@ -6388,6 +6395,15 @@ export class Conductor {
           }
           }
 
+          if (result.worktreeMissing && !result.refused) {
+            result.refused = {
+              kind: 'missing-worktree',
+              reason:
+                result.output?.trim() ||
+                `Cannot dispatch '${step.name}': the feature worktree no longer exists.`,
+            };
+          }
+
           if (result.refused) {
             await emitTracked({
               type: 'step_refused',
@@ -6397,6 +6413,11 @@ export class Conductor {
             });
             if (result.refused.kind === 'protected-artifact' && attempt < stepMaxRetries) {
               continue;
+            }
+            if (result.refused.kind === 'missing-worktree') {
+              // No remediation-PR surfacing: that path runs git/gh from the
+              // very directory that is missing.
+              await this.emitLoopHalt(result.refused.reason);
             }
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
@@ -6621,24 +6642,6 @@ export class Conductor {
             await this.closeOpenExecutions();
             await this.writeHaltMarker(haltReason + '\n', 'mechanical');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
-            await this.emitLoopHalt(haltReason);
-            process.off('SIGINT', sigintHandler);
-            process.off('SIGTERM', sigterm);
-            return;
-          }
-
-          // A missing worktree is terminal for this run. The runner refused to
-          // dispatch because the working directory is gone; retrying, escalating
-          // the model, or kicking back to an earlier step all re-dispatch into
-          // the same absent path. Nothing is written into the missing directory —
-          // recreating `.pipeline/` there would leave a non-worktree stub that
-          // makes the next `git worktree add` fail 128 (#681).
-          if (result.worktreeMissing) {
-            const haltReason =
-              result.output?.trim() ||
-              `Cannot dispatch '${step.name}': the feature worktree no longer exists.`;
-            // No remediation-PR surfacing: that path runs git/gh from the very
-            // directory that is missing.
             await this.emitLoopHalt(haltReason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
