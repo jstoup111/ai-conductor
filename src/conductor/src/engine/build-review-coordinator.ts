@@ -57,6 +57,15 @@ const TRANSITIONAL_ENGINE_IDENTITY = {
   skillDigest: "unresolved",
 } as BuildReviewEngineIdentity;
 
+export type BuildReviewRubricIdentity =
+  | { readonly kind: "ready"; readonly identity: BuildReviewEngineIdentity }
+  | { readonly kind: "unavailable"; readonly path: string };
+
+export type BuildReviewRubricIdentities = Readonly<Record<
+  BuildReviewRubricId,
+  BuildReviewRubricIdentity
+>>;
+
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
   rubric: BuildReviewRubricId;
@@ -107,8 +116,8 @@ export interface BuildReviewCoordinationInput {
   readonly config: ResolvedBuildReviewConfig;
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
-  /** Identity supplied once by the dispatch site and shared by every rubric. */
-  readonly engineIdentity?: BuildReviewEngineIdentity;
+  /** Per-rubric cache identity resolved by the dispatch site before coordination. */
+  readonly engineIdentity?: BuildReviewRubricIdentities | BuildReviewEngineIdentity;
   /** Test seam for an engine-held projection corruption at branch settlement. */
   readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
@@ -277,7 +286,6 @@ function validWrittenArtifact(
 export async function coordinateBuildReviewRubrics(
   input: BuildReviewCoordinationInput,
 ): Promise<BuildReviewCoordination> {
-  const engineIdentity = input.engineIdentity ?? TRANSITIONAL_ENGINE_IDENTITY;
   const classification = classifyBuildReviewRubricBranches(input.config, []);
   if (classification.kind !== "ready") return classification;
 
@@ -304,7 +312,7 @@ export async function coordinateBuildReviewRubrics(
     },
   });
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
-  const misses: BuildReviewDispatchableRubric[] = [];
+  const misses: Array<{ branch: BuildReviewDispatchableRubric; identity: BuildReviewEngineIdentity }> = [];
 
   for (const branch of classification.branches) {
     if ("kind" in branch) {
@@ -329,6 +337,14 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
+    const identity = input.engineIdentity !== undefined && "tautology" in input.engineIdentity
+      ? input.engineIdentity[branch.rubric]
+      : { kind: "ready" as const, identity: input.engineIdentity ?? TRANSITIONAL_ENGINE_IDENTITY };
+    if (identity.kind === "unavailable") {
+      resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed", identity.path));
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });
+      continue;
+    }
     const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
     let candidate: BuildReviewCacheEntryCandidate | undefined;
     try {
@@ -344,7 +360,7 @@ export async function coordinateBuildReviewRubrics(
       projectionVersion: projection.projectionVersion,
       projectionDigest: projection.digest,
       policyFingerprint,
-      engineIdentity,
+      engineIdentity: identity.identity,
       lapId: input.lapId,
       snapshotDigest: projection.snapshotDigest,
     });
@@ -377,16 +393,19 @@ export async function coordinateBuildReviewRubrics(
           lapId: input.lapId,
           reason: cache.reason,
           ...(candidate?.engineIdentity === undefined ? {} : { cachedEngineStamp: candidate.engineIdentity.engineStamp }),
-          currentEngineStamp: engineIdentity.engineStamp,
+          currentEngineStamp: identity.identity.engineStamp,
         });
       }
       await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
-      misses.push(branch);
+      misses.push({ branch, identity: identity.identity });
     }
   }
 
-  const dispatched = await runAuxiliaryGroupBranches(misses.map((branch) => ({ memberId: branch.rubric, policy: branch })), input.config.maxParallel,
-    async (rubric, branch) => {
+  const dispatched = await runAuxiliaryGroupBranches(misses.map(({ branch, identity }) => ({
+    memberId: branch.rubric,
+    policy: { branch, identity },
+  })), input.config.maxParallel,
+    async (rubric, { branch, identity }) => {
       const projection = projections[rubric];
       try {
         const dispatched = await input.dispatchModel(branch, projection);
@@ -425,7 +444,7 @@ export async function coordinateBuildReviewRubrics(
             projectionVersion: projection.projectionVersion,
             projectionDigest: projection.digest,
             policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
-            engineIdentity,
+            engineIdentity: identity,
             result: written,
           });
         } catch {

@@ -201,6 +201,44 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(writeCache.mock.calls.every(([entry]) => entry.result.kind === "judged")).toBe(true);
   });
 
+  it("settles an unavailable rubric identity as cache-read-failed without cache I/O for that rubric", async () => {
+    const readCache = vi.fn(async (_branch: Parameters<BuildReviewCoordinationInput["readCache"]>[0]) => undefined);
+    const writeCache = vi.fn(async (_entry: BuildReviewCacheEntry) => undefined);
+    const dispatchModel = vi.fn(async (branch, projection) => ({
+      kind: "judged" as const, rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+      contractVersion: "v3" as never, findings: [], verdict: "PASS" as const,
+    }));
+    const unavailablePath = "/harness/skills/build-review-scope/SKILL.md";
+    const result = await coordinateBuildReviewRubrics({
+      config: config(), inputs: inputs(), lapId: parseBuildReviewLapId("lap-current")!,
+      engineIdentity: {
+        tautology: { kind: "ready", identity: engineIdentity },
+        scope: { kind: "unavailable", path: unavailablePath },
+        rootCause: { kind: "ready", identity: engineIdentity },
+        completeness: { kind: "ready", identity: engineIdentity },
+      },
+      preflight: vi.fn(), readCache,
+      dispatchModel,
+      writeArtifact: async (artifact) => ({ version: 1, ...artifact }),
+      writeCache,
+    });
+
+    const scope = result.kind === "ready" ? result.branches.find((branch) => branch.rubric === "scope") : undefined;
+    expect(scope).toMatchObject({
+      kind: "infrastructure-failure", rubric: "scope", reason: "cache-read-failed",
+    });
+    expect(scope).toMatchObject({ detail: expect.stringContaining(unavailablePath) });
+    expect({
+      cacheReads: readCache.mock.calls.map(([branch]) => branch.rubric),
+      cacheWrites: writeCache.mock.calls.map(([entry]) => entry.rubric),
+      dispatched: dispatchModel.mock.calls.map(([branch]) => branch.rubric),
+    }).toEqual({
+      cacheReads: ["tautology", "rootCause", "completeness"],
+      cacheWrites: ["tautology", "rootCause", "completeness"],
+      dispatched: ["tautology", "rootCause", "completeness"],
+    });
+  });
+
   it.each([
     ["engine-version-mismatch", { engineStamp: "old-engine", skillDigest: engineIdentity.skillDigest }, "old-engine"],
     ["skill-digest-mismatch", { engineStamp: engineIdentity.engineStamp, skillDigest: "sha256:old-skill" }, engineIdentity.engineStamp],
