@@ -737,6 +737,7 @@ describe('production FINISH publication composition', () => {
         createDispositionStore: () => ({
           list: async () => ({ ok: true, records: Object.freeze([accepted]) }),
           listReducedCoverage: async () => ({ ok: true as const, records: [coverage] }),
+          listBeyond: async () => ({ ok: true as const, records: [] }),
         }),
       });
       const state = {
@@ -812,6 +813,7 @@ describe('production FINISH publication composition', () => {
         createDispositionStore: () => ({
           list: async () => ({ ok: true, records: Object.freeze([]) }),
           listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+          listBeyond: async () => ({ ok: true as const, records: [] }),
         }),
       });
       const state = {
@@ -869,6 +871,7 @@ describe('production FINISH publication composition', () => {
         createDispositionStore: () => ({
           list: async () => ({ ok: true as const, records: [] }),
           listReducedCoverage: async () => ({ ok: true as const, records: [coverage] }),
+          listBeyond: async () => ({ ok: true as const, records: [] }),
         }),
       });
       const state = {

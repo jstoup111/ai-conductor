@@ -267,6 +267,13 @@ export function appendBuildReviewReducedCoverageEvidence(
   return `${existingContent}${separator}${section}\n`;
 }
 
+/** Appends engine-rendered non-blocking finding evidence to a shipped record. */
+export function appendBuildReviewBeyondEvidence(existingContent: string, section: string | undefined): string {
+  if (section === undefined) return existingContent;
+  const separator = existingContent.endsWith('\n') ? '\n' : '\n\n';
+  return `${existingContent}${separator}${section}\n`;
+}
+
 /** Appends an idempotent, parser-compatible build-review KPI block. */
 export function appendBuildReviewMetrics(
   existingContent: string,

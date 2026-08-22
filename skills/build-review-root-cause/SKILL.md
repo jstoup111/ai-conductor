@@ -53,6 +53,10 @@ identity after validating this findings-only payload.
 Return every independent finding; an empty array means a PASS for this rubric. Each finding contains:
 It may include `boundTo`: use `"beyond"` for a concern outside every `Done when:` criterion; otherwise
 use a content-region reference to the applicable criterion. Omit it when the task has no criteria.
+The projection's `doneWhenContext` is the frozen criteria evidence. A finding is blocking only when
+it names a `Done when:` check the diff fails; every other concern is `beyond`. ADR D1 keeps land
+validation shape-only, so authoring-only semantic-falsifiability concerns outside a failed task
+criterion must bind as `beyond` rather than request a semantic land gate.
 
 **Closed vocabulary:** `root-cause-unaddressed`, `symptom-only-fix`,
 `provenance-sensitive-cache-identity`.

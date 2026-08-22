@@ -64,6 +64,17 @@ describe('engine/build-review rubric skill contracts', () => {
     }
   });
 
+  it('pins the Done-when binding grammar in every rubric contract', async () => {
+    for (const path of [tautologySkillPath, scopeSkillPath, rootCauseSkillPath, completenessSkillPath]) {
+      const skill = await readFile(path, 'utf8');
+      expect(skill).toMatch(/`doneWhenContext`.*frozen criteria evidence/i);
+      expect(skill).toMatch(/blocking only when[\s\S]*?`Done when:` check[\s\S]*?diff fails/i);
+      expect(skill).toMatch(/every other concern is `beyond`/i);
+      expect(skill).toMatch(/`boundTo`.*`"beyond"`.*content-region/is);
+    }
+    await expect(readFile(rootCauseSkillPath, 'utf8')).resolves.toMatch(/shape-only.*authoring-only semantic-falsifiability.*`beyond`/is);
+  });
+
   it('defines the versioned Tautology judgement contract over its closed projection', async () => {
     const skill = await readFile(tautologySkillPath, 'utf8');
 

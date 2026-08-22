@@ -102,6 +102,8 @@ array means no Completeness concern was found.
 Each finding contains:
 It may include `boundTo`: use `"beyond"` for a concern outside every `Done when:` criterion; otherwise
 use a content-region reference to the applicable criterion. Omit it when the task has no criteria.
+The projection's `doneWhenContext` is the frozen criteria evidence. A finding is blocking only when
+it names a `Done when:` check the diff fails; every other concern is `beyond`.
 
 **Closed vocabulary:** `missing-deliverable`.
 

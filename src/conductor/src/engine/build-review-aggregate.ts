@@ -34,6 +34,8 @@ export interface BuildReviewAggregate {
   readonly reasons: readonly string[];
   /** Engine-stamped current-lap reduced-coverage evidence, when an allowance was used. */
   readonly reducedCoverageEvidence?: string;
+  /** Engine-stamped current durable non-blocking finding evidence. */
+  readonly beyondEvidence?: string;
   readonly codeStamp?: string | null;
 }
 
@@ -173,9 +175,11 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
     ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
+    ...(source.beyondEvidence === undefined ? [] : ['beyondEvidence']),
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
   ]) || source.aggregateVersion !== AGGREGATE_VERSION || !isNonEmptyString(source.snapshotDigest) ||
     (source.reducedCoverageEvidence !== undefined && !isNonEmptyString(source.reducedCoverageEvidence)) ||
+    (source.beyondEvidence !== undefined && !isNonEmptyString(source.beyondEvidence)) ||
     (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp))) return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
   if (!lapId) return undefined;
@@ -206,6 +210,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
     aggregateVersion: AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, coverage: expectedCoverage,
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
     ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
+    ...(source.beyondEvidence !== undefined ? { beyondEvidence: source.beyondEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
   };
 }

@@ -489,9 +489,10 @@ function parseFindings(
       : parseContentRegionReference(source.boundTo);
     if (source.boundTo !== undefined && !boundTo) return undefined;
     if (boundTo && boundTo !== 'beyond') {
-      const task = anchor.rubric === 'completeness' ? anchor.planTask : undefined;
+      const task = owningTask(anchor, references);
+      if (!task) return undefined;
       const valid = (references?.doneWhenContext ?? []).some((entry) =>
-        (!task || entry.taskId === task) && entry.criteria.some((criterion) =>
+        entry.taskId === task && entry.criteria.some((criterion) =>
           criterion.contentHash === boundTo.contentHash &&
           (criterion.occurrence ?? 0) === (boundTo.occurrence ?? 0)));
       if (!valid) return undefined;
@@ -500,6 +501,17 @@ function parseFindings(
       ...(boundTo === undefined ? {} : { boundTo }) });
   }
   return findings;
+}
+
+/** Resolve a rubric anchor's task from its explicit task or its owned path. */
+function owningTask(anchor: BuildReviewFindingAnchor, references?: BuildReviewFindingReferenceContext): string | undefined {
+  if (anchor.rubric === 'completeness') return anchor.planTask;
+  const region = anchor.rubric === 'tautology' ? anchor.changedTest : anchor.rubric === 'rootCause' ? anchor.locus : undefined;
+  const path = anchor.rubric === 'scope' ? anchor.path : typeof region === 'object' ? region.path : undefined;
+  if (!path) return undefined;
+  const tasks = Object.entries(references?.planTaskSurfaces ?? {})
+    .filter(([, surfaces]) => surfaces.includes(path)).map(([task]) => task);
+  return tasks.length === 1 ? tasks[0] : undefined;
 }
 
 /**
@@ -721,12 +733,13 @@ export function describeBuildReviewJudgedResultRejection(
         if (!boundTo) {
           problems.push(`findings[${index}].boundTo must be "beyond" or a content-region reference to a Done when: criterion`);
         } else if (boundTo !== 'beyond') {
-          const planTask = anchor?.rubric === 'completeness'
-            ? parseBuildReviewCanonicalPlanTaskReference(anchor.planTask)
-            : undefined;
+          const parsedAnchor = anchor && parseBuildReviewFindingAnchor(anchor, references, source.contractVersion as BuildReviewRubricContractVersion);
+          const planTask = parsedAnchor ? owningTask(parsedAnchor, references) : undefined;
           const candidates = references?.doneWhenContext ?? [];
-          const taskCriteria = planTask === undefined ? candidates : candidates.filter((entry) => entry.taskId === planTask);
-          if (planTask !== undefined && taskCriteria.length === 0) {
+          const taskCriteria = planTask === undefined ? [] : candidates.filter((entry) => entry.taskId === planTask);
+          if (planTask === undefined) {
+            problems.push(`findings[${index}].boundTo cannot resolve because its anchor does not identify one task; allowed forms are "beyond" or content-region`);
+          } else if (taskCriteria.length === 0) {
             problems.push(`findings[${index}].boundTo cannot resolve because task ${planTask} has no criteria`);
           } else if (!taskCriteria.some((entry) => entry.criteria.some((criterion) =>
             criterion.contentHash === boundTo.contentHash && (criterion.occurrence ?? 0) === (boundTo.occurrence ?? 0)))) {

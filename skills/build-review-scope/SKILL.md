@@ -66,6 +66,8 @@ identity after validating this findings-only payload.
 Return every independent finding; an empty array means no Scope concern was found. Each finding
 may include `boundTo`: use `"beyond"` for a concern outside every `Done when:` criterion; otherwise
 use a content-region reference to the applicable criterion. Omit it when the task has no criteria.
+The projection's `doneWhenContext` is the frozen criteria evidence. A finding is blocking only when
+it names a `Done when:` check the diff fails; every other concern is `beyond`.
 contains:
 
 **Closed vocabulary:** `out-of-plan-change`, `not-authorized-by-plan`.

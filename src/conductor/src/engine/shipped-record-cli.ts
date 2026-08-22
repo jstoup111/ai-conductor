@@ -27,6 +27,7 @@ import {
   appendTimingSection,
   appendBuildReviewAcceptedRisk,
   appendBuildReviewReducedCoverageEvidence,
+  appendBuildReviewBeyondEvidence,
   appendBuildReviewMetrics,
   specHash,
   renderShippedRecord,
@@ -230,6 +231,15 @@ export async function dispatchShippedRecord(
         if (!rendered.ok) throw new Error(rendered.message);
         recordBody = appendBuildReviewReducedCoverageEvidence(recordBody, rendered.section);
       }
+      const beyond = await new BuildReviewDispositionStore(cwd).listBeyond({
+        version: 'v1', repository, feature: identity.slug,
+      });
+      if (!beyond.ok) throw new Error(beyond.message);
+      const beyondSection = beyond.records.length === 0 ? undefined : [
+        '## Build-review findings beyond plan criteria',
+        ...beyond.records.map((record) => `- ${record.findingId}: ${record.summary} (${record.issueUrl ?? record.status})`),
+      ].join('\n');
+      recordBody = appendBuildReviewBeyondEvidence(recordBody, beyondSection);
     } catch (err) {
       console.error(
         `shipped-record accepted-risk evidence failed for ${identity.slug}: ${

@@ -34,7 +34,7 @@ import {
 } from './finish-publication.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
-import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewBeyondDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
@@ -81,7 +81,7 @@ export interface ProductionFinishPublicationDeps {
   repairPresentation?: (input: { prUrl: string; state: ConductState }) => Promise<void>;
   /** Task 38 seams: overridable in tests; production defaults resolve the real worktree identity and store. */
   resolveFeatureIdentity?: (projectRoot: string) => Promise<BuildReviewFeatureIdentity | undefined>;
-  createDispositionStore?: (projectRoot: string) => Pick<BuildReviewDispositionStore, 'list' | 'listReducedCoverage'>;
+  createDispositionStore?: (projectRoot: string) => Pick<BuildReviewDispositionStore, 'list' | 'listReducedCoverage' | 'listBeyond'>;
 }
 
 export interface ProductionReleaseReadinessObserverInput {
@@ -103,8 +103,7 @@ export async function publishAcceptedBuildReviewRiskToRetainedPr(input: {
   return { ok: true, changed: upserted.changed };
 }
 
-function upsertReducedCoverageEvidence(body: string, section: string | undefined): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
-  const heading = '## Reduced build-review coverage';
+function upsertEvidenceSection(body: string, heading: string, section: string | undefined): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
   const start = body.indexOf(heading);
   const end = start === -1 ? -1 : body.indexOf('\n## ', start + heading.length);
   const withoutExisting = start === -1
@@ -113,6 +112,17 @@ function upsertReducedCoverageEvidence(body: string, section: string | undefined
   if (section === undefined) return { ok: true, body: withoutExisting, changed: withoutExisting !== body };
   const next = withoutExisting.trim().length === 0 ? section : `${withoutExisting}\n\n${section}`;
   return { ok: true, body: next, changed: next !== body };
+}
+
+function upsertReducedCoverageEvidence(body: string, section: string | undefined) {
+  return upsertEvidenceSection(body, '## Reduced build-review coverage', section);
+}
+
+function renderBeyondEvidence(records: readonly BuildReviewBeyondDispositionRecord[]): string | undefined {
+  if (records.length === 0) return undefined;
+  return ['## Build-review findings beyond plan criteria',
+    ...records.map((record) => `- ${record.findingId}: ${record.summary} (${record.issueUrl ?? record.status})`),
+  ].join('\n');
 }
 
 /**
@@ -270,6 +280,8 @@ export function createProductionFinishPublicationCoordinator(
     if (!listed.ok) throw new Error(`accepted-risk projection: ${listed.message}`);
     const reducedCoverage = await store.listReducedCoverage(feature);
     if (!reducedCoverage.ok) throw new Error(`accepted-risk projection: ${reducedCoverage.message}`);
+    const beyond = await store.listBeyond(feature);
+    if (!beyond.ok) throw new Error(`accepted-risk projection: ${beyond.message}`);
     const aggregate = await readFile(join(deps.projectRoot, '.pipeline', 'build-review.json'), 'utf8')
       .then((text) => parseBuildReviewAggregate(JSON.parse(text)))
       .catch(() => undefined);
@@ -291,7 +303,9 @@ export function createProductionFinishPublicationCoordinator(
       renderedReducedCoverage.section,
     );
     if (!reducedCoverageBody.ok) throw new Error(`accepted-risk projection: ${reducedCoverageBody.message}`);
-    const acceptedRiskBody = upsertBuildReviewAcceptedRisk(reducedCoverageBody.body, listed.records);
+    const beyondBody = upsertEvidenceSection(reducedCoverageBody.body, '## Build-review findings beyond plan criteria', renderBeyondEvidence(beyond.records));
+    if (!beyondBody.ok) throw new Error(`accepted-risk projection: ${beyondBody.message}`);
+    const acceptedRiskBody = upsertBuildReviewAcceptedRisk(beyondBody.body, listed.records);
     if (!acceptedRiskBody.ok) throw new Error(`accepted-risk projection: ${acceptedRiskBody.message}`);
     if (acceptedRiskBody.body !== (typeof body === 'string' ? body : '')) {
       await deps.gh(['pr', 'edit', prUrl, '--body', acceptedRiskBody.body], { cwd: deps.projectRoot });

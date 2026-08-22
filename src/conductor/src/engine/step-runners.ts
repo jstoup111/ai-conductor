@@ -2042,8 +2042,12 @@ export class DefaultStepRunner implements StepRunner {
     // faults and durable operator decisions.  Persist its shared rendering on
     // the aggregate itself so the lap evidence and shipped-record projection
     // cannot drift into independently formatted views.
-    if (effective.reducedCoverageEvidence !== undefined) {
-      const stampedAggregate = { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence };
+    if (effective.reducedCoverageEvidence !== undefined || effective.beyondEvidence !== undefined) {
+      const stampedAggregate = {
+        ...aggregate,
+        ...(effective.reducedCoverageEvidence === undefined ? {} : { reducedCoverageEvidence: effective.reducedCoverageEvidence }),
+        ...(effective.beyondEvidence === undefined ? {} : { beyondEvidence: effective.beyondEvidence }),
+      };
       try {
         const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
         await writeFile(temporaryPath, `${JSON.stringify(stampedAggregate, null, 2)}\n`, 'utf-8');
@@ -2051,7 +2055,7 @@ export class DefaultStepRunner implements StepRunner {
       } catch (error) {
         return {
           success: false,
-          output: `build_review reduced-coverage evidence publication failed: ${error instanceof Error ? error.message : String(error)}`,
+          output: `build_review evidence publication failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
     }
