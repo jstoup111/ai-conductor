@@ -361,12 +361,7 @@ describe("build-review semantic cache", () => {
 
     const coordination = await coordinateBuildReviewRubrics({
       config, inputs: frozenInputs, lapId: currentLap, preflight: async () => ({ classification: "approved-exception" as const, exception: "empty-test-set" as const, cacheable: true as const, cacheProvenance: "miss" as const, changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [], sourceIdentities: { mergeBase: "base", headSha: "head" } }),
-      engineIdentity: {
-        tautology: { kind: "ready", identity: entry().engineIdentity },
-        scope: { kind: "ready", identity: entry().engineIdentity },
-        rootCause: { kind: "ready", identity: entry().engineIdentity },
-        completeness: { kind: "ready", identity: entry().engineIdentity },
-      },
+      engineIdentity: entry().engineIdentity,
       readCache: async (branch, projection, policyFingerprint) => branch.rubric === "scope" ? { ...entry(), projectionDigest: projection.digest, policyFingerprint, result: { ...entry().result, lapId: oldLap, snapshotDigest: oldProjection.snapshotDigest } } : undefined,
       dispatchModel, writeArtifact: async (artifact) => ({ version: 1 as const, ...artifact }), writeCache: async () => undefined,
     });

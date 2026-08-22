@@ -187,12 +187,6 @@ export type PrepareCandidateSelfHost = (
   identity?: { readonly runId: string | undefined; readonly attempt: number },
 ) => Promise<SelfHostInvocation | undefined>;
 
-/** Observes the actual child environment after candidate preparation. */
-export type OnCandidateSelfHostPrepared = (
-  candidate: ProviderCandidate,
-  selfHost: SelfHostInvocation | undefined,
-) => Promise<InvokeResult | void> | InvokeResult | void;
-
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
   configuredProviders: readonly string[];
@@ -225,7 +219,6 @@ export interface ExecuteProviderCandidatesInput {
   /** Safety boundary for each resolved candidate, after resolution and before fallback. */
   withCandidateSafety?: WithCandidateSafety;
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
-  onCandidateSelfHostPrepared?: OnCandidateSelfHostPrepared;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
@@ -561,7 +554,6 @@ export async function executeProviderCandidates({
   onTelemetryError,
   withCandidateSafety,
   prepareCandidateSelfHost,
-  onCandidateSelfHostPrepared,
   warn,
   options,
   optionsForCandidate,
@@ -632,12 +624,6 @@ export async function executeProviderCandidates({
           runId,
           attempt: index,
         });
-        // A candidate-bound preparation hook may settle work (for example, a
-        // provenance-sensitive cache hit) before the model boundary.  It is
-        // deliberately after self-host preparation: the hook must observe the
-        // exact child environment this candidate would have used.
-        const preparedResult = await onCandidateSelfHostPrepared?.(candidate, selfHost);
-        if (preparedResult !== undefined) return preparedResult;
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,

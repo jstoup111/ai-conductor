@@ -2,8 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   classifyBuildReviewRubricBranches,
-  coordinateBuildReviewRubrics as coordinateBuildReviewRubricsImpl,
-  type BuildReviewRubricIdentities,
+  coordinateBuildReviewRubrics,
   type BuildReviewCoordinationInput,
   type BuildReviewCoordinatorHooks,
 } from "../../src/engine/build-review-coordinator.js";
@@ -149,7 +148,6 @@ function identitiesFor(identity: BuildReviewEngineIdentity): BuildReviewRubricId
   };
 }
 
-const coordinateBuildReviewRubrics = coordinateBuildReviewRubricsImpl;
 
 describe("build-review coordinator: frozen fan-out", () => {
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
@@ -305,7 +303,7 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(result).toMatchObject({ kind: "ready" });
   });
 
-  it("emits no discard for missing, projection, policy, or invalid cache misses and completes without an emitter", async () => {
+  it("emits no discard for legacy or unrelated cache misses and completes without an emitter", async () => {
     const cases: Array<[string, unknown]> = [
       ["missing", undefined],
       ["projection", { projectionDigest: "sha256:other" }],

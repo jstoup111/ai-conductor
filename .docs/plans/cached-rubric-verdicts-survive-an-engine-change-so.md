@@ -314,6 +314,34 @@ Task 6 ─┬──────────────────────�
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
 ### Task rem-scope-1: src/conductor/src/engine/smoke-runner.ts:145,152,170 — remove the child temp-directory creation, environment override, and cleanup, restoring the planned smoke-runner behavior and removing any imports made unused
+> **Operator decision 2026-08-22 — the candidate-home remediation family is REJECTED.**
+> The tasks listed below were appended by `remediate` across build_review laps 2-3. They direct the
+> cache identity to be resolved from the effective provider candidate's prepared home after
+> self-host preparation and fallback selection. That is a real defect, but satisfying it requires
+> extending shared provider execution (`provider-execution.ts`), which this plan does not authorize
+> and which the `scope` rubric rejected on the same lap that `rootCause` demanded it. The two
+> rubrics were enforcing incompatible designs and no implementation could satisfy both.
+>
+> This feature keeps its approved design: identity resolved once per dispatch from
+> `resolveHarnessRoot()`, before `coordinateBuildReviewRubrics`. The candidate-home gap is filed as
+> its own intake, **issue #1804**, with both laps' `rootCause` findings as evidence. The headings
+> below are retained deliberately — the engine's completion predicate blocks on a recorded
+> remediation id missing from the plan — but they are not work items for this feature.
+>
+> **Rejected:** `rem-provenance-2`, `rem-provenance-3`, `rem-provenance-4`, `rem-scope-3`,
+> `rem-root-cause-1`, `rem-completeness-2`, `rem-completeness-3`, `rem-completeness-4`,
+> `rem-completeness-5`.
+>
+> **Partially satisfied:** `rem-provenance-1` — its `projectDir`-fallback half IS delivered. An
+> unresolvable harness root now settles as the `unavailable` identity, which the coordinator routes
+> to that rubric's `cache-read-failed` branch, instead of silently digesting a checkout-local or
+> nonexistent SKILL.md. Its "installed root used by provider invocation" half is deferred to #1804.
+>
+> **Delivered against this decision:** the candidate-preparation callback, the post-dispatch
+> cache-identity override, and the provider-home skill-root derivation were reverted to the planned
+> `resolveHarnessRoot` design (commits `52bafa364`, `05ff3a8b1`, `31d41a854`, `de934745c`,
+> `682b0b368`).
+
 ### Task rem-provenance-1: src/conductor/src/engine/step-runners.ts:2097-2125 — resolve each enabled rubric's SKILL.md from the same installed skill root used by provider invocation; remove the projectDir fallback and return the existing unavailable identity shape when that root or file cannot be read
 ### Task rem-provenance-2: src/conductor/test/engine/build-review-halt-wiring.test.ts and src/conductor/test/acceptance/build-review-engine-identity.acceptance.test.ts — prove dist-version engine execution hashes the provider-installed rubric skill root and settles unresolved or unreadable roots as cache-read-failed without cache reuse or writes
 ### Task rem-coordinator-1: src/conductor/src/engine/build-review-coordinator.ts:51-58,115-120,340-342 — make engineIdentity a required BuildReviewRubricIdentities input, delete TRANSITIONAL_ENGINE_IDENTITY and all omitted or single-identity fallback logic, and update coordinator callers to supply resolved per-rubric identities

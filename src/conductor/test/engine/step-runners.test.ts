@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createHash } from 'node:crypto';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -3251,17 +3250,17 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
-    it('defers enabled-rubric digest resolution until a provider candidate is prepared', async () => {
+    it('resolves one engine stamp and one skill digest per enabled rubric before injecting identities into the coordinator', async () => {
       const provider = createMockProvider();
-      const resolveSkillRoot = vi.fn(async () => '/fixture-provider');
+      const resolveHarnessRoot = vi.fn(async () => '/fixture-harness');
       const resolveEngineStamp = vi.fn(() => 'engine-1759');
       const readRubricSkill = vi.fn(async (path: string) => Buffer.from(path));
       const coordinate = vi.fn(async (_inputs, _config, engineIdentity) => {
         expect(engineIdentity).toEqual({
-          tautology: { kind: 'candidate-bound', engineStamp: 'engine-1759' },
-          scope: { kind: 'candidate-bound', engineStamp: 'engine-1759' },
-          rootCause: { kind: 'candidate-bound', engineStamp: 'engine-1759' },
-          completeness: { kind: 'candidate-bound', engineStamp: 'engine-1759' },
+          tautology: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: expect.any(String) } },
+          scope: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: expect.any(String) } },
+          rootCause: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: expect.any(String) } },
+          completeness: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: expect.any(String) } },
         });
         return { success: true, output: 'identity injected' };
       });
@@ -3275,7 +3274,7 @@ TIER: M`,
           },
         } as HarnessConfig,
         buildReviewCoordinator: coordinate,
-        resolveBuildReviewSkillRoot: resolveSkillRoot,
+        resolveBuildReviewHarnessRoot: resolveHarnessRoot,
         resolveBuildReviewEngineStamp: resolveEngineStamp,
         readBuildReviewRubricSkill: readRubricSkill,
         buildReviewInputOptions: {
@@ -3287,16 +3286,24 @@ TIER: M`,
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
 
-      expect(resolveSkillRoot).not.toHaveBeenCalled();
+      expect(resolveHarnessRoot).toHaveBeenCalledOnce();
       expect(resolveEngineStamp).toHaveBeenCalledOnce();
-      expect(readRubricSkill).not.toHaveBeenCalled();
+      expect(readRubricSkill).toHaveBeenCalledTimes(4);
+      expect(readRubricSkill.mock.calls.map(([path]) => path)).toEqual([
+        '/fixture-harness/skills/build-review-tautology/SKILL.md',
+        '/fixture-harness/skills/build-review-scope/SKILL.md',
+        '/fixture-harness/skills/build-review-root-cause/SKILL.md',
+        '/fixture-harness/skills/build-review-completeness/SKILL.md',
+      ]);
       expect(coordinate).toHaveBeenCalledOnce();
     });
 
-    it('does not probe an ambient provider home for coordinator-only identity injection', async () => {
+    it('converts an unreadable rubric skill into the coordinator unavailable identity', async () => {
       const provider = createMockProvider();
       const coordinate = vi.fn(async (_inputs, _config, engineIdentity) => {
-        expect(engineIdentity.scope).toEqual({ kind: 'candidate-bound', engineStamp: 'engine-1759' });
+        expect(engineIdentity.scope).toEqual({
+          kind: 'unavailable', path: '/fixture-harness/skills/build-review-scope/SKILL.md',
+        });
         return { success: true, output: 'unavailable identity injected' };
       });
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -3306,7 +3313,7 @@ TIER: M`,
           build_review: { perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
         } as HarnessConfig,
         buildReviewCoordinator: coordinate,
-        resolveBuildReviewSkillRoot: async () => '/fixture-provider',
+        resolveBuildReviewHarnessRoot: async () => '/fixture-harness',
         resolveBuildReviewEngineStamp: () => 'engine-1759',
         readBuildReviewRubricSkill: async (path) => {
           if (path.endsWith('/build-review-scope/SKILL.md')) throw new Error('EACCES');
@@ -3321,83 +3328,6 @@ TIER: M`,
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
       expect(coordinate).toHaveBeenCalledOnce();
-    });
-
-    it('uses each prepared fallback home for cache lookup and writes only the successful candidate identity', async () => {
-      const claudeHome = join(dir, 'prepared-claude');
-      const codexHome = join(dir, 'prepared-codex');
-      await Promise.all([
-        mkdir(join(claudeHome, 'skills', 'build-review-scope'), { recursive: true }),
-        mkdir(join(codexHome, 'skills', 'build-review-scope'), { recursive: true }),
-      ]);
-      await writeFile(join(claudeHome, 'skills', 'build-review-scope', 'SKILL.md'), 'claude rubric bytes');
-      await writeFile(join(codexHome, 'skills', 'build-review-scope', 'SKILL.md'), 'codex rubric bytes');
-      const unavailable = vi.fn(async (): Promise<InvokeResult> => ({
-        success: false, output: 'claude unavailable', exitCode: 127,
-        providerUnavailable: true, providerUnavailableScope: 'run',
-      }));
-      const succeeded = vi.fn(async (): Promise<InvokeResult> => ({
-        success: true, output: JSON.stringify({ findings: [] }), exitCode: 0,
-      }));
-      const claudeRuntime = {
-        key: 'claude', provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke: unavailable, invokeInteractive: vi.fn() },
-        policy: CLAUDE_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
-      };
-      const codexRuntime = {
-        key: 'codex', provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke: succeeded, invokeInteractive: vi.fn() },
-        policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
-      };
-      const prepared = vi.fn(async (candidate: { providerKey: string }) => ({
-        executable: candidate.providerKey,
-        args: [],
-        env: candidate.providerKey === 'claude'
-          ? { CLAUDE_CONFIG_DIR: claudeHome }
-          : { CODEX_HOME: codexHome },
-        teardown: async () => undefined,
-      }));
-      const runner = new DefaultStepRunner(createMockProvider(), 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath,
-        config: {
-          llm_provider: ['claude', 'codex'],
-          build_review: {
-            perTaskFloor: false,
-            rubrics: {
-              tautology: { enabled: false },
-              scope: { enabled: true, llm_provider: ['claude', 'codex'] },
-              rootCause: { enabled: false },
-              completeness: { enabled: false },
-            },
-          },
-        } as HarnessConfig,
-        providerRuntimes: new ProviderRuntimeSet([claudeRuntime, codexRuntime]),
-        sessionStore: new ProviderSessionStore(),
-        configuredProviders: ['claude', 'codex'],
-        providerExecution: { prepareCandidateSelfHost: prepared } as any,
-        resolveBuildReviewEngineStamp: () => '31b5c81beaec',
-        buildReviewEffectiveResolver: async (_projectRoot, aggregate) => ({
-          ok: true,
-          effective: { verdict: aggregate.verdict },
-        }) as never,
-        buildReviewInputOptions: {
-          inspectTestSuite: async () => ({
-            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
-          } as never),
-        },
-      });
-
-      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
-
-      expect(unavailable).toHaveBeenCalledOnce();
-      expect(succeeded).toHaveBeenCalledOnce();
-      expect(prepared.mock.calls.map(([candidate]) => candidate.providerKey)).toEqual(['claude', 'codex']);
-      const cached = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review', 'cache', 'scope.json'), 'utf8'));
-      expect(cached.engineIdentity).toEqual({
-        engineStamp: '31b5c81beaec',
-        skillDigest: `sha256:${createHash('sha256').update('codex rubric bytes').digest('hex')}`,
-      });
-      expect(cached.engineIdentity.skillDigest).not.toBe(
-        `sha256:${createHash('sha256').update('claude rubric bytes').digest('hex')}`,
-      );
     });
 
     it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
@@ -3534,10 +3464,7 @@ TIER: M`,
         }),
         ...currentBuildReviewProof(),
       });
-      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any, onCandidatePrepared: any) => {
-        const engineIdentity = { engineStamp: 'test-engine', skillDigest: 'sha256:test-skill' } as any;
-        await onCandidatePrepared(engineIdentity);
-        return { result: {
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
         contractVersion: 'v3',
         findings: branch.rubric === 'scope' ? [{
@@ -3546,8 +3473,7 @@ TIER: M`,
           anchor: { rubric: 'scope', path: 'x', relation: 'not-authorized-by-plan' },
         }] : [],
         verdict: branch.rubric === 'scope' ? 'FAIL' : 'PASS',
-        }, engineIdentity };
-      });
+      }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
       expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject(rawAggregate as object);
@@ -4483,77 +4409,5 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain(
       'Your previous response (bounded excerpt):\nRuntime-candidates repair output marker.',
     );
-  });
-
-  it('recomputes cache identity after each prepared fallback candidate and retains only the successful candidate identity', async () => {
-    const unavailable = vi.fn(async (): Promise<InvokeResult> => ({
-      success: false,
-      output: 'claude unavailable',
-      exitCode: 127,
-      providerUnavailable: true,
-      providerUnavailableScope: 'run',
-    }));
-    const succeeded = vi.fn(async (): Promise<InvokeResult> => ({
-      success: true,
-      output: JSON.stringify({ findings: [] }),
-      exitCode: 0,
-    }));
-    const claudeRuntime = {
-      key: 'claude',
-      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke: unavailable, invokeInteractive: vi.fn() },
-      policy: CLAUDE_POLICY,
-      builtIn: true,
-      availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
-    };
-    const codexRuntime = {
-      key: 'codex',
-      provider: { lifecycleCapability: { synchronousSpawnPermit: true } as const, invoke: succeeded, invokeInteractive: vi.fn() },
-      policy: CODEX_MODEL_POLICY,
-      builtIn: true,
-      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
-    };
-    const resolveSkillRoot = vi.fn(async (_provider: string, env?: NodeJS.ProcessEnv) => env?.BUILD_REVIEW_SKILL_ROOT ?? null);
-    const readRubricSkill = vi.fn(async (path: string) => Buffer.from(path));
-    const resolveEngineStamp = vi.fn(() => 'must-not-be-read');
-    const prepared = vi.fn(async (candidate: { providerKey: string }) => ({
-      executable: candidate.providerKey,
-      args: [],
-      env: { BUILD_REVIEW_SKILL_ROOT: `/prepared/${candidate.providerKey}` },
-      teardown: async () => undefined,
-    }));
-    const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project', {
-      config: { llm_provider: ['claude', 'codex'] },
-      providerRuntimes: new ProviderRuntimeSet([claudeRuntime, codexRuntime]),
-      sessionStore: new ProviderSessionStore(),
-      configuredProviders: ['claude', 'codex'],
-      providerExecution: { prepareCandidateSelfHost: prepared } as any,
-      resolveBuildReviewSkillRoot: resolveSkillRoot,
-      resolveBuildReviewEngineStamp: resolveEngineStamp,
-      readBuildReviewRubricSkill: readRubricSkill,
-    });
-    const identities: Array<{ engineStamp: string; skillDigest: string }> = [];
-
-    const result = await (runner as any).dispatchBuildReviewRubric(
-      { ...branch, policy: { ...policy, llm_provider: ['claude', 'codex'] } },
-      projection,
-      async (identity: { engineStamp: string; skillDigest: string }) => {
-        identities.push(identity);
-        return { kind: 'miss' };
-      },
-      '31b5c81beaec',
-    );
-
-    expect(result).toMatchObject({ kind: 'judged', rubric: 'tautology', verdict: 'PASS' });
-    expect(identities).toEqual([
-      { engineStamp: '31b5c81beaec', skillDigest: expect.stringMatching(/^sha256:/) },
-      { engineStamp: '31b5c81beaec', skillDigest: expect.stringMatching(/^sha256:/) },
-    ]);
-    expect(identities[0]!.skillDigest).not.toBe(identities[1]!.skillDigest);
-    expect(readRubricSkill.mock.calls.map(([path]) => path)).toEqual([
-      '/prepared/claude/skills/build-review-tautology/SKILL.md',
-      '/prepared/codex/skills/build-review-tautology/SKILL.md',
-    ]);
-    expect((runner as any).buildReviewDispatchIdentities.get('tautology')).toEqual(identities[1]);
-    expect(resolveEngineStamp).not.toHaveBeenCalled();
   });
 });

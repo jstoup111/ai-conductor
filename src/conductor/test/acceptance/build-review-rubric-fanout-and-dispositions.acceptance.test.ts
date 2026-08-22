@@ -170,7 +170,7 @@ describe('acceptance: independent build_review rubric execution', () => {
         build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
         wiring: { entry_points: ['src/feature.ts'] },
       } as HarnessConfig,
-      resolveBuildReviewSkillRoot: async () => '/fixture-provider',
+      resolveBuildReviewHarnessRoot: async () => '/fixture-harness',
       resolveBuildReviewEngineStamp: () => 'current-engine',
       readBuildReviewRubricSkill: async (path: string) => Buffer.from(path),
       buildReviewInputOptions: {
