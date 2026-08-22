@@ -248,7 +248,7 @@ describe('gateVerdictStillValid', () => {
     expect(result).toBe('rerun');
   });
 
-  it('feature-runtime (prd_audit): returns preserve when the delta since baseline is docs-only (surface miss)', async () => {
+  it('feature-runtime-or-prd-inputs (prd_audit): returns preserve when the delta is unrelated docs-only (surface miss)', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
     await commit(s, { 'src/feature.ts': 'f\n' }, 'init');
@@ -263,6 +263,25 @@ describe('gateVerdictStillValid', () => {
     );
     expect(result).toBe('preserve');
   });
+
+  it.each(['.docs/stories/happy-path.md', '.docs/specs/feature-prd.md'])(
+    'feature-runtime-or-prd-inputs (prd_audit): returns rerun when a declared document input changes (%s)',
+    async (documentInput) => {
+      const s = await makeRepo();
+      scratches.push(s.repo);
+      await commit(s, { 'src/feature.ts': 'f\n' }, 'init');
+      await addOriginRemote(s);
+      const baseline = await commit(s, { 'src/feature.ts': 'f2\n' }, 'feature work');
+      await commit(s, { [documentInput]: 'changed\n' }, 'update prd audit input');
+
+      const result = await gateVerdictStillValid(
+        { projectRoot: s.repo, git: s.git },
+        'prd_audit',
+        baseline,
+      );
+      expect(result).toBe('rerun');
+    },
+  );
 
   it('feature-codetest (build_review): returns preserve when the delta touches only a FOREIGN runtime path', async () => {
     const s = await makeRepo();
