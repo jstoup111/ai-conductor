@@ -44,12 +44,24 @@ All paths below are relative to the repository root; the engine lives under `src
 - `EVENT_SINKS` compiles with `step_refused` declared `persist: true`; the test finds the record in `events.jsonl`.
 - No existing test changes.
 
+> **Amended 2026-08-22 by #1753:** the criterion "No existing test changes" is superseded for two
+> files only — `src/conductor/test/engine/daemon-render.test.ts` and
+> `src/conductor/test/engine/event-sinks.test.ts`. Adding `step_refused` to the `ConductorEvent`
+> union makes both files' exhaustive event-type samples fail unless the new member is listed, so
+> the additions are a mechanical consequence of this task's own union change, not new behavior.
+> Authorized: the renderer assertion at `daemon-render.test.ts:73`, the current/previous exhaustive
+> samples at `:404` and `:479`, and the `PRE_REFACTOR_PERSISTED_EVENT_TYPES` /
+> `DAEMON_SWITCH_HANDLED_EVENT_TYPES` entries at `event-sinks.test.ts:23,150`. No other existing
+> test changes under this task.
+
 **Files:**
 - src/conductor/src/engine/conductor.ts — `StepRunResult` facet
 - src/conductor/src/types/events.ts — event member
 - src/conductor/src/engine/event-sinks.ts — sink declaration
 - src/conductor/src/engine/report-renderer.ts — render line
 - src/conductor/test/engine/step-refusal.test.ts — new
+- src/conductor/test/engine/daemon-render.test.ts — `step_refused` added to exhaustive samples (amended 2026-08-22)
+- src/conductor/test/engine/event-sinks.test.ts — `step_refused` added to exhaustive samples (amended 2026-08-22)
 
 **Dependencies:** none
 
@@ -292,9 +304,17 @@ All paths below are relative to the repository root; the engine lives under `src
 - Happy case HALT matches the regex; class `needs-human`.
 - Negatives (a)–(c) pass; the backstop wording test in `conductor.test.ts` is unchanged.
 
+> **Amended 2026-08-22 by #1753:** this task additionally authorizes an edit to
+> `src/conductor/test/acceptance/builds-stall-when-work-lands-without-task-trailer-.acceptance.test.ts:664-679`
+> (landed in `7277e3c7d`). Routing the residual gate-blocked exit through the refused facet gives the
+> routed run legitimate earlier BUILD attempts, so the C1 tail comparison must anchor on each run's
+> final BUILD (`lastIndexOf`) rather than its first. The comparison must stay an equality of the two
+> runs' post-BUILD step sequences; it may not be narrowed further.
+
 **Files:**
 - src/conductor/src/engine/conductor.ts
 - src/conductor/test/engine/conductor.test.ts
+- src/conductor/test/acceptance/builds-stall-when-work-lands-without-task-trailer-.acceptance.test.ts — C1 tail anchor (amended 2026-08-22)
 
 **Dependencies:** Task 12, Task 10
 

@@ -671,9 +671,7 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
     const routedBuildIdx = stepStartsRouted.lastIndexOf('build');
     expect(gateBuildIdx).toBeGreaterThanOrEqual(0);
     expect(routedBuildIdx).toBeGreaterThanOrEqual(0);
-    expect(stepStartsGate.slice(gateBuildIdx, gateBuildIdx + 2)).toEqual(
-      stepStartsRouted.slice(routedBuildIdx, routedBuildIdx + 2),
-    );
+    expect(stepStartsGate.slice(gateBuildIdx)).toEqual(stepStartsRouted.slice(routedBuildIdx));
     expect(stepStartsGate).toContain('build_review');
     expect(stepStartsRouted).toContain('build_review');
   });
