@@ -195,7 +195,7 @@ describe('structural: smoke test entry point', () => {
           `  setupFiles: [${JSON.stringify(join(conductorRoot, 'test/setup.ts'))}],`,
           `  globalSetup: [${JSON.stringify(join(conductorRoot, 'test/global-setup.ts'))}],`,
           "  pool: 'forks',",
-          "  poolOptions: { forks: { maxForks: 1, minForks: 1 } },",
+          '  maxWorkers: 1,',
           '} });',
         ].join('\n'));
 
@@ -248,7 +248,7 @@ describe('structural: smoke test entry point', () => {
           '  exclude: [],',
           "  environment: 'node',",
           "  pool: 'forks',",
-          "  poolOptions: { forks: { maxForks: 1, minForks: 1 } },",
+          '  maxWorkers: 1,',
           '} });',
         ].join('\n'));
 
@@ -281,7 +281,7 @@ describe('structural: smoke test entry point', () => {
     });
 
     try {
-      const discovered = (await vitest.globTestFiles())
+      const discovered = (await vitest.globTestSpecifications())
         .map(({ moduleId }) => relative(conductorRoot, moduleId).replaceAll('\\', '/'))
         .sort();
 
@@ -310,7 +310,7 @@ describe('structural: smoke test entry point', () => {
     });
 
     try {
-      const discovered = (await vitest.globTestFiles())
+      const discovered = (await vitest.globTestSpecifications())
         .map(({ moduleId }) => relative(conductorRoot, moduleId).replaceAll('\\', '/'))
         .sort();
       const retiredVariables = [

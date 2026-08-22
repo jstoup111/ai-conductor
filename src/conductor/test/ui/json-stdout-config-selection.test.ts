@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock, type MockInstance } from 'vitest';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { JsonStdoutSubscriber } from '../../../../plugins/json-stdout-subscriber/index.ts';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
@@ -41,12 +41,12 @@ function buildRegistryAndSelectSubscriber(
 
 describe('Config-driven subscriber selection', () => {
   let stdoutWriteSpy: MockInstance<typeof process.stdout.write>;
-  let renderCallback: ReturnType<typeof vi.fn>;
+  let renderCallback: Mock<(event: ConductorEvent) => void>;
   let emitter: ConductorEventEmitter;
 
   beforeEach(() => {
     stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    renderCallback = vi.fn();
+    renderCallback = vi.fn<(event: ConductorEvent) => void>();
     emitter = new ConductorEventEmitter();
   });
 

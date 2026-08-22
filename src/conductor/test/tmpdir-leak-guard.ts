@@ -119,15 +119,12 @@ export async function createRunTmpRoot(realTmpdir: string): Promise<string> {
 /**
  * Idempotently install the run root and the `TMPDIR` redirect into `env`.
  *
- * Called from `vitest.config.ts` module scope rather than from `globalSetup`,
- * one stage earlier than it looks like it needs to be. vitest's own
- * `WorkspaceProject.tmpDir` is a class field — `join(tmpdir(), nanoid())` —
- * evaluated when the project is constructed, which happens AFTER the config
- * module is evaluated but BEFORE `globalSetup` runs. Redirecting only in
- * `globalSetup` therefore leaves vitest's own SSR transform cache (a
- * random-named, un-prefix-matchable directory) in the operator's real tmpdir
- * every single run — observed failing the guard, which is how this ordering
- * was found. Redirecting here contains it.
+ * The package scripts install the run root before importing Vitest because
+ * Vitest 4 allocates its root instance tmpDir before loading this config.
+ * This config-level call remains the idempotent fallback for callers that
+ * construct a Vitest project after importing its API (including nested smoke
+ * discovery). Waiting until `globalSetup` is always too late: project tmpDir
+ * fields have already been initialized by then.
  *
  * Idempotent because a watch-mode config reload re-evaluates this module; a
  * second root per reload would be a new leak of exactly the kind being fixed.

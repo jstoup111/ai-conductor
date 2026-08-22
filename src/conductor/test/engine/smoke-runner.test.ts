@@ -10,7 +10,7 @@ describe('discoverSmokeFiles', () => {
       expect(process.env.AI_CONDUCTOR_TEST_TMP_ROOT).toBeUndefined();
       expect(process.env.TMPDIR).toBe('isolated-discovery-root');
       return {
-      globTestFiles: async () => [],
+      globTestSpecifications: async () => [],
       close,
       };
     });
@@ -57,7 +57,7 @@ describe('discoverSmokeFiles', () => {
           expect(process.env.AI_CONDUCTOR_TEST_TMP_ROOT).toBeUndefined();
           expect(process.env.TMPDIR).toBe('isolated-discovery-root');
           return {
-            globTestFiles: async () => { throw new Error('discovery failed'); },
+            globTestSpecifications: async () => { throw new Error('discovery failed'); },
             close,
           };
         },

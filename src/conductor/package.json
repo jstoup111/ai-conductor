@@ -6,11 +6,14 @@
   "engines": {
     "node": ">=26.0.0"
   },
+  "overrides": {
+    "esbuild@^0.27.0": "0.27.2"
+  },
   "scripts": {
     "build": "node scripts/publish-engine.mjs",
-    "test": "sh -c \"vitest run --reporter=dot --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
-    "test:changed": "sh -c \"vitest run --reporter=dot --changed --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
-    "test:watch": "vitest",
+    "test": "sh -c \"node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
+    "test:changed": "sh -c \"node scripts/run-vitest.mjs run --reporter=dot --changed --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
+    "test:watch": "node scripts/run-vitest.mjs",
     "smoke": "node --import tsx scripts/smoke.ts vitest.smoke.config.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json",
@@ -37,16 +40,14 @@
     "uuid": "^14.0.2"
   },
   "devDependencies": {
-    "@eslint/js": "^9.39.5",
-    "@types/js-yaml": "^4.0.0",
-    "@types/node": "^20.0.0",
-    "@types/semver": "^7.5.0",
-    "@types/uuid": "^10.0.0",
-    "eslint": "^9.39.5",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.2.0",
+    "@types/semver": "^7.8.0",
+    "eslint": "^10.9.0",
     "tsup": "^8.0.0",
-    "tsx": "^4.23.0",
-    "typescript": "^5.5.0",
-    "typescript-eslint": "^8.65.0",
-    "vitest": "^2.0.0"
+    "tsx": "^4.23.12",
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
   }
 }
