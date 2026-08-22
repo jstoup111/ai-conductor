@@ -46,7 +46,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   build:
     'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
-    'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, root-cause fixes, and plan completeness — adversarial code review demands a high-capability model, same class of judgement as prd_audit/code-review.',
+    'Fresh-session grader for explicitly enabled, criterion-bound test-quality concerns — adversarial evidence judgement demands a high-capability model, same class as prd_audit/code-review.',
   wiring_check: 'Deprecated compatibility no-op; reachability is no longer judged anywhere in BUILD.',
   test_suite:
     'Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required.',
@@ -150,13 +150,13 @@ const RESOLVED_RUBRIC_POLICY = 'inherits resolved rubric policy' as const;
 
 export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
   {
-    name: 'build-review-tautology',
+    name: 'build-review-test-quality',
     executionPath: 'engine-managed auxiliary rubric',
     claudeModel: RESOLVED_RUBRIC_POLICY,
     claudeEffort: RESOLVED_RUBRIC_POLICY,
     codexModel: RESOLVED_RUBRIC_POLICY,
     codexEffort: RESOLVED_RUBRIC_POLICY,
-    why: 'Judges mutation sensitivity from the engine-owned green proof and reverted-production preflight.',
+    why: 'Judges whether criterion-bound changed tests are insensitive to the behavior they claim to cover; preflight is evidence, never a verdict.',
   },
   {
     name: 'build-review-scope',

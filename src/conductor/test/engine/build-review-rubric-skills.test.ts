@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import { BUILD_REVIEW_FINDING_VOCABULARIES } from '../../src/engine/build-review-domain.js';
 
-const tautologySkillPath = fileURLToPath(
-  new URL('../../../../skills/build-review-tautology/SKILL.md', import.meta.url),
+const testQualitySkillPath = fileURLToPath(
+  new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url),
 );
 const scopeSkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-scope/SKILL.md', import.meta.url),
@@ -27,15 +27,7 @@ function documentedVocabulary(skill: string): string[] {
 }
 
 function expectFindingsOnlyProviderPayload(skill: string, rubric: string): void {
-  if (rubric === 'Tautology') {
-    // Tautology alone carries a second provider-owned top-level field: the
-    // audit-only relocationAudit, contract-required on fixture-relocation
-    // results, persisted in the artifact, and consumed by the aggregate.
-    expect(skill).toContain('whose only top-level fields are `findings`, an array, and');
-    expect(skill).toContain('the audit-only `relocationAudit` array');
-  } else {
-    expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
-  }
+  expect(skill).toContain('Return exactly one JSON object whose only top-level field is `findings`, an array.');
   expect(skill).toContain('The engine owns\nthe `judged` envelope and stamps its kind, rubric, contract version, lap identity, and snapshot\nidentity after validating this findings-only payload.');
   expect(skill).toMatch(new RegExp(`empty\\s+array means (?:no ${rubric} concern was found|a PASS for this rubric)`, 'i'));
   expect(skill).not.toMatch(/Return exactly one JSON `judged` result/i);
@@ -45,7 +37,7 @@ function expectFindingsOnlyProviderPayload(skill: string, rubric: string): void 
 describe('engine/build-review rubric skill contracts', () => {
   it('keeps every rubric skill’s closed vocabulary equal to the engine source in both directions', async () => {
     const skills = {
-      tautology: await readFile(tautologySkillPath, 'utf8'),
+      testQuality: await readFile(testQualitySkillPath, 'utf8'),
       scope: await readFile(scopeSkillPath, 'utf8'),
       rootCause: await readFile(rootCauseSkillPath, 'utf8'),
       completeness: await readFile(completenessSkillPath, 'utf8'),
@@ -64,10 +56,10 @@ describe('engine/build-review rubric skill contracts', () => {
     }
   });
 
-  it('defines the versioned Tautology judgement contract over its closed projection', async () => {
-    const skill = await readFile(tautologySkillPath, 'utf8');
+  it('defines the versioned Test Quality judgement contract over its closed projection', async () => {
+    const skill = await readFile(testQualitySkillPath, 'utf8');
 
-    expect(skill).toMatch(/^---\nname: build-review-tautology\n/m);
+    expect(skill).toMatch(/^---\nname: build-review-test-quality\n/m);
     expect(skill).toMatch(/^description: ".+"$/m);
     expect(skill).toMatch(/^enforcement: gating$/m);
     expect(skill).toMatch(/^phase: build$/m);
@@ -78,27 +70,20 @@ describe('engine/build-review rubric skill contracts', () => {
     expect(skill).toMatch(/`contentDigest`/);
     expect(skill).toMatch(/current.*`test_suite`.*PASS/i);
     expect(skill).toMatch(/typed.*preflight evidence/i);
-    expect(skill).toMatch(/changed-test selectors/i);
-    // #1600 replaced the embedded reverted-production patch with a
-    // content-free manifest (path + merge-base blob sha per file).
-    expect(skill).toMatch(/reverted-production manifest/i);
-    // Remediation-lap bound: rem-* prose neither exempts a changed test nor
-    // creates a new behavior to exercise — the judgement surface is fixed.
-    expect(skill).toMatch(/neither exempts a changed\s+test.*nor creates a new behavior/is);
-    expect(skill).toMatch(/judgement surface\s+does not grow lap over lap/i);
+    expect(skill).toMatch(/in-scope changed tests/i);
+    expect(skill).toMatch(/resolvable `Covers:` binding/i);
 
-    expectFindingsOnlyProviderPayload(skill, 'Tautology');
+    expectFindingsOnlyProviderPayload(skill, 'Test Quality');
     expect(skill).toMatch(/concern kind/i);
     expect(skill).toMatch(/changed test/i);
-    expect(skill).toMatch(/exercised behavior\/assertion/i);
-    expect(skill).toMatch(/violation kind/i);
-    expect(skill).toMatch(/"rubric": "tautology", "changedTest": \{"path": "<repository-relative path>",/);
+    expect(skill).toMatch(/stub-passable assertion/i);
+    expect(skill).toMatch(/"rubric": "testQuality", "locus": \{"path": "<repository-relative path>",/);
     expect(skill).toMatch(/never\s+flattened/i);
     expect(skill).toMatch(/concrete evidence locations/i);
     expect(skill).toMatch(/every independent finding/i);
 
-    expect(skill).toMatch(/`red`.*expected.*evidence/i);
-    expect(skill).toMatch(/`stayed-green`.*blocking finding/i);
+    expect(skill).toMatch(/`red`.*supports/i);
+    expect(skill).toMatch(/`stayed-green`.*not automatically/i);
     expect(skill).toMatch(/`infrastructure-failure`.*not.*finding/i);
     expect(skill).toMatch(/does not.*(?:read|write|apply|decide).*disposition/i);
 

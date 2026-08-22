@@ -399,7 +399,7 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
 
 describe('build-review auxiliary rubric rows', () => {
   const rubricSkills = [
-    'build-review-tautology',
+    'build-review-test-quality',
     'build-review-scope',
     'build-review-root-cause',
     'build-review-completeness',

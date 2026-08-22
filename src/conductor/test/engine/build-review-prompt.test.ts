@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { parseBuildReviewJudgedResult } from '../../src/engine/build-review-domain.js';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 import type { BuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 
@@ -26,6 +27,36 @@ describe('buildGraderPrompt', () => {
     remoteHeadSha: null,
     fresh: false,
   };
+
+  it('accepts the test-quality finding contract and rejects retired symptom-only findings', () => {
+    const locus = {
+      path: 'test/widget.test.ts',
+      contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      display: 'persists the updated widget',
+    };
+    const result = {
+      kind: 'judged',
+      rubric: 'testQuality',
+      contractVersion: 'v3',
+      lapId: 'lap-test-quality',
+      snapshotDigest: 'sha256:snapshot',
+      findings: [{
+        concernKind: 'test-insensitive',
+        summary: 'The assertion can pass when the changed behavior is stubbed.',
+        evidenceLocations: ['test/widget.test.ts:12'],
+        anchor: { rubric: 'testQuality', locus },
+      }],
+    };
+
+    expect(parseBuildReviewJudgedResult(result)).toMatchObject({
+      rubric: 'testQuality',
+      findings: [{ concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus } }],
+    });
+    expect(parseBuildReviewJudgedResult({
+      ...result,
+      findings: [{ ...result.findings[0], concernKind: 'symptom-only-fix' }],
+    })).toBeUndefined();
+  });
 
   it('includes the original rubric items verbatim', () => {
     const prompt = buildGraderPrompt(inputs);

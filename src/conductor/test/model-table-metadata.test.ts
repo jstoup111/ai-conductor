@@ -228,7 +228,7 @@ describe('AUXILIARY_MODEL_TABLE_ROWS build-review rubric registration', () => {
     const names = AUXILIARY_MODEL_TABLE_ROWS.map((row) => row.name);
 
     expect(names).toEqual([
-      'build-review-tautology',
+      'build-review-test-quality',
       'build-review-scope',
       'build-review-root-cause',
       'build-review-completeness',

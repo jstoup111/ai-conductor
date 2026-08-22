@@ -74,9 +74,9 @@ function member(rubric: string, field: string, fallback: string): string {
   return anchorFields?.[field]?.[0] ?? fallback;
 }
 const RUBRICS: Record<string, { referenceFields: string[]; fixed: Record<string, string> }> = {
-  tautology: {
-    referenceFields: ['changedTest'],
-    fixed: { exercisedBehavior: 'probe behavior', violationKind: member('tautology', 'violationKind', 'source-text-mirror') },
+  testQuality: {
+    referenceFields: ['locus'],
+    fixed: {},
   },
   scope: {
     referenceFields: ['path'],
@@ -191,8 +191,12 @@ check_vocabulary_drift() {
     return 1
   fi
 
-  for rubric in tautology scope rootCause completeness; do
-    skill_file="$harness_dir/skills/build-review-${rubric//rootCause/root-cause}/SKILL.md"
+  for rubric in testQuality scope rootCause completeness; do
+    case "$rubric" in
+      testQuality) skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md" ;;
+      rootCause) skill_file="$harness_dir/skills/build-review-root-cause/SKILL.md" ;;
+      *) skill_file="$harness_dir/skills/build-review-${rubric}/SKILL.md" ;;
+    esac
     if [ ! -f "$skill_file" ]; then
       echo "missing vocabulary source for ${rubric}: ${skill_file}" >&2
       return 1
@@ -226,8 +230,12 @@ check_reference_grammar_drift() {
     return 1
   fi
 
-  for rubric in tautology scope rootCause completeness; do
-    skill_file="$harness_dir/skills/build-review-${rubric//rootCause/root-cause}/SKILL.md"
+  for rubric in testQuality scope rootCause completeness; do
+    case "$rubric" in
+      testQuality) skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md" ;;
+      rootCause) skill_file="$harness_dir/skills/build-review-root-cause/SKILL.md" ;;
+      *) skill_file="$harness_dir/skills/build-review-${rubric}/SKILL.md" ;;
+    esac
     if [ ! -r "$skill_file" ]; then
       echo "could not read build-review ${rubric} reference grammar contract: ${skill_file}" >&2
       return 1
@@ -285,8 +293,8 @@ mkdir -p "$fixture_harness/skills"
 # exercises the probe against genuine accept/reject behavior.
 cat >"$fixture_domain" <<'EOF'
 export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
-  tautology: Object.freeze({
-    concernKinds: Object.freeze(['assertion-insensitive-to-production']),
+  testQuality: Object.freeze({
+    concernKinds: Object.freeze(['test-insensitive']),
   }),
   scope: Object.freeze({
     concernKinds: Object.freeze(['out-of-plan-change']),
@@ -326,8 +334,8 @@ function verifiedReference(value: unknown, parser: (candidate: unknown) => unkno
 export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): unknown {
   const source = value;
   switch (source.rubric) {
-    case 'tautology':
-      return parseContentRegionReference(source.changedTest);
+    case 'testQuality':
+      return parseContentRegionReference(source.locus);
     case 'scope':
       return verifiedReference(source.path, parseBuildReviewCanonicalPathReference);
     case 'rootCause':
@@ -340,14 +348,14 @@ export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): u
 }
 EOF
 
-for rubric in tautology scope root-cause completeness; do
+for rubric in test-quality scope root-cause completeness; do
   mkdir -p "$fixture_harness/skills/build-review-$rubric"
 done
 
-printf '%s\n' '**Closed vocabulary:** `assertion-insensitive-to-production`' \
-  >"$fixture_harness/skills/build-review-tautology/SKILL.md"
-printf '\n%s\n' '**Reference grammar:** `anchor.changedTest` is a `content-region` reference.' \
-  >>"$fixture_harness/skills/build-review-tautology/SKILL.md"
+printf '%s\n' '**Closed vocabulary:** `test-insensitive`' \
+  >"$fixture_harness/skills/build-review-test-quality/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
+  >>"$fixture_harness/skills/build-review-test-quality/SKILL.md"
 printf '%s\n' '**Closed vocabulary:** `out-of-plan-change`' \
   >"$fixture_harness/skills/build-review-scope/SKILL.md"
 printf '\n%s\n' '**Reference grammar:** `anchor.path` is a `path` reference.' \
@@ -396,24 +404,24 @@ sed 's/verifiedReference(source\.planTask, parseBuildReviewCanonicalPlanTaskRefe
 run_drift_fixture 'a parser-only grammar change' "$fixture_plantask_path" "$fixture_harness" \
   'build-review completeness reference grammar drift: anchor.planTask requires path, but SKILL.md does not state that grammar'
 
-# Remediation Task root-cause-3: the parser reads `anchor.changedTest` for the
-# root-cause locus while the contract keeps `anchor.locus`. The documented
+# The parser reads `anchor.changedTest` for the test-quality locus while the
+# contract keeps `anchor.locus`. The documented
 # specimen anchor carries locus, not changedTest, so the parser rejects every
 # baseline — rerouted field reads cannot pass silently.
 fixture_field="$fixture_dir/build-review-domain-reference-field.ts"
 sed 's/parseContentRegionReference(source\.locus)/parseContentRegionReference(source.changedTest)/' \
   "$fixture_domain" >"$fixture_field"
 run_drift_fixture 'a parser-only reference-field change' "$fixture_field" "$fixture_harness" \
-  'build-review rootCause reference grammar drift: the parser rejected the fully-documented specimen anchor'
+  'build-review testQuality reference grammar drift: the parser rejected the fully-documented specimen anchor'
 
-# Remediation Task root-cause-4 (incomplete enforcement): a branch that stops
+# An incomplete test-quality branch that stops
 # routing the declared field through any grammar accepts garbage and must fail
 # as unenforced, never pass as an empty comparison.
 fixture_unenforced="$fixture_dir/build-review-domain-unenforced.ts"
 sed 's/return parseContentRegionReference(source\.locus);/return source.locus;/' \
   "$fixture_domain" >"$fixture_unenforced"
 run_drift_fixture 'an unenforced reference field' "$fixture_unenforced" "$fixture_harness" \
-  'build-review rootCause reference grammar drift: anchor.locus accepts arbitrary input'
+  'build-review testQuality reference grammar drift: anchor.locus accepts arbitrary input'
 
 # Remediation Task rem-root-cause-4: grammar drift in each CONSTANT the parser
 # builds on — never in the helper body, binding, or contract — must change

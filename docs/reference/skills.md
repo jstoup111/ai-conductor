@@ -54,7 +54,7 @@ The 12 implicit-required shipped skills are:
 | Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims` | Called from an active skill: issue authoring, fresh debugging, batch simplification, or load-bearing claim verification |
 
 The 21 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-completeness`,
-`build-review-root-cause`, `build-review-scope`, `build-review-tautology`, `code-review`, `conduct`,
+`build-review-root-cause`, `build-review-scope`, `build-review-test-quality`, `code-review`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
 `remediate`, `retro`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and

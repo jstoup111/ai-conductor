@@ -145,6 +145,15 @@ item; it is the failure mode this gate exists to avoid reintroducing.
 All-or-FAIL rule: PASS only if all four rubric items pass. If any one of the
 four rubric items fails, the overall verdict is FAIL.
 
+For the engine-managed \`testQuality\` branch, use its findings-only contract:
+
+{ "findings": [{ "concernKind": "test-insensitive", "summary": "<non-empty actionable string>", "evidenceLocations": ["<path:line or path:line:column>"], "anchor": { "rubric": "testQuality", "locus": { "path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique> } } }] }
+
+\`test-insensitive\` is the only permitted concern kind for this branch. Do
+not use a root-cause kind such as \`symptom-only-fix\`; the engine rejects it.
+The preflight result is evidence only: cite a concrete stub-passable assertion
+before returning a finding.
+
 Before judging, run only the scoped tests exercised by this diff (the changed
 test files) through \`conduct-ts scoped-run\` — observe their output firsthand.
 

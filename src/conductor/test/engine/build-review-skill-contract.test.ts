@@ -3,17 +3,16 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-const tautologySkillPath = fileURLToPath(
-  new URL('../../../../skills/build-review-tautology/SKILL.md', import.meta.url),
+const testQualitySkillPath = fileURLToPath(
+  new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url),
 );
 
-describe('build-review Tautology skill contract', () => {
-  it('requires a finding when a red excerpt proves no test executed', async () => {
-    const skill = await readFile(tautologySkillPath, 'utf8');
+describe('build-review Test Quality skill contract', () => {
+  it('requires concrete stub-passable evidence rather than treating preflight as a verdict', async () => {
+    const skill = await readFile(testQualitySkillPath, 'utf8');
 
-    expect(skill).toMatch(/run kind.*`passed`.*`nonzero-exit`/i);
-    expect(skill).toMatch(/no test executed.*finding/i);
-    expect(skill).toMatch(/never overrides.*four closed exceptions/i);
-    expect(skill).toMatch(/never manufactures.*finding.*ambiguous excerpt/i);
+    expect(skill).toMatch(/`stayed-green`.*not automatically/i);
+    expect(skill).toMatch(/concrete stub-passable assertion/i);
+    expect(skill).toMatch(/`infrastructure-failure`.*not a finding/i);
   });
 });
