@@ -3744,6 +3744,109 @@ function verdictTableLines(content: string): string[] {
   return end === -1 ? rest : rest.slice(0, end);
 }
 
+/** The only grades a criterion-level PRD-audit finding may carry. */
+export type PrdAuditGrade = 'PASS' | 'FIXABLE' | 'PLAN_GAP' | 'OVER_SCOPE';
+
+export interface PrdAuditFinding {
+  criterion: string;
+  grade: PrdAuditGrade;
+  planTask?: number;
+  evidence: string;
+}
+
+export interface PrdAuditReport {
+  prd: 'present' | 'none';
+  findings: PrdAuditFinding[];
+}
+
+export type PrdAuditReportParseResult =
+  | { ok: true; value: PrdAuditReport }
+  | { ok: false; error: string };
+
+const PRD_AUDIT_GRADES: ReadonlySet<PrdAuditGrade> = new Set([
+  'PASS',
+  'FIXABLE',
+  'PLAN_GAP',
+  'OVER_SCOPE',
+]);
+const CRITERION_ID_RE = /^S\d+\.\d+$/i;
+
+function tableCells(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\||\|$/g, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function isTableSeparator(cells: readonly string[]): boolean {
+  return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+/**
+ * Parse the criterion-grade verdict table emitted by `prd_audit`.
+ *
+ * The existing per-FR table is evidence only; the criterion table is the
+ * authoritative routing contract. Invalid grade vocabulary fails closed here
+ * instead of being interpreted by a later route as an implicit new grade.
+ */
+export function parsePrdAuditReport(content: string): PrdAuditReportParseResult {
+  const prdMarker = content.match(
+    /^\s*(?:\*{0,2}\s*PRD\s*\*{0,2}\s*:|\*{0,2}\s*PRD\s*:\s*\*{0,2})\s*(present|none)\s*$/im,
+  );
+  if (!prdMarker) {
+    return { ok: false, error: 'PRD audit report must declare **PRD:** present or none.' };
+  }
+
+  const lines = verdictTableLines(content);
+  const headerIndex = lines.findIndex((line) => {
+    if (!/^\s*\|/.test(line)) return false;
+    const cells = tableCells(line).map((cell) => cell.toLowerCase());
+    return cells.includes('criterion') && cells.includes('grade');
+  });
+  if (headerIndex === -1) {
+    return { ok: false, error: 'PRD audit report is missing its criterion-grade Verdict Table.' };
+  }
+
+  const header = tableCells(lines[headerIndex]).map((cell) => cell.toLowerCase());
+  const criterionIndex = header.indexOf('criterion');
+  const gradeIndex = header.indexOf('grade');
+  const planTaskIndex = header.indexOf('plan task');
+  const evidenceIndex = header.indexOf('evidence');
+  const findings: PrdAuditFinding[] = [];
+
+  for (const line of lines.slice(headerIndex + 1)) {
+    if (!/^\s*\|/.test(line)) continue;
+    const cells = tableCells(line);
+    if (isTableSeparator(cells)) continue;
+    const criterion = cells[criterionIndex]?.toUpperCase();
+    if (!criterion || !CRITERION_ID_RE.test(criterion)) continue;
+
+    const rawGrade = cells[gradeIndex]?.toUpperCase();
+    if (!rawGrade || !PRD_AUDIT_GRADES.has(rawGrade as PrdAuditGrade)) {
+      return { ok: false, error: `PRD audit finding ${criterion} has an invalid Grade.` };
+    }
+
+    const rawPlanTask = planTaskIndex === -1 ? '' : cells[planTaskIndex] ?? '';
+    const planTask = rawPlanTask.trim() === '' ? undefined : Number(rawPlanTask);
+    if (planTask !== undefined && (!Number.isInteger(planTask) || planTask < 1)) {
+      return { ok: false, error: `PRD audit finding ${criterion} has an invalid Plan task.` };
+    }
+
+    findings.push({
+      criterion,
+      grade: rawGrade as PrdAuditGrade,
+      ...(planTask === undefined ? {} : { planTask }),
+      evidence: evidenceIndex === -1 ? '' : cells[evidenceIndex] ?? '',
+    });
+  }
+
+  return {
+    ok: true,
+    value: { prd: prdMarker[1].toLowerCase() as PrdAuditReport['prd'], findings },
+  };
+}
+
 /** Return expected FR ids that have no parseable verdict row in the report. */
 export function findFrIdsWithoutRows(content: string, expectedIds: ReadonlySet<string>): string[] {
   const present = new Set<string>();

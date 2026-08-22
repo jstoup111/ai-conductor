@@ -6,11 +6,74 @@ import { execa } from 'execa';
 import {
   checkStepCompletion,
   findFrIdsWithoutRows,
+  parsePrdAuditReport,
   prdAuditCoverageGap,
   resolveFeaturePrdPaths,
   sweepStaleReviewArtifacts,
   type ArtifactResolutionContext,
 } from '../src/engine/artifacts.js';
+
+describe('parsePrdAuditReport', () => {
+  it('reads criterion grades, optional plan ownership, and the PRD-presence marker', () => {
+    const report = [
+      '# PRD Audit',
+      '',
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | FIXABLE | 4 | Missing guard |',
+      '| S2.2 | PLAN_GAP | | No plan task owns this |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report)).toEqual({
+      ok: true,
+      value: {
+        prd: 'present',
+        findings: [
+          { criterion: 'S2.1', grade: 'FIXABLE', planTask: 4, evidence: 'Missing guard' },
+          { criterion: 'S2.2', grade: 'PLAN_GAP', evidence: 'No plan task owns this' },
+        ],
+      },
+    });
+  });
+
+  it('reads a no-PRD verdict report', () => {
+    const report = [
+      '**PRD:** none',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | PASS | | Implemented |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report)).toMatchObject({
+      ok: true,
+      value: { prd: 'none', findings: [{ criterion: 'S2.1', grade: 'PASS' }] },
+    });
+  });
+
+  it('rejects a grade outside the closed grade enum', () => {
+    const report = [
+      '**PRD:** none',
+      '',
+      '## Verdict Table',
+      '',
+      '| Criterion | Grade | Plan task | Evidence |',
+      '| --- | --- | --- | --- |',
+      '| S2.1 | MAYBE | | Unclear |',
+    ].join('\n');
+
+    expect(parsePrdAuditReport(report)).toEqual({
+      ok: false,
+      error: 'PRD audit finding S2.1 has an invalid Grade.',
+    });
+  });
+});
 
 const context = (overrides: Partial<ArtifactResolutionContext> = {}): ArtifactResolutionContext => ({
   featureIdentities: [],
