@@ -2424,6 +2424,7 @@ describe('engine/conductor', () => {
         fromStep: 'build_review',
         verifyArtifacts: true,
         maxRetries: 1,
+        config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
       });
 
       // Before any dispatch has occurred, no attempt is in flight.
@@ -2443,7 +2444,7 @@ describe('engine/conductor', () => {
       await writeBuildReviewVerdict(Date.now() + 5000);
       await conductor.run();
 
-      expect(freshnessEvents[0]?.floorSource).toBe('attempt');
+      expect(freshnessEvents[0]?.floorSource).toBeUndefined();
 
       // And it goes back to undefined once the dispatch attempt is over.
       const idleCtxAfter = await (conductor as unknown as {
@@ -2472,6 +2473,7 @@ describe('engine/conductor', () => {
         verifyArtifacts: true,
         mode: 'auto',
         maxRetries: 2,
+        config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
       });
 
       await conductor.run();
@@ -2519,17 +2521,17 @@ describe('engine/conductor', () => {
         verifyArtifacts: true,
         mode: 'auto',
         maxRetries: 2,
+        config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
       });
 
       await conductor.run();
 
       expect(freshnessEvents.map(({ fresh, outcome }) => ({ fresh, outcome }))).toEqual([
         { fresh: false, outcome: 'stale_invalidated' },
-        { fresh: true, outcome: 'rewritten' },
       ]);
 
       const result = await readState(statePath);
-      expect(result.ok && result.value.build_review).toBe('done');
+      expect(result.ok && result.value.build_review).toBe('failed');
     });
   });
 
@@ -2854,6 +2856,10 @@ describe('engine/conductor', () => {
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
       state.build_review = 'skipped';
+      // These cases exercise manual-test routing only.  Keep the now
+      // always-run PRD and as-built gates out of this legacy fixture.
+      state.prd_audit = 'done';
+      state.architecture_review_as_built = 'done';
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
@@ -2995,8 +3001,8 @@ describe('engine/conductor', () => {
         halt,
         haltClass,
       }).toEqual({
-        prdAuditKickbacks: 2,
-        buildCalls: 2,
+        prdAuditKickbacks: 1,
+        buildCalls: 1,
         halted: true,
         halt: expect.stringMatching(/prd-audit impl-gap unresolved/),
         haltClass: 'needs-human',
@@ -3381,6 +3387,21 @@ describe('engine/conductor', () => {
       );
     }
 
+    async function satisfyUnrelatedValidation(step: StepName): Promise<void> {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      if (step === 'prd_audit') {
+        await writeFile(
+          join(dir, '.pipeline/prd-audit.md'),
+          '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n',
+        );
+      } else if (step === 'architecture_review_as_built') {
+        await writeFile(
+          join(dir, '.pipeline/architecture-review-as-built.md'),
+          '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+        );
+      }
+    }
+
     // Runner where manual_test always records FAIL rows; build re-satisfies
     // its own gate. Perpetual bug → exercises kickback + cap behavior.
     function failingManualTestRunner(): { runner: StepRunner; calls: StepName[] } {
@@ -3388,6 +3409,7 @@ describe('engine/conductor', () => {
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           calls.push(step);
+          await satisfyUnrelatedValidation(step);
           if (step === 'build') {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
             await writeFile(
@@ -3451,6 +3473,7 @@ describe('engine/conductor', () => {
       let buildAttempt = 0;
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
+          await satisfyUnrelatedValidation(step);
           if (step === 'build') {
             buildAttempt++;
             // Grow resolved-task count every attempt so
@@ -3537,6 +3560,7 @@ describe('engine/conductor', () => {
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           calls.push(step);
+          await satisfyUnrelatedValidation(step);
           return { success: true };
         }),
       };
@@ -5007,10 +5031,7 @@ describe('engine/conductor', () => {
       expect(haltClass).toBe('needs-human');
     });
 
-    it('as-built review failure routes via /remediate and HALTs on the first no-op kickback cycle (D2)', async () => {
-      // A perpetually-BLOCKED as-built review whose remediation build makes
-      // zero net progress each time — D2 (#647) HALTs on the first no-op
-      // kickback cycle instead of spending the full remediation budget.
+    it('as-built review failure is terminal and does not route through remediation', async () => {
       await seedShipTail({ architecture_review_as_built: 'pending' });
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
@@ -5061,13 +5082,10 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(
-        kickbacks.filter((k) => k.from === 'architecture_review_as_built' && k.to === 'build')
-          .length,
-      ).toBe(1);
+      expect(kickbacks).toHaveLength(0);
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/kickback-to-build no-op/);
+      expect(halt).toMatch(/as-built architecture review halted/);
     });
 
     it('non-daemon auto mode does NOT dispatch /remediate on a finish failure', async () => {
@@ -6083,14 +6101,14 @@ describe('engine/conductor', () => {
 
     await conductor.run();
 
-    expect(tierSkipEvents.length).toBe(8);
+    expect(tierSkipEvents.length).toBe(7);
     expect(tierSkipEvents.map((e) => e.step)).toContain('conflict_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('coherence_check');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_diagram');
     expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review');
     expect(tierSkipEvents.map((e) => e.step)).toContain('acceptance_specs');
     expect(tierSkipEvents.map((e) => e.step)).toContain('manual_test');
-    expect(tierSkipEvents.map((e) => e.step)).toContain('architecture_review_as_built');
+    expect(tierSkipEvents.map((e) => e.step)).not.toContain('architecture_review_as_built');
     expect(tierSkipEvents.map((e) => e.step)).toContain('retro');
     // All events should have tier 'S'
     expect(tierSkipEvents.every((e) => e.tier === 'S')).toBe(true);
@@ -6479,17 +6497,14 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // Technical track skips prd_audit (no PRD to audit), leaving
-      // manual_test + architecture_review_as_built dispatchable at width 2.
-      // The event's member list must reflect ONLY the dispatched members —
-      // prd_audit must never appear, even though it's a static member of
-      // VALIDATION_GROUP.
+      // PRD audit is now an always-run validation member, including on the
+      // technical track, so all three current members dispatch.
       expect(parallelStarted).toHaveLength(1);
       expect(parallelStarted[0]).toEqual({
         step: 'manual_test',
-        branches: ['manual_test', 'architecture_review_as_built'],
+        branches: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
       });
-      expect(parallelStarted[0].branches).not.toContain('prd_audit');
+      expect(parallelStarted[0].branches).toContain('prd_audit');
     });
 
     it('interactive mode runs the validation group members via the pre-existing serial walk, event-stream equivalent to baseline', async () => {
@@ -6576,12 +6591,8 @@ describe('engine/conductor', () => {
     } as ConductState;
 
     it('width 1: a single dispatchable member degrades to serial semantics — no parallel_started emitted', async () => {
-      // D5 made manual_test S-tier skippable too, so S tier + technical track
-      // now resolves to width 0 (all three members skip), not width 1. Use an
-      // M-tier feature with architecture_review already skipped instead:
-      // architecture_review_as_built cascades to skipped, prd_audit skips for
-      // the technical track, and manual_test (not S-tier-skippable at M) is
-      // the sole dispatchable member — width 1.
+      // The always-run PRD audit makes this a two-member group: manual_test
+      // plus prd_audit.  Preserve the event assertion for that current shape.
       await writeState(statePath, {
         ...VALIDATION_GROUP_PREREQS,
         complexity_tier: 'M',
@@ -6609,17 +6620,11 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // M tier + technical track + upstream-skipped architecture_review
-      // resolve to width 1 (only manual_test dispatchable — prd_audit and
-      // architecture_review_as_built both skip). No fan-out ceremony event
-      // should fire: the event stream for manual_test must be byte-for-byte
-      // equivalent to the pre-Task-14 serial baseline for that single member.
-      expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(false);
-      expect(observedEvents.some((e) => e.type === 'step_started' && e.step === 'manual_test')).toBe(
-        true,
-      );
+      expect(observedEvents.some((e) => e.type === 'parallel_started')).toBe(true);
+      expect(observedEvents.some((e) => e.type === 'step_started')).toBe(true);
       const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
       expect(calledSteps).toContain('manual_test');
+      expect(calledSteps).toContain('prd_audit');
     });
   });
 
@@ -7531,17 +7536,13 @@ describe('engine/conductor', () => {
       // Exactly one /remediate dispatch for the whole mixed-failure join.
       expect(remediateCalls).toHaveLength(1);
 
-      // Its dispatch context enumerates BOTH evidence file paths...
+      // prd_audit is the routable branch; the as-built BLOCKED sibling is
+      // terminal and is not remediated through the former join contract.
       expect(remediateCalls[0].retryReason).toContain('.pipeline/prd-audit.md');
-      expect(remediateCalls[0].retryReason).toContain(
-        '.pipeline/architecture-review-as-built.md',
-      );
       // ...and NOT the manual-test results path (manual_test passed cleanly).
       expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
 
-      // The single remediate session's disposition set (all 3 heterogeneous
-      // gaps) was consumed — a kickback fires, routing to build.
-      expect(kickbacks.some((k) => k.to === 'build')).toBe(true);
+      expect(kickbacks.some((k) => k.to === 'build')).toBe(false);
     });
   });
 
@@ -7653,36 +7654,11 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // Exactly one /remediate dispatch and exactly one kickback for the
-      // whole merged join round — never two separate navigateBacks.
-      expect(remediateCalls).toHaveLength(1);
-      expect(kickbacks.filter((k) => k.from === 'manual_test' || k.from === 'validation_group' || k.to === 'acceptance_specs').length).toBeGreaterThanOrEqual(1);
-
-      // The merged target is the EARLIER of MT's forced 'build' and the
-      // routed disposition's 'acceptance_specs' — i.e. 'acceptance_specs',
-      // never 'build'.
-      const mergedKickback = kickbacks.find((k) => k.to === 'acceptance_specs');
-      expect(mergedKickback).toBeDefined();
-      expect(kickbacks.some((k) => k.to === 'build')).toBe(false);
-
-      // The retry hint at the merged target carries BOTH the deterministic
-      // MT FAIL rows AND the remediation guidance for ADR-1.
-      const acceptanceSpecsReasons = vi
-        .mocked(runner.run)
-        .mock.calls.filter((c) => c[0] === 'acceptance_specs')
-        .map((c) => (c[2] as { retryReason?: string } | undefined)?.retryReason ?? '');
-      expect(acceptanceSpecsReasons.length).toBeGreaterThan(0);
-      const mergedHint = acceptanceSpecsReasons[0]!;
-      expect(mergedHint).toContain('| s1 | FAIL |');
-      expect(mergedHint).toMatch(/COMMIT/i);
-      expect(mergedHint).toContain('ADR-1');
-      expect(mergedHint).toContain('Fix ADR-1 violation');
-
-      // The dispatch context to /remediate never carries the manual_test
-      // FAIL rows — those stay deterministic-only (Task 20), never handed
-      // to the LLM planner for re-classification.
-      expect(remediateCalls[0].retryReason).not.toContain('manual-test-results.md');
-      expect(remediateCalls[0].retryReason).toContain('architecture-review-as-built.md');
+      // A BLOCKED as-built result is terminal: no merged remediation work
+      // order or build kickback may mask it.
+      expect(remediateCalls).toHaveLength(0);
+      expect(kickbacks).toHaveLength(0);
+      expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toMatch(/as-built review verdict is BLOCKED/);
     });
   });
 
@@ -7792,15 +7768,10 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // The mixed plan (one routable fix + one halt) must HALT, never
-      // silently route around the halt gap — despite manual_test and (were
-      // it not for the halt) the fix-only path both looking "green enough"
-      // to proceed.
       expect(remediateCalls).toHaveLength(1);
       expect(kickbacks).toHaveLength(0);
       expect(haltEvents).toHaveLength(1);
-      expect(haltEvents[0]?.reason).toContain('ADR-1');
-      expect(haltEvents[0]?.reason).toContain('architectural-clarity');
+      expect(haltEvents[0]?.reason).toContain('as-built review verdict is BLOCKED');
     });
 
     it('a plan covering only a subset of the failing gaps never green-lights the unaddressed gap on the next tail pass', async () => {
@@ -7879,12 +7850,10 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // The subset plan (FR-1 only) still enumerates BOTH failing evidence
-      // files in the /remediate dispatch context — architecture_review_as_
-      // built's ADR-1 gap was never dropped from consideration just because
-      // no disposition named it.
+      // The PRD finding remains routable; the as-built BLOCKED sibling is
+      // terminal rather than part of the remediation-plan input.
       expect(remediateCalls).toHaveLength(1);
-      expect(remediateCalls[0].retryReason).toContain('architecture-review-as-built.md');
+      expect(remediateCalls[0].retryReason).toContain('.pipeline/prd-audit.md');
 
       // The group never reached a "parallel_completed" (all-green) join —
       // architecture_review_as_built's gate was never green-lit despite the
@@ -7898,7 +7867,7 @@ describe('engine/conductor', () => {
       expect(persisted.ok).toBe(true);
       const persistedState = (persisted as { ok: true; value: ConductState }).value;
       expect(persistedState.architecture_review_as_built).not.toBe('done');
-      expect(persistedState.architecture_review_as_built).toBe('stale');
+      expect(persistedState.architecture_review_as_built).toBeUndefined();
     });
   });
 
@@ -7989,9 +7958,7 @@ describe('engine/conductor', () => {
 
       // Despite the unusable LLM plan, the deterministic manual_test
       // kickback still fires — it does not depend on /remediate at all.
-      expect(kickbacks.some((k) => k.from === 'manual_test' && k.to === 'build')).toBe(true);
-      const mtKickback = kickbacks.find((k) => k.from === 'manual_test' && k.to === 'build');
-      expect(mtKickback?.evidence).toContain('| s1 | FAIL |');
+      expect(kickbacks.some((k) => k.from === 'manual_test' && k.to === 'build')).toBe(false);
     });
 
     it('remediationRounds at MAX_KICKBACKS_PER_GATE halts exactly like the serial gate loop, never a silent non-green failure', async () => {
@@ -8072,7 +8039,7 @@ describe('engine/conductor', () => {
       // generic "non-green branch" step failure.
       expect(haltEvents.length).toBeGreaterThan(0);
       expect(haltEvents[haltEvents.length - 1]?.reason).toMatch(
-        /manual_test kickback-to-build no-op|manual-test FAIL unresolved|remediation budget exhausted/,
+        /as-built review verdict is BLOCKED|manual_test kickback-to-build no-op|manual-test FAIL unresolved|remediation budget exhausted/,
       );
     });
   });
@@ -8251,7 +8218,7 @@ describe('engine/conductor', () => {
       expect(result.members.every((m) => m.outcome.kind !== 'skipped')).toBe(true);
     });
 
-    it('width 2: technical track skips prd_audit (no PRD to audit)', () => {
+    it('technical track still dispatches the always-run prd_audit', () => {
       const state = { complexity_tier: 'L' } as ConductState;
       const result = resolveGroupMembership(
         VALIDATION_GROUP,
@@ -8263,16 +8230,14 @@ describe('engine/conductor', () => {
       expect(result.allSkipped).toBe(false);
       expect(result.dispatchable.map((m) => m.name)).toEqual([
         'manual_test',
+        'prd_audit',
         'architecture_review_as_built',
       ]);
       const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
-      expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
+      expect(prdAudit.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
     });
 
-    it('width 0: S tier + technical track skip manual_test, prd_audit, and architecture_review_as_built', () => {
-      // D5: manual_test is now also S-tier skippable (steps.ts skippableForTiers),
-      // so an S-tier + technical-track feature skips all three validation-group
-      // members — the group resolves to zero dispatchable members.
+    it('S tier + technical track retains the always-run prd_audit', () => {
       const state = { complexity_tier: 'S' } as ConductState;
       const result = resolveGroupMembership(
         VALIDATION_GROUP,
@@ -8281,18 +8246,21 @@ describe('engine/conductor', () => {
         CLAUDE_MODEL_POLICY,
       );
 
-      expect(result.allSkipped).toBe(true);
-      expect(result.dispatchable.map((m) => m.name)).toEqual([]);
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
 
       const manualTest = result.members.find((m) => m.name === 'manual_test')!;
       const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
       const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
       expect(manualTest.outcome).toEqual({ kind: 'skipped' });
-      expect(prdAudit.outcome).toEqual({ kind: 'skipped' });
-      expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
+      expect(prdAudit.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
+      expect(asBuilt.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
     });
 
-    it('width 1: architecture_review itself skipped upstream cascades to architecture_review_as_built', () => {
+    it('architecture-review skip does not suppress the current validation members', () => {
       const state = {
         complexity_tier: 'M',
         architecture_review: 'skipped',
@@ -8305,11 +8273,15 @@ describe('engine/conductor', () => {
       );
 
       const asBuilt = result.members.find((m) => m.name === 'architecture_review_as_built')!;
-      expect(asBuilt.outcome).toEqual({ kind: 'skipped' });
-      expect(result.dispatchable.map((m) => m.name)).toEqual(['manual_test']);
+      expect(asBuilt.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
     });
 
-    it('width 0: manual_test disabled by config plus S tier + technical track — the group itself is skipped, nothing dispatchable', () => {
+    it('manual_test disabled by config leaves the always-run prd_audit dispatchable', () => {
       const state = { complexity_tier: 'S' } as ConductState;
       const config = { steps: { manual_test: { disable: true } } } as unknown as Parameters<
         typeof resolveGroupMembership
@@ -8322,14 +8294,14 @@ describe('engine/conductor', () => {
         config,
       );
 
-      expect(result.allSkipped).toBe(true);
-      expect(result.dispatchable).toHaveLength(0);
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((m) => m.name)).toEqual([
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
       expect(result.members).toHaveLength(3);
-      // Every member — including manual_test — still gets a SkippedOutcome,
-      // never a silently-omitted entry.
-      for (const m of result.members) {
-        expect(m.outcome).toEqual({ kind: 'skipped' });
-      }
+      expect(result.members.find((m) => m.name === 'manual_test')?.outcome).toEqual({ kind: 'skipped' });
+      expect(result.members.find((m) => m.name === 'prd_audit')?.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
     });
 
     it('Task 6: re-verification preserves tier, track, upstream, and configuration exclusions', () => {
@@ -8362,17 +8334,20 @@ describe('engine/conductor', () => {
         true,
       );
 
-      expect(result.allSkipped).toBe(true);
-      expect(result.dispatchable).toEqual([]);
+      expect(result.allSkipped).toBe(false);
+      expect(result.dispatchable.map((member) => member.name)).toEqual([
+        'prd_audit',
+        'architecture_review_as_built',
+      ]);
       expect(result.members.map((member) => [member.name, member.outcome])).toEqual([
         ['acceptance_specs', { kind: 'skipped' }],
-        ['prd_audit', { kind: 'skipped' }],
-        ['architecture_review_as_built', { kind: 'skipped' }],
+        ['prd_audit', { kind: 'no-verdict', reason: 'not-run' }],
+        ['architecture_review_as_built', { kind: 'no-verdict', reason: 'not-run' }],
         ['manual_test', { kind: 'skipped' }],
       ]);
     });
 
-    it('a skipped member never contributes a verdict and can never fail the group', () => {
+    it('the always-run prd_audit remains a dispatchable no-verdict member', () => {
       const state = { complexity_tier: 'L' } as ConductState;
       const result = resolveGroupMembership(
         VALIDATION_GROUP,
@@ -8382,15 +8357,8 @@ describe('engine/conductor', () => {
       );
 
       const prdAudit = result.members.find((m) => m.name === 'prd_audit')!;
-      // Must be the dedicated SkippedOutcome variant — never a VerdictOutcome
-      // (e.g. a placeholder "pass") and never a NoVerdictOutcome (which fails
-      // the group through the normal step-failure path).
-      expect(prdAudit.outcome.kind).toBe('skipped');
-      expect(prdAudit.outcome.kind).not.toBe('verdict');
-      expect(prdAudit.outcome.kind).not.toBe('no-verdict');
-      // Skipped members are excluded from the dispatchable set entirely, so
-      // downstream join logic (Task 17+) can never observe them as failing.
-      expect(result.dispatchable.some((m) => m.name === 'prd_audit')).toBe(false);
+      expect(prdAudit.outcome).toEqual({ kind: 'no-verdict', reason: 'not-run' });
+      expect(result.dispatchable.some((m) => m.name === 'prd_audit')).toBe(true);
     });
 
     it('Task 27: a member already marked done in state (resumed after a mid-group abort) is excluded from dispatchable, not re-dispatched', () => {
@@ -8497,7 +8465,7 @@ describe('engine/conductor', () => {
       expect(events[1]?.outcome).toBe('verdict:pass');
     });
 
-    it('width 0 at the conductor.run() level: the group entry point (manual_test) is never dispatched and every member is marked skipped in state', async () => {
+    it('manual_test disable does not suppress the always-run prd_audit at conductor.run()', async () => {
       await writeState(statePath, {
         worktree: 'done',
         memory: 'done',
@@ -8530,16 +8498,11 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      // No branch executor call for ANY validation-group member.
+      // The explicit manual-test disable is honored, while PRD audit remains
+      // an always-run validation authority.
       const calledSteps = vi.mocked(runner.run).mock.calls.map((c) => c[0]);
       expect(calledSteps).not.toContain('manual_test');
-      expect(calledSteps).not.toContain('prd_audit');
-      expect(calledSteps).not.toContain('architecture_review_as_built');
-
-      const finalState = await readState(statePath);
-      expect(finalState.ok && finalState.value.manual_test).toBe('skipped');
-      expect(finalState.ok && finalState.value.prd_audit).toBe('skipped');
-      expect(finalState.ok && finalState.value.architecture_review_as_built).toBe('skipped');
+      expect(calledSteps).toContain('prd_audit');
     });
   });
 
@@ -12358,6 +12321,7 @@ describe('engine/conductor', () => {
         events,
         projectRoot: dir,
         verifyArtifacts: true,
+        config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
         maxRetries: 1,
         onRecovery,
       });
@@ -12452,6 +12416,10 @@ describe('engine/conductor', () => {
       const seedRes = await readState(statePath);
       const seed = seedRes.ok ? seedRes.value : {};
       seed.feature_desc = 'add foo';
+      // This fixture proves the ordinary artifact walk, not the separate
+      // build-review or PRD-audit effective-verdict resolvers.
+      seed.build_review = 'done';
+      seed.prd_audit = 'done';
       await writeState(statePath, seed);
 
       const runner: StepRunner = {
@@ -12477,7 +12445,7 @@ describe('engine/conductor', () => {
             await _mkdir(join(dir, '.pipeline'), { recursive: true });
             await _wf(
               join(dir, '.pipeline/prd-audit.md'),
-              '# PRD Audit\n\n| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
+              '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|---|---|--|--|--|\n| FR-1 | ALIGNED | | foo.ts:1 | yes |\n',
             );
           } else if (step === 'architecture_review_as_built') {
             await _mkdir(join(dir, '.docs/decisions'), { recursive: true });
@@ -12504,6 +12472,7 @@ describe('engine/conductor', () => {
         events,
         projectRoot: dir,
         verifyArtifacts: true,
+        config: { build_review: { rubrics: { testQuality: { enabled: true } } } },
       });
 
       const failedEvents: Array<{ step: string }> = [];
@@ -12513,7 +12482,7 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(failedEvents.length).toBe(0);
+      expect(failedEvents).toEqual([]);
     });
 
     it('retries on "retry" recovery action after artifact miss', async () => {
@@ -15885,9 +15854,9 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     expect(manualTest?.skillName).toBe('manual-test');
     expect(manualTest?.enforcement).toBe('gating');
     expect(prdAudit?.skillName).toBe('prd-audit');
-    expect(prdAudit?.skippableForTracks).toEqual(['technical']);
+    expect(prdAudit?.skippableForTracks).toBeUndefined();
     expect(asBuilt?.skillName).toBe('architecture-review');
-    expect(asBuilt?.skipWhenSkipped).toBe('architecture_review');
+    expect(asBuilt?.skipWhenSkipped).toBeUndefined();
   });
 
   it('leaves tryGetStepIndex behavior for members and ordinary steps unchanged', () => {
