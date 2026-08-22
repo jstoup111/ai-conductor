@@ -35,6 +35,20 @@ function contentHashForText(value: string): string {
 }
 
 describe('build-review finding identity', () => {
+  it('keeps binding variants out of the canonical identity payload', () => {
+    const base = {
+      rubric: 'scope' as const, contractVersion: 'v1' as const, concernKind: 'out-of-plan-change',
+      anchor: { rubric: 'scope' as const, path: 'src/a.ts', relation: 'not-authorized-by-plan' },
+    };
+    const ids = [
+      base,
+      { ...base, boundTo: 'beyond' },
+      { ...base, boundTo: { path: '.docs/plans/plan.md', contentHash: contentHashForText('criterion'), display: 'criterion' } },
+    ].map((finding) => canonicalizeBuildReviewFindingIdentity(finding)!);
+    expect(new Set(ids.map((identity) => identity.id))).toEqual(new Set([ids[0]!.id]));
+    expect(Object.keys(ids[0]!.canonicalPayload).sort()).toEqual(['anchor', 'concernKind', 'contractVersion', 'rubric']);
+    expect(rehydrateBuildReviewFindingIdentity(ids[0]!.canonicalPayload)).toEqual(ids[0]);
+  });
   const fixtures: readonly BuildReviewFindingIdentityInput[] = [
     {
       rubric: 'tautology', contractVersion: 'v1', concernKind: 'source-text-mirror',

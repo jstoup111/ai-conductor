@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { reconcileBeyondRecords } from '../../src/engine/beyond-reconciliation.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
-import type { TrackerClient } from '../../src/engine/tracker-client.js';
+import { createOrRecoverIssueBySourceRef, type TrackerClient } from '../../src/engine/tracker-client.js';
 
 const roots: string[] = [];
 
@@ -15,6 +15,31 @@ afterEach(async () => {
 });
 
 describe('reconcileBeyondRecords', () => {
+  it('serializes concurrent source-ref filings and recovers a create whose response was lost', async () => {
+    const createIssue = vi.fn<TrackerClient['createIssue']>(async () => 'https://github.com/acme/repo/issues/77');
+    const findIssueBySourceRef = vi.fn<TrackerClient['findIssueBySourceRef']>().mockResolvedValue(null);
+    const tracker = { findIssueBySourceRef, createIssue } as never as TrackerClient;
+    const input = { title: 'beyond', body: 'Source-Ref: feature:sha256:race' };
+
+    await expect(Promise.all([
+      createOrRecoverIssueBySourceRef(tracker, 'feature:sha256:race', input, '/repo'),
+      createOrRecoverIssueBySourceRef(tracker, 'feature:sha256:race', input, '/repo'),
+    ])).resolves.toEqual([
+      'https://github.com/acme/repo/issues/77',
+      'https://github.com/acme/repo/issues/77',
+    ]);
+    expect(createIssue).toHaveBeenCalledOnce();
+
+    const responseLost = vi.fn<TrackerClient['createIssue']>().mockRejectedValue(new Error('response lost'));
+    const recover = vi.fn<TrackerClient['findIssueBySourceRef']>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('https://github.com/acme/repo/issues/78');
+    await expect(createOrRecoverIssueBySourceRef(
+      { findIssueBySourceRef: recover, createIssue: responseLost } as never,
+      'feature:sha256:lost', { title: 'beyond', body: 'Source-Ref: feature:sha256:lost' }, '/repo',
+    )).resolves.toBe('https://github.com/acme/repo/issues/78');
+    expect(responseLost).toHaveBeenCalledOnce();
+  });
   it('files each unfiled record with a stable source ref and marks it filed', async () => {
     const root = await mkdtemp(join(tmpdir(), 'beyond-reconcile-'));
     roots.push(root);

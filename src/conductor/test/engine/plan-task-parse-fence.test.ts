@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { scanPlanProtectedTargets } from '../../src/engine/plan-protected-targets.js';
-import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
+import { parsePlanTaskIds, parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 
 describe('plan task Files convention fence', () => {
+  it('keeps task headings hidden until an equal-or-longer closing fence', () => {
+    expect(parsePlanTaskIds('````markdown\n```\n### Task hidden: code\n```\n````\n### Task 1: visible'))
+      .toEqual(['1']);
+  });
   it('does not retain the retired WIRED_INTO_LINE parser machinery', async () => {
     const source = await readFile(
       fileURLToPath(new URL('../../src/engine/plan-task-parse.ts', import.meta.url)),

@@ -47,7 +47,7 @@ describe('build-review domain', () => {
 
   it('diagnoses malformed and unresolved boundTo values with a finding index', () => {
     const value = {
-      kind: 'judged', rubric: 'completeness', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      kind: 'judged', rubric: 'completeness', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3', verdict: 'FAIL',
       findings: [{ concernKind: 'missing-deliverable', summary: 'x', evidenceLocations: ['src/x.ts:1'],
         anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/x.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' },
         boundTo: 'src/x.ts:1' }],
@@ -56,6 +56,21 @@ describe('build-review domain', () => {
       lapId: 'lap-1', snapshotDigest: 'sha256:abc',
     }, { changedTests: [], changedPaths: [], planTasks: ['1'], doneWhenContext: [] }))
       .toMatch(/findings\[0\].boundTo.*beyond.*content-region/i);
+  });
+
+  it('parses the beyond binding and documents both boundTo grammar forms', () => {
+    const value = {
+      kind: 'judged', rubric: 'completeness', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3', verdict: 'FAIL',
+      findings: [{ concernKind: 'missing-deliverable', summary: 'x', evidenceLocations: ['src/x.ts:1'],
+        anchor: { rubric: 'completeness', planTask: '1', missingSurface: 'src/x.ts', missingOutcome: 'x', missingKind: 'missing-deliverable' },
+        boundTo: 'beyond' }],
+    };
+    expect(parseBuildReviewJudgedResult(value, {
+      changedTests: [], changedPaths: ['src/x.ts'], planTasks: ['1'], doneWhenContext: [],
+    })).toMatchObject({ findings: [{ boundTo: 'beyond' }] });
+    expect(renderBuildReviewJudgedResultShape('scope')).toContain(
+      '"boundTo": "beyond" | {"path": "<plan path>"',
+    );
   });
   it('brands lap and rubric-contract identities from their closed grammars', () => {
     expect(parseBuildReviewLapId('lap-20260813-01')).toBe('lap-20260813-01');

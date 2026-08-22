@@ -2607,28 +2607,22 @@ describe('engine/conductor', () => {
       await conductor.run();
     }
 
-    it('records each beyond finding once after an effective build_review verdict', async () => {
+    it('does not record beyond findings from the completion path', async () => {
       await runBeyondLap();
 
       const recorded = await new BuildReviewDispositionStore(dir).listBeyond(feature);
-      expect(recorded).toMatchObject({
-        ok: true,
-        records: [
-          { findingId: beyondFindingFixture().beyondFindingIds[0], rubric: 'scope', summary: 'First beyond-plan observation.', evidenceLocations: ['src/first.ts:10'], status: 'unfiled' },
-          { findingId: beyondFindingFixture().beyondFindingIds[1], rubric: 'scope', summary: 'Second beyond-plan observation.', evidenceLocations: ['src/second.ts:20'], status: 'unfiled' },
-        ],
-      });
+      expect(recorded).toMatchObject({ ok: true, records: [] });
     });
 
-    it('does not append duplicate beyond records when the same lap is re-run', async () => {
+    it('does not append completion-path records when the same lap is re-run', async () => {
       await runBeyondLap();
       await runBeyondLap();
 
       const recorded = await new BuildReviewDispositionStore(dir).listBeyond(feature);
-      expect(recorded.ok && recorded.records).toHaveLength(2);
+      expect(recorded.ok && recorded.records).toHaveLength(0);
     });
 
-    it('logs a beyond-record lease failure without changing the effective verdict', async () => {
+    it('does not touch the beyond lease from the completion path', async () => {
       const log = vi.fn();
       const store = new BuildReviewDispositionStore(dir);
       await store.withLease(async () => {
@@ -2637,7 +2631,7 @@ describe('engine/conductor', () => {
 
       const state = await readState(statePath);
       expect(state.ok && state.value.build_review).toBe('done');
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/build_review beyond record deferred:.*lease/i));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/build_review beyond record deferred:.*lease/i));
       await expect(store.listBeyond(feature)).resolves.toMatchObject({ ok: true, records: [] });
     });
   });

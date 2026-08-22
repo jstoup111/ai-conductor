@@ -106,6 +106,43 @@ export interface TrackerClient {
   removeIssueLabel(repo: string, number: number, label: string, cwd: string): Promise<void>;
 }
 
+// Keep the idempotency lock at the tracker seam so every filing caller shares
+// one source-ref create-or-recover operation instead of rebuilding a race.
+const sourceRefOperations = new WeakMap<TrackerClient, Map<string, Promise<string>>>();
+
+export async function createOrRecoverIssueBySourceRef(
+  tracker: TrackerClient,
+  sourceRef: string,
+  input: { title: string; body: string; repo?: string },
+  cwd: string,
+): Promise<string> {
+  const key = `${cwd}\0${input.repo ?? ''}\0${sourceRef}`;
+  let operations = sourceRefOperations.get(tracker);
+  if (!operations) {
+    operations = new Map();
+    sourceRefOperations.set(tracker, operations);
+  }
+  const active = operations.get(key);
+  if (active) return active;
+  const operation = (async () => {
+    const existing = await tracker.findIssueBySourceRef(sourceRef, input.repo, cwd);
+    if (existing) return existing;
+    try {
+      return await tracker.createIssue(input, cwd);
+    } catch (error) {
+      const recovered = await tracker.findIssueBySourceRef(sourceRef, input.repo, cwd);
+      if (recovered) return recovered;
+      throw error;
+    }
+  })();
+  operations.set(key, operation);
+  try {
+    return await operation;
+  } finally {
+    if (operations.get(key) === operation) operations.delete(key);
+  }
+}
+
 /** Error thrown when a `GhRunner` invocation rejects; carries argv/stderr/exit-code and, if
  * the failure is 404-shaped, a `status: 404` marker so callers (e.g. the engineer-forget
  * advisory-label-strip flow) can detect "issue not found" specifically. */

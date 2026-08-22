@@ -49,6 +49,15 @@ const DONE_WHEN_LINE = /^\s*(?:[-*]\s+)?\*\*Done when\s*:?\s*\*\*\s*:?\s*$/i;
 const MARKDOWN_HEADER_LINE = /^\s*\*\*[^*]+\*\*\s*:?[\t ]*$/;
 const FENCE_LINE = /^\s*(`{3,}|~{3,})/;
 
+type MarkdownFence = { character: string; length: number };
+
+function advanceFence(fence: MarkdownFence | null, line: string): MarkdownFence | null {
+  const delimiter = line.match(FENCE_LINE)?.[1];
+  if (!delimiter) return fence;
+  if (!fence) return { character: delimiter[0], length: delimiter.length };
+  return delimiter[0] === fence.character && delimiter.length >= fence.length ? null : fence;
+}
+
 // Retired **Wired-into:** metadata must remain excluded from legacy fallback
 // paths in historical plans. This preserves only the old line grammar (case,
 // optional bullet, qualifier, and colon placement), not its wiring behavior.
@@ -91,13 +100,11 @@ function expandTaskIds(raw: string): string[] {
 /** Enumerate task headers through the same fence-aware grammar as plan sections. */
 export function parsePlanTaskIds(text: string): string[] {
   const ids: string[] = [];
-  let fence: string | null = null;
+  let fence: MarkdownFence | null = null;
   for (const line of text.split('\n')) {
-    const fenceMatch = line.match(FENCE_LINE);
-    if (fenceMatch) {
-      const delimiter = fenceMatch[1];
-      if (!fence) fence = delimiter[0];
-      else if (delimiter[0] === fence) fence = null;
+    const wasFence: MarkdownFence | null = fence;
+    fence = advanceFence(fence, line);
+    if (wasFence !== fence || FENCE_LINE.test(line)) {
       continue;
     }
     if (fence) continue;
@@ -162,14 +169,12 @@ export function parsePlanTaskDoneWhen(text: string): Map<string, string[]> {
   const result = new Map<string, string[]>();
   let currentIds: string[] = [];
   let collecting = false;
-  let fence: string | null = null;
+  let fence: MarkdownFence | null = null;
 
   for (const line of text.split('\n')) {
-    const fenceMatch = line.match(FENCE_LINE);
-    if (fenceMatch) {
-      const delimiter = fenceMatch[1];
-      if (!fence) fence = delimiter[0];
-      else if (delimiter[0] === fence) fence = null;
+    const wasFence: MarkdownFence | null = fence;
+    fence = advanceFence(fence, line);
+    if (wasFence !== fence || FENCE_LINE.test(line)) {
       continue;
     }
     if (fence) continue;

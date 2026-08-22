@@ -15,7 +15,7 @@ import { parseSizeLabel, parsePriorityLabels } from '../../backlog-priority.js';
 import { restAddLabelArgs } from '../../pr-labels.js';
 import { parseSourceRef } from '../issue-ref.js';
 import { sanitizeIntakeText, type Redaction } from './sanitize.js';
-import type { TrackerClient } from '../../tracker-client.js';
+import { createOrRecoverIssueBySourceRef, type TrackerClient } from '../../tracker-client.js';
 
 export interface FileIntakeIssueOpts {
   title: string;
@@ -153,9 +153,8 @@ export async function fileIntakeIssue(
   // retry after a successful create but before its local stamp must recover
   // this issue instead of creating a duplicate.
   const issueUrl = opts.sourceRef
-    ? await deps.tracker.findIssueBySourceRef(opts.sourceRef, opts.repo, deps.cwd) ?? await deps.tracker.createIssue(
-      { title: cleanTitle.text, body: cleanBody.text, repo: opts.repo }, deps.cwd,
-    )
+    ? await createOrRecoverIssueBySourceRef(deps.tracker, opts.sourceRef,
+      { title: cleanTitle.text, body: cleanBody.text, repo: opts.repo }, deps.cwd)
     : await deps.tracker.createIssue({ title: cleanTitle.text, body: cleanBody.text, repo: opts.repo }, deps.cwd);
   const ref = issueUrlToRef(issueUrl);
 

@@ -7102,23 +7102,6 @@ export class Conductor {
             // to derive here — a build-gate miss just falls through to the
             // normal retry path below.
 
-            if (step.name === 'build_review') {
-              try {
-                const verdictRaw = JSON.parse(
-                  await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'),
-                );
-                const resolution = await (
-                  this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
-                )(this.projectRoot, verdictRaw, {
-                  emit: async (event) => { await this.events.emit(event); },
-                });
-                await this.recordBeyondBuildReviewFindings(verdictRaw, resolution);
-              } catch {
-                // Completion owns the effective verdict. Recording non-blocking
-                // beyond findings must never change that gate outcome.
-              }
-            }
-
             if (step.name === 'acceptance_specs') {
               const viaException =
                 'viaException' in completion && completion.viaException === true;

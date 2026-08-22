@@ -107,6 +107,35 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs).not.toHaveProperty('acceptedDispositions');
     });
 
+    it('freezes Done when criteria with task identity, hashes, occurrences, empty blocks, and legacy absence', async () => {
+      await writeFile(planPath, `### Task 1: criteria
+**Done when:**
+- shared line
+- shared line
+- third line
+
+### Task 2: same content
+**Done when:**
+- shared line
+
+### Task 3: empty
+**Done when:**
+`, 'utf8');
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: '' } },
+      ]);
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+      const context = inputs.sourceSnapshot.doneWhenContext!;
+      expect(context.map(({ taskId, criteria }) => [taskId, criteria.length])).toEqual([['1', 3], ['2', 1], ['3', 0]]);
+      expect(context[0]!.criteria[0]!.hash).toBe(context[1]!.criteria[0]!.hash);
+      expect(context[0]!.criteria.map((criterion) => criterion.occurrence)).toEqual([0, 1, 0]);
+      const legacy = { ...inputs.sourceSnapshot } as Record<string, unknown>;
+      delete legacy.doneWhenContext;
+      expect('doneWhenContext' in legacy).toBe(false);
+    });
+
     it('captures declared changed-test title chains from the graded HEAD with an explicit static fallback', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
