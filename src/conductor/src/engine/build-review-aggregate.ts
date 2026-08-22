@@ -50,6 +50,8 @@ export interface BuildReviewEffectiveVerdict {
   readonly verdict: 'PASS' | 'FAIL';
   readonly acceptedFindingIds: readonly string[];
   readonly unresolvedFindingIds: readonly string[];
+  /** Additive: legacy resolver fixtures and serialized verdicts omit this. */
+  readonly beyondFindingIds?: readonly string[];
   readonly skippedRubrics: readonly BuildReviewRubricId[];
   readonly infrastructureFailureRubrics: readonly BuildReviewRubricId[];
 }
@@ -222,6 +224,7 @@ export function deriveEffectiveBuildReviewVerdict(
   if (!aggregate) return undefined;
   const accepted: string[] = [];
   const unresolved: string[] = [];
+  const beyond: string[] = [];
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
   let uncoveredInfrastructureCount = 0;
@@ -247,13 +250,14 @@ export function deriveEffectiveBuildReviewVerdict(
         rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
       });
       if (!identity) return undefined;
-      (acceptedFindingIds.has(identity.id) ? accepted : unresolved).push(identity.id);
+      if (finding.boundTo === 'beyond') beyond.push(identity.id);
+      else (acceptedFindingIds.has(identity.id) ? accepted : unresolved).push(identity.id);
     }
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
     verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructureCount === 0 ? 'PASS' : 'FAIL',
-    acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
+    acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved), beyondFindingIds: Object.freeze(beyond),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
   });
 }

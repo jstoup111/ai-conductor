@@ -58,9 +58,27 @@ export interface BuildReviewReducedCoverageDispositionRecord {
   readonly acceptedAt: string;
 }
 
+export type BuildReviewBeyondStatus = 'unfiled' | 'filed';
+
+/** Durable intake bookkeeping for a finding judged outside the plan boundary. */
+export interface BuildReviewBeyondDispositionRecord {
+  readonly kind: 'beyond';
+  readonly version: typeof STORE_VERSION;
+  readonly feature: BuildReviewFeatureIdentity;
+  readonly findingId: string;
+  readonly rubric: BuildReviewRubricId;
+  readonly summary: string;
+  readonly evidenceLocations: readonly string[];
+  readonly status: BuildReviewBeyondStatus;
+  readonly issueUrl?: string;
+  readonly recordedAt: string;
+  readonly filedAt?: string;
+}
+
 type BuildReviewStoredDispositionRecord =
   | BuildReviewDispositionRecord
-  | BuildReviewReducedCoverageDispositionRecord;
+  | BuildReviewReducedCoverageDispositionRecord
+  | BuildReviewBeyondDispositionRecord;
 
 export interface BuildReviewDispositionInput {
   readonly feature: BuildReviewFeatureIdentity;
@@ -77,6 +95,14 @@ export interface BuildReviewReducedCoverageInput {
   readonly reason: BuildReviewInfrastructureFailureReason;
   readonly rationale: string;
   readonly operator: string;
+}
+
+export interface BuildReviewBeyondInput {
+  readonly feature: BuildReviewFeatureIdentity;
+  readonly findingId: string;
+  readonly rubric: BuildReviewRubricId;
+  readonly summary: string;
+  readonly evidenceLocations: readonly string[];
 }
 
 export interface BuildReviewDispositionFilesystem {
@@ -107,12 +133,20 @@ export type BuildReviewReducedCoverageAppendResult =
   | { readonly ok: true; readonly record: BuildReviewReducedCoverageDispositionRecord }
   | BuildReviewDispositionStoreFailure;
 
+export type BuildReviewBeyondAppendResult =
+  | { readonly ok: true; readonly record: BuildReviewBeyondDispositionRecord }
+  | BuildReviewDispositionStoreFailure;
+
 export type BuildReviewDispositionListResult =
   | { readonly ok: true; readonly records: readonly BuildReviewDispositionRecord[] }
   | BuildReviewDispositionStoreFailure;
 
 export type BuildReviewReducedCoverageListResult =
   | { readonly ok: true; readonly records: readonly BuildReviewReducedCoverageDispositionRecord[] }
+  | BuildReviewDispositionStoreFailure;
+
+export type BuildReviewBeyondListResult =
+  | { readonly ok: true; readonly records: readonly BuildReviewBeyondDispositionRecord[] }
   | BuildReviewDispositionStoreFailure;
 
 export type BuildReviewDispositionLeaseResult<Value> =
@@ -214,14 +248,52 @@ function parseReducedCoverageDispositionRecord(value: unknown): BuildReviewReduc
   };
 }
 
+function parseBeyondDispositionRecord(value: unknown): BuildReviewBeyondDispositionRecord | undefined {
+  const source = record(value);
+  if (!source || source.kind !== 'beyond' || source.version !== STORE_VERSION ||
+    !nonEmptyString(source.findingId) || typeof source.rubric !== 'string' ||
+    !REDUCED_COVERAGE_RUBRICS.has(source.rubric as BuildReviewRubricId) || !nonEmptyString(source.summary) ||
+    !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 ||
+    source.evidenceLocations.some((location) => !nonEmptyString(location)) ||
+    !nonEmptyString(source.recordedAt) || Number.isNaN(Date.parse(source.recordedAt))) return undefined;
+  const feature = parseFeatureIdentity(source.feature);
+  if (!feature) return undefined;
+  if (source.status === 'unfiled' && exactKeys(source, [
+    'kind', 'version', 'feature', 'findingId', 'rubric', 'summary', 'evidenceLocations', 'status', 'recordedAt',
+  ])) {
+    return {
+      kind: 'beyond', version: STORE_VERSION, feature, findingId: source.findingId,
+      rubric: source.rubric as BuildReviewRubricId, summary: source.summary,
+      evidenceLocations: Object.freeze([...source.evidenceLocations]), status: 'unfiled', recordedAt: source.recordedAt,
+    };
+  }
+  if (source.status === 'filed' && exactKeys(source, [
+    'kind', 'version', 'feature', 'findingId', 'rubric', 'summary', 'evidenceLocations', 'status', 'issueUrl', 'recordedAt', 'filedAt',
+  ]) && nonEmptyString(source.issueUrl) && nonEmptyString(source.filedAt) && !Number.isNaN(Date.parse(source.filedAt))) {
+    return {
+      kind: 'beyond', version: STORE_VERSION, feature, findingId: source.findingId,
+      rubric: source.rubric as BuildReviewRubricId, summary: source.summary,
+      evidenceLocations: Object.freeze([...source.evidenceLocations]), status: 'filed', issueUrl: source.issueUrl,
+      recordedAt: source.recordedAt, filedAt: source.filedAt,
+    };
+  }
+  return undefined;
+}
+
 function parseStoredDispositionRecord(value: unknown): BuildReviewStoredDispositionRecord | undefined {
-  return record(value)?.kind === 'reduced-coverage'
-    ? parseReducedCoverageDispositionRecord(value)
-    : parseDispositionRecord(value);
+  switch (record(value)?.kind) {
+    case 'reduced-coverage': return parseReducedCoverageDispositionRecord(value);
+    case 'beyond': return parseBeyondDispositionRecord(value);
+    default: return parseDispositionRecord(value);
+  }
 }
 
 function isFindingDispositionRecord(value: BuildReviewStoredDispositionRecord): value is BuildReviewDispositionRecord {
   return !('kind' in value);
+}
+
+function isBeyondDispositionRecord(value: BuildReviewStoredDispositionRecord): value is BuildReviewBeyondDispositionRecord {
+  return 'kind' in value && value.kind === 'beyond';
 }
 
 function parseState(value: unknown): BuildReviewDispositionState | undefined {
@@ -391,8 +463,74 @@ export class BuildReviewDispositionStore {
       const loaded = await this.load();
       return loaded.ok
         ? { ok: true, records: Object.freeze(loaded.state.records.filter((entry): entry is BuildReviewReducedCoverageDispositionRecord =>
-          !isFindingDispositionRecord(entry) && sameFeature(entry.feature, feature))) }
+          'kind' in entry && entry.kind === 'reduced-coverage' && sameFeature(entry.feature, feature))) }
         : loaded;
+    } finally {
+      await acquired.release();
+    }
+  }
+
+  async listBeyond(featureInput: unknown): Promise<BuildReviewBeyondListResult> {
+    const feature = parseFeatureIdentity(featureInput);
+    if (!feature) return { ok: false, kind: 'invalid', message: 'build-review feature identity is invalid' };
+    const acquired = await this.acquire();
+    if (!acquired.ok) return acquired;
+    try {
+      const loaded = await this.load();
+      return loaded.ok
+        ? { ok: true, records: Object.freeze(loaded.state.records.filter(isBeyondDispositionRecord).filter((entry) => sameFeature(entry.feature, feature))) }
+        : loaded;
+    } finally {
+      await acquired.release();
+    }
+  }
+
+  async appendBeyondIfAbsent(input: BuildReviewBeyondInput): Promise<BuildReviewBeyondAppendResult> {
+    const feature = parseFeatureIdentity(input.feature);
+    if (!feature || !nonEmptyString(input.findingId) || !REDUCED_COVERAGE_RUBRICS.has(input.rubric) ||
+      !nonEmptyString(input.summary) || input.evidenceLocations.length === 0 || input.evidenceLocations.some((location) => !nonEmptyString(location))) {
+      return { ok: false, kind: 'invalid', message: 'build-review beyond input is invalid' };
+    }
+    const acquired = await this.acquire();
+    if (!acquired.ok) return acquired;
+    try {
+      const loaded = await this.load();
+      if (!loaded.ok) return loaded;
+      const existing = loaded.state.records.filter(isBeyondDispositionRecord)
+        .find((entry) => sameFeature(entry.feature, feature) && entry.findingId === input.findingId);
+      if (existing) return { ok: true, record: existing };
+      const disposition: BuildReviewBeyondDispositionRecord = {
+        kind: 'beyond', version: STORE_VERSION, feature, findingId: input.findingId, rubric: input.rubric,
+        summary: input.summary, evidenceLocations: Object.freeze([...input.evidenceLocations]), status: 'unfiled',
+        recordedAt: new Date(this.clock()).toISOString(),
+      };
+      const replaced = await this.replace({ version: STORE_VERSION, records: [...loaded.state.records, disposition] });
+      return replaced.ok ? { ok: true, record: disposition } : replaced;
+    } finally {
+      await acquired.release();
+    }
+  }
+
+  async markBeyondFiled(featureInput: unknown, findingId: string, issueUrl: string): Promise<BuildReviewBeyondAppendResult> {
+    const feature = parseFeatureIdentity(featureInput);
+    if (!feature || !nonEmptyString(findingId) || !nonEmptyString(issueUrl)) {
+      return { ok: false, kind: 'invalid', message: 'build-review beyond filing input is invalid' };
+    }
+    const acquired = await this.acquire();
+    if (!acquired.ok) return acquired;
+    try {
+      const loaded = await this.load();
+      if (!loaded.ok) return loaded;
+      const existing = loaded.state.records.filter(isBeyondDispositionRecord)
+        .find((entry) => sameFeature(entry.feature, feature) && entry.findingId === findingId);
+      if (!existing) return { ok: false, kind: 'invalid', message: 'build-review beyond record does not exist for this feature' };
+      if (existing.status === 'filed') return { ok: true, record: existing };
+      const filed: BuildReviewBeyondDispositionRecord = {
+        ...existing, status: 'filed', issueUrl, filedAt: new Date(this.clock()).toISOString(),
+      };
+      const records = loaded.state.records.map((entry) => entry === existing ? filed : entry);
+      const replaced = await this.replace({ version: STORE_VERSION, records });
+      return replaced.ok ? { ok: true, record: filed } : replaced;
     } finally {
       await acquired.release();
     }

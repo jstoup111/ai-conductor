@@ -108,6 +108,9 @@ function renderPlan(slug: string, files: string, inherited = false): string {
         '### Task 2: inherit the protected target',
         '',
         '**Files:** same as Task 1',
+        '**Done when:**',
+        '- The inherited target is processed by the fixture.',
+        '- The inherited target retains the task behavior.',
         '',
         '**Wired-into:** same as Task 1',
       ].join('\n')
@@ -120,6 +123,10 @@ function renderPlan(slug: string, files: string, inherited = false): string {
     '### Task 1: implement the change',
     '',
     `**Files:** ${files}`,
+    '',
+    '**Done when:**',
+    '- The fixture processes the declared file targets.',
+    '- The declared target policy is checked at land time.',
     '',
     // Must be a canonical waiver form: land's wiring-anchor gate runs the same
     // `extractWiredIntoContracts` parser BUILD does, and an invented `none (...)`

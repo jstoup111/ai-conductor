@@ -9,6 +9,7 @@ import {
   BuildReviewDispositionStore,
   matchesBuildReviewDisposition,
   type BuildReviewReducedCoverageDispositionRecord,
+  type BuildReviewBeyondDispositionRecord,
   type BuildReviewDispositionFilesystem,
   type BuildReviewDispositionRecord,
 } from '../../src/engine/build-review-dispositions.js';
@@ -52,6 +53,92 @@ const finding = canonicalizeBuildReviewFindingIdentity({
 })!;
 
 describe('build-review dispositions', () => {
+  it('appends an unfiled beyond record once and treats the same finding id as a no-op', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, clock: () => Date.parse('2026-08-21T12:00:00.000Z'),
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    const input = {
+      feature, findingId: finding.id, rubric: 'scope' as const, summary: 'Outside the plan boundary.',
+      evidenceLocations: ['src/a.ts:1'],
+    };
+
+    const first = await store.appendBeyondIfAbsent(input);
+    const writesAfterFirst = filesystem.writes.length;
+    const duplicate = await store.appendBeyondIfAbsent(input);
+
+    expect(first).toEqual({ ok: true, record: expect.objectContaining({
+      kind: 'beyond', version: 'v1', feature, findingId: finding.id, rubric: 'scope',
+      summary: 'Outside the plan boundary.', evidenceLocations: ['src/a.ts:1'], status: 'unfiled',
+      recordedAt: '2026-08-21T12:00:00.000Z',
+    }) });
+    expect(duplicate).toEqual({ ok: true, record: (first as { record: BuildReviewBeyondDispositionRecord }).record });
+    expect(filesystem.writes).toHaveLength(writesAfterFirst);
+  });
+
+  it('lists only beyond records for the requested feature', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    await store.appendBeyondIfAbsent({ feature, findingId: finding.id, rubric: 'scope', summary: 'beyond', evidenceLocations: ['src/a.ts:1'] });
+    await store.append({ feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'accepted', rationale: 'reason', operator: 'james' });
+
+    await expect(store.listBeyond(feature)).resolves.toEqual({ ok: true, records: [expect.objectContaining({ kind: 'beyond', findingId: finding.id })] });
+  });
+
+  it('excludes beyond records from reduced-coverage records', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    await store.appendBeyondIfAbsent({ feature, findingId: finding.id, rubric: 'scope', summary: 'beyond', evidenceLocations: ['src/a.ts:1'] });
+
+    await expect(store.listReducedCoverage(feature)).resolves.toEqual({ ok: true, records: [] });
+  });
+
+  it('marks a beyond record filed with its issue URL and filing time', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, clock: () => Date.parse('2026-08-21T12:00:00.000Z'),
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    await store.appendBeyondIfAbsent({ feature, findingId: finding.id, rubric: 'scope', summary: 'beyond', evidenceLocations: ['src/a.ts:1'] });
+
+    await expect(store.markBeyondFiled(feature, finding.id, 'https://github.com/acme/conductor/issues/12')).resolves.toEqual({
+      ok: true, record: expect.objectContaining({ status: 'filed', issueUrl: 'https://github.com/acme/conductor/issues/12', filedAt: '2026-08-21T12:00:00.000Z' }),
+    });
+  });
+
+  it('treats an unknown beyond status as malformed state', async () => {
+    const filesystem = new MemoryFilesystem();
+    filesystem.files.set('/repo/.pipeline/build-review-dispositions.json', JSON.stringify({
+      version: 'v1', records: [{
+        kind: 'beyond', version: 'v1', feature, findingId: finding.id, rubric: 'scope', summary: 'beyond',
+        evidenceLocations: ['src/a.ts:1'], status: 'unknown', recordedAt: '2026-08-21T12:00:00.000Z',
+      }],
+    }));
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(store.listBeyond(feature)).resolves.toMatchObject({ ok: false, kind: 'unreadable' });
+  });
+
+  it('fails a beyond append when the disposition lease is held', async () => {
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem: new MemoryFilesystem(), lock: lock({ ok: false, kind: 'timeout', message: 'occupied' }),
+    });
+
+    await expect(store.appendBeyondIfAbsent({
+      feature, findingId: finding.id, rubric: 'scope', summary: 'beyond', evidenceLocations: ['src/a.ts:1'],
+    })).resolves.toEqual({ ok: false, kind: 'lock', message: 'occupied' });
+  });
+
   it('persists the versioned feature, complete canonical finding, lap, rationale, operator, and clock time', async () => {
     const filesystem = new MemoryFilesystem();
     const store = new BuildReviewDispositionStore('/repo', {

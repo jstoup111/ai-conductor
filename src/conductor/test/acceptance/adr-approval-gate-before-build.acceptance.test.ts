@@ -46,6 +46,9 @@ const PLAN = [
   '### Task 1: enforce approval',
   '**Story:** 1',
   '**Dependencies:** none',
+  '**Done when:**',
+  '- Approved ADR declarations are accepted.',
+  '- Non-approved ADR declarations are rejected.',
   '',
 ].join('\n');
 

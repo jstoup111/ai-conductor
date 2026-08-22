@@ -80,6 +80,7 @@ export interface BuildReviewFindingReferenceContext {
   readonly planTasks: readonly string[];
   readonly rootCauseLoci?: readonly BuildReviewContentRegionReference[];
   readonly planTaskSurfaces?: Readonly<Record<string, readonly string[]>>;
+  readonly doneWhenContext?: readonly { readonly taskId: string; readonly criteria: readonly BuildReviewContentRegionReference[] }[];
 }
 
 /** The closed content-addressed reference shared by rubric anchor contracts. */
@@ -136,11 +137,18 @@ export function buildReviewFindingReferenceContext(
   projection: BuildReviewRubricProjection,
 ): BuildReviewFindingReferenceContext {
   const changedPaths = projection.changedFiles.map((file) => file.path);
+  const doneWhenContext = (projection.doneWhenContext ?? []).map((entry) => ({
+    taskId: entry.taskId,
+    criteria: entry.criteria.map((criterion) => contentRegionReference(
+      '.docs/plans/frozen-plan.md', criterion.hash, criterion.text, criterion.occurrence,
+    )),
+  }));
   if (projection.rubric !== 'completeness') {
     return Object.freeze({
       changedTests: projection.rubric === 'tautology' ? Object.freeze([...projection.changedTestSelectors]) : [],
       changedPaths: Object.freeze(changedPaths),
       planTasks: [],
+      doneWhenContext: Object.freeze(doneWhenContext),
       ...(projection.rubric === 'tautology'
         ? { changedTestRegions: withOccurrenceOrdinals((projection.changedTestTitles?.length
           ? projection.changedTestTitles
@@ -166,6 +174,7 @@ export function buildReviewFindingReferenceContext(
     planTaskSurfaces: Object.freeze(Object.fromEntries(
       [...taskPaths.entries()].map(([task, paths]) => [task, Object.freeze([...paths])]),
     )),
+    doneWhenContext: Object.freeze(doneWhenContext),
   });
 }
 
@@ -174,6 +183,8 @@ export interface BuildReviewFinding {
   readonly summary: string;
   readonly evidenceLocations: readonly string[];
   readonly anchor: BuildReviewFindingAnchor;
+  /** Optional rubric judgement binding this finding to the task boundary. */
+  readonly boundTo?: 'beyond' | BuildReviewContentRegionReference;
 }
 
 export interface BuildReviewJudgedResult {
@@ -473,7 +484,20 @@ function parseFindings(
     if ((anchor.rubric === 'tautology' && concernKind !== anchor.violationKind) ||
       (anchor.rubric === 'rootCause' && concernKind !== anchor.relation) ||
       (anchor.rubric === 'completeness' && concernKind !== anchor.missingKind)) return undefined;
-    findings.push({ concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations]), anchor });
+    const boundTo = source.boundTo === undefined ? undefined : source.boundTo === 'beyond'
+      ? 'beyond' as const
+      : parseContentRegionReference(source.boundTo);
+    if (source.boundTo !== undefined && !boundTo) return undefined;
+    if (boundTo && boundTo !== 'beyond') {
+      const task = anchor.rubric === 'completeness' ? anchor.planTask : undefined;
+      const valid = (references?.doneWhenContext ?? []).some((entry) =>
+        (!task || entry.taskId === task) && entry.criteria.some((criterion) =>
+          criterion.contentHash === boundTo.contentHash &&
+          (criterion.occurrence ?? 0) === (boundTo.occurrence ?? 0)));
+      if (!valid) return undefined;
+    }
+    findings.push({ concernKind, summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations]), anchor,
+      ...(boundTo === undefined ? {} : { boundTo }) });
   }
   return findings;
 }
@@ -566,7 +590,7 @@ export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId):
   ).join(', ');
   return '{"findings": [{"concernKind": "' + renderFindingVocabularyMemberShape(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds) + '", "summary": "<non-empty actionable string>", ' +
     '"evidenceLocations": ["<path:line or path:line:column>"], ' +
-    `"anchor": {"rubric": "${rubric}", ${anchorFields}}}]}`;
+    `"anchor": {"rubric": "${rubric}", ${anchorFields}}, "boundTo": "beyond" | {"path": "<plan path>", "contentHash": "sha256:<normalized Done when criterion>", "display": "<criterion>", "occurrence": <ordinal>}}]}`;
 }
 
 const MAX_REJECTION_PROBLEMS = 6;

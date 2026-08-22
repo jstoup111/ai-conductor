@@ -95,6 +95,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_cache_hit',
   'build_review_rubric_infrastructure_failure',
   'build_review_mechanical_allowance_exhausted',
+  'build_review_beyond_filed',
   'build_review_disposition_version_invalidated',
   'build_review_outer_verdict',
   'loop_halt',
@@ -412,6 +413,22 @@ describe('event sink subscriptions', () => {
     });
   });
 
+  it('defines the build-review beyond-filed occurrence and sends it to persistence and audit', () => {
+    const event = {
+      type: 'build_review_beyond_filed',
+      feature: 'plan-tasks-lack-falsifiable-done-criteria',
+      lapId: 'lap-42',
+      rubric: 'completeness',
+      findingId: 'finding-7',
+      issueUrl: 'https://github.com/example/repo/issues/42',
+    } satisfies ConductorEvent;
+
+    expect({ event, sinks: EVENT_SINKS.build_review_beyond_filed }).toEqual({
+      event,
+      sinks: { render: false, persist: true, audit: true },
+    });
+  });
+
   it('defines provider-neutral operator park boundary telemetry without completion authority', () => {
     const boundaries = [
       { kind: 'step', name: 'memory' },
@@ -541,6 +558,7 @@ describe('event sink subscriptions', () => {
       'verdict_freshness',
       'halt_marker_write_failed',
       'build_review_disposition_version_invalidated',
+      'build_review_beyond_filed',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));

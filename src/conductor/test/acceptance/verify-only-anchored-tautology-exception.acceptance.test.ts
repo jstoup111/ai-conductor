@@ -156,7 +156,7 @@ describe('acceptance: plan-marked verify-only maintenance reaches both build_rev
     for (const projection of Object.values(projections)) {
       expect(verifyOnlyContext(projection)).toEqual(expected);
     }
-    expect(projections.tautology).not.toHaveProperty('planBody');
+    expect(projections.tautology).toHaveProperty('planBody', inputs.sourceSnapshot.planBody);
 
     const prompt = buildGraderPrompt(inputs);
     expect(prompt).toContain('## Engine-parsed verify-only tasks');

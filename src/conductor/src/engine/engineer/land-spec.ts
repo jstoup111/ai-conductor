@@ -53,6 +53,7 @@ import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-ga
 import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
 import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
+import { validatePlanDoneWhen } from '../plan-done-when.js';
 
 const execFile = promisify(execFileCb);
 
@@ -238,7 +239,6 @@ export async function landSpec(
   }
   validateArtifactContent('stories', storiesContent, idea);
   validateArtifactContent('plan', planContent, idea);
-
   const protectedTargetViolations = scanPlanProtectedTargets(planContent, planStem(planFile));
   if (protectedTargetViolations.length > 0) {
     const targets = protectedTargetViolations
@@ -246,8 +246,15 @@ export async function landSpec(
       .join(', ');
     throw new Error(
       `landSpec: plan targets sealed artifacts owned by another feature: ${targets}. ` +
-        'Amend accepted artifacts during DECIDE, then re-author the plan.',
+      'Amend accepted artifacts during DECIDE, then re-author the plan.',
     );
+  }
+
+  const doneWhenViolations = validatePlanDoneWhen(planContent);
+  if (doneWhenViolations.length > 0) {
+    throw new Error(`landSpec: ${doneWhenViolations.map(({ taskId, reason }) =>
+      `plan task ${taskId} has ${reason === 'missing' ? 'no Done when: block' : `an invalid Done when: block (${reason})`}`,
+    ).join('; ')}`);
   }
 
   // Land and daemon discovery must agree on the exact stories artifact. Resolve

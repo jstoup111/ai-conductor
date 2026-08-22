@@ -88,7 +88,7 @@ async function writeDocs(dir: string, idea: string): Promise<void> {
     join(dir, '.docs', 'stories', `${slug}.md`),
     `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: s\n\n### AC\n- Given a, when b, then c.\n`,
   );
-  await writeFile(join(dir, '.docs', 'plans', `${slug}.md`), `# Plan: ${idea}\n\n### Task 1\n**Dependencies:** none\n`);
+  await writeFile(join(dir, '.docs', 'plans', `${slug}.md`), `# Plan: ${idea}\n\n### Task 1\n**Dependencies:** none\n**Done when:**\n- The plan's intended behavior is represented by the fixture.\n- The land operation can validate and commit the fixture.\n`);
 }
 
 /** A byte-comparable snapshot of the primary tree's git identity. */
