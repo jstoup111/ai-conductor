@@ -195,6 +195,11 @@ is untouched, so a rubric that ran and found something blocks exactly as today. 
 decision never resolves a finding; a finding acceptance never resolves reduced coverage. The reducer
 stays pure, fails closed on unreadable state, and continues to reject a malformed aggregate outright.
 
+> **Amended 2026-08-21 by #1763:** "blocks exactly as today" covers bound and unbound findings. A
+> finding the rubric itself marks `boundTo: beyond` (outside every `Done when:` criterion of its
+> task) leaves the blocking set per `adr-2026-08-21-review-bound-by-plan-done-when-criteria` D3 —
+> a rubric verdict, never an operator decision; reduced coverage still suppresses no finding.
+
 ### D9 — Reduced coverage is stamped where a reader will meet it (OQ-5, no expiry)
 
 Every lap that passes with a reduced-coverage decision in force records, on the lap evidence and via
