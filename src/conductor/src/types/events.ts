@@ -155,6 +155,12 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 
 export type ConductorEvent =
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
+  | {
+      /** A retired configuration key was accepted as a compatibility no-op. */
+      type: 'config_deprecated_key';
+      key: string;
+      adr: string;
+    }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */

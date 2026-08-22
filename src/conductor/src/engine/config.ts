@@ -55,6 +55,20 @@ const BUILD_REVIEW_RUBRIC_IDS = [
   'rootCause',
   'completeness',
 ] as const;
+export const DEPRECATED_BUILD_REVIEW_RUBRIC_IDS = [
+  'scope',
+  'completeness',
+  'rootCause',
+  'causalIntegrity',
+  'tautology',
+  'wiring',
+] as const;
+
+const DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET = new Set<string>(
+  DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
+);
+const DEPRECATED_BUILD_REVIEW_RUBRIC_ADR =
+  'adr-2026-08-22-build-review-opt-in-rubric-container';
 
 /** Default hard floor for live provider-stream observation emission. */
 export const DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS = 5_000;
@@ -87,6 +101,7 @@ function normalizeKeyedBlock(
 function validateBuildReviewRubrics(
   maxParallel: unknown,
   rubrics: unknown,
+  warnings: ConfigWarning[],
 ): ConfigError | null {
   if (
     maxParallel !== undefined &&
@@ -116,6 +131,12 @@ function validateBuildReviewRubrics(
   ]);
   for (const [rubricId, policy] of Object.entries(rubrics)) {
     const path = `build_review.rubrics.${rubricId}`;
+    if (DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId)) {
+      warnings.push(
+        `${path} is retired and ignored (${DEPRECATED_BUILD_REVIEW_RUBRIC_ADR}).`,
+      );
+      continue;
+    }
     if (!BUILD_REVIEW_RUBRIC_IDS.includes(rubricId as (typeof BUILD_REVIEW_RUBRIC_IDS)[number])) {
       return { type: 'validation_error', message: `Unknown rubric ID: ${path}` };
     }
@@ -1054,18 +1075,16 @@ export function validateConfig(
         ],
         warnings,
       );
-      let rubricInput = br.rubrics;
-      if (isPlainObject(rubricInput) && Object.hasOwn(rubricInput, 'causalIntegrity')) {
-        if (Object.hasOwn(rubricInput, 'rootCause')) {
-          return errVal(
-            'Ambiguous rubric configuration: build_review.rubrics.rootCause and build_review.rubrics.causalIntegrity cannot both be defined',
-          );
-        }
-        const { causalIntegrity, ...canonicalRubrics } = rubricInput;
-        rubricInput = { ...canonicalRubrics, rootCause: causalIntegrity };
-      }
-      const rubricError = validateBuildReviewRubrics(br.maxParallel, rubricInput);
+      const rubricInput = br.rubrics;
+      const rubricError = validateBuildReviewRubrics(br.maxParallel, rubricInput, warnings);
       if (rubricError) return { ok: false, error: rubricError };
+      const activeRubricInput = isPlainObject(rubricInput)
+        ? Object.fromEntries(
+            Object.entries(rubricInput).filter(
+              ([rubricId]) => !DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId),
+            ),
+          )
+        : undefined;
       const resolvedBuildReview = {
         ...br,
         enabled: typeof br.enabled === 'boolean' ? br.enabled : true,
@@ -1074,24 +1093,16 @@ export function validateConfig(
           BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
             rubricId,
             {
-              ...((rubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
+              ...((activeRubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
               enabled:
-                typeof (rubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
-                  ? (rubricInput as Record<string, Record<string, unknown>>)[rubricId].enabled
+                typeof (activeRubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
+                  ? (activeRubricInput as Record<string, Record<string, unknown>>)[rubricId].enabled
                   : true,
             },
           ]),
         ),
       };
       obj.build_review = resolvedBuildReview;
-      if (
-        resolvedBuildReview.enabled === true &&
-        Object.values(resolvedBuildReview.rubrics as Record<string, { enabled: boolean }>).every(
-          (rubric) => rubric.enabled === false,
-        )
-      ) {
-        return errVal('build_review.rubrics must contain at least one enabled rubric when build_review is enabled');
-      }
     } else {
       warnings.push(
         `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,

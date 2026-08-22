@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import {
   loadConfig,
   validateConfig,
+  DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
   customStepEntries,
   mergeConfigs,
@@ -1800,7 +1801,58 @@ complexity:
   });
 
   describe('build_review config field', () => {
-    it('materializes the closed four-rubric configuration with default and per-rubric execution policy fields', () => {
+    it('accepts retired rubric keys as no-ops and warns once per configured key', () => {
+      const retiredScope = validateConfig({
+        build_review: {
+          rubrics: {
+            scope: { enabled: true, max_retries: 'ignored-with-the-retired-rubric' },
+          },
+        },
+      });
+      const emptyContainer = validateConfig({
+        build_review: {
+          enabled: true,
+          rubrics: {
+            tautology: { enabled: false },
+            scope: { enabled: false },
+            rootCause: { enabled: false },
+            completeness: { enabled: false },
+          },
+        },
+      });
+      const oldAliases = validateConfig({
+        build_review: {
+          rubrics: {
+            rootCause: { enabled: true },
+            causalIntegrity: { enabled: true },
+          },
+        },
+      });
+      const neverShipped = validateConfig({
+        build_review: { rubrics: { inventedRubric: { enabled: true } } },
+      });
+
+      expect(DEPRECATED_BUILD_REVIEW_RUBRIC_IDS).toEqual([
+        'scope', 'completeness', 'rootCause', 'causalIntegrity', 'tautology', 'wiring',
+      ]);
+      expect(retiredScope.ok && retiredScope.warnings).toEqual([
+        'build_review.rubrics.scope is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+      ]);
+      expect(emptyContainer.ok).toBe(true);
+      expect(oldAliases.ok && oldAliases.warnings).toEqual([
+        'build_review.rubrics.rootCause is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+        'build_review.rubrics.causalIntegrity is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+      ]);
+      expect(neverShipped).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown rubric ID: build_review.rubrics.inventedRubric',
+        },
+      });
+    });
+
+    it('materializes retired rubric defaults while ignoring their configured policy', () => {
       const defaults = validateConfig({ build_review: {} });
       const configured = validateConfig({
         build_review: {
@@ -1837,15 +1889,7 @@ complexity:
           enabled: true,
           maxParallel: 3,
           rubrics: {
-            tautology: {
-              enabled: false,
-              llm_provider: ['codex', 'claude'],
-              model: 'gpt-5.6-sol',
-              effort: 'high',
-              model_fallback_ladder: ['gpt-5.6-terra'],
-              max_retries: 2,
-              escalate: true,
-            },
+            tautology: { enabled: true },
             scope: { enabled: true },
             rootCause: { enabled: true },
             completeness: { enabled: true },
@@ -1854,7 +1898,7 @@ complexity:
       });
     });
 
-    it('keeps legacy keys tolerant while the rubric execution subtree is fail-closed', () => {
+    it('keeps legacy keys tolerant and treats retired rubric policy as a no-op', () => {
       const legacy = validateConfig({
         build_review: { enabled: 'not-a-boolean', perTaskFloor: 'not-a-boolean' },
       });
@@ -1869,7 +1913,7 @@ complexity:
               warnings: legacy.warnings,
             }
           : legacy,
-        rubricPolicy: rubricPolicy.ok ? rubricPolicy : rubricPolicy.error.message,
+        rubricPolicy: rubricPolicy.ok ? rubricPolicy.warnings : rubricPolicy.error.message,
       }).toEqual({
         legacy: {
           buildReview: expect.objectContaining({ enabled: true }),
@@ -1878,7 +1922,9 @@ complexity:
             expect.stringMatching(/build_review\.perTaskFloor/),
           ],
         },
-        rubricPolicy: expect.stringMatching(/build_review\.rubrics\.completeness\.max_retries/),
+        rubricPolicy: [
+          'build_review.rubrics.completeness is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+        ],
       });
     });
 

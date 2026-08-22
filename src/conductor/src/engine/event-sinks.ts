@@ -8,6 +8,7 @@ export interface SinkDeclaration {
 
 export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   operator_rewind: { render: true, persist: true, audit: true },
+  config_deprecated_key: { render: false, persist: false, audit: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false },
   self_host_containment_verdict: { render: true, persist: true, audit: false },
   build_review_rubric_started: { render: false, persist: true, audit: false },
