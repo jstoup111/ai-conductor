@@ -280,18 +280,22 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
     for (const id of s.ids) {
       if (s.hasFilesLine) declaredTaskIds.add(id);
       hasFilesLineByTaskId.set(id, s.hasFilesLine);
-      if (!s.hasFilesLine) {
-        const references = new Set<string>();
-        BACKTICK_TOKEN.lastIndex = 0;
-        let match: RegExpExecArray | null;
-        while ((match = BACKTICK_TOKEN.exec(s.bodyLines.join('\n'))) !== null) {
-          const path = match[1].replace(/:\d+(?:-\d+)?$/, '').replace(/^\.\//, '');
-          if (PROTECTED_ARTIFACT_DIRECTORIES.some((directory) =>
-            path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
-          ) && !namesOwnFeature(path, featureDesc)) {
-            references.add(path);
-          }
+      const references = new Set<string>();
+      BACKTICK_TOKEN.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = BACKTICK_TOKEN.exec(s.bodyLines.join('\n'))) !== null) {
+        const path = match[1].replace(/:\d+(?:-\d+)?$/, '').replace(/^\.\//, '');
+        if (PROTECTED_ARTIFACT_DIRECTORIES.some((directory) =>
+          path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
+        ) && !namesOwnFeature(path, featureDesc)) {
+          references.add(path);
         }
+      }
+      // Files-declared tasks need this metadata only when their prose names a
+      // foreign protected artifact. Preserve the established empty-entry
+      // contract for no-Files legacy-fallback tasks, whose section body has
+      // always been the parser's fallback source.
+      if (references.size > 0 || !s.hasFilesLine) {
         foreignProtectedReferencesByTaskId.set(id, references);
       }
       const existing = result.get(id);

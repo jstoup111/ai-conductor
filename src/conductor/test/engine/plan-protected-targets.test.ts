@@ -1,13 +1,49 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { scanPlanProtectedTargets } from '../../src/engine/plan-protected-targets.js';
+import { TASK_HEADER_PATTERN } from '../../src/engine/plan-task-parse.js';
 import {
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
 } from '../../src/cli.js';
+
+function taskBlock(plan: string, taskId: string): string | undefined {
+  let currentTaskIds: string[] = [];
+  let currentTaskLines: string[] = [];
+
+  const finishCurrentTask = () => {
+    if (currentTaskIds.includes(taskId)) return currentTaskLines.join('\n');
+    return undefined;
+  };
+
+  for (const line of plan.split('\n')) {
+    const header = line.match(TASK_HEADER_PATTERN);
+    if (header) {
+      const completedTask = finishCurrentTask();
+      if (completedTask !== undefined) return completedTask;
+      currentTaskIds = (header[1] ?? header[2] ?? header[3] ?? header[4])
+        .split(',')
+        .flatMap((id) => {
+          const trimmed = id.trim();
+          const range = trimmed.match(/^(\d+)\s*-\s*(\d+)$/);
+          if (!range) return [trimmed];
+          return Array.from(
+            { length: Number(range[2]) - Number(range[1]) + 1 },
+            (_, offset) => String(Number(range[1]) + offset),
+          );
+        });
+      currentTaskLines = [line];
+    } else if (currentTaskIds.length > 0) {
+      currentTaskLines.push(line);
+    }
+  }
+
+  return finishCurrentTask();
+}
 
 describe('engine/plan-protected-targets', () => {
   it('reports every other-feature story artifact named by Task 14', () => {
@@ -91,13 +127,72 @@ Read \`.docs/specs/2026-07-04-operator-park.md\` first.
     ]);
   });
 
-  it('allows a declared task to cite a protected artifact as context', () => {
+  it('rejects a declared task that cites a foreign protected artifact', () => {
+    const plan = `### Task 17: Review the existing decision
+**Files:** .docs/validation/report.md
+Read \`.docs/decisions/adr-2026-01-01-other.md\` first.
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([
+      { taskId: '17', path: '.docs/decisions/adr-2026-01-01-other.md' },
+    ]);
+  });
+
+  it('still rejects the foreign prose reference without a Files line', () => {
+    const plan = `### Task 18: Review the existing decision
+Read \`.docs/decisions/adr-2026-01-01-other.md\` first.
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([
+      { taskId: '18', path: '.docs/decisions/adr-2026-01-01-other.md' },
+    ]);
+  });
+
+  it('allows an own-feature story path', () => {
+    const plan = `### Task 19: Amend this feature's story
+**Files:** .docs/stories/feature.md
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([]);
+  });
+
+  it('allows tasks that name only source and validation paths', () => {
+    const plan = `### Task 20: Add validation coverage
+**Files:**
+- src/conductor/src/engine/plan-protected-targets.ts
+- .docs/validation/report.md
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([]);
+  });
+
+  it('rejects a declared task that cites a protected artifact as context', () => {
     const plan = `### Task 17: Implement the scanner
 **Files:** src/conductor/src/x.ts
 Read \`.docs/specs/other-feature.md\` as context.
 `;
 
-    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([]);
+    expect(scanPlanProtectedTargets(plan, 'feature')).toEqual([
+      { taskId: '17', path: '.docs/specs/other-feature.md' },
+    ]);
+  });
+
+  it('reports only protected paths present in their task across the plan corpus', async () => {
+    const plansDirectory = resolve(fileURLToPath(new URL('../../../../.docs/plans/', import.meta.url)));
+    const planFiles = (await readdir(plansDirectory))
+      .filter((entry) => entry.endsWith('.md'))
+      .sort();
+
+    for (const planFile of planFiles) {
+      const plan = await readFile(join(plansDirectory, planFile), 'utf8');
+      const violations = scanPlanProtectedTargets(plan, basename(planFile, '.md'));
+
+      for (const violation of violations) {
+        const relevantTask = taskBlock(plan, violation.taskId);
+        expect(relevantTask, `${planFile} Task ${violation.taskId}`).toBeDefined();
+        expect(relevantTask, `${planFile} Task ${violation.taskId}`).toContain(violation.path);
+      }
+    }
   });
 
   it('does not produce violations for a clean in-memory plan', () => {

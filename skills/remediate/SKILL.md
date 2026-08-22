@@ -99,7 +99,7 @@ gap must be turned into concrete work:
 
 Judgment rules:
 - **Sealed-artifact amendments return to DECIDE.** When a gap requires amending another feature's
-  artifact under `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`, do
+  artifact under `.docs/architecture/`, `.docs/decisions/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`, do
   not assign `build` or `acceptance_specs`. Route it to the owning DECIDE step through the existing
   operator gate and DECIDE kickback path; make no request, ledger, record, or new artifact to bypass
   that ownership.

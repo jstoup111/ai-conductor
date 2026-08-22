@@ -723,8 +723,7 @@ annotation-only draft would have shipped an FR still claiming five rubrics.) Re-
 without a task targeting the other feature's sealed artifact, then run
 `conduct-ts plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
 `No protected-target violations found.`; each violation is reported as `Task <id>: <path> —
-ambiguous protected reference without a **Files:** declaration; add **Files:** to declare the
-task's targets.`
+return this amendment to DECIDE; BUILD tasks must not target protected artifacts.`
 
 1. Read the refusal in `.daemon/daemon.log`:
    ```bash

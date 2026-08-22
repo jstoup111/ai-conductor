@@ -74,12 +74,16 @@ Read \`.docs/specs/files-convention-fence.md\` as context.
     ]));
     expect(parsed.foreignProtectedReferencesByTaskId).toEqual(new Map([
       ['2', new Set(['.docs/specs/another-feature.md'])],
+      // Files-declared tasks retain a foreign protected prose reference, but
+      // do not create an empty metadata entry when they have none.
+      ['4', new Set(['.docs/specs/another-feature.md'])],
       ['6', new Set()],
       ['7', new Set()],
     ]));
     expect(scanPlanProtectedTargets(plan, 'files-convention-fence')).toEqual([
       { taskId: '2', path: '.docs/specs/another-feature.md' },
       { taskId: '3', path: '.docs/stories/another-feature.md' },
+      { taskId: '4', path: '.docs/specs/another-feature.md' },
     ]);
   });
 });
