@@ -856,6 +856,13 @@ export interface CompletionResult {
   /** Human-readable description of what's missing; injected into retry prompt. */
   reason?: string;
   /**
+   * The accepted-risk join that made a strict build_review aggregate complete.
+   * Passing it to the conductor lets its non-blocking beyond-finding recorder
+   * reuse the authoritative completion decision instead of resolving the
+   * disposition store a second time.
+   */
+  buildReviewEffectiveResolution?: BuildReviewEffectiveResolution;
+  /**
    * Machine-readable facet code for why `done` is false. 'recording' marks
    * misses caused by the finish skill failing to record its outcome (missing/
    * stale/invalid finish-choice marker, or missing pr_url for choice='pr');
@@ -2948,8 +2955,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             // verdict. Code-stamp preservation skips only the mtime check;
             // it must not bypass an unavailable or failing state resolver.
             const aggregate = parseBuildReviewAggregate(parsed);
+            let effectiveResolution: BuildReviewEffectiveResolution | undefined;
             if (aggregate) {
-              const effectiveResolution = await (
+              effectiveResolution = await (
                 ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
               )(dir, aggregate);
               if (!effectiveResolution.ok) {
@@ -2969,6 +2977,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             }
             return {
               done: true,
+              ...(effectiveResolution ? { buildReviewEffectiveResolution: effectiveResolution } : {}),
               verdictFreshness: await verdictFreshnessFor(path, ctx, 'preserved_surface_miss'),
             };
           }
@@ -3049,6 +3058,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
       return {
         done: true,
+        buildReviewEffectiveResolution: effectiveResolution,
         verdictFreshness: await verdictFreshnessFor(path, ctx, 'rewritten'),
       };
     }
