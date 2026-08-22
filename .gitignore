@@ -12,6 +12,7 @@ node_modules/
 .vite/
 src/conductor/dist
 src/conductor/dist-versions/
+src/conductor/tsup.config.bundled_*.mjs
 # publish-engine stages the built engine into a `.engine-staging-<rand>/` temp dir
 # and renames it into place; an interrupted/crashed publish orphans one. Unignored,
 # that orphan dirties the tree and the daemon then permanently skips fast-forward.

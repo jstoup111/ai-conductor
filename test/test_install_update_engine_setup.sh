@@ -47,7 +47,7 @@ done
 cat > "$STUBS_DIR/node" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = "--version" ]; then
-  echo v20.19.2
+  echo "${FAKE_NODE_VERSION:-v26.7.0}"
 fi
 EOF
 chmod +x "$STUBS_DIR/node"
@@ -110,6 +110,32 @@ run_install() {
 
 run_install update --update
 run_install fresh
+
+# Exercise the runtime-floor predicate directly. Node 25 must be rejected,
+# while the pinned major and future majors remain accepted.
+NODE_SUPPORT_FRAGMENT="$CHECKOUT/bin/install-node-support-test"
+awk '/# ─── Main ─────────────────────────────────────────────────────────────────────/{exit} {print}' \
+  "$CHECKOUT/bin/install" > "$NODE_SUPPORT_FRAGMENT"
+printf '%s\n' 'node_supports_conduct_ts' >> "$NODE_SUPPORT_FRAGMENT"
+chmod +x "$NODE_SUPPORT_FRAGMENT"
+
+assert_node_support() {
+  local version=$1 expected=$2 code=0
+  set +e
+  FAKE_NODE_VERSION="$version" PATH="$STUBS_DIR:$PATH" "$NODE_SUPPORT_FRAGMENT"
+  code=$?
+  set -e
+  if [ "$code" -eq "$expected" ]; then
+    echo "PASS Node ${version#v} support verdict is ${expected}"
+  else
+    echo "FAIL Node ${version#v} support verdict: expected ${expected}, got ${code}" >&2
+    exit 1
+  fi
+}
+
+assert_node_support v25.99.0 1
+assert_node_support v26.0.0 0
+assert_node_support v27.0.0 0
 
 # Exercise configure_permissions directly so this regression remains focused on
 # the write/cleanup boundary rather than the rest of a full installation.

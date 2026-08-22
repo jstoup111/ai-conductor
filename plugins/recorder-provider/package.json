@@ -2,6 +2,9 @@
   "name": "@james-stoup-agents/recorder-provider",
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=26.0.0"
+  },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
