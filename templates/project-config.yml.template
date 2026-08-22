@@ -2,6 +2,13 @@
 
 harness_version: ">=0.99.0"
 
+# The test-quality reviewer is opt-in for scaffolded projects. Enable it only
+# after configuring a supported scoped test command below.
+build_review:
+  rubrics:
+    testQuality:
+      enabled: false
+
 # Required for the native pre-SHIP aggregate gate. Name one project-owned
 # command that composes every authoritative test suite.
 # test_suite:

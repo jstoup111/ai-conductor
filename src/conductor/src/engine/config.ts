@@ -62,12 +62,7 @@ const PRD_AUDIT_DEFAULTS = {
   max_appended_ratio: 0.25,
   halt_on_any_plan_gap: false,
 } as const;
-const BUILD_REVIEW_RUBRIC_IDS = [
-  'tautology',
-  'scope',
-  'rootCause',
-  'completeness',
-] as const;
+const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
 export const DEPRECATED_BUILD_REVIEW_RUBRIC_IDS = [
   'scope',
   'completeness',
@@ -1130,7 +1125,7 @@ export function validateConfig(
               enabled:
                 typeof (activeRubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
                   ? (activeRubricInput as Record<string, Record<string, unknown>>)[rubricId].enabled
-                  : true,
+                  : false,
             },
           ]),
         ),
@@ -1143,14 +1138,14 @@ export function validateConfig(
       obj.build_review = {
         enabled: true,
         maxParallel: 4,
-        rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: true }])),
+        rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
       };
     }
   } else if (obj.build_review === null || materializeDefaults) {
     obj.build_review = {
       enabled: true,
       maxParallel: 4,
-      rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: true }])),
+      rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: false }])),
     };
   }
 

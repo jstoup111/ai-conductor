@@ -97,21 +97,16 @@ describe('engine/resolved-config', () => {
       expect(resolved.enabled).toBe(true);
     });
 
-    it('defaults tautology (#1682) and rootCause (#1805) off, scope and completeness on', () => {
+    it('defaults the test-quality rubric off with no overrides', () => {
       const resolved = resolveBuildReviewConfig(undefined);
-      expect({
-        tautology: resolved.rubrics.tautology.enabled,
-        scope: resolved.rubrics.scope.enabled,
-        rootCause: resolved.rubrics.rootCause.enabled,
-        completeness: resolved.rubrics.completeness.enabled,
-      }).toEqual({ tautology: false, scope: true, rootCause: false, completeness: true });
+      expect(resolved.rubrics.testQuality.enabled).toBe(false);
     });
 
-    it('honors an explicit tautology opt-in over the off default', () => {
+    it('honors an explicit test-quality opt-in over the off default', () => {
       const config: HarnessConfig = {
-        build_review: { rubrics: { tautology: { enabled: true } } },
+        build_review: { rubrics: { testQuality: { enabled: true } } },
       } as HarnessConfig;
-      expect(resolveBuildReviewConfig(config).rubrics.tautology.enabled).toBe(true);
+      expect(resolveBuildReviewConfig(config).rubrics.testQuality.enabled).toBe(true);
     });
 
     it('defaults perTaskFloor to true when field is absent', () => {

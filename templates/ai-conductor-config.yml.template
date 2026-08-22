@@ -7,6 +7,13 @@
 
 harness_version: ">=0.99.0"
 
+# The test-quality reviewer is opt-in by default. Project configuration can
+# enable it once a supported scoped test command is declared.
+build_review:
+  rubrics:
+    testQuality:
+      enabled: false
+
 # Required in project config for the native pre-SHIP aggregate gate. Declare
 # one project-owned command that composes every authoritative suite. For
 # projects with separate unit and acceptance commands, combine them in a
