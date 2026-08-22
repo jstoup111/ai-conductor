@@ -75,7 +75,8 @@ export type BuildReviewCacheMissReason =
   | "projection-version-mismatch"
   | "projection-digest-mismatch"
   | "policy-fingerprint-mismatch"
-  | "engine-version-mismatch";
+  | "engine-version-mismatch"
+  | "skill-digest-mismatch";
 
 export type BuildReviewCacheLookupResolution =
   | { kind: "hit"; hit: BuildReviewCacheHit }
@@ -191,6 +192,10 @@ export function classifyBuildReviewCacheLookup(
   if (!entry.engineIdentity || (lookup.engineIdentity !== undefined &&
     entry.engineIdentity.engineStamp !== lookup.engineIdentity.engineStamp)) {
     return { kind: "miss", reason: "engine-version-mismatch" };
+  }
+  if (lookup.engineIdentity !== undefined &&
+    entry.engineIdentity.skillDigest !== lookup.engineIdentity.skillDigest) {
+    return { kind: "miss", reason: "skill-digest-mismatch" };
   }
   return {
     kind: "hit",

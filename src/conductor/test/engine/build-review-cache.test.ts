@@ -103,6 +103,42 @@ describe("build-review semantic cache", () => {
     ]);
   });
 
+  it("classifies a changed rubric skill digest only after the engine stamp matches", () => {
+    const request = lookup();
+
+    expect([
+      classifyBuildReviewCacheLookup({
+        ...entry(),
+        engineIdentity: { ...entry().engineIdentity, skillDigest: "sha256:other-skill" },
+      }, request),
+      classifyBuildReviewCacheLookup({
+        ...entry(),
+        engineIdentity: { engineStamp: "other-engine", skillDigest: "sha256:other-skill" },
+      }, request),
+      classifyBuildReviewCacheLookup(entry(), request),
+    ]).toEqual([
+      { kind: "miss", reason: "skill-digest-mismatch" },
+      { kind: "miss", reason: "engine-version-mismatch" },
+      {
+        kind: "hit",
+        hit: {
+          result: {
+            ...entry().result,
+            lapId: "lap-current",
+            snapshotDigest: "snapshot-current",
+          },
+          provenance: {
+            kind: "cache-hit",
+            cachedLapId: "lap-a",
+            cachedSnapshotDigest: "snapshot-a",
+            projectionDigest: "sha256:projection-a",
+            policyFingerprint: "sha256:policy-a",
+          },
+        },
+      },
+    ]);
+  });
+
   it("stages legacy entries without engineIdentity for closed classification", async () => {
     const root = "/feature";
     const path = cacheEntryPath(root, "scope");
