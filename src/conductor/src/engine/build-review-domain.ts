@@ -143,11 +143,18 @@ export function buildReviewFindingReferenceContext(
       '.docs/plans/frozen-plan.md', criterion.hash, criterion.text, criterion.occurrence,
     )),
   }));
+  // Narrow domain fixtures and legacy projections predate the additive plan
+  // body field; absence means no ownership mapping, not an invalid result.
+  const taskPaths = parsePlanTaskPaths(projection.planBody ?? '');
+  const planTaskSurfaces = Object.freeze(Object.fromEntries(
+    [...taskPaths.entries()].map(([task, paths]) => [task, Object.freeze([...paths])]),
+  ));
   if (projection.rubric !== 'completeness') {
     return Object.freeze({
       changedTests: projection.rubric === 'tautology' ? Object.freeze([...projection.changedTestSelectors]) : [],
       changedPaths: Object.freeze(changedPaths),
       planTasks: [],
+      planTaskSurfaces,
       doneWhenContext: Object.freeze(doneWhenContext),
       ...(projection.rubric === 'tautology'
         ? { changedTestRegions: withOccurrenceOrdinals((projection.changedTestTitles?.length
@@ -167,13 +174,10 @@ export function buildReviewFindingReferenceContext(
         : {}),
     });
   }
-  const taskPaths = parsePlanTaskPaths(projection.planBody);
   return Object.freeze({
     changedTests: [], changedPaths: Object.freeze(changedPaths),
     planTasks: Object.freeze([...taskPaths.keys()]),
-    planTaskSurfaces: Object.freeze(Object.fromEntries(
-      [...taskPaths.entries()].map(([task, paths]) => [task, Object.freeze([...paths])]),
-    )),
+    planTaskSurfaces,
     doneWhenContext: Object.freeze(doneWhenContext),
   });
 }
