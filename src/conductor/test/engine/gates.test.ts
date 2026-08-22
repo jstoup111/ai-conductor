@@ -39,6 +39,32 @@ describe('engine/gates', () => {
       expect(result.passed).toBe(false);
     });
 
+    it('reports the failed test_suite prerequisite with its status', () => {
+      const result = checkGate('test_suite', { build: 'failed' });
+
+      expect(result).toEqual({
+        passed: false,
+        reason: 'Prerequisites not satisfied: build',
+        unsatisfied: [{ step: 'build', status: 'failed' }],
+      });
+    });
+
+    it('reports every unsatisfied build_review prerequisite with its status', () => {
+      const result = checkGate('build_review', {
+        wiring_check: 'failed',
+        test_suite: 'in_progress',
+      });
+
+      expect(result).toEqual({
+        passed: false,
+        reason: 'Prerequisites not satisfied: wiring_check, test_suite',
+        unsatisfied: [
+          { step: 'wiring_check', status: 'failed' },
+          { step: 'test_suite', status: 'in_progress' },
+        ],
+      });
+    });
+
     it('fails when prerequisite is in_progress', () => {
       const state: ConductState = { architecture_review: 'in_progress' };
       const result = checkGate('stories', state);

@@ -1,11 +1,15 @@
-import type { StepName, StepDefinition } from '../types/index.js';
+import type { StepName, StepDefinition, StepStatus } from '../types/index.js';
 import type { ConductState } from '../types/index.js';
 import { getStepDefinition } from './steps.js';
-import { stepSatisfied } from './state.js';
+import { getStepStatus, stepSatisfied } from './state.js';
 
 export type GateResult =
   | { passed: true }
-  | { passed: false; reason: string };
+  | {
+    passed: false;
+    reason: string;
+    unsatisfied: Array<{ step: StepName; status: StepStatus }>;
+  };
 
 /**
  * Check whether a step's gate passes — all prerequisites must be satisfied.
@@ -29,6 +33,10 @@ export function checkGate(
   return {
     passed: false,
     reason: `Prerequisites not satisfied: ${names}`,
+    unsatisfied: unsatisfied.map((prereq) => ({
+      step: prereq,
+      status: getStepStatus(state, prereq),
+    })),
   };
 }
 
