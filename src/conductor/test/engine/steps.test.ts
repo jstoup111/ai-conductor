@@ -214,17 +214,15 @@ describe('engine/steps', () => {
       expect(s.skillName).toBe('prd-audit');
     });
 
-    it('architecture_review_as_built is SHIP/gating loopGate, after prd_audit', () => {
+    it('architecture_review_as_built is SHIP/gating loopGate, after prd_audit, and runs on every tier and track', () => {
       const s = ALL_STEPS[18];
       expect(s.name).toBe('architecture_review_as_built');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['prd_audit']);
-      // Skipped for Small (no ADRs) and tied to the DECIDE-phase review: if
-      // architecture_review was skipped for any reason, there is nothing to
-      // audit, so the as-built sweep skips too.
-      expect(s.skippableForTiers).toEqual(['S']);
-      expect(s.skipWhenSkipped).toBe('architecture_review');
+      expect(s.skippableForTiers).toEqual([]);
+      expect(s.skippableForTracks).toBeUndefined();
+      expect(s.skipWhenSkipped).toBeUndefined();
       expect(s.isCheckpoint).toBe(false);
       expect(s.loopGate).toBe(true);
       // Runs the existing architecture-review skill in --as-built mode.
@@ -346,7 +344,8 @@ describe('engine/steps', () => {
     it('Small tier does not skip non-skippable steps', () => {
       const nonSkippable: StepName[] = [
         'worktree', 'memory', 'explore', 'complexity', 'prd', 'stories',
-        'plan', 'build', 'wiring_check', 'test_suite', 'finish',
+        'plan', 'build', 'wiring_check', 'test_suite',
+        'architecture_review_as_built', 'finish',
       ];
       for (const step of nonSkippable) {
         expect(shouldSkipForTier(step, 'S')).toBe(false);
@@ -378,7 +377,8 @@ describe('engine/steps', () => {
     // legitimately skip manual testing.
     it('locks the S-tier evidence-gate core as never-skippable (Task: T6)', () => {
       const evidenceGateCore: StepName[] = [
-        'build', 'build_review', 'wiring_check', 'test_suite', 'rebase', 'finish',
+        'build', 'build_review', 'wiring_check', 'test_suite',
+        'architecture_review_as_built', 'rebase', 'finish',
       ];
       for (const step of evidenceGateCore) {
         expect(shouldSkipForTier(step, 'S')).toBe(false);
@@ -438,13 +438,12 @@ describe('engine/steps', () => {
   // --- getSkippableSteps ---
 
   describe('getSkippableSteps', () => {
-    it('returns 8 steps for S tier', () => {
+    it('returns 7 steps for S tier', () => {
       const result = getSkippableSteps('S');
       // Returned in ALL_STEPS order (architecture now precedes conflict_check).
       expect(result).toEqual([
         'architecture_diagram', 'architecture_review', 'conflict_check',
-        'coherence_check', 'acceptance_specs', 'manual_test',
-        'architecture_review_as_built', 'retro',
+        'coherence_check', 'acceptance_specs', 'manual_test', 'retro',
       ]);
     });
 
@@ -464,7 +463,6 @@ describe('engine/steps', () => {
         'coherence_check',
         'acceptance_specs',
         'manual_test',
-        'architecture_review_as_built',
         'retro',
       ]);
     });

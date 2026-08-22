@@ -244,12 +244,7 @@ export const ALL_STEPS: StepDefinition[] = [
     phase: 'SHIP',
     enforcement: 'gating',
     prerequisites: ['prd_audit'],
-    // Mirror the DECIDE-phase architecture_review's tier skip: Small features
-    // produce no ADRs, so there is nothing for the as-built sweep to audit.
-    skippableForTiers: ['S'],
-    // And skip on ANY skip of the review (config-disable / when: on M/L), not
-    // just the tier case — no APPROVED ADRs means no as-built compliance check.
-    skipWhenSkipped: 'architecture_review',
+    skippableForTiers: [],
     isCheckpoint: false,
     skillName: 'architecture-review',
     loopGate: true,
