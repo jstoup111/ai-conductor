@@ -29,7 +29,7 @@ describe('reconcileBeyondRecords', () => {
     const emitted = vi.fn();
 
     await reconcileBeyondRecords({
-      projectRoot: root, tracker: { createIssue } as never,
+      projectRoot: root, tracker: { findIssueBySourceRef: vi.fn(async () => null), createIssue } as never,
       gh: vi.fn(async () => ({ stdout: '' })), log: vi.fn(), emit: emitted,
     });
 
@@ -54,7 +54,7 @@ describe('reconcileBeyondRecords', () => {
       .mockResolvedValueOnce('https://github.com/acme/repo/issues/2');
 
     await reconcileBeyondRecords({
-      projectRoot: root, tracker: { createIssue } as never,
+      projectRoot: root, tracker: { findIssueBySourceRef: vi.fn(async () => null), createIssue } as never,
       gh: vi.fn(async () => ({ stdout: '' })), log: vi.fn(),
     });
 
@@ -77,8 +77,34 @@ describe('reconcileBeyondRecords', () => {
     await store.markBeyondFiled(feature, 'sha256:filed', 'https://github.com/acme/repo/issues/3');
     const createIssue = vi.fn<TrackerClient['createIssue']>();
 
-    await reconcileBeyondRecords({ projectRoot: root, tracker: { createIssue } as never, gh: vi.fn(async () => ({ stdout: '' })), log: vi.fn() });
+    await reconcileBeyondRecords({ projectRoot: root, tracker: { findIssueBySourceRef: vi.fn(async () => null), createIssue } as never, gh: vi.fn(async () => ({ stdout: '' })), log: vi.fn() });
 
     expect(createIssue).not.toHaveBeenCalled();
+  });
+
+  it('recovers an issue by sourceRef after a post-create stamp failure without creating a duplicate', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'beyond-reconcile-'));
+    roots.push(root);
+    const worktree = join(root, '.worktrees', 'feature');
+    await mkdir(worktree, { recursive: true });
+    const store = new BuildReviewDispositionStore(worktree);
+    const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
+    await store.appendBeyondIfAbsent({ feature, findingId: 'sha256:retry', rubric: 'scope', summary: 'retry', evidenceLocations: ['src/x.ts:1'] });
+    const createIssue = vi.fn<TrackerClient['createIssue']>(async () => 'https://github.com/acme/repo/issues/4');
+    const findIssueBySourceRef = vi.fn<TrackerClient['findIssueBySourceRef']>()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('https://github.com/acme/repo/issues/4');
+    const originalRemember = BuildReviewDispositionStore.prototype.rememberBeyondIssueUrl;
+    vi.spyOn(BuildReviewDispositionStore.prototype, 'rememberBeyondIssueUrl')
+      .mockImplementationOnce(async () => ({ ok: false, message: 'simulated stamp failure' }))
+      .mockImplementation(originalRemember);
+
+    const input = { projectRoot: root, tracker: { findIssueBySourceRef, createIssue } as never, gh: vi.fn(async () => ({ stdout: '' })), log: vi.fn() };
+    await reconcileBeyondRecords(input);
+    await reconcileBeyondRecords(input);
+
+    expect(createIssue).toHaveBeenCalledOnce();
+    expect(findIssueBySourceRef).toHaveBeenCalledTimes(2);
+    await expect(store.listBeyond(feature)).resolves.toMatchObject({ ok: true, records: [{ status: 'filed', issueUrl: 'https://github.com/acme/repo/issues/4' }] });
   });
 });

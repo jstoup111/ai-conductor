@@ -7107,12 +7107,12 @@ export class Conductor {
                 const verdictRaw = JSON.parse(
                   await readFile(join(this.projectRoot, BUILD_REVIEW_VERDICT), 'utf-8'),
                 );
-                if (completion.buildReviewEffectiveResolution) {
-                  await this.recordBeyondBuildReviewFindings(
-                    verdictRaw,
-                    completion.buildReviewEffectiveResolution,
-                  );
-                }
+                const resolution = await (
+                  this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+                )(this.projectRoot, verdictRaw, {
+                  emit: async (event) => { await this.events.emit(event); },
+                });
+                await this.recordBeyondBuildReviewFindings(verdictRaw, resolution);
               } catch {
                 // Completion owns the effective verdict. Recording non-blocking
                 // beyond findings must never change that gate outcome.

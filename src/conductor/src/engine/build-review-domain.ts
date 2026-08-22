@@ -67,9 +67,9 @@ export function deriveBuildReviewInfrastructureFailureReason(
 }
 
 export type BuildReviewFindingAnchor =
-  | { rubric: 'tautology'; changedTest: string | BuildReviewContentRegionReference; exercisedBehavior: string; violationKind: string }
-  | { rubric: 'scope'; path: string; relation: string }
-  | { rubric: 'rootCause'; statedDefect: string; locus: string | BuildReviewContentRegionReference; relation: string }
+  | { rubric: 'tautology'; changedTest: string | BuildReviewContentRegionReference; exercisedBehavior: string; violationKind: string; taskId?: string }
+  | { rubric: 'scope'; path: string; relation: string; taskId?: string }
+  | { rubric: 'rootCause'; statedDefect: string; locus: string | BuildReviewContentRegionReference; relation: string; taskId?: string }
   | { rubric: 'completeness'; planTask: string; missingSurface: string; missingOutcome: string; missingKind: string };
 
 /** Immutable projection members that may appear in a finding identity. */
@@ -149,11 +149,15 @@ export function buildReviewFindingReferenceContext(
   const planTaskSurfaces = Object.freeze(Object.fromEntries(
     [...taskPaths.entries()].map(([task, paths]) => [task, Object.freeze([...paths])]),
   ));
+  const planTasks = Object.freeze([...new Set([
+    ...taskPaths.keys(),
+    ...doneWhenContext.map((entry) => entry.taskId),
+  ])]);
   if (projection.rubric !== 'completeness') {
     return Object.freeze({
       changedTests: projection.rubric === 'tautology' ? Object.freeze([...projection.changedTestSelectors]) : [],
       changedPaths: Object.freeze(changedPaths),
-      planTasks: [],
+      planTasks,
       planTaskSurfaces,
       doneWhenContext: Object.freeze(doneWhenContext),
       ...(projection.rubric === 'tautology'
@@ -176,7 +180,7 @@ export function buildReviewFindingReferenceContext(
   }
   return Object.freeze({
     changedTests: [], changedPaths: Object.freeze(changedPaths),
-    planTasks: Object.freeze([...taskPaths.keys()]),
+    planTasks,
     planTaskSurfaces,
     doneWhenContext: Object.freeze(doneWhenContext),
   });
@@ -428,15 +432,17 @@ export function parseBuildReviewFindingAnchor(
         : matchesContentRegion(references.changedTestRegions, changedTest)
           ? changedTest
           : undefined;
-      return matchedChangedTest && nonEmptyString(source.exercisedBehavior) && violationKind
-        ? { rubric: source.rubric, changedTest: matchedChangedTest, exercisedBehavior: source.exercisedBehavior, violationKind }
+      const taskId = source.taskId === undefined ? undefined : verifiedReference(source.taskId, references?.planTasks, parseBuildReviewCanonicalPlanTaskReference);
+      return matchedChangedTest && nonEmptyString(source.exercisedBehavior) && violationKind && (source.taskId === undefined || taskId)
+        ? { rubric: source.rubric, changedTest: matchedChangedTest, exercisedBehavior: source.exercisedBehavior, violationKind, ...(taskId ? { taskId } : {}) }
         : undefined;
     }
     case 'scope': {
       const relation = parseBuildReviewFindingAnchorClassification(source.relation, source.rubric, 'relation');
       const path = verifiedReference(source.path, references?.changedPaths, parseBuildReviewCanonicalPathReference);
-      return path && relation && (contractVersion === 'v1' || relation === 'not-authorized-by-plan')
-        ? { rubric: source.rubric, path, relation }
+      const taskId = source.taskId === undefined ? undefined : verifiedReference(source.taskId, references?.planTasks, parseBuildReviewCanonicalPlanTaskReference);
+      return path && relation && (contractVersion === 'v1' || relation === 'not-authorized-by-plan') && (source.taskId === undefined || taskId)
+        ? { rubric: source.rubric, path, relation, ...(taskId ? { taskId } : {}) }
         : undefined;
     }
     case 'rootCause': {
@@ -449,8 +455,9 @@ export function parseBuildReviewFindingAnchor(
         : matchesContentRegion(references.rootCauseLoci, locus)
           ? locus
           : undefined;
-      return nonEmptyString(source.statedDefect) && matchedLocus && relation
-        ? { rubric: source.rubric, statedDefect: source.statedDefect, locus: matchedLocus, relation }
+      const taskId = source.taskId === undefined ? undefined : verifiedReference(source.taskId, references?.planTasks, parseBuildReviewCanonicalPlanTaskReference);
+      return nonEmptyString(source.statedDefect) && matchedLocus && relation && (source.taskId === undefined || taskId)
+        ? { rubric: source.rubric, statedDefect: source.statedDefect, locus: matchedLocus, relation, ...(taskId ? { taskId } : {}) }
         : undefined;
     }
     case 'completeness': {
@@ -507,15 +514,10 @@ function parseFindings(
   return findings;
 }
 
-/** Resolve a rubric anchor's task from its explicit task or its owned path. */
+/** Resolve a binding-capable anchor only from its declared task identity. */
 function owningTask(anchor: BuildReviewFindingAnchor, references?: BuildReviewFindingReferenceContext): string | undefined {
   if (anchor.rubric === 'completeness') return anchor.planTask;
-  const region = anchor.rubric === 'tautology' ? anchor.changedTest : anchor.rubric === 'rootCause' ? anchor.locus : undefined;
-  const path = anchor.rubric === 'scope' ? anchor.path : typeof region === 'object' ? region.path : undefined;
-  if (!path) return undefined;
-  const tasks = Object.entries(references?.planTaskSurfaces ?? {})
-    .filter(([, surfaces]) => surfaces.includes(path)).map(([task]) => task);
-  return tasks.length === 1 ? tasks[0] : undefined;
+  return anchor.taskId;
 }
 
 /**
@@ -606,7 +608,7 @@ export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId):
   ).join(', ');
   return '{"findings": [{"concernKind": "' + renderFindingVocabularyMemberShape(BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds) + '", "summary": "<non-empty actionable string>", ' +
     '"evidenceLocations": ["<path:line or path:line:column>"], ' +
-    `"anchor": {"rubric": "${rubric}", ${anchorFields}}, "boundTo": "beyond" | {"path": "<plan path>", "contentHash": "sha256:<normalized Done when criterion>", "display": "<criterion>", "occurrence": <ordinal>}}]}`;
+    `"anchor": {"rubric": "${rubric}", ${anchorFields}${rubric === 'completeness' ? '' : ', "taskId": "<owning plan task when boundTo is content-region>"'}}, "boundTo": "beyond" | {"path": "<plan path>", "contentHash": "sha256:<normalized Done when criterion>", "display": "<criterion>", "occurrence": <ordinal>}}]}`;
 }
 
 const MAX_REJECTION_PROBLEMS = 6;
@@ -744,7 +746,7 @@ export function describeBuildReviewJudgedResultRejection(
           if (planTask === undefined) {
             problems.push(`findings[${index}].boundTo cannot resolve because its anchor does not identify one task; allowed forms are "beyond" or content-region`);
           } else if (taskCriteria.length === 0) {
-            problems.push(`findings[${index}].boundTo cannot resolve because task ${planTask} has no criteria`);
+            problems.push(`findings[${index}].boundTo cannot resolve because task ${planTask} has no criteria; allowed forms are "beyond" or content-region`);
           } else if (!taskCriteria.some((entry) => entry.criteria.some((criterion) =>
             criterion.contentHash === boundTo.contentHash && (criterion.occurrence ?? 0) === (boundTo.occurrence ?? 0)))) {
             problems.push(`findings[${index}].boundTo must reference a Done when: criterion${planTask ? ` for task ${planTask}` : ''}; allowed forms are "beyond" or content-region`);

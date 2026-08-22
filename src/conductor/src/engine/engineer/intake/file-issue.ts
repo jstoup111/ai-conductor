@@ -148,11 +148,15 @@ export async function fileIntakeIssue(
   const cleanBody = sanitizeIntakeText(`${opts.body}${opts.sourceRef ? `\n\nSource-Ref: ${opts.sourceRef}` : ''}`);
   const redactions = [...cleanTitle.redactions, ...cleanBody.redactions];
 
-  // ── Create the issue ─────────────────────────────────────────────────────
-  const issueUrl = await deps.tracker.createIssue(
-    { title: cleanTitle.text, body: cleanBody.text, repo: opts.repo },
-    deps.cwd,
-  );
+  // ── Recover or create the issue ──────────────────────────────────────────
+  // Source-Ref is a durable idempotency key, not merely issue-body prose. A
+  // retry after a successful create but before its local stamp must recover
+  // this issue instead of creating a duplicate.
+  const issueUrl = opts.sourceRef
+    ? await deps.tracker.findIssueBySourceRef(opts.sourceRef, opts.repo, deps.cwd) ?? await deps.tracker.createIssue(
+      { title: cleanTitle.text, body: cleanBody.text, repo: opts.repo }, deps.cwd,
+    )
+    : await deps.tracker.createIssue({ title: cleanTitle.text, body: cleanBody.text, repo: opts.repo }, deps.cwd);
   const ref = issueUrlToRef(issueUrl);
 
   const result: FileIntakeIssueResult = {

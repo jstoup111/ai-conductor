@@ -88,6 +88,28 @@ function expandTaskIds(raw: string): string[] {
   return ids;
 }
 
+/** Enumerate task headers through the same fence-aware grammar as plan sections. */
+export function parsePlanTaskIds(text: string): string[] {
+  const ids: string[] = [];
+  let fence: string | null = null;
+  for (const line of text.split('\n')) {
+    const fenceMatch = line.match(FENCE_LINE);
+    if (fenceMatch) {
+      const delimiter = fenceMatch[1];
+      if (!fence) fence = delimiter[0];
+      else if (delimiter[0] === fence) fence = null;
+      continue;
+    }
+    if (fence) continue;
+    const headerMatch = line.match(TASK_HEADER_PATTERN);
+    if (!headerMatch) continue;
+    for (const id of expandTaskIds(headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4])) {
+      if (!ids.includes(id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
 /**
  * Parses the preserved behavior declared by each plan task.
  *

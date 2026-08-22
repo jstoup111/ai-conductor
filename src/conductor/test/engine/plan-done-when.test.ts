@@ -45,4 +45,15 @@ describe('validatePlanDoneWhen', () => {
 - second real criterion
 `)).toEqual([{ taskId: '2', reason: 'blank' }]);
   });
+
+  it('ignores a fenced task heading during task enumeration', () => {
+    expect(validatePlanDoneWhen(`### Task 1: real
+**Done when:**
+- first observable result
+- second observable result
+\`\`\`
+### Task 2: illustrative only
+\`\`\`
+`)).toEqual([]);
+  });
 });

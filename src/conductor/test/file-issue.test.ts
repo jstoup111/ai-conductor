@@ -21,6 +21,9 @@ function makeFakeTracker(opts: { failIssueCreate?: boolean } = {}) {
     [];
 
   const tracker: TrackerClient = {
+    async findIssueBySourceRef() {
+      return null;
+    },
     async getIssueLabels() {
       throw new Error('not used in this test');
     },

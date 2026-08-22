@@ -24,6 +24,27 @@ import {
 import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
 
 describe('build-review domain', () => {
+  it('uses an explicit task identity for bound findings when tasks share a file', () => {
+    const references = {
+      changedTests: [], changedPaths: ['src/shared.ts'], planTasks: ['7', '8'],
+      planTaskSurfaces: { '7': ['src/shared.ts'], '8': ['src/shared.ts'] },
+      doneWhenContext: [
+        { taskId: '7', criteria: [{ path: '.docs/plans/frozen-plan.md', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'task seven criterion' }] },
+        { taskId: '8', criteria: [{ path: '.docs/plans/frozen-plan.md', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'task eight criterion' }] },
+      ],
+    };
+    const finding = (taskId: string, contentHash: string) => ({
+      kind: 'judged', rubric: 'scope', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
+      findings: [{ concernKind: 'out-of-plan-change', summary: 'x', evidenceLocations: ['src/shared.ts:1'],
+        anchor: { rubric: 'scope', path: 'src/shared.ts', relation: 'not-authorized-by-plan', taskId },
+        boundTo: { path: '.docs/plans/frozen-plan.md', contentHash, display: 'criterion' } }],
+    });
+
+    expect(parseBuildReviewJudgedResult(finding('7', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'), references)).toBeDefined();
+    expect(parseBuildReviewJudgedResult(finding('7', 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'), references)).toBeUndefined();
+    expect(parseBuildReviewJudgedResult({ ...finding('7', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'), findings: [{ ...finding('7', 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa').findings[0], anchor: { rubric: 'scope', path: 'src/shared.ts', relation: 'not-authorized-by-plan' } }] }, references)).toBeUndefined();
+  });
+
   it('diagnoses malformed and unresolved boundTo values with a finding index', () => {
     const value = {
       kind: 'judged', rubric: 'completeness', lapId: 'lap-1', snapshotDigest: 'sha256:abc', contractVersion: 'v3',
@@ -511,13 +532,13 @@ describe('build-review judged-result contract rendering and rejection diagnosis'
     expect(renderBuildReviewJudgedResultShape('tautology')).not.toContain('"snapshotDigest"');
     expect(renderBuildReviewJudgedResultShape('tautology')).not.toContain('"contractVersion"');
     expect(renderBuildReviewJudgedResultShape('tautology')).toContain(
-      '"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>"}',
+      '"anchor": {"rubric": "tautology", "changedTest": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-test-title>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "exercisedBehavior": "<canonical projection reference or report string>", "violationKind": "<one of: assertion-insensitive-to-production | test-does-not-exercise-changed-behavior | assertion-derived-from-test-data | source-text-mirror>", "taskId": "<owning plan task when boundTo is content-region>"}',
     );
     expect(renderBuildReviewJudgedResultShape('scope')).toContain(
-      '"anchor": {"rubric": "scope", "path": "<canonical projection reference or report string>", "relation": "<one of: not-authorized-by-plan>"}',
+      '"anchor": {"rubric": "scope", "path": "<canonical projection reference or report string>", "relation": "<one of: not-authorized-by-plan>", "taskId": "<owning plan task when boundTo is content-region>"}',
     );
     expect(renderBuildReviewJudgedResultShape('rootCause')).toContain(
-      '"anchor": {"rubric": "rootCause", "statedDefect": "<canonical projection reference or report string>", "locus": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-hunk-content>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>"}',
+      '"anchor": {"rubric": "rootCause", "statedDefect": "<canonical projection reference or report string>", "locus": {"path": "<repository-relative path>", "contentHash": "sha256:<normalized-hunk-content>", "display": "<human-readable non-coordinate label>", "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}, "relation": "<one of: root-cause-unaddressed | symptom-only-fix | provenance-sensitive-cache-identity>", "taskId": "<owning plan task when boundTo is content-region>"}',
     );
     expect(renderBuildReviewJudgedResultShape('completeness')).toContain(
       '"anchor": {"rubric": "completeness", "planTask": "<canonical projection reference or report string>", "missingSurface": "<canonical projection reference or report string>", "missingOutcome": "<canonical projection reference or report string>", "missingKind": "<one of: missing-deliverable>"}',

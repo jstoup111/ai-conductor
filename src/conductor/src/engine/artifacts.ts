@@ -856,13 +856,6 @@ export interface CompletionResult {
   /** Human-readable description of what's missing; injected into retry prompt. */
   reason?: string;
   /**
-   * The accepted-risk join that made a strict build_review aggregate complete.
-   * Passing it to the conductor lets its non-blocking beyond-finding recorder
-   * reuse the authoritative completion decision instead of resolving the
-   * disposition store a second time.
-   */
-  buildReviewEffectiveResolution?: BuildReviewEffectiveResolution;
-  /**
    * Machine-readable facet code for why `done` is false. 'recording' marks
    * misses caused by the finish skill failing to record its outcome (missing/
    * stale/invalid finish-choice marker, or missing pr_url for choice='pr');
@@ -2975,11 +2968,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                 };
               }
             }
-            return {
-              done: true,
-              ...(effectiveResolution ? { buildReviewEffectiveResolution: effectiveResolution } : {}),
-              verdictFreshness: await verdictFreshnessFor(path, ctx, 'preserved_surface_miss'),
-            };
+            return { done: true, verdictFreshness: await verdictFreshnessFor(path, ctx, 'preserved_surface_miss') };
           }
         }
       } catch {
@@ -3056,11 +3045,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           routeClass: 'named-route',
         };
       }
-      return {
-        done: true,
-        buildReviewEffectiveResolution: effectiveResolution,
-        verdictFreshness: await verdictFreshnessFor(path, ctx, 'rewritten'),
-      };
+      return { done: true, verdictFreshness: await verdictFreshnessFor(path, ctx, 'rewritten') };
     }
     if (result.verdict === 'FAIL') {
       const details = buildReviewFailureDetails(result);

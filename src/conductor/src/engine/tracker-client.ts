@@ -67,6 +67,8 @@ interface AssignedIssue {
  *
  */
 export interface TrackerClient {
+  /** Locate a previously-created issue whose body contains this exact Source-Ref marker. */
+  findIssueBySourceRef(sourceRef: string, repo: string | undefined, cwd: string): Promise<string | null>;
   /** `gh api repos/<owner>/<repo>/issues/<number>` — returns label names. */
   getIssueLabels(repo: string, number: number, cwd: string): Promise<string[]>;
   /** `gh issue view <owner/repo#number> --json state` — raw stdout JSON. */
@@ -177,6 +179,14 @@ function parseJsonOrThrow<T>(operation: string, stdout: string): T {
 /** Construct a `TrackerClient` backed by the GitHub `gh` CLI via the given runner. */
 export function createGithubTrackerClient(runner: GhRunner): TrackerClient {
   return {
+    async findIssueBySourceRef(sourceRef, repo, cwd) {
+      const args = ['issue', 'list', '--state', 'all', '--search', `"Source-Ref: ${sourceRef}" in:body`, '--json', 'url,body', '--limit', '2'];
+      if (repo) args.push('-R', repo);
+      const { stdout } = await runOrThrow(runner, args, { cwd });
+      const issues = parseJsonOrThrow<Array<{ url?: string; body?: string }>>('findIssueBySourceRef', stdout || '[]');
+      const marker = new RegExp(`^Source-Ref: ${sourceRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm');
+      return issues.find((issue) => typeof issue.url === 'string' && marker.test(issue.body ?? ''))?.url ?? null;
+    },
     async getIssueLabels(repo, number, cwd) {
       const { stdout } = await runOrThrow(runner, ['api', `repos/${repo}/issues/${number}`], {
         cwd,
