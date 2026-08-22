@@ -816,6 +816,84 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
     })]);
   }, 30000);
 
+  it('withholds the exhausted-allowance HALT when a failing lap carries no mechanical fault', async () => {
+    // Negative-path sibling of the test above (plan task rem-fr12-2). That one
+    // reaches the ceiling WITH `currentLapMechanicalFault: true`. This one
+    // reaches the same ceiling, with the same published aggregate, on a
+    // build_review dispatch failure that is NOT classified as mechanical.
+    // The terminal exhausted-allowance HALT must be withheld and the lap left
+    // to the ordinary retry path. Without the
+    // `result.currentLapMechanicalFault === true` guard this HALTs instead.
+    const fixture = await setupStaleTrackingRefFixture(dir);
+    const repo = fixture.repo;
+    await seedToBuildReview(statePath, repo);
+    const seeded = await readState(statePath);
+    await writeState(statePath, {
+      ...(seeded.ok ? seeded.value : {}),
+      run_started_at: Date.now(),
+    } as ConductState);
+    await writeKickbackLedger(repo, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0,
+          mechanicalFaults: MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+          treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+
+    const allowanceOccurrences: unknown[] = [];
+    events.on('build_review_mechanical_allowance_exhausted' as never, (event) => {
+      allowanceOccurrences.push(event);
+    });
+
+    const lapId = parseBuildReviewLapId('lap-no-mechanical-fault')!;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest: 'sha256:no-mechanical-fault',
+      results: {
+        tautology: { kind: 'judged', rubric: 'tautology', lapId, snapshotDigest: 'sha256:no-mechanical-fault', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        scope: { kind: 'judged', rubric: 'scope', lapId, snapshotDigest: 'sha256:no-mechanical-fault', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        rootCause: { kind: 'judged', rubric: 'rootCause', lapId, snapshotDigest: 'sha256:no-mechanical-fault', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+        completeness: { kind: 'judged', rubric: 'completeness', lapId, snapshotDigest: 'sha256:no-mechanical-fault', contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      },
+    });
+
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: async (step) => {
+        calls.push(step);
+        if (step === 'build_review') {
+          await writeFile(join(repo, '.pipeline/build-review.json'), JSON.stringify(aggregate));
+          // Dispatch failed, but nothing classified it as a mechanical fault:
+          // no `currentLapMechanicalFault` on the result.
+          return { success: false, output: 'grader dispatch failed' } as StepRunResult;
+        }
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: withPassingBuildVerification(repo, runner),
+      events,
+      projectRoot: repo,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build_review',
+    } as never).run();
+
+    // The ceiling was reached and an aggregate was published, but this lap
+    // carried no mechanical fault, so the terminal allowance HALT is withheld.
+    expect(allowanceOccurrences).toEqual([]);
+    const haltBody = await readFile(join(repo, HALT_MARKER), 'utf8').catch(() => null);
+    expect(haltBody ?? '').not.toContain('mechanical fault allowance exhausted');
+    expect(haltBody ?? '').not.toContain('record-reduced-coverage');
+  }, 30000);
+
   it('writes reduced-coverage CLI outcomes through the external same-schema writer', async () => {
     const lapId = parseBuildReviewLapId('lap-event-spine')!;
     const aggregate = joinBuildReviewRubricOutcomes({
