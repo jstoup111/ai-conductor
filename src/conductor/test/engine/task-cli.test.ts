@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { detectTaskCommand, runTaskStart, runTaskDone } from '../../src/engine/task-cli.js';
+import {
+  detectTaskCommand,
+  dispatchTaskCommand,
+  runTaskStart,
+  runTaskDone,
+} from '../../src/engine/task-cli.js';
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -711,6 +716,74 @@ describe('runTaskDone', () => {
       const status = JSON.parse(afterDoneContent);
       const task7 = status.tasks.find((t: any) => t.id === '7');
       expect(task7.status).toBe('in_progress');
+    });
+  });
+
+  describe('plan gap — an unsatisfiable Done when check halts without appending work', () => {
+    it('writes a classified halt naming the task and check, preserves the plan, and emits loop_halt', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const planPath = join(dir, 'plan.md');
+      const plan = [
+        '### Task 7: Deliver the bounded behavior',
+        '**Done when:**',
+        '- The approved behavior can be verified without widening the plan.',
+        '',
+      ].join('\n');
+      const status = JSON.stringify({
+        tasks: [{ id: '7', name: 'Task 7', status: 'in_progress' }],
+      }, null, 2);
+      await fsPromises.writeFile(planPath, plan, 'utf-8');
+      await fsPromises.writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({ activePlanPath: 'plan.md' }),
+        'utf-8',
+      );
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), status, 'utf-8');
+      await fsPromises.writeFile(join(dir, '.pipeline', 'current-task'), '7', 'utf-8');
+
+      const command = detectTaskCommand([
+        'node',
+        'conduct',
+        'task',
+        'done',
+        '7',
+        '--plan-gap',
+        '1',
+        '--reason',
+        'The approved plan has no authorized way to satisfy this check.',
+      ]);
+
+      expect(command).toEqual({
+        kind: 'done',
+        id: '7',
+        planGap: {
+          index: 1,
+          reason: 'The approved plan has no authorized way to satisfy this check.',
+        },
+      });
+      expect(await dispatchTaskCommand(command!, dir)).toBe(1);
+
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('plan-gap');
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toMatch(/task 7/i);
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toMatch(/check 1/i);
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toMatch(
+        /The approved behavior can be verified without widening the plan\./,
+      );
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'current-task'), 'utf-8')).resolves.toBe('7');
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')).resolves.toBe(status);
+      await expect(fsPromises.readFile(planPath, 'utf-8')).resolves.toBe(plan);
+
+      const events = (await fsPromises.readFile(join(dir, '.pipeline', 'pipeline-events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: 'loop_halt',
+          haltClass: 'plan-gap',
+          reason: expect.stringContaining('The approved plan has no authorized way'),
+        }),
+      ]);
     });
   });
 });

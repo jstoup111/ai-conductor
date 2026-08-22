@@ -1,6 +1,11 @@
 import { readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { HALT_MARKER, HALT_CLASS_MARKER, type HaltDisposition } from './halt-marker.js';
+import {
+  HALT_MARKER,
+  HALT_CLASS_MARKER,
+  isOperatorActionHalt,
+  type HaltDisposition,
+} from './halt-marker.js';
 import {
   makeGitRunner,
   rebaseStateActive,
@@ -184,7 +189,7 @@ export async function rekickSweep(
       } catch {
         /* best-effort: an unreadable class is retained as unclassified */
       }
-      if (haltClass === 'needs-human' || haltClass === 'unclassified') {
+      if (isOperatorActionHalt(haltClass)) {
         skipped.push(slug);
         let classReason = 'unknown';
         try {

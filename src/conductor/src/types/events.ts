@@ -672,6 +672,8 @@ export type ConductorEvent =
       type: 'loop_halt';
       step?: StepName;
       reason: string;
+      /** Present when an external BUILD action classifies its own terminal halt. */
+      haltClass?: 'plan-gap';
       /**
        * URL of the auto-opened needs-remediation draft PR, when the conductor
        * irrecoverably HALTs in auto mode and escalation succeeded. Absent when

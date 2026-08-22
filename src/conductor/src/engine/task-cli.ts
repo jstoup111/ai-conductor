@@ -6,15 +6,28 @@
 // pipeline boots, pure parsing (no I/O), returns dispatch type or null.
 
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import {
   completeTaskDoneWhen,
   type DoneWhenEvidenceInput,
 } from './task-progress.js';
+import { writeHaltMarker } from './halt-marker.js';
+import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
+import { appendCloseoutEvent } from './closeout-events.js';
+
+export interface PlanGapInput {
+  index: number;
+  reason: string;
+}
 
 export type TaskDispatch =
   | { kind: 'start'; id: string }
-  | { kind: 'done'; id: string; doneWhen?: DoneWhenEvidenceInput[] }
+  | {
+      kind: 'done';
+      id: string;
+      doneWhen?: DoneWhenEvidenceInput[];
+      planGap?: PlanGapInput;
+    }
   | { kind: 'guide' };
 
 /**
@@ -43,11 +56,35 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
   if (verb === 'start') return { kind: 'start', id };
 
   const doneWhen: DoneWhenEvidenceInput[] = [];
-  for (let index = 5; index < argv.length; index += 2) {
-    if (argv[index] !== '--done-when' || !argv[index + 1]) return { kind: 'guide' };
-    const match = argv[index + 1].match(/^(\d+)=(.+)$/);
-    if (!match || Number(match[1]) < 1 || !match[2].trim()) return { kind: 'guide' };
-    doneWhen.push({ index: Number(match[1]), evidence: match[2] });
+  let planGapIndex: number | undefined;
+  let planGapReason: string | undefined;
+  for (let index = 5; index < argv.length;) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!value) return { kind: 'guide' };
+    if (flag === '--done-when') {
+      const match = value.match(/^(\d+)=(.+)$/);
+      if (!match || Number(match[1]) < 1 || !match[2].trim()) return { kind: 'guide' };
+      doneWhen.push({ index: Number(match[1]), evidence: match[2] });
+    } else if (flag === '--plan-gap') {
+      if (planGapIndex !== undefined || !/^\d+$/.test(value) || Number(value) < 1) {
+        return { kind: 'guide' };
+      }
+      planGapIndex = Number(value);
+    } else if (flag === '--reason') {
+      if (planGapReason !== undefined || !value.trim()) return { kind: 'guide' };
+      planGapReason = value;
+    } else {
+      return { kind: 'guide' };
+    }
+    index += 2;
+  }
+
+  if (planGapIndex !== undefined || planGapReason !== undefined) {
+    if (planGapIndex === undefined || planGapReason === undefined || doneWhen.length > 0) {
+      return { kind: 'guide' };
+    }
+    return { kind: 'done', id, planGap: { index: planGapIndex, reason: planGapReason } };
   }
 
   return doneWhen.length > 0 ? { kind: 'done', id, doneWhen } : { kind: 'done', id };
@@ -70,7 +107,10 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
         '\n' +
         'conduct task done <id> [--done-when <n>=<evidence>]...\n' +
         '  Close task <id>. Tasks with a Done when block require evidence for every check.\n' +
-        '  The engine records that evidence before clearing the current-task stamp.',
+        '  The engine records that evidence before clearing the current-task stamp.\n' +
+        '\n' +
+        'conduct task done <id> --plan-gap <n> --reason <text>\n' +
+        '  Halt when Done when check <n> cannot be satisfied within the approved plan.',
     );
     return 2;
   }
@@ -80,7 +120,7 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
   }
 
   if (cmd.kind === 'done') {
-    return runTaskDone(cwd, cmd.id, cmd.doneWhen ?? []);
+    return runTaskDone(cwd, cmd.id, cmd.doneWhen ?? [], cmd.planGap);
   }
 
   // Should never reach here
@@ -194,6 +234,7 @@ export async function runTaskDone(
   projectRoot: string,
   id: string,
   doneWhen: DoneWhenEvidenceInput[] = [],
+  planGap?: PlanGapInput,
 ): Promise<number> {
   const pipelineDir = join(projectRoot, '.pipeline');
   const stampPath = join(pipelineDir, 'current-task');
@@ -213,6 +254,10 @@ export async function runTaskDone(
     return 1;
   }
 
+  if (planGap) {
+    return runTaskPlanGap(projectRoot, id, planGap);
+  }
+
   const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);
   if (completion.kind === 'refused') {
     console.error(completion.message);
@@ -228,4 +273,76 @@ export async function runTaskDone(
   }
 
   return 0;
+}
+
+/**
+ * Halt an active task when one declared Done when check cannot be achieved
+ * without widening the approved plan. This deliberately leaves both the task
+ * row and current-task stamp untouched: no task has closed, and no off-plan
+ * remediation task may be appended.
+ */
+async function runTaskPlanGap(
+  projectRoot: string,
+  id: string,
+  planGap: PlanGapInput,
+): Promise<number> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  let activePlanPath: string | undefined;
+  try {
+    const state = JSON.parse(
+      await readFile(join(pipelineDir, 'engine-state.json'), 'utf-8'),
+    ) as { activePlanPath?: unknown };
+    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
+      activePlanPath = state.activePlanPath;
+    }
+  } catch {
+    // The diagnostic below gives the operator the actionable missing authority.
+  }
+  if (!activePlanPath) {
+    console.error(`[task-cli] cannot report a plan gap for task ${id}: no active plan is recorded`);
+    return 1;
+  }
+
+  let planText: string;
+  try {
+    planText = await readFile(
+      isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath),
+      'utf-8',
+    );
+  } catch (error) {
+    console.error(
+      `[task-cli] cannot report a plan gap for task ${id}: could not read the active plan: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
+
+  const check = parsePlanTaskDoneWhen(planText).get(id)?.[planGap.index - 1];
+  if (!check) {
+    console.error(
+      `[task-cli] cannot report a plan gap for task ${id}: Done when check ${planGap.index} is not declared`,
+    );
+    return 1;
+  }
+
+  const reason = planGap.reason.trim();
+  const haltReason =
+    `Plan gap: task ${id}, Done when check ${planGap.index} cannot be satisfied under the approved plan.\n` +
+    `Check: ${check}\n` +
+    `Reason: ${reason}\n`;
+  const write = await writeHaltMarker(projectRoot, haltReason, 'plan-gap');
+  if (write.status !== 'written') {
+    console.error(
+      `[task-cli] failed to write classified plan-gap HALT for task ${id}: ${write.reason}`,
+    );
+    return 1;
+  }
+
+  appendCloseoutEvent(projectRoot, {
+    type: 'loop_halt',
+    reason: haltReason,
+    haltClass: 'plan-gap',
+    ts: new Date().toISOString(),
+  });
+  return 1;
 }
