@@ -1,7 +1,8 @@
 import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { LLMProvider, ProviderStreamObservation } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
@@ -54,7 +55,16 @@ import {
   stampBuildReviewDispatchedCandidate,
   validateBuildReviewDispatchedResult,
   type BuildReviewDispatchableRubric,
+  type BuildReviewRubricIdentities,
 } from './build-review-coordinator.js';
+import { BUILD_REVIEW_RUBRIC_REGISTRY } from './build-review-registry.js';
+import {
+  digestRubricSkill,
+  engineStampFromEngineDir,
+  SkillDigestUnavailable,
+  type RubricSkillFileReader,
+} from './build-review-engine-identity.js';
+import { resolveHarnessRoot } from './install-freshness.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
@@ -461,7 +471,12 @@ export interface StepRunnerOptions {
   buildReviewCoordinator?: (
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
+    engineIdentity: BuildReviewRubricIdentities,
   ) => Promise<StepRunResult>;
+  /** Injected identity seams keep build_review runner tests filesystem-free. */
+  resolveBuildReviewHarnessRoot?: () => Promise<string | null>;
+  resolveBuildReviewEngineStamp?: (engineDir: string) => string;
+  readBuildReviewRubricSkill?: RubricSkillFileReader;
   /** Shared raw-aggregate/disposition join. Tests inject a bounded fake store. */
   buildReviewEffectiveResolver?: typeof resolveEffectiveBuildReviewVerdict;
   /** Test seam for a missing or malformed current-lap branch artifact. */
@@ -570,6 +585,9 @@ export class DefaultStepRunner implements StepRunner {
   private planPathOverride?: string;
   private buildReviewInputOptions?: BuildReviewInputOptions;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
+  private resolveBuildReviewHarnessRoot: NonNullable<StepRunnerOptions['resolveBuildReviewHarnessRoot']>;
+  private resolveBuildReviewEngineStamp: NonNullable<StepRunnerOptions['resolveBuildReviewEngineStamp']>;
+  private readBuildReviewRubricSkill: RubricSkillFileReader;
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
   private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
   private events?: ConductorEventEmitter;
@@ -624,6 +642,9 @@ export class DefaultStepRunner implements StepRunner {
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
+    this.resolveBuildReviewHarnessRoot = options?.resolveBuildReviewHarnessRoot ?? resolveHarnessRoot;
+    this.resolveBuildReviewEngineStamp = options?.resolveBuildReviewEngineStamp ?? engineStampFromEngineDir;
+    this.readBuildReviewRubricSkill = options?.readBuildReviewRubricSkill ?? (async (path) => readFile(path));
     this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
     this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
     this.events = options?.events;
@@ -1889,6 +1910,7 @@ export class DefaultStepRunner implements StepRunner {
   private async runRubricBuildReview(
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
+    engineIdentity: BuildReviewRubricIdentities,
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -1903,6 +1925,7 @@ export class DefaultStepRunner implements StepRunner {
       config,
       inputs,
       lapId,
+      engineIdentity,
       preflight: async () => this.runTautologyPreflight(inputs),
       readCache: async (branch) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
         readFile: async (path) => readFile(path, 'utf-8'),
@@ -2069,6 +2092,39 @@ export class DefaultStepRunner implements StepRunner {
       // rework. Only a pure infrastructure lap owns the mechanical lane.
       ...(infrastructureFailure === undefined || hasJudgedFinding ? {} : { currentLapMechanicalFault: true }),
     };
+  }
+
+  /** Resolve one cache identity per enabled rubric for this build_review dispatch. */
+  private async resolveBuildReviewRubricIdentities(
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+  ): Promise<BuildReviewRubricIdentities> {
+    const engineDir = dirname(fileURLToPath(import.meta.url));
+    const harnessRoot = await this.resolveBuildReviewHarnessRoot();
+    const engineStamp = this.resolveBuildReviewEngineStamp(engineDir);
+    const identities = {} as Record<keyof typeof BUILD_REVIEW_RUBRIC_REGISTRY, BuildReviewRubricIdentities[keyof BuildReviewRubricIdentities]>;
+
+    for (const [rubric, descriptor] of Object.entries(BUILD_REVIEW_RUBRIC_REGISTRY) as Array<
+      [keyof typeof BUILD_REVIEW_RUBRIC_REGISTRY, (typeof BUILD_REVIEW_RUBRIC_REGISTRY)[keyof typeof BUILD_REVIEW_RUBRIC_REGISTRY]]
+    >) {
+      // Skipped rubrics never reach the cache boundary, so no byte read is
+      // warranted. The coordinator will only inspect identities for enabled branches.
+      if (!config.rubrics[rubric].enabled) {
+        identities[rubric] = { kind: 'ready', identity: { engineStamp, skillDigest: 'disabled' } as never };
+        continue;
+      }
+      try {
+        const skillDigest = await digestRubricSkill({
+          harnessRoot: harnessRoot ?? this.projectDir,
+          skillName: descriptor.skillName,
+          readFile: this.readBuildReviewRubricSkill,
+        });
+        identities[rubric] = { kind: 'ready', identity: { engineStamp, skillDigest } as never };
+      } catch (error) {
+        if (!(error instanceof SkillDigestUnavailable)) throw error;
+        identities[rubric] = { kind: 'unavailable', path: error.path };
+      }
+    }
+    return identities as BuildReviewRubricIdentities;
   }
 
   private async dispatchBuildReviewRubric(
@@ -2513,14 +2569,15 @@ export class DefaultStepRunner implements StepRunner {
         ? { output: `${floorAdvisoryLines.join('\n')}\n\n${result.output}` }
         : {}),
     });
+    const engineIdentity = await this.resolveBuildReviewRubricIdentities(buildReviewConfig);
     if (this.buildReviewCoordinator) {
       return withBaseFreshness(withFloorAdvisory(
-        await this.buildReviewCoordinator(inputs, buildReviewConfig),
+        await this.buildReviewCoordinator(inputs, buildReviewConfig, engineIdentity),
       ));
     }
 
     return withBaseFreshness(withFloorAdvisory(
-      await this.runRubricBuildReview(inputs, buildReviewConfig),
+      await this.runRubricBuildReview(inputs, buildReviewConfig, engineIdentity),
     ));
   }
 

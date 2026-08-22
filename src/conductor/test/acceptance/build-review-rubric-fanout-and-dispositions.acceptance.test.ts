@@ -154,6 +154,51 @@ describe('acceptance: independent build_review rubric execution', () => {
     }
   });
 
+  it('persists a cache-discard event when an engine-stamped cached rubric is regraded', async () => {
+    const { dir, planPath } = await fixtureRepo();
+    const provider: LLMProvider = {
+      invoke: vi.fn(async () => ({ success: true, output: JSON.stringify({ findings: [] }), exitCode: 0 })),
+      invokeInteractive: vi.fn().mockResolvedValue(undefined),
+    };
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
+    const options = {
+      planPath,
+      pipelineDir: join(dir, '.pipeline'),
+      events,
+      config: {
+        build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
+        wiring: { entry_points: ['src/feature.ts'] },
+      } as HarnessConfig,
+      resolveBuildReviewHarnessRoot: async () => '/fixture-harness',
+      resolveBuildReviewEngineStamp: () => 'current-engine',
+      readBuildReviewRubricSkill: async (path: string) => Buffer.from(path),
+      buildReviewInputOptions: {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
+    };
+    persister.start();
+    const state = { complexity_tier: 'L', feature_desc: 'cache-discard', track: 'product' } as const;
+    await expect(new DefaultStepRunner(provider, 'first-session', dir, options).run('build_review', state)).resolves.toMatchObject({ success: true });
+
+    const scopeCachePath = join(dir, '.pipeline', 'build-review', 'cache', 'scope.json');
+    const scopeCache = JSON.parse(await readFile(scopeCachePath, 'utf8'));
+    scopeCache.engineIdentity.engineStamp = 'previous-engine';
+    await writeFile(scopeCachePath, JSON.stringify(scopeCache));
+
+    await expect(new DefaultStepRunner(provider, 'second-session', dir, options).run('build_review', state)).resolves.toMatchObject({ success: true });
+    persister.stop();
+
+    const eventsByLine = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line));
+    expect(eventsByLine).toContainEqual(expect.objectContaining({
+      type: 'build_review_cache_discarded', rubric: 'scope', reason: 'engine-version-mismatch',
+      cachedEngineStamp: 'previous-engine', currentEngineStamp: 'current-engine',
+    }));
+  });
+
   it('advertises read-only finding inspection and exact-finding acceptance as local commands', () => {
     const help = renderFullHelp();
 
