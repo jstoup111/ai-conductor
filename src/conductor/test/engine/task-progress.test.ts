@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +16,11 @@ import {
 } from '../../src/engine/task-progress.js';
 import { CUSTOM_COMPLETION_PREDICATES } from '../../src/engine/artifacts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import {
+  detectTaskCommand,
+  dispatchTaskCommand,
+  runTaskStart,
+} from '../../src/engine/task-cli.js';
 
 describe('task-progress', () => {
   let dir: string;
@@ -330,6 +335,111 @@ describe('task-progress', () => {
       const resolved = await resolveTaskIds(dir, ['1', '2']);
 
       expect(resolved).toEqual(new Set(['1']));
+    });
+  });
+
+  describe('Done when evidence at task close', () => {
+    async function prepareTaskClose(planTask: string, id = '1'): Promise<void> {
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'feature.md'), `# Plan\n\n${planTask}\n`);
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({ activePlanPath: '.docs/plans/feature.md' }),
+      );
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id, status: 'pending' }] }),
+      );
+      expect(await runTaskStart(dir, id)).toBe(0);
+    }
+
+    async function taskRow(id = '1'): Promise<Record<string, unknown>> {
+      const status = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+      ) as { tasks: Array<Record<string, unknown>> };
+      return status.tasks.find((task) => task.id === id) ?? {};
+    }
+
+    it('records all supplied Done when evidence and completes the task', async () => {
+      await prepareTaskClose(`### Task 1: evidence required
+
+**Done when:**
+- first observable outcome
+- second observable outcome
+- third observable outcome`);
+
+      const command = detectTaskCommand([
+        'node', 'conduct', 'task', 'done', '1',
+        '--done-when', '1=proved first',
+        '--done-when', '2=proved second',
+        '--done-when', '3=proved third',
+      ]);
+
+      expect(command).not.toBeNull();
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      expect(await taskRow()).toMatchObject({
+        status: 'completed',
+        doneWhen: [
+          { check: 'first observable outcome', evidence: 'proved first', source: 'reported' },
+          { check: 'second observable outcome', evidence: 'proved second', source: 'reported' },
+          { check: 'third observable outcome', evidence: 'proved third', source: 'reported' },
+        ],
+      });
+    });
+
+    it('refuses close and names the missing Done when check', async () => {
+      await prepareTaskClose(`### Task 1: evidence required
+
+**Done when:**
+- first observable outcome
+- second observable outcome
+- third observable outcome`);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const command = detectTaskCommand([
+          'node', 'conduct', 'task', 'done', '1',
+          '--done-when', '1=proved first',
+          '--done-when', '2=proved second',
+        ]);
+
+        expect(await dispatchTaskCommand(command!, dir)).toBe(1);
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('third observable outcome'));
+      } finally {
+        error.mockRestore();
+      }
+      expect(await taskRow()).toMatchObject({ status: 'in_progress' });
+      expect(await taskRow()).not.toHaveProperty('doneWhen');
+    });
+
+    it('closes a task without a Done when block under the legacy rule', async () => {
+      await prepareTaskClose('### Task 1: legacy close');
+
+      const command = detectTaskCommand(['node', 'conduct', 'task', 'done', '1']);
+
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      expect(await taskRow()).toMatchObject({ status: 'in_progress' });
+      expect(await taskRow()).not.toHaveProperty('doneWhen');
+    });
+
+    it('closes a verify-only task through prove-closed evidence', async () => {
+      await prepareTaskClose(`### Task 1: prove the current behavior is already closed
+
+**Verify-only:** yes
+
+**Done when:**
+- first verified outcome
+- second verified outcome`);
+
+      const command = detectTaskCommand(['node', 'conduct', 'task', 'done', '1']);
+
+      expect(await dispatchTaskCommand(command!, dir)).toBe(0);
+      const row = await taskRow();
+      expect(row).toMatchObject({ status: 'completed' });
+      expect(row.doneWhen).toEqual([
+        { check: 'first verified outcome', evidence: 'prove-closed', source: 'verify-only' },
+        { check: 'second verified outcome', evidence: 'prove-closed', source: 'verify-only' },
+      ]);
     });
   });
 

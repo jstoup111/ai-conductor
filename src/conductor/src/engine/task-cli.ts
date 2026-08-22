@@ -7,8 +7,15 @@
 
 import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  completeTaskDoneWhen,
+  type DoneWhenEvidenceInput,
+} from './task-progress.js';
 
-export type TaskDispatch = { kind: 'start'; id: string } | { kind: 'done'; id: string } | { kind: 'guide' };
+export type TaskDispatch =
+  | { kind: 'start'; id: string }
+  | { kind: 'done'; id: string; doneWhen?: DoneWhenEvidenceInput[] }
+  | { kind: 'guide' };
 
 /**
  * Parse argv for the `task` subcommand.
@@ -33,7 +40,17 @@ export function detectTaskCommand(argv: string[]): TaskDispatch | null {
     return { kind: 'guide' };
   }
 
-  return { kind: verb, id };
+  if (verb === 'start') return { kind: 'start', id };
+
+  const doneWhen: DoneWhenEvidenceInput[] = [];
+  for (let index = 5; index < argv.length; index += 2) {
+    if (argv[index] !== '--done-when' || !argv[index + 1]) return { kind: 'guide' };
+    const match = argv[index + 1].match(/^(\d+)=(.+)$/);
+    if (!match || Number(match[1]) < 1 || !match[2].trim()) return { kind: 'guide' };
+    doneWhen.push({ index: Number(match[1]), evidence: match[2] });
+  }
+
+  return doneWhen.length > 0 ? { kind: 'done', id, doneWhen } : { kind: 'done', id };
 }
 
 /**
@@ -51,9 +68,9 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
         '  Start or resume task <id> (H9 grammar [A-Za-z0-9._-]+). Prompts for\n' +
         '  confirmation and updates task-status.json.\n' +
         '\n' +
-        'conduct task done <id>\n' +
-        '  Mark task <id> as complete. Clears the current-task stamp file.\n' +
-        '  Task status is updated only by the gate authority (Task 19/pipeline skill gate).',
+        'conduct task done <id> [--done-when <n>=<evidence>]...\n' +
+        '  Close task <id>. Tasks with a Done when block require evidence for every check.\n' +
+        '  The engine records that evidence before clearing the current-task stamp.',
     );
     return 2;
   }
@@ -63,7 +80,7 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
   }
 
   if (cmd.kind === 'done') {
-    return runTaskDone(cwd, cmd.id);
+    return runTaskDone(cwd, cmd.id, cmd.doneWhen ?? []);
   }
 
   // Should never reach here
@@ -166,13 +183,18 @@ export async function runTaskStart(projectRoot: string, id: string): Promise<num
  * Safety guarantees:
  * - If stamp file contains a different id, exits non-zero and leaves stamp untouched
  * - If stamp file is absent, exits 0 (idempotent)
- * - NEVER modifies task-status.json (completion is gate authority, not this function)
+ * - A task with an engine-recorded `Done when:` block is completed only after
+ *   the engine records evidence for every declared check
  *
  * Exit codes:
  *   0 = success (stamp removed or already absent)
  *   1 = mismatch (stamp exists but id doesn't match, stamp left untouched)
  */
-export async function runTaskDone(projectRoot: string, id: string): Promise<number> {
+export async function runTaskDone(
+  projectRoot: string,
+  id: string,
+  doneWhen: DoneWhenEvidenceInput[] = [],
+): Promise<number> {
   const pipelineDir = join(projectRoot, '.pipeline');
   const stampPath = join(pipelineDir, 'current-task');
 
@@ -188,6 +210,12 @@ export async function runTaskDone(projectRoot: string, id: string): Promise<numb
   // A different stamp is a sibling's current work. Never clear it.
   if (stampContent !== id) {
     console.error(`[task-cli] cannot clear task ${id}; current stamp is ${stampContent}`);
+    return 1;
+  }
+
+  const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);
+  if (completion.kind === 'refused') {
+    console.error(completion.message);
     return 1;
   }
 

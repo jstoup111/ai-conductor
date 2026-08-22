@@ -1,6 +1,7 @@
-import { readFile, unlink, mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { listCommitsWithTrailers, canonicalTaskId } from './autoheal.js';
+import { readFile, unlink, mkdir, writeFile, rename, rm } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
+import { listCommitsWithTrailers, canonicalTaskId, parsePlanTaskVerifyOnly } from './autoheal.js';
+import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -128,6 +129,155 @@ export interface NormalizedTask {
   id?: string;
   title?: string;
   status?: string;
+}
+
+/** Evidence supplied for a numbered task-local `Done when:` check. */
+export interface DoneWhenEvidenceInput {
+  index: number;
+  evidence: string;
+}
+
+/** The engine-owned task-status entry recorded for each satisfied check. */
+export interface DoneWhenEvidenceRecord {
+  check: string;
+  evidence: string;
+  source: 'reported' | 'verify-only';
+}
+
+export type TaskDoneWhenCloseResult =
+  | { kind: 'legacy' }
+  | { kind: 'completed' }
+  | { kind: 'refused'; message: string };
+
+interface TaskStatusRow extends Record<string, unknown> {
+  id?: unknown;
+  status?: unknown;
+  doneWhen?: unknown;
+}
+
+/**
+ * Apply the opted-in `Done when:` close contract to a task-status row.
+ *
+ * The active plan path comes only from engine state. A plan that predates
+ * `Done when:` has no parser entry for the task and therefore returns the
+ * legacy outcome without touching its row. For an opted-in task, this is the
+ * sole writer of the completion state and the accompanying evidence.
+ */
+export async function completeTaskDoneWhen(
+  projectRoot: string,
+  id: string,
+  suppliedEvidence: DoneWhenEvidenceInput[],
+): Promise<TaskDoneWhenCloseResult> {
+  const pipelineDir = join(projectRoot, '.pipeline');
+  let activePlanPath: string | undefined;
+  try {
+    const rawState = await readFile(join(pipelineDir, 'engine-state.json'), 'utf-8');
+    const state = JSON.parse(rawState) as { activePlanPath?: unknown };
+    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
+      activePlanPath = state.activePlanPath;
+    }
+  } catch {
+    // No engine-recorded plan is the legacy close path.
+  }
+  if (!activePlanPath) return { kind: 'legacy' };
+
+  let planText: string;
+  try {
+    planText = await readFile(
+      isAbsolute(activePlanPath) ? activePlanPath : join(projectRoot, activePlanPath),
+      'utf-8',
+    );
+  } catch {
+    return {
+      kind: 'refused',
+      message: `[task-cli] cannot read the active plan to verify Done when evidence for task ${id}`,
+    };
+  }
+
+  const doneWhen = parsePlanTaskDoneWhen(planText);
+  if (doneWhen.malformedTaskIds.has(id)) {
+    return {
+      kind: 'refused',
+      message: `[task-cli] task ${id} has a malformed Done when block with no checks`,
+    };
+  }
+  const checks = doneWhen.get(id);
+  if (!checks) return { kind: 'legacy' };
+
+  const verifyOnly = parsePlanTaskVerifyOnly(planText).get(id) === true;
+  const evidenceByIndex = new Map<number, string>();
+  for (const entry of suppliedEvidence) {
+    if (entry.index > 0 && entry.evidence.trim()) {
+      evidenceByIndex.set(entry.index, entry.evidence);
+    }
+  }
+
+  if (!verifyOnly) {
+    const missingIndex = checks.findIndex((_, index) => !evidenceByIndex.has(index + 1));
+    if (missingIndex !== -1) {
+      return {
+        kind: 'refused',
+        message:
+          `[task-cli] cannot complete task ${id}: missing Done when evidence for ` +
+          `check ${missingIndex + 1}: ${checks[missingIndex]}`,
+      };
+    }
+  }
+
+  const statusPath = join(pipelineDir, 'task-status.json');
+  let status: Record<string, unknown>;
+  try {
+    const rawStatus = await readFile(statusPath, 'utf-8');
+    const parsed: unknown = JSON.parse(rawStatus);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { kind: 'refused', message: '[task-cli] task-status.json root is not an object' };
+    }
+    status = parsed as Record<string, unknown>;
+  } catch (err) {
+    return {
+      kind: 'refused',
+      message: `[task-cli] could not read task-status.json: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (!Array.isArray(status.tasks)) {
+    return { kind: 'refused', message: '[task-cli] task-status.json does not have a tasks array' };
+  }
+
+  const task = (status.tasks as unknown[]).find(
+    (row): row is TaskStatusRow =>
+      !!row && typeof row === 'object' && (row as TaskStatusRow).id === id,
+  );
+  if (!task) {
+    return {
+      kind: 'refused',
+      message: `[task-cli] task id "${id}" not found in task-status.json`,
+    };
+  }
+
+  const doneWhenRecords: DoneWhenEvidenceRecord[] = checks.map((check, index) => ({
+    check,
+    evidence: verifyOnly ? 'prove-closed' : evidenceByIndex.get(index + 1)!,
+    source: verifyOnly ? 'verify-only' : 'reported',
+  }));
+  task.status = 'completed';
+  task.doneWhen = doneWhenRecords;
+
+  const tempFile = join(
+    pipelineDir,
+    `.task-status.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+  try {
+    await writeFile(tempFile, JSON.stringify(status, null, 2));
+    await rename(tempFile, statusPath);
+  } catch (err) {
+    await rm(tempFile, { force: true }).catch(() => {});
+    return {
+      kind: 'refused',
+      message: `[task-cli] failed to write task-status.json: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  return { kind: 'completed' };
 }
 
 /**
