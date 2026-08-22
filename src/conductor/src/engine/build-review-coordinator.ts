@@ -98,6 +98,11 @@ export type BuildReviewCoordination =
   | { readonly kind: "refused"; readonly reason: "no-enabled-rubrics" | "no-valid-judgement" }
   | { readonly kind: "ready"; readonly branches: readonly BuildReviewCoordinatedBranch[] };
 
+export type BuildReviewCandidateCacheDecision =
+  | { readonly kind: "cache-hit"; readonly result: BuildReviewJudgedResult }
+  | { readonly kind: "miss" }
+  | { readonly kind: "infrastructure-failure"; readonly detail?: string };
+
 /**
  * All side effects are injected: snapshots/projections stay engine-owned and
  * a provider receives only its own closed projection, never sibling state or
@@ -107,8 +112,9 @@ export interface BuildReviewCoordinationInput {
   readonly config: ResolvedBuildReviewConfig;
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
-  /** Per-rubric cache identity resolved by the dispatch site before coordination. */
-  readonly engineIdentity: BuildReviewRubricIdentities;
+  /** Compatibility seam for coordinator-only tests; production omits this so
+   * identities are resolved exclusively from prepared candidates. */
+  readonly engineIdentity?: BuildReviewRubricIdentities;
   /** Test seam for an engine-held projection corruption at branch settlement. */
   readonly projections?: BuildReviewRubricProjections;
   readonly preflight: () => Promise<TautologyPreflightResult>;
@@ -120,7 +126,8 @@ export interface BuildReviewCoordinationInput {
   readonly dispatchModel: (
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
-  ) => Promise<unknown | { readonly result: unknown; readonly engineIdentity: BuildReviewEngineIdentity }>;
+    onCandidatePrepared: (identity: BuildReviewEngineIdentity) => Promise<BuildReviewCandidateCacheDecision>,
+  ) => Promise<unknown | { readonly result: unknown; readonly engineIdentity: BuildReviewEngineIdentity } | { readonly kind: "cache-hit"; readonly result: BuildReviewJudgedResult } | { readonly kind: "infrastructure-failure"; readonly detail?: string }>;
   /** Persist and return the validated, current-lap branch evidence. */
   readonly writeArtifact: (
     artifact: Omit<BuildReviewBranchArtifact, "version">,
@@ -303,7 +310,7 @@ export async function coordinateBuildReviewRubrics(
     },
   });
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
-  const misses: Array<{ branch: BuildReviewDispatchableRubric; identity: BuildReviewEngineIdentity }> = [];
+  const dispatchable: BuildReviewDispatchableRubric[] = [];
 
   for (const branch of classification.branches) {
     if ("kind" in branch) {
@@ -328,81 +335,77 @@ export async function coordinateBuildReviewRubrics(
       });
       continue;
     }
-    const identity = input.engineIdentity[branch.rubric];
-    if (identity.kind === "unavailable") {
-      resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed", identity.path));
-      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });
-      continue;
-    }
-    const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
-    let candidate: BuildReviewCacheEntryCandidate | undefined;
-    try {
-      candidate = await input.readCache(branch, projection, policyFingerprint);
-    } catch {
-      resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed"));
-      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });
-      continue;
-    }
-    const cache = classifyBuildReviewCacheLookup(candidate, {
-      rubric: branch.rubric,
-      contractVersion: projection.contractVersion,
-      projectionVersion: projection.projectionVersion,
-      projectionDigest: projection.digest,
-      policyFingerprint,
-      engineIdentity: identity.identity,
-      lapId: input.lapId,
-      snapshotDigest: projection.snapshotDigest,
-    });
-    if (cache.kind === "hit") {
-      let result: BuildReviewJudgedResult | undefined;
-      try {
-        result = validWrittenArtifact(await input.writeArtifact({
-          rubric: branch.rubric,
-          lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest,
-          result: cache.hit.result,
-          provenance: cache.hit.provenance,
-        }), branch.rubric, projection);
-        resolved.set(branch.rubric, result
-          ? { kind: "cache-hit", rubric: branch.rubric, result }
-          : infrastructure(branch.rubric, "artifact-write-failed"));
-        await input.emit?.(result
-          ? { type: "build_review_cache_hit", rubric: branch.rubric, lapId: input.lapId }
-          : { type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
-      } catch {
-        resolved.set(branch.rubric, infrastructure(branch.rubric, "artifact-write-failed"));
-        await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
-      }
-      if (result) await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
-    } else {
-      if (cache.reason === "engine-version-mismatch" || cache.reason === "skill-digest-mismatch") {
-        await input.emit?.({
-          type: "build_review_cache_discarded",
-          rubric: branch.rubric,
-          lapId: input.lapId,
-          reason: cache.reason,
-          ...(candidate?.engineIdentity === undefined ? {} : { cachedEngineStamp: candidate.engineIdentity.engineStamp }),
-          currentEngineStamp: identity.identity.engineStamp,
-        });
-      }
-      await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
-      misses.push({ branch, identity: identity.identity });
-    }
+    dispatchable.push(branch);
   }
 
-  const dispatched = await runAuxiliaryGroupBranches(misses.map(({ branch, identity }) => ({
+  const dispatched = await runAuxiliaryGroupBranches(dispatchable.map((branch) => ({
     memberId: branch.rubric,
-    policy: { branch, identity },
+    policy: { branch },
   })), input.config.maxParallel,
-    async (rubric, { branch, identity }) => {
+    async (rubric, { branch }) => {
       const projection = projections[rubric];
       try {
-        const dispatched = await input.dispatchModel(branch, projection);
+        const settleCandidate = async (identity: BuildReviewEngineIdentity): Promise<BuildReviewCandidateCacheDecision> => {
+          const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
+          let candidate: BuildReviewCacheEntryCandidate | undefined;
+          try {
+            candidate = await input.readCache(branch, projection, policyFingerprint);
+          } catch {
+            return { kind: "infrastructure-failure" };
+          }
+          const cache = classifyBuildReviewCacheLookup(candidate, {
+            rubric: branch.rubric, contractVersion: projection.contractVersion,
+            projectionVersion: projection.projectionVersion, projectionDigest: projection.digest,
+            policyFingerprint, engineIdentity: identity, lapId: input.lapId,
+            snapshotDigest: projection.snapshotDigest,
+          });
+          if (cache.kind !== "hit") {
+            if (cache.reason === "engine-version-mismatch" || cache.reason === "skill-digest-mismatch") {
+              await input.emit?.({ type: "build_review_cache_discarded", rubric: branch.rubric,
+                lapId: input.lapId, reason: cache.reason,
+                ...(candidate?.engineIdentity === undefined ? {} : { cachedEngineStamp: candidate.engineIdentity.engineStamp }),
+                currentEngineStamp: identity.engineStamp });
+            }
+            await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
+            return { kind: "miss" };
+          }
+          const result = validWrittenArtifact(await input.writeArtifact({ rubric: branch.rubric,
+            lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+            result: cache.hit.result, provenance: cache.hit.provenance }), branch.rubric, projection);
+          if (!result) return { kind: "infrastructure-failure" };
+          await input.emit?.({ type: "build_review_cache_hit", rubric: branch.rubric, lapId: input.lapId });
+          await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
+          return { kind: "cache-hit", result };
+        };
+        const legacyIdentity = input.engineIdentity?.[rubric];
+        if (legacyIdentity?.kind === "unavailable") {
+          return { rubric, branch: infrastructure(rubric, "cache-read-failed", legacyIdentity.path) };
+        }
+        // Coordinator-only callers have no candidate execution boundary. Keep
+        // that explicit compatibility seam isolated from production, where the
+        // identity is intentionally absent until preparation.
+        const legacyDecision = legacyIdentity?.kind === "ready"
+          ? await settleCandidate(legacyIdentity.identity)
+          : undefined;
+        if (legacyDecision?.kind === "cache-hit") {
+          return { rubric, branch: { kind: "cache-hit", rubric, result: legacyDecision.result } as BuildReviewCoordinatedBranch };
+        }
+        if (legacyDecision?.kind === "infrastructure-failure") {
+          return { rubric, branch: infrastructure(rubric, "cache-read-failed", legacyDecision.detail) };
+        }
+        const dispatched = await input.dispatchModel(branch, projection, settleCandidate);
+        const candidateDispatch = dispatched as { kind?: string; result?: BuildReviewJudgedResult; detail?: string } | undefined;
+        if (candidateDispatch?.kind === "cache-hit" && candidateDispatch.result !== undefined) {
+          return { rubric, branch: { kind: "cache-hit", rubric, result: candidateDispatch.result } as BuildReviewCoordinatedBranch };
+        }
+        if (candidateDispatch?.kind === "infrastructure-failure") {
+          return { rubric, branch: infrastructure(rubric, "cache-read-failed", candidateDispatch.detail) };
+        }
         const dispatchedWithIdentity = typeof dispatched === "object" && dispatched !== null &&
           "engineIdentity" in dispatched && "result" in dispatched;
         const dispatchedIdentity = dispatchedWithIdentity
           ? dispatched.engineIdentity as BuildReviewEngineIdentity
-          : identity;
+          : legacyIdentity?.kind === "ready" ? legacyIdentity.identity : undefined;
         const candidate = stampBuildReviewDispatchedCandidate(
           dispatchedWithIdentity ? dispatched.result : dispatched,
           rubric,
@@ -442,7 +445,7 @@ export async function coordinateBuildReviewRubrics(
             projectionVersion: projection.projectionVersion,
             projectionDigest: projection.digest,
             policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
-            engineIdentity: dispatchedIdentity,
+            engineIdentity: dispatchedIdentity!,
             result: written,
           });
         } catch {

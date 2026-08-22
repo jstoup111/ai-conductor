@@ -191,7 +191,7 @@ export type PrepareCandidateSelfHost = (
 export type OnCandidateSelfHostPrepared = (
   candidate: ProviderCandidate,
   selfHost: SelfHostInvocation | undefined,
-) => Promise<void> | void;
+) => Promise<InvokeResult | void> | InvokeResult | void;
 
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
@@ -632,7 +632,12 @@ export async function executeProviderCandidates({
           runId,
           attempt: index,
         });
-        await onCandidateSelfHostPrepared?.(candidate, selfHost);
+        // A candidate-bound preparation hook may settle work (for example, a
+        // provenance-sensitive cache hit) before the model boundary.  It is
+        // deliberately after self-host preparation: the hook must observe the
+        // exact child environment this candidate would have used.
+        const preparedResult = await onCandidateSelfHostPrepared?.(candidate, selfHost);
+        if (preparedResult !== undefined) return preparedResult;
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,

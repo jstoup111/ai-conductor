@@ -3250,17 +3250,17 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
-    it('resolves one engine stamp and one skill digest per enabled rubric before injecting identities into the coordinator', async () => {
+    it('defers enabled-rubric digest resolution until a provider candidate is prepared', async () => {
       const provider = createMockProvider();
       const resolveSkillRoot = vi.fn(async () => '/fixture-provider');
       const resolveEngineStamp = vi.fn(() => 'engine-1759');
       const readRubricSkill = vi.fn(async (path: string) => Buffer.from(path));
       const coordinate = vi.fn(async (_inputs, _config, engineIdentity) => {
         expect(engineIdentity).toEqual({
-          tautology: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: expect.any(String) } },
-          scope: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: expect.any(String) } },
-          rootCause: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: expect.any(String) } },
-          completeness: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: expect.any(String) } },
+          tautology: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } },
+          scope: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } },
+          rootCause: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } },
+          completeness: { kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } },
         });
         return { success: true, output: 'identity injected' };
       });
@@ -3286,24 +3286,16 @@ TIER: M`,
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
 
-      expect(resolveSkillRoot).toHaveBeenCalledTimes(4);
+      expect(resolveSkillRoot).not.toHaveBeenCalled();
       expect(resolveEngineStamp).toHaveBeenCalledOnce();
-      expect(readRubricSkill).toHaveBeenCalledTimes(4);
-      expect(readRubricSkill.mock.calls.map(([path]) => path)).toEqual([
-        '/fixture-provider/skills/build-review-tautology/SKILL.md',
-        '/fixture-provider/skills/build-review-scope/SKILL.md',
-        '/fixture-provider/skills/build-review-root-cause/SKILL.md',
-        '/fixture-provider/skills/build-review-completeness/SKILL.md',
-      ]);
+      expect(readRubricSkill).not.toHaveBeenCalled();
       expect(coordinate).toHaveBeenCalledOnce();
     });
 
-    it('converts an unreadable rubric skill into the coordinator unavailable identity', async () => {
+    it('does not probe an ambient provider home for coordinator-only identity injection', async () => {
       const provider = createMockProvider();
       const coordinate = vi.fn(async (_inputs, _config, engineIdentity) => {
-        expect(engineIdentity.scope).toEqual({
-          kind: 'unavailable', path: '/fixture-provider/skills/build-review-scope/SKILL.md',
-        });
+        expect(engineIdentity.scope).toEqual({ kind: 'ready', identity: { engineStamp: 'engine-1759', skillDigest: 'deferred-candidate' } });
         return { success: true, output: 'unavailable identity injected' };
       });
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -3464,7 +3456,10 @@ TIER: M`,
         }),
         ...currentBuildReviewProof(),
       });
-      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any, onCandidatePrepared: any) => {
+        const engineIdentity = { engineStamp: 'test-engine', skillDigest: 'sha256:test-skill' } as any;
+        await onCandidatePrepared(engineIdentity);
+        return { result: {
         kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
         contractVersion: 'v3',
         findings: branch.rubric === 'scope' ? [{
@@ -3473,7 +3468,8 @@ TIER: M`,
           anchor: { rubric: 'scope', path: 'x', relation: 'not-authorized-by-plan' },
         }] : [],
         verdict: branch.rubric === 'scope' ? 'FAIL' : 'PASS',
-      }));
+        }, engineIdentity };
+      });
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
       expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject(rawAggregate as object);
