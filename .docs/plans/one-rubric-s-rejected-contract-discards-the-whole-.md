@@ -232,10 +232,11 @@ Close the gap in `adr-2026-08-18` D3's premise: a below-cap mechanical fault sti
 **Steps:**
 1. In `src/conductor/test/engine/step-runners.test.ts`, drive the real lap join (faked provider adapters) through: lap 1 — rubric X judged FAIL with one finding, aggregate published, kickback reason names that finding; lap 2 (new HEAD) — X and two others judged PASS, the fourth returns a post-repair `dispatch-failure` below cap. Assert: three branch artifacts exist under `.pipeline/build-review/<lap2>/`; no aggregate for `<lap2>`; `currentLapMechanicalFault: true`; ledger `count`/`cumulative` unchanged from after lap 1; completion on the lap-1 aggregate at HEAD `<lap2>` returns `absent` (Task 6) and its reason contains no lap-1 finding id. Lap 3 — the fourth rubric judged PASS → a four-judged PASS aggregate is published.
 2. Also assert the at-cap variant (three prior faults) publishes the aggregate with `coverage.<rubric>: infrastructure-failure` and effective FAIL, and the mixed variant (one judged finding + one rejection) publishes with only the current lap's finding in the reasons.
-3. If every assertion passes without a production change, complete with an empty commit carrying `Evidence: skipped already-satisfied-by-tasks-3-and-6`.
+3. Also assert the all-infrastructure variant below cap (Story 2's third negative path): every rubric on the lap returns an infrastructure failure with the ledger below the allowance cap; assert no aggregate is written for that lap and the step result names the first failing rubric and its closed reason.
+4. If every assertion passes without a production change, complete with an empty commit carrying `Evidence: skipped already-satisfied-by-tasks-3-and-6`.
 
 **Done when:**
-- The three-lap test and both variants pass.
+- The three-lap test and all three variants pass — at-cap, mixed, and all-infrastructure-below-cap.
 - No production file changes in this task's commit range.
 
 **Files:**
