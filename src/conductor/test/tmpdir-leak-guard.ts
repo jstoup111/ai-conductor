@@ -140,7 +140,7 @@ export async function createRunTmpRoot(realTmpdir: string): Promise<string> {
  */
 export function ensureRunTmpRootSync(
   realTmpdir: string,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env
 ): string {
   const existing = env[RUN_TMP_ROOT_ENV];
   const createdRunRoot = existing ?? mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
