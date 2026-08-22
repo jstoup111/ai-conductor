@@ -91,6 +91,7 @@ export interface BuildReviewDispositionStoreOptions {
   readonly clock?: () => number;
   readonly lock?: ConductStateLease;
   readonly leaseOptions?: Omit<ConductStateLeaseOptions, 'now'>;
+  readonly log?: (message: string) => void;
 }
 
 export type BuildReviewDispositionStoreFailure = {
@@ -129,6 +130,17 @@ const REDUCED_COVERAGE_REASONS = new Set<BuildReviewInfrastructureFailureReason>
   'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
   'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed',
 ]);
+
+/** Persisted records from these pre-registry rubrics have no current authority. */
+const RETIRED_BUILD_REVIEW_RUBRICS = new Set(['tautology', 'scope', 'rootCause', 'completeness']);
+
+/**
+ * Deliberately narrower than "unregistered": this admits only known legacy
+ * records, preserving the rejection path for a new unknown rubric.
+ */
+export function isRetiredBuildReviewRubric(value: unknown): value is string {
+  return typeof value === 'string' && RETIRED_BUILD_REVIEW_RUBRICS.has(value);
+}
 
 const defaultFilesystem: BuildReviewDispositionFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
@@ -302,6 +314,7 @@ export class BuildReviewDispositionStore {
   private readonly clock: () => number;
   private readonly statePath: string;
   private readonly lock: ConductStateLease;
+  private readonly log: (message: string) => void;
 
   constructor(projectRoot: string, options: BuildReviewDispositionStoreOptions = {}) {
     this.filesystem = options.filesystem ?? defaultFilesystem;
@@ -311,6 +324,7 @@ export class BuildReviewDispositionStore {
       ...options.leaseOptions,
       now: this.clock,
     });
+    this.log = options.log ?? ((message) => console.warn(message));
   }
 
   private async acquire(): Promise<BuildReviewDispositionStoreFailure | { readonly ok: true; readonly release: () => Promise<void> }> {
@@ -374,9 +388,17 @@ export class BuildReviewDispositionStore {
     if (!acquired.ok) return acquired;
     try {
       const loaded = await this.load();
-      return loaded.ok
-        ? { ok: true, records: Object.freeze(loaded.state.records.filter(isFindingDispositionRecord).filter((entry) => sameFeature(entry.feature, feature))) }
-        : loaded;
+      if (!loaded.ok) return loaded;
+      const records = loaded.state.records
+        .filter(isFindingDispositionRecord)
+        .filter((entry) => sameFeature(entry.feature, feature))
+        .filter((entry) => {
+          const rubric = entry.finding.canonicalPayload.rubric;
+          if (!isRetiredBuildReviewRubric(rubric)) return true;
+          this.log(`ignored retired rubric record: ${rubric}`);
+          return false;
+        });
+      return { ok: true, records: Object.freeze(records) };
     } finally {
       await acquired.release();
     }
@@ -389,10 +411,17 @@ export class BuildReviewDispositionStore {
     if (!acquired.ok) return acquired;
     try {
       const loaded = await this.load();
-      return loaded.ok
-        ? { ok: true, records: Object.freeze(loaded.state.records.filter((entry): entry is BuildReviewReducedCoverageDispositionRecord =>
-          !isFindingDispositionRecord(entry) && sameFeature(entry.feature, feature))) }
-        : loaded;
+      if (!loaded.ok) return loaded;
+      const records = loaded.state.records
+        .filter((entry): entry is BuildReviewReducedCoverageDispositionRecord =>
+          !isFindingDispositionRecord(entry) && sameFeature(entry.feature, feature))
+        .filter((entry) => {
+          const rubric = entry.identity.rubric;
+          if (!isRetiredBuildReviewRubric(rubric)) return true;
+          this.log(`ignored retired rubric record: ${rubric}`);
+          return false;
+        });
+      return { ok: true, records: Object.freeze(records) };
     } finally {
       await acquired.release();
     }

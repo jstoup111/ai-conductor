@@ -8,6 +8,7 @@ import {
   type BuildReviewJudgedResult,
   type BuildReviewRubricContractVersion,
 } from "./build-review-domain.js";
+import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 
 const CACHE_VERSION = 1;
 const CACHE_DIRECTORY = ".pipeline/build-review/cache";
@@ -137,7 +138,8 @@ export async function readBuildReviewCacheEntry(
   fs: BuildReviewCacheFilesystem,
 ): Promise<BuildReviewCacheEntryCandidate | undefined> {
   try {
-    return parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
+    const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
+    return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : undefined;
   } catch {
     return undefined;
   }
