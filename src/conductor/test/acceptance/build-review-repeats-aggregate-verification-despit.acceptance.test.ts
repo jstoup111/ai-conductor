@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +43,11 @@ beforeEach(async () => {
   ) as { scripts: Record<string, string> };
 
   await mkdir(join(fixtureRoot, 'bin'), { recursive: true });
+  await mkdir(join(fixtureRoot, 'scripts'), { recursive: true });
+  await copyFile(
+    join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'),
+    join(fixtureRoot, 'scripts', 'run-vitest.mjs'),
+  );
   await writeFile(
     join(fixtureRoot, 'package.json'),
     JSON.stringify({ name: 'scoped-script-fixture', private: true, scripts: sourcePackage.scripts }),

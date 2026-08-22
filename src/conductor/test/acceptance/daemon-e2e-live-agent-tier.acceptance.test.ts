@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
-import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
+import { dumpPipelineDiagnostics } from '../fixtures/daemon-e2e-diagnostics.js';
 import { LIVE_E2E_PROVIDERS } from '../fixtures/live-e2e-providers.js';
 import {
   enforceLiveE2ETokenCap,
@@ -16,7 +16,7 @@ import {
   withLiveE2EFailureDiagnostics,
 } from '../fixtures/live-e2e-run-body.js';
 
-vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+vi.mock('../fixtures/daemon-e2e-diagnostics.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 
