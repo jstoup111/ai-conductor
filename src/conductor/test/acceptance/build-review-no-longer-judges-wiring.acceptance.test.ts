@@ -114,12 +114,13 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
     const config: HarnessConfig = {
       build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
     };
+    const head = await git(dir, 'rev-parse', 'HEAD');
     const buildReviewRunner = new DefaultStepRunner(provider, 'maker-session', dir, {
       config,
       planPath,
       buildReviewInputOptions: {
         inspectTestSuite: async () => ({
-          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+          status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' },
         } as never),
       },
     });

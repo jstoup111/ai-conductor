@@ -322,7 +322,7 @@ describe('acceptance: independent build_review rubric execution', () => {
     ['an unresolved finding', true],
     ['an infrastructure failure', false],
   ])('fails closed in both runner and completion predicate for %s', async (_name, returnFinding) => {
-    const { dir, planPath } = await fixtureRepo();
+    const { dir, planPath, head } = await fixtureRepo();
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
@@ -336,7 +336,7 @@ describe('acceptance: independent build_review rubric execution', () => {
         return { success: true, output: JSON.stringify({ findings }), exitCode: 0 };
       }), invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
-    const runner = new DefaultStepRunner(provider, 'maker-session', dir, { planPath, pipelineDir: join(dir, '.pipeline'), config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig, buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' } } as never) } });
+    const runner = new DefaultStepRunner(provider, 'maker-session', dir, { planPath, pipelineDir: join(dir, '.pipeline'), config: { build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } }, wiring: { entry_points: ['src/feature.ts'] } } as HarnessConfig, buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' } } as never) } });
     const result = await runner.run('build_review', { complexity_tier: 'L', feature_desc: 'blocking-branch', track: 'product' });
     const completion = await checkStepCompletion(dir, 'build_review', { sessionStartedAt: Date.now() - 1_000 });
     expect({ result: result.success, done: completion.done, route: completion.routeClass }).toEqual({
@@ -347,7 +347,7 @@ describe('acceptance: independent build_review rubric execution', () => {
   });
 
   it('converges a current Scope finding to completion after the operator accepts its exact recomputed identity', async () => {
-    const { dir, planPath } = await fixtureRepo();
+    const { dir, planPath, head } = await fixtureRepo();
     let providerCalls = 0;
     const provider: LLMProvider = {
       invoke: vi.fn(async (options) => {
@@ -375,7 +375,7 @@ describe('acceptance: independent build_review rubric execution', () => {
       pipelineDir: join(dir, '.pipeline'),
       buildReviewInputOptions: {
         inspectTestSuite: async () => ({
-          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+          status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS' },
         } as never),
       },
     });
