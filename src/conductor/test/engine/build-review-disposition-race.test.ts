@@ -246,10 +246,13 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
     const { invalidatedDispositions } = await fixture(resolver);
 
-    expect(invalidatedDispositions).toEqual([{
-      type: 'build_review_disposition_version_invalidated',
+    // The current lap is resolved at completion, at the raw-FAIL exit, and
+    // again after build_review re-lands. The approved race guard deliberately
+    // does not reuse an early resolution across those decision points.
+    expect(invalidatedDispositions).toEqual(Array.from({ length: 3 }, () => ({
+      type: 'build_review_disposition_version_invalidated' as const,
       feature: 'feature', findingId: 'sha256:superseded', rubric: 'scope', contractVersion: 'v1',
-    }]);
+    })));
   });
 
   it('keeps the kickback when unresolved findings remain despite a partial acceptance', async () => {
@@ -378,7 +381,10 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { buildReviewRuns, projectRoot } = await fixture(resolver, { seedPerGateLimit: true });
 
-    expect(resolver).toHaveBeenCalledTimes(1);
+    // Completion, the per-gate-cap exit, and the re-landed PASS completion
+    // each resolve current disposition state. Do not collapse these reads:
+    // an operator may accept a finding between any two decision points.
+    expect(resolver).toHaveBeenCalledTimes(3);
     expect(buildReviewRuns()).toBe(2);
     await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
   });
