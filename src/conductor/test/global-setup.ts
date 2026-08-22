@@ -15,7 +15,6 @@ import {
   removeRunTmpRoot,
   snapshotTmpdirEntries,
   RUN_TMP_ROOT_ENV,
-  RUN_TMP_ROOT_OWNER_PID_ENV,
   type TmpdirDiff,
 } from './tmpdir-leak-guard.js';
 import {
@@ -236,12 +235,7 @@ export default async function setup() {
   // even if the config-level install is ever missing.
   const inheritedRunTmpRoot = process.env[RUN_TMP_ROOT_ENV];
   const runTmpRoot = inheritedRunTmpRoot ?? (await createRunTmpRoot(tmpdir()));
-  const ownsRunTmpRoot = inheritedRunTmpRoot === undefined ||
-    process.env[RUN_TMP_ROOT_OWNER_PID_ENV] === String(process.pid);
   process.env[RUN_TMP_ROOT_ENV] = runTmpRoot;
-  if (inheritedRunTmpRoot === undefined) {
-    process.env[RUN_TMP_ROOT_OWNER_PID_ENV] = String(process.pid);
-  }
   process.env.TMPDIR = runTmpRoot;
   const realTmpdir = dirname(runTmpRoot);
 
@@ -323,7 +317,6 @@ export default async function setup() {
     // pane cwd anywhere under the real tmpdir, not only under the run root.
     process.env.TMPDIR = realTmpdir;
     delete process.env[RUN_TMP_ROOT_ENV];
-    delete process.env[RUN_TMP_ROOT_OWNER_PID_ENV];
 
     try {
       await runTeardownGuards();
@@ -332,7 +325,7 @@ export default async function setup() {
       // guard failure still frees the disk, and self-contained try/catch so a
       // removal failure can never mask the guard error being propagated.
       try {
-        if (ownsRunTmpRoot) await removeRunTmpRoot(runTmpRoot);
+        await removeRunTmpRoot(runTmpRoot);
       } catch (err) {
         console.error(
           `tmpdir-leak-guard: could not remove the run temp root ${runTmpRoot} — remove it ` +

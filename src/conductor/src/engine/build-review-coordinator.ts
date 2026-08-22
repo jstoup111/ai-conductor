@@ -120,7 +120,7 @@ export interface BuildReviewCoordinationInput {
   readonly dispatchModel: (
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
-  ) => Promise<unknown>;
+  ) => Promise<unknown | { readonly result: unknown; readonly engineIdentity: BuildReviewEngineIdentity }>;
   /** Persist and return the validated, current-lap branch evidence. */
   readonly writeArtifact: (
     artifact: Omit<BuildReviewBranchArtifact, "version">,
@@ -398,7 +398,16 @@ export async function coordinateBuildReviewRubrics(
       const projection = projections[rubric];
       try {
         const dispatched = await input.dispatchModel(branch, projection);
-        const candidate = stampBuildReviewDispatchedCandidate(dispatched, rubric, projection);
+        const dispatchedWithIdentity = typeof dispatched === "object" && dispatched !== null &&
+          "engineIdentity" in dispatched && "result" in dispatched;
+        const dispatchedIdentity = dispatchedWithIdentity
+          ? dispatched.engineIdentity as BuildReviewEngineIdentity
+          : identity;
+        const candidate = stampBuildReviewDispatchedCandidate(
+          dispatchedWithIdentity ? dispatched.result : dispatched,
+          rubric,
+          projection,
+        );
         const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
         if (!result) {
           const failure = parseBuildReviewDispatchFailure(dispatched);
@@ -433,7 +442,7 @@ export async function coordinateBuildReviewRubrics(
             projectionVersion: projection.projectionVersion,
             projectionDigest: projection.digest,
             policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
-            engineIdentity: identity,
+            engineIdentity: dispatchedIdentity,
             result: written,
           });
         } catch {

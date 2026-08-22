@@ -12,7 +12,6 @@ import {
   ensureRunTmpRootSync,
   removeRunTmpRoot,
   RUN_TMP_ROOT_ENV,
-  RUN_TMP_ROOT_OWNER_PID_ENV,
   snapshotTmpdirEntries,
   diffTmpdirEntries,
   IGNORED_TMPDIR_PREFIXES,
@@ -60,19 +59,6 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
     const second = ensureRunTmpRootSync(fakeRealTmpdir, env);
 
     expect(second).toBe(first);
-    expect(await readdir(fakeRealTmpdir)).toHaveLength(1);
-  });
-
-  it('lets a nested Vitest coordinator borrow its parent root without taking ownership', async () => {
-    const parentEnv: NodeJS.ProcessEnv = {};
-    const parentRoot = ensureRunTmpRootSync(fakeRealTmpdir, parentEnv, 'parent-pid');
-    const childEnv: NodeJS.ProcessEnv = { ...parentEnv };
-
-    const childRoot = ensureRunTmpRootSync(fakeRealTmpdir, childEnv, 'child-pid');
-
-    expect(childRoot).toBe(parentRoot);
-    expect(childEnv[RUN_TMP_ROOT_ENV]).toBe(parentRoot);
-    expect(childEnv[RUN_TMP_ROOT_OWNER_PID_ENV]).toBe('parent-pid');
     expect(await readdir(fakeRealTmpdir)).toHaveLength(1);
   });
 

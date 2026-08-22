@@ -41,16 +41,6 @@ export const RUN_TMP_ROOT_PREFIX = 'ai-conductor-vitest-run-';
  */
 export const RUN_TMP_ROOT_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT';
 
-/**
- * Process id of the Vitest coordinator that owns `RUN_TMP_ROOT_ENV`.
- *
- * A Vitest process that inherits this value borrows the parent's root; only
- * this coordinator may reclaim it. That keeps child workers and the parent
- * suite in one contained tree without letting child teardown delete the
- * parent's root.
- */
-export const RUN_TMP_ROOT_OWNER_PID_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT_OWNER_PID';
-
 /** Make nested directories removable without following symlinks. */
 function makeDirectoriesWritableSync(path: string): void {
   let stat: ReturnType<typeof lstatSync>;
@@ -151,15 +141,8 @@ export async function createRunTmpRoot(realTmpdir: string): Promise<string> {
 export function ensureRunTmpRootSync(
   realTmpdir: string,
   env: NodeJS.ProcessEnv = process.env,
-  ownerPid: string = String(process.pid),
 ): string {
   const existing = env[RUN_TMP_ROOT_ENV];
-  const ownsExistingRoot =
-    existing !== undefined && env[RUN_TMP_ROOT_OWNER_PID_ENV] === ownerPid;
-  // A nested Vitest coordinator's workers inherit their environment before
-  // its config has run. Reusing the inherited root keeps those workers within
-  // the same tree as the coordinator, while the owner marker prevents the
-  // nested teardown from reclaiming the parent's root.
   const createdRunRoot = existing ?? mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
   let runRoot: string;
 
@@ -176,7 +159,6 @@ export function ensureRunTmpRootSync(
   }
 
   env[RUN_TMP_ROOT_ENV] = runRoot;
-  if (!existing || ownsExistingRoot) env[RUN_TMP_ROOT_OWNER_PID_ENV] = ownerPid;
   env.TMPDIR = runRoot;
 
   const ceilings = env.GIT_CEILING_DIRECTORIES;
