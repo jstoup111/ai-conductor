@@ -377,6 +377,3 @@ All paths below are relative to the repository root; the engine lives under `src
 - [x] No task exceeds 5 minutes of work
 - [x] Every task has a `Done when:` block of falsifiable checks
 - [x] Dependencies are explicit and acyclic
-### Task rem-scope-1: src/conductor/test/acceptance/builds-stall-when-work-lands-without-task-trailer-.acceptance.test.ts:667,674 — authorize and specify the terminal two-step routing assertion that tolerates legitimate earlier retry attempts
-### Task rem-scope-2: src/conductor/test/engine/daemon-render.test.ts:73,404,479 — authorize adding step_refused to the rendering assertion and exhaustive current/previous event-type samples
-### Task rem-scope-3: src/conductor/test/engine/event-sinks.test.ts:23,150 — authorize adding step_refused to the persisted-event and daemon-switch-handled exhaustive sets
