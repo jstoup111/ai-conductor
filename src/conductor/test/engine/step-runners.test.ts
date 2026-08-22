@@ -3457,24 +3457,27 @@ TIER: M`,
 
     it.each([
       {
-        // #1682: tautology defaults to disabled; only the other three rubrics dispatch.
-        name: 'build_review is absent and defaults to the three enabled rubrics (tautology off, #1682)',
+        // tautology (#1682) and rootCause (#1805) both default to disabled;
+        // only scope and completeness dispatch with no build_review config.
+        name: 'build_review is absent and defaults to the two enabled rubrics (tautology and rootCause off)',
         config: { wiring: { entry_points: ['src/index.ts'] } } as HarnessConfig,
-        expectedInvokeCalls: 6, // 3 rubrics x (1 dispatch + 1 bounded shape-repair)
+        expectedInvokeCalls: 4, // 2 rubrics x (1 dispatch + 1 bounded shape-repair)
         expectTautology: false,
+        expectRootCause: false,
       },
       {
         name: 'a partial rubric override inherits the remaining enabled rubrics',
         config: {
           build_review: {
-            rubrics: { scope: { model: 'opus' }, tautology: { enabled: true } },
+            rubrics: { scope: { model: 'opus' }, tautology: { enabled: true }, rootCause: { enabled: true } },
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
         expectedInvokeCalls: 8, // 4 rubrics x (1 dispatch + 1 bounded shape-repair)
         expectTautology: true,
+        expectRootCause: true,
       },
-    ])('uses the production rubric coordinator when $name', async ({ config, expectedInvokeCalls, expectTautology }) => {
+    ])('uses the production rubric coordinator when $name', async ({ config, expectedInvokeCalls, expectTautology, expectRootCause }) => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
@@ -3494,10 +3497,14 @@ TIER: M`,
       expect(prompts).toEqual(
         expect.arrayContaining([
           expect.stringContaining('Build Review Scope rubric'),
-          expect.stringContaining('Build Review Root Cause rubric'),
           expect.stringContaining('Build Review Completeness rubric'),
         ]),
       );
+      if (expectRootCause) {
+        expect(prompts).toEqual(expect.arrayContaining([expect.stringContaining('Build Review Root Cause rubric')]));
+      } else {
+        expect(prompts.join('\n')).not.toContain('Build Review Root Cause rubric');
+      }
       if (expectTautology) {
         expect(prompts).toEqual(expect.arrayContaining([expect.stringContaining('Build Review Tautology rubric')]));
       } else {
@@ -3541,7 +3548,7 @@ TIER: M`,
     // #1682: tautology defaults off; these tests exercise four-rubric fan-out mechanics.
     function tautologyOptIn() {
       return {
-        config: { build_review: { rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+        config: { build_review: { rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } } } as HarnessConfig,
       };
     }
 
@@ -3603,7 +3610,7 @@ TIER: M`,
           gitRunner: makeGitRunner(dir),
           planPath,
           pipelineDir: join(dir, '.pipeline'),
-          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } } } as HarnessConfig,
           ...currentBuildReviewProof(),
         },
       );
@@ -3644,7 +3651,7 @@ TIER: M`,
           planPath,
           pipelineDir: join(dir, '.pipeline'),
           log: (message) => console.warn(message),
-          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true } } } } as HarnessConfig,
+          config: { build_review: { scopeContainmentEnforced: true, rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } } } as HarnessConfig,
           ...currentBuildReviewProof(),
         },
       );

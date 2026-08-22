@@ -112,7 +112,7 @@ describe('acceptance: build_review routes a rubric finding to build', () => {
       invokeInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const config: HarnessConfig = {
-      build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true } } },
+      build_review: { enabled: true, perTaskFloor: false, rubrics: { tautology: { enabled: true }, rootCause: { enabled: true } } },
     };
     const head = await git(dir, 'rev-parse', 'HEAD');
     const buildReviewRunner = new DefaultStepRunner(provider, 'maker-session', dir, {
