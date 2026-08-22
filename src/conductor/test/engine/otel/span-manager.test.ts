@@ -73,7 +73,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
     await emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
     await vis.stop();
 
-    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanId);
+    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
     expect(roots).toHaveLength(1);
     expect(roots[0].name).toBe('conductor.run');
   });
@@ -87,7 +87,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
     await emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
     await vis.stop();
 
-    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanId);
+    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
     expect(roots[0].status.code).toBe(1 /* OK */);
   });
 
@@ -100,7 +100,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
     // No feature_complete — simulate abrupt termination
     await vis.stop();
 
-    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanId);
+    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
     expect(roots).toHaveLength(1); // closed on flush
   });
 
@@ -113,7 +113,7 @@ describe('T10: run span lifecycle — one trace per run', () => {
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanId);
+    const roots = spanExporter.getFinishedSpans().filter((s) => !s.parentSpanContext);
     expect(roots).toHaveLength(1);
   });
 
@@ -129,8 +129,8 @@ describe('T10: run span lifecycle — one trace per run', () => {
     await vis.stop();
 
     const spans = spanExporter.getFinishedSpans();
-    const root = spans.find((s) => !s.parentSpanId)!;
-    const children = spans.filter((s) => s.parentSpanId);
+    const root = spans.find((s) => !s.parentSpanContext)!;
+    const children = spans.filter((s) => s.parentSpanContext);
     expect(children.length).toBeGreaterThan(0);
     for (const child of children) {
       expect(child.spanContext().traceId).toBe(root.spanContext().traceId);
@@ -209,9 +209,9 @@ describe('T11: step spans — duration and status', () => {
     await vis.stop();
 
     const spans = spanExporter.getFinishedSpans();
-    const root = spans.find((s) => !s.parentSpanId)!;
+    const root = spans.find((s) => !s.parentSpanContext)!;
     const step = spans.find((s) => s.name === 'bootstrap')!;
-    expect(step.parentSpanId).toBe(root.spanContext().spanId);
+    expect(step.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
     expect(step.spanContext().traceId).toBe(root.spanContext().traceId);
   });
 });
@@ -402,7 +402,7 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
     await vis.stop();
 
     // The run span should carry the gate_verdict event
-    const runSpan = spanExporter.getFinishedSpans().find((s) => !s.parentSpanId)!;
+    const runSpan = spanExporter.getFinishedSpans().find((s) => !s.parentSpanContext)!;
     const verdictEvent = runSpan.events.find((e) => e.name === 'gate_verdict');
     expect(verdictEvent).toBeDefined();
   });
@@ -444,7 +444,7 @@ describe('Task 19: pipeline_closeout span event', () => {
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const runSpan = spanExporter.getFinishedSpans().find((span) => !span.parentSpanId)!;
+    const runSpan = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
     const closeout = runSpan.events.find((event) => event.name === 'pipeline_closeout');
     expect(closeout?.attributes).toMatchObject({
       obligation: 'summary',
@@ -488,7 +488,7 @@ describe('T20: incomplete-span close (FR-9 unit coverage)', () => {
     // All three left open — forceCloseAll must handle all
     await vis.stop();
 
-    const spans = spanExporter.getFinishedSpans().filter((s) => s.parentSpanId);
+    const spans = spanExporter.getFinishedSpans().filter((s) => s.parentSpanContext);
     const names = spans.map((s) => s.name).sort();
     expect(names).toEqual(['bootstrap', 'explore', 'plan'].sort());
     for (const s of spans) {
@@ -506,7 +506,7 @@ describe('T20: incomplete-span close (FR-9 unit coverage)', () => {
     await vis.stop();
 
     const spans = spanExporter.getFinishedSpans();
-    const rootSpan = spans.find((s) => !s.parentSpanId);
+    const rootSpan = spans.find((s) => !s.parentSpanContext);
     expect(rootSpan).toBeDefined(); // run span must be closed
     expect(rootSpan!.name).toBe('conductor.run');
 

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
-import { Resource } from '@opentelemetry/resources';
+import { resourceFromAttributes, type Resource } from '@opentelemetry/resources';
 
 const SERVICE_NAME = 'ai-conductor';
 
@@ -35,7 +35,7 @@ export function buildResource(ctx: ResourceContext): Resource {
   const feature = ctx.feature ?? 'unknown';
   const project = ctx.project ?? 'unknown';
 
-  return new Resource({
+  return resourceFromAttributes({
     'service.name': SERVICE_NAME,
     'conductor.run.id': runId,
     'conductor.feature': feature,
