@@ -1800,6 +1800,76 @@ complexity:
     });
   });
 
+  describe('prd_audit and architecture_review_as_built config fields', () => {
+    it('resolves the remediation caps and plan-gap policy defaults', () => {
+      expect(validateConfig({})).toMatchObject({
+        ok: true,
+        config: {
+          prd_audit: {
+            max_remediation_laps: 1,
+            max_appended_tasks: 5,
+            max_appended_ratio: 0.25,
+            halt_on_any_plan_gap: false,
+          },
+        },
+      });
+    });
+
+    it.each([
+      ['max_remediation_laps', 0],
+      ['max_appended_tasks', 0],
+    ])('rejects prd_audit.%s when it is zero', (key, value) => {
+      expect(validateConfig({ prd_audit: { [key]: value } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: `prd_audit.${key} must be a positive integer`,
+        },
+      });
+    });
+
+    it.each([0, -0.1, 1.1])('rejects an out-of-range remediation ratio', (value) => {
+      expect(validateConfig({ prd_audit: { max_appended_ratio: value } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'prd_audit.max_appended_ratio must be a finite number in (0, 1]',
+        },
+      });
+    });
+
+    it('resolves a per-check as-built tier override', () => {
+      expect(
+        validateConfig({
+          architecture_review_as_built: {
+            checks: { reachability: { tiers: ['M', 'L'] } },
+          },
+        }),
+      ).toMatchObject({
+        ok: true,
+        config: {
+          architecture_review_as_built: {
+            checks: { reachability: { tiers: ['M', 'L'] } },
+          },
+        },
+      });
+    });
+
+    it('rejects an unknown as-built check name', () => {
+      expect(
+        validateConfig({
+          architecture_review_as_built: { checks: { unknown: { tiers: ['S'] } } },
+        }),
+      ).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'Unknown check in architecture_review_as_built.checks: "unknown"',
+        },
+      });
+    });
+  });
+
   describe('build_review config field', () => {
     it('accepts retired rubric keys as no-ops and warns once per configured key', () => {
       const retiredScope = validateConfig({

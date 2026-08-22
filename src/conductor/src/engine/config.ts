@@ -49,6 +49,19 @@ const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'm
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
 const BUILT_IN_MODEL_PROVIDERS = new Set(['claude', 'codex']);
 const VALID_ADR_CORPORA = new Set(['change_set', 'repo_wide']);
+const VALID_COMPLEXITY_TIERS = new Set(['S', 'M', 'L']);
+const AS_BUILT_CHECK_NAMES = new Set([
+  'reachability',
+  'planGap',
+  'adrCompliance',
+  'diagramDrift',
+]);
+const PRD_AUDIT_DEFAULTS = {
+  max_remediation_laps: 1,
+  max_appended_tasks: 5,
+  max_appended_ratio: 0.25,
+  halt_on_any_plan_gap: false,
+} as const;
 const BUILD_REVIEW_RUBRIC_IDS = [
   'tautology',
   'scope',
@@ -408,6 +421,10 @@ export function validateConfig(
     'build_review',
     // ADR corpus scope for conflict-check.
     'conflict_check',
+    // SHIP prd_audit remediation caps and PLAN_GAP routing policy.
+    'prd_audit',
+    // Per-check tier policy for the as-built architecture review.
+    'architecture_review_as_built',
     // CI watch feature (adr-2026-07-07-ship-ci-feedback-loop).
     'ci_watch',
     // Progress-aware build halt/park decision (daemon-halts-a-build-that-is-making-forward-progre).
@@ -729,8 +746,7 @@ export function validateConfig(
       return errVal('complexity must be an object');
     }
     const cx = obj.complexity as Record<string, unknown>;
-    const VALID_TIERS = new Set(['S', 'M', 'L']);
-    if (cx.default_tier !== undefined && !VALID_TIERS.has(cx.default_tier as string)) {
+    if (cx.default_tier !== undefined && !VALID_COMPLEXITY_TIERS.has(cx.default_tier as string)) {
       return errVal('complexity.default_tier must be S|M|L');
     }
   }
@@ -1030,6 +1046,23 @@ export function validateConfig(
     };
   }
 
+  // prd_audit — bounded remediation policy. Every validated config carries
+  // the defaults so the later remediation router has one authoritative cap.
+  {
+    const err = validatePrdAuditBlock(obj.prd_audit);
+    if (err) return { ok: false, error: err };
+    if (obj.prd_audit !== undefined || materializeDefaults) {
+      obj.prd_audit = resolvePrdAuditBlock(obj.prd_audit);
+    }
+  }
+
+  // architecture_review_as_built — optional tier overrides for the review's
+  // closed set of independently applicable checks.
+  if (obj.architecture_review_as_built !== undefined) {
+    const err = validateArchitectureReviewAsBuiltBlock(obj.architecture_review_as_built);
+    if (err) return { ok: false, error: err };
+  }
+
   // conflict_check — ADR corpus scope for conflict-check. The default keeps
   // consumer checks bounded to ADRs in the current change set.
   if (obj.conflict_check !== undefined) {
@@ -1325,6 +1358,146 @@ function validateBuildAuthBlock(raw: unknown): ConfigError | null {
       message: 'harness_self_host.build_auth.token_path must be a string',
     };
   }
+  return null;
+}
+
+function validatePrdAuditBlock(raw: unknown): ConfigError | null {
+  if (raw === undefined || raw === null) return null;
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'prd_audit must be an object' };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const allowed = new Set([
+    'max_remediation_laps',
+    'max_appended_tasks',
+    'max_appended_ratio',
+    'halt_on_any_plan_gap',
+  ]);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in prd_audit: "${key}"` };
+    }
+  }
+
+  for (const key of ['max_remediation_laps', 'max_appended_tasks'] as const) {
+    const value = obj[key];
+    if (
+      value !== undefined &&
+      (typeof value !== 'number' || !Number.isInteger(value) || value <= 0)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `prd_audit.${key} must be a positive integer`,
+      };
+    }
+  }
+
+  const ratio = obj.max_appended_ratio;
+  if (
+    ratio !== undefined &&
+    (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0 || ratio > 1)
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'prd_audit.max_appended_ratio must be a finite number in (0, 1]',
+    };
+  }
+
+  if (
+    obj.halt_on_any_plan_gap !== undefined &&
+    typeof obj.halt_on_any_plan_gap !== 'boolean'
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'prd_audit.halt_on_any_plan_gap must be a boolean',
+    };
+  }
+
+  return null;
+}
+
+function resolvePrdAuditBlock(raw: unknown): {
+  max_remediation_laps: number;
+  max_appended_tasks: number;
+  max_appended_ratio: number;
+  halt_on_any_plan_gap: boolean;
+} {
+  const obj = isPlainObject(raw) ? raw : {};
+  return {
+    max_remediation_laps:
+      typeof obj.max_remediation_laps === 'number'
+        ? obj.max_remediation_laps
+        : PRD_AUDIT_DEFAULTS.max_remediation_laps,
+    max_appended_tasks:
+      typeof obj.max_appended_tasks === 'number'
+        ? obj.max_appended_tasks
+        : PRD_AUDIT_DEFAULTS.max_appended_tasks,
+    max_appended_ratio:
+      typeof obj.max_appended_ratio === 'number'
+        ? obj.max_appended_ratio
+        : PRD_AUDIT_DEFAULTS.max_appended_ratio,
+    halt_on_any_plan_gap:
+      typeof obj.halt_on_any_plan_gap === 'boolean'
+        ? obj.halt_on_any_plan_gap
+        : PRD_AUDIT_DEFAULTS.halt_on_any_plan_gap,
+  };
+}
+
+function validateArchitectureReviewAsBuiltBlock(raw: unknown): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return {
+      type: 'validation_error',
+      message: 'architecture_review_as_built must be an object',
+    };
+  }
+
+  const obj = raw as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (key !== 'checks') {
+      return {
+        type: 'validation_error',
+        message: `Unknown key in architecture_review_as_built: "${key}"`,
+      };
+    }
+  }
+
+  if (obj.checks === undefined) return null;
+  if (!isPlainObject(obj.checks)) {
+    return {
+      type: 'validation_error',
+      message: 'architecture_review_as_built.checks must be an object',
+    };
+  }
+
+  for (const [checkName, policy] of Object.entries(obj.checks)) {
+    const path = `architecture_review_as_built.checks.${checkName}`;
+    if (!AS_BUILT_CHECK_NAMES.has(checkName)) {
+      return {
+        type: 'validation_error',
+        message: `Unknown check in architecture_review_as_built.checks: "${checkName}"`,
+      };
+    }
+    if (!isPlainObject(policy)) {
+      return { type: 'validation_error', message: `${path} must be an object` };
+    }
+    for (const key of Object.keys(policy)) {
+      if (key !== 'tiers') {
+        return { type: 'validation_error', message: `Unknown key in ${path}: "${key}"` };
+      }
+    }
+    if (
+      policy.tiers !== undefined &&
+      (!Array.isArray(policy.tiers) ||
+        policy.tiers.some((tier) => typeof tier !== 'string' || !VALID_COMPLEXITY_TIERS.has(tier)))
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.tiers must be an array containing only S, M, or L`,
+      };
+    }
+  }
+
   return null;
 }
 
