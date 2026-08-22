@@ -273,7 +273,7 @@ async function loadProjectConfig(
 
   let parsed: unknown;
   try {
-    parsed = loadYaml(raw);
+    parsed = loadYaml(raw.trim() === '' ? '{}' : raw);
   } catch (e: unknown) {
     let message = 'Failed to parse YAML';
     if (e instanceof Error) {
@@ -1989,7 +1989,7 @@ export async function loadMergedConfigForRead(
 
   let project: unknown;
   try {
-    project = loadYaml(raw) ?? {};
+    project = loadYaml(raw.trim() === '' ? '{}' : raw) ?? {};
   } catch (error: unknown) {
     return {
       ok: false,

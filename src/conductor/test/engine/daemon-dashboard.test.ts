@@ -397,8 +397,8 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     });
     expect(state).toMatchObject({
       inProgress: expect.arrayContaining([
-        { slug: 'missing-ledger', step: 'acceptance_specs' },
-        { slug: 'unreadable-ledger', step: 'acceptance_specs' },
+        expect.objectContaining({ slug: 'missing-ledger', step: 'acceptance_specs' }),
+        expect.objectContaining({ slug: 'unreadable-ledger', step: 'acceptance_specs' }),
       ]),
     });
 

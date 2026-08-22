@@ -6,11 +6,11 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AuthenticationReadiness, InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
-import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
+import { dumpPipelineDiagnostics } from './daemon-e2e-diagnostics.js';
 import { LIVE_E2E_PROVIDERS, type LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import type { LiveE2ERunBodyDependencies } from './live-e2e-run-body.js';
 
-vi.mock('../engine/daemon-e2e-fixture.test.js', () => ({
+vi.mock('./daemon-e2e-diagnostics.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 

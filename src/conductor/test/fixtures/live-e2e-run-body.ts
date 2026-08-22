@@ -20,7 +20,7 @@ import { DefaultStepRunner, type StepRunnerOptions } from '../../src/engine/step
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
 import type { StepName } from '../../src/types/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { dumpPipelineDiagnostics } from '../engine/daemon-e2e-fixture.test.js';
+import { dumpPipelineDiagnostics } from './daemon-e2e-diagnostics.js';
 import { initTestRepo } from './git-repo.js';
 import type { LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import { provisionLiveProviderHome } from './live-provider-home.js';
