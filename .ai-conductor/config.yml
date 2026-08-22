@@ -78,7 +78,36 @@ build_review:
     scope:
       llm_provider: codex
       model: gpt-5.6-sol
+    # rootCause is disabled on 2026-08-22 by operator decision, as the interim
+    # half of #1805 while that consolidation goes through DECIDE.
+    #
+    # Measured cost across the 24 shipped features carrying build_review
+    # telemetry: a 39.2% FAIL rate (148 failures / 378 judged), the highest of
+    # the three enabled rubrics; mean laps-to-pass 5.2 (max 12), which did not
+    # move across 89 build_review fixes merged since 2026-08-08.
+    #
+    # The cause is structural, not strictness. Of the three grading rubrics only
+    # rootCause has no plan reference in its anchor (build-review-domain.ts:71-73):
+    # scope carries `relation: not-authorized-by-plan` and completeness carries a
+    # `planTask`, while rootCause binds a free-text `statedDefect` to a code
+    # locus. When the approved mechanism cannot fully close the stated defect it
+    # therefore cannot report "the plan is the limit" — it can only demand a
+    # different mechanism, which scope then condemns as unauthorized. That
+    # deadlock is #1630; on 2026-08-22 alone it cost an operator revert of five
+    # commits and the rejection of ten appended remediation tasks.
+    #
+    # What still covers this ground meanwhile: scope keeps every change inside
+    # the approved plan, completeness keeps the can't-fail bar on task
+    # deliverables, acceptance RED is engine-enforced (adr-2026-07-21), and
+    # test_suite runs the full suite. What is genuinely uncovered: whether a
+    # change fixes the root cause or only its symptom, until #1805 re-seats that
+    # judgement.
+    #
+    # RE-ENABLE only as part of #1805, re-seated as an as-built architecture
+    # review with the authority to route a plan gap back to DECIDE. Do not
+    # re-enable it as a BUILD-blocking rubric that can order work off-plan.
     rootCause:
+      enabled: false
       llm_provider: codex
       model: gpt-5.6-sol
 
