@@ -41,6 +41,15 @@ export const RUN_TMP_ROOT_PREFIX = 'ai-conductor-vitest-run-';
  */
 export const RUN_TMP_ROOT_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT';
 
+/**
+ * Process id of the Vitest coordinator that owns `RUN_TMP_ROOT_ENV`.
+ *
+ * A full-suite verifier can launch Vitest from inside an already-running
+ * Vitest process. Its child inherits the parent's environment, but it must
+ * never reuse (and subsequently delete) the parent's run root.
+ */
+export const RUN_TMP_ROOT_OWNER_PID_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT_OWNER_PID';
+
 /** Make nested directories removable without following symlinks. */
 function makeDirectoriesWritableSync(path: string): void {
   let stat: ReturnType<typeof lstatSync>;
@@ -140,10 +149,15 @@ export async function createRunTmpRoot(realTmpdir: string): Promise<string> {
  */
 export function ensureRunTmpRootSync(
   realTmpdir: string,
-  env: NodeJS.ProcessEnv = process.env
+  env: NodeJS.ProcessEnv = process.env,
+  ownerPid: string = String(process.pid),
 ): string {
   const existing = env[RUN_TMP_ROOT_ENV];
-  const createdRunRoot = existing ?? mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
+  const ownsExistingRoot =
+    existing !== undefined && env[RUN_TMP_ROOT_OWNER_PID_ENV] === ownerPid;
+  const createdRunRoot = ownsExistingRoot
+    ? existing
+    : mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
   let runRoot: string;
 
   try {
@@ -159,6 +173,7 @@ export function ensureRunTmpRootSync(
   }
 
   env[RUN_TMP_ROOT_ENV] = runRoot;
+  env[RUN_TMP_ROOT_OWNER_PID_ENV] = ownerPid;
   env.TMPDIR = runRoot;
 
   const ceilings = env.GIT_CEILING_DIRECTORIES;

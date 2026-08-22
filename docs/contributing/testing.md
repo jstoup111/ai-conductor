@@ -244,6 +244,9 @@ Four files run automatically and exist because each one prevented a real inciden
 The config module calls `ensureRunTmpRootSync(tmpdir())` before Vitest constructs anything. That creates
 one `ai-conductor-vitest-run-*` root inside the real tmpdir and points `TMPDIR` at it.
 
+The root is owned by the coordinator process. A nested configured Vitest run inherits `TMPDIR`, but receives
+its own root, so its teardown cannot remove the outer suite's live transform cache.
+
 `os.tmpdir()` reads `TMPDIR` on every call, so all ~1,426 `mkdtemp(join(tmpdir(), '<prefix>-'))` call
 sites across the suite — including ones written later — land inside that root with no test-file changes,
 and `global-setup.ts` deletes the root wholesale at teardown. Before this, the tests that never cleaned
