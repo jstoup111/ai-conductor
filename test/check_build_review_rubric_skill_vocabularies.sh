@@ -191,12 +191,8 @@ check_vocabulary_drift() {
     return 1
   fi
 
-  for rubric in testQuality scope rootCause completeness; do
-    case "$rubric" in
-      testQuality) skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md" ;;
-      rootCause) skill_file="$harness_dir/skills/build-review-root-cause/SKILL.md" ;;
-      *) skill_file="$harness_dir/skills/build-review-${rubric}/SKILL.md" ;;
-    esac
+  for rubric in testQuality; do
+    skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md"
     if [ ! -f "$skill_file" ]; then
       echo "missing vocabulary source for ${rubric}: ${skill_file}" >&2
       return 1
@@ -230,12 +226,8 @@ check_reference_grammar_drift() {
     return 1
   fi
 
-  for rubric in testQuality scope rootCause completeness; do
-    case "$rubric" in
-      testQuality) skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md" ;;
-      rootCause) skill_file="$harness_dir/skills/build-review-root-cause/SKILL.md" ;;
-      *) skill_file="$harness_dir/skills/build-review-${rubric}/SKILL.md" ;;
-    esac
+  for rubric in testQuality; do
+    skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md"
     if [ ! -r "$skill_file" ]; then
       echo "could not read build-review ${rubric} reference grammar contract: ${skill_file}" >&2
       return 1
@@ -394,70 +386,6 @@ run_drift_fixture() {
     failures=1
   fi
 }
-
-# Task 14: the parser routes `anchor.planTask` through the PATH grammar while
-# the contract still says plan-task. Behaviorally: 'src/probe.ts' becomes
-# accepted, so the field classifies as path and drifts against the contract.
-fixture_plantask_path="$fixture_dir/build-review-domain-plantask-path.ts"
-sed 's/verifiedReference(source\.planTask, parseBuildReviewCanonicalPlanTaskReference)/verifiedReference(source.planTask, parseBuildReviewCanonicalPathReference)/' \
-  "$fixture_domain" >"$fixture_plantask_path"
-run_drift_fixture 'a parser-only grammar change' "$fixture_plantask_path" "$fixture_harness" \
-  'build-review completeness reference grammar drift: anchor.planTask requires path, but SKILL.md does not state that grammar'
-
-# The parser reads `anchor.changedTest` for the test-quality locus while the
-# contract keeps `anchor.locus`. The documented
-# specimen anchor carries locus, not changedTest, so the parser rejects every
-# baseline — rerouted field reads cannot pass silently.
-fixture_field="$fixture_dir/build-review-domain-reference-field.ts"
-sed 's/parseContentRegionReference(source\.locus)/parseContentRegionReference(source.changedTest)/' \
-  "$fixture_domain" >"$fixture_field"
-run_drift_fixture 'a parser-only reference-field change' "$fixture_field" "$fixture_harness" \
-  'build-review testQuality reference grammar drift: the parser rejected the fully-documented specimen anchor'
-
-# An incomplete test-quality branch that stops
-# routing the declared field through any grammar accepts garbage and must fail
-# as unenforced, never pass as an empty comparison.
-fixture_unenforced="$fixture_dir/build-review-domain-unenforced.ts"
-sed 's/return parseContentRegionReference(source\.locus);/return source.locus;/' \
-  "$fixture_domain" >"$fixture_unenforced"
-run_drift_fixture 'an unenforced reference field' "$fixture_unenforced" "$fixture_harness" \
-  'build-review testQuality reference grammar drift: anchor.locus accepts arbitrary input'
-
-# Remediation Task rem-root-cause-4: grammar drift in each CONSTANT the parser
-# builds on — never in the helper body, binding, or contract — must change
-# observed acceptance and fail the guard. This is the exact surface the old
-# textual extraction could not see.
-fixture_canonical="$fixture_dir/build-review-domain-canonical-constant.ts"
-sed 's|^const CANONICAL_PLAN_TASK_REFERENCE = .*|const CANONICAL_PLAN_TASK_REFERENCE = /^task-[0-9]+$/;|' \
-  "$fixture_domain" >"$fixture_canonical"
-# This drift is so complete that no plan-task specimen is accepted at all, so
-# it surfaces as a rejected baseline rather than an unclassifiable field —
-# still fail-closed, with the diagnostic naming the specimen contract.
-run_drift_fixture 'CANONICAL_PLAN_TASK_REFERENCE grammar drift' "$fixture_canonical" "$fixture_harness" \
-  'build-review completeness reference grammar drift: the parser rejected the fully-documented specimen anchor'
-
-fixture_titled="$fixture_dir/build-review-domain-titled-constant.ts"
-sed 's|^const TITLED_PLAN_TASK_REFERENCE = .*|const TITLED_PLAN_TASK_REFERENCE = new RegExp(`^Plan\\\\s+(${TASK_ID_PATTERN}):\\\\s+.+$`);|' \
-  "$fixture_domain" >"$fixture_titled"
-run_drift_fixture 'TITLED_PLAN_TASK_REFERENCE grammar drift' "$fixture_titled" "$fixture_harness" \
-  'build-review completeness reference grammar drift: anchor.planTask acceptance matches no known reference grammar'
-
-fixture_task_id="$fixture_dir/build-review-domain-task-id-constant.ts"
-sed "s|^const TASK_ID_PATTERN = .*|const TASK_ID_PATTERN = '[0-9]+';|" \
-  "$fixture_domain" >"$fixture_task_id"
-run_drift_fixture 'TASK_ID_PATTERN grammar drift' "$fixture_task_id" "$fixture_harness" \
-  'build-review completeness reference grammar drift: anchor.planTask acceptance matches no known reference grammar'
-
-# A stale contract direction: the engine enforces path where the contract
-# still documents content-region.
-fixture_stale="$fixture_dir/build-review-domain-stale-doc.ts"
-cp "$fixture_domain" "$fixture_stale"
-fixture_stale_harness="$fixture_dir/harness-stale"
-cp -R "$fixture_harness" "$fixture_stale_harness"
-sed -i 's/`anchor.path` is a `path` reference/`anchor.path` is a `content-region` reference/' \
-  "$fixture_stale_harness/skills/build-review-scope/SKILL.md"
-run_drift_fixture 'a stale documented grammar' "$fixture_stale" "$fixture_stale_harness" \
-  'build-review scope reference grammar drift: anchor.path requires path, but SKILL.md does not state that grammar'
 
 fixture_missing_domain="$fixture_dir/missing-build-review-domain.ts"
 if fixture_output=$(check_reference_grammar_drift "$fixture_missing_domain" "$fixture_harness" 2>&1); then

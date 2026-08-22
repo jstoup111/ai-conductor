@@ -702,15 +702,9 @@ export function resolveMergeableAutoresolve(config?: HarnessConfig): ResolvedMer
 // ────────────────────────────────────────────────────────────────────────────
 
 const DEFAULT_BUILD_REVIEW_ENABLED = true;
-const DEFAULT_PER_TASK_FLOOR_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
 const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 4;
-const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = [
-  'tautology',
-  'scope',
-  'rootCause',
-  'completeness',
-];
+const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = ['testQuality'];
 
 /** Concrete execution policy for one independently-dispatched review rubric. */
 export interface ResolvedBuildReviewRubricPolicy {
@@ -735,44 +729,27 @@ export interface ResolvedBuildReviewConfig {
 /**
  * Resolve the `build_review` block to concrete settings.
  * Absent/malformed block defaults to ENABLED (#773 Task 4) — build_review's
- * completeness rubric item is the replacement completion authority once the
- * per-task evidence gate is retired. Projects may still explicitly opt out
+ * test-quality is the replacement completion authority. Projects may still explicitly opt out
  * via `build_review.enabled: false`. Validation and warning emission for
  * malformed input happens in `validateConfig`; this resolver assumes a
  * validated (or absent) block and only applies the default.
  */
 /** Per-rubric default efforts; explicit rubric or step config overrides. */
 const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'high'>> = {
-  tautology: 'high',
-  scope: 'medium',
-  rootCause: 'medium',
-  completeness: 'high',
+  testQuality: 'high',
 };
 
 /**
  * Per-rubric default enablement; an explicit `rubrics.<id>.enabled` always
- * wins. Tautology is opt-in: its scoped-run preflight classifies test output
+ * wins. Test quality is opt-in: its scoped-run preflight classifies test output
  * with framework-specific patterns, and on frameworks it does not recognize
  * (e.g. RSpec, #1682) every run — pass or fail — becomes an unretriable
  * infrastructure failure, so the rubric can never return a verdict and the
  * gate deadlocks. Projects whose framework the preflight understands enable
  * it explicitly (this repository does, in `.ai-conductor/config.yml`).
- *
- * rootCause is opt-in for a different reason (#1805, #1808): as a
- * BUILD-blocking rubric it binds a free-text `statedDefect` to a code anchor
- * with no plan reference, so unlike scope (`relation: not-authorized-by-plan`)
- * and completeness (`planTask`) it can order work that the approved plan never
- * authorized, and re-raise it every lap. This repository disabled it on
- * 2026-08-22 for that reason and runs without it; shipping it on by default
- * would hand consumers the loop the maintainer had already turned off.
- * Re-seat it as an as-built review that can route a plan gap back to DECIDE
- * (#1805) before defaulting it back on.
  */
 const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
-  tautology: false,
-  scope: true,
-  rootCause: false,
-  completeness: true,
+  testQuality: false,
 };
 
 export function resolveBuildReviewConfig(
@@ -856,10 +833,7 @@ export function resolveBuildReviewConfig(
 
   return {
     enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
-    perTaskFloor:
-      typeof block?.perTaskFloor === 'boolean'
-        ? block.perTaskFloor
-        : DEFAULT_PER_TASK_FLOOR_ENABLED,
+    perTaskFloor: false,
     scopeContainmentEnforced:
       typeof block?.scopeContainmentEnforced === 'boolean'
         ? block.scopeContainmentEnforced

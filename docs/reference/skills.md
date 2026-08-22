@@ -53,8 +53,7 @@ The 12 implicit-required shipped skills are:
 | `/engineer` DECIDE composition | `explore`, `prd`, `architecture-diagram`, `architecture-review`, `stories`, `conflict-check`, `plan`, `coherence-check` | `/engineer` must run the real workflows directly in its current chat; it does not launch a second CLI session for them |
 | Other same-session handoffs | `intake`, `debugging`, `simplify`, `verify-claims` | Called from an active skill: issue authoring, fresh debugging, batch simplification, or load-bearing claim verification |
 
-The 21 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-completeness`,
-`build-review-root-cause`, `build-review-scope`, `build-review-test-quality`, `code-review`, `conduct`,
+The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
 `remediate`, `retro`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
@@ -561,7 +560,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 `test-suite` and `wiring-check` have no `SKILL.md` — both `test_suite` (index 14) and `wiring_check`
 (index 13) are **engine-native** BUILD steps. `test_suite` obtains a current result from the
 repository-configured aggregate verifier. `wiring_check` is a deprecated no-op retained for compatibility.
-`build_review` fans out to the engine-managed Tautology, Scope, Root Cause, and Completeness rubric
+`build_review` dispatches the engine-managed test-quality rubric
 skills; their raw verdicts are joined before effective dispositions are applied. The two names remain in `build_verification` (see
 [The build verification group](steps.md#the-build-verification-group)); it fans out after `build` and
 joins before `build_review`.

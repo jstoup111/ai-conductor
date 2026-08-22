@@ -646,11 +646,7 @@ export interface MergeableAutoresolveConfig {
 }
 
 /** The closed set of independently-executed build-review rubric branches. */
-export type BuildReviewRubricId =
-  | 'tautology'
-  | 'scope'
-  | 'rootCause'
-  | 'completeness';
+export type BuildReviewRubricId = 'testQuality';
 
 /** Optional execution overrides for one build-review rubric branch. */
 export interface BuildReviewRubricConfig {

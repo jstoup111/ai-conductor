@@ -250,37 +250,14 @@ export type BuildReviewFailRoute = 'build' | 'remediate' | 'none';
  * Derive the routing decision deterministically from the grader verdict that
  * is already on disk — no extra LLM-judged field, no prompt change.
  *
- * Rule: a **completeness** failure means the diff does not cover everything the
- * plan describes. Repeatedly kicking that back to `build` is what produces the
- * "different legitimate finding every lap" signature of an under-decomposed
- * plan task, so it goes to `remediate`, which can route per-gap (build /
- * acceptance_specs / plan / …) or HALT for a human.
- *
- * A **scope** failure is the mirror image: the diff contains work the plan does
- * not describe. That is equally plan-implicating — either the plan should be
- * amended to cover the work, or the work does not belong — and it is NOT a
- * judgement to hand an unsupervised builder, whose only lever is to delete
- * whatever was flagged. That is exactly what happened on
- * `build-review-ci-watch-partial-block-1002` (commit `0bf9d809b`, −249 lines,
- * removing an engine repair the branch legitimately needed). Scope therefore
- * routes to `remediate`, which may still choose build — but as a recorded
- * plan-level decision rather than a silent deletion.
- *
- * The remaining two rubric items (tautology, rootCause) are local diff defects
- * — they keep kicking straight back to `build`.
- *
- * A FAIL with neither signal fails open to `'build'`, preserving today's
- * behavior. Kickback counting semantics are untouched (see #984).
+ * The remaining test-quality judgement is a local diff defect and routes to
+ * `build`. Kickback counting semantics are untouched (see #984).
  */
 export function buildReviewFailRoute(verdict: {
   verdict: string;
-  rubric?: { tautology?: boolean; scope?: boolean; rootCause?: boolean; completeness?: boolean };
-  findings?: { completeness?: string[]; scope?: string[] };
+  rubric?: { testQuality?: boolean };
+  findings?: { testQuality?: string[] };
 }): BuildReviewFailRoute {
   if (verdict.verdict !== 'FAIL') return 'none';
-  const completenessFailed =
-    verdict.rubric?.completeness === true || (verdict.findings?.completeness?.length ?? 0) > 0;
-  const scopeFailed =
-    verdict.rubric?.scope === true || (verdict.findings?.scope?.length ?? 0) > 0;
-  return completenessFailed || scopeFailed ? 'remediate' : 'build';
+  return 'build';
 }

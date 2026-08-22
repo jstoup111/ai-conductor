@@ -224,14 +224,11 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
 });
 
 describe('AUXILIARY_MODEL_TABLE_ROWS build-review rubric registration', () => {
-  it('defines all four retained rubric skills without inventing lifecycle steps', () => {
+  it('defines the test-quality rubric without inventing a lifecycle step', () => {
     const names = AUXILIARY_MODEL_TABLE_ROWS.map((row) => row.name);
 
     expect(names).toEqual([
       'build-review-test-quality',
-      'build-review-scope',
-      'build-review-root-cause',
-      'build-review-completeness',
     ]);
     expect(Object.keys(STEP_RATIONALE)).not.toEqual(expect.arrayContaining(names));
     expect(AUXILIARY_MODEL_TABLE_ROWS.every((row) =>

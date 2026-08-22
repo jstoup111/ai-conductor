@@ -23,7 +23,7 @@ export type BuildReviewProjectionJson =
   | readonly BuildReviewProjectionJson[]
   | { readonly [key: string]: BuildReviewProjectionJson };
 
-export interface BuildReviewTautologyProjectionInput {
+export interface BuildReviewTestQualityProjectionInput {
   readonly changedTestSelectors: readonly string[];
   /**
    * Content-free identity of each reverted production file. The grader
@@ -35,11 +35,11 @@ export interface BuildReviewTautologyProjectionInput {
   readonly preflight: TestQualityPreflightEvidence;
 }
 
-/** The complete engine-owned source from which the four closed projections are derived. */
+/** The complete engine-owned source from which the closed projection is derived. */
 export interface BuildReviewProjectionSource {
   readonly lapId: BuildReviewLapId;
   readonly inputs: BuildReviewFrozenInputs;
-  readonly tautology: BuildReviewTautologyProjectionInput;
+  readonly testQuality: BuildReviewTestQualityProjectionInput;
 }
 
 /** One hunk's line-range header from a unified diff (`@@ -old +new @@`). */
@@ -78,13 +78,9 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly headSha: string;
   /** The graded diff by reference — paths, change kinds, and hunk line ranges. */
   readonly changedFiles: readonly ChangedFileReference[];
-  /** Diff-derived removal evidence (never an exemption), kept inline because it is compact. */
-  readonly removalContext: BuildReviewSourceSnapshot['removalContext'];
-  /** Engine-parsed verify-only task evidence, kept inline as compact ids and paths. */
-  readonly verifyOnlyContext: BuildReviewSourceSnapshot['verifyOnlyContext'];
 }
 
-export interface TautologyProjection extends CommonProjection<'tautology'> {
+export interface TestQualityProjection extends CommonProjection<'testQuality'> {
   readonly changedTestSelectors: readonly string[];
   /** Frozen declared title chains, with an explicit selector-hash fallback marker. */
   readonly changedTestTitles: BuildReviewSourceSnapshot['changedTestTitles'];
@@ -92,39 +88,12 @@ export interface TautologyProjection extends CommonProjection<'tautology'> {
   /** By-reference reverted-production identity; never embedded file content. */
   readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
   readonly preflight: TestQualityPreflightEvidence;
-  /** Rebase-repair evidence is visible only to the closed Tautology contract. */
-  readonly repairContext: readonly BuildReviewProjectionJson[];
 }
 
-export interface ScopeProjection extends CommonProjection<'scope'> {
-  readonly planBody: string;
-  readonly repairContext: readonly BuildReviewProjectionJson[];
-  readonly acceptedWidenings: readonly BuildReviewProjectionJson[];
-  readonly operatorReseals: readonly NonNullable<BuildReviewFrozenInputs['sourceSnapshot']['operatorReseals']>[number][];
-}
-
-export interface RootCauseProjection extends CommonProjection<'rootCause'> {
-  readonly planBody: string;
-  readonly repairContext: readonly BuildReviewProjectionJson[];
-}
-
-export interface CompletenessProjection extends CommonProjection<'completeness'> {
-  readonly planBody: string;
-  /** Preserved-behavior plan evidence is relevant to Completeness alone. */
-  readonly preservationContext: BuildReviewSourceSnapshot['preservationContext'];
-}
-
-export type BuildReviewRubricProjection =
-  | TautologyProjection
-  | ScopeProjection
-  | RootCauseProjection
-  | CompletenessProjection;
+export type BuildReviewRubricProjection = TestQualityProjection;
 
 export type BuildReviewRubricProjections = {
-  readonly tautology: TautologyProjection;
-  readonly scope: ScopeProjection;
-  readonly rootCause: RootCauseProjection;
-  readonly completeness: CompletenessProjection;
+  readonly testQuality: TestQualityProjection;
 };
 
 /** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
@@ -370,8 +339,6 @@ function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectio
     mergeBase: snapshot.mergeBase,
     headSha: snapshot.headSha,
     changedFiles: deriveChangedFileReferences(snapshot.diff),
-    removalContext: snapshot.removalContext,
-    verifyOnlyContext: snapshot.verifyOnlyContext,
   };
 }
 
@@ -382,31 +349,15 @@ function seal<Projection extends Omit<BuildReviewRubricProjection, 'digest'>>(pr
 /** Build every rubric's closed, versioned projection from one frozen source snapshot. */
 export function deriveBuildReviewRubricProjections(source: BuildReviewProjectionSource): BuildReviewRubricProjections {
   const inputs = source.inputs;
-  const tautology = seal({
-    ...common(source, 'tautology'),
-    changedTestSelectors: canonicalArray(source.tautology.changedTestSelectors) as readonly string[],
+  const testQuality = seal({
+    ...common(source, 'testQuality'),
+    changedTestSelectors: canonicalArray(source.testQuality.changedTestSelectors) as readonly string[],
     changedTestTitles: inputs.sourceSnapshot.changedTestTitles,
     testSuiteProof: canonicalize(json(inputs.testSuiteProof)),
     revertedProductionManifest: canonicalArray(
-      source.tautology.revertedProductionManifest as unknown as readonly BuildReviewProjectionJson[],
+      source.testQuality.revertedProductionManifest as unknown as readonly BuildReviewProjectionJson[],
     ) as unknown as readonly RevertedProductionFileReference[],
-    preflight: source.tautology.preflight,
-    repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
-  }) as TautologyProjection;
-  const scope = seal({
-    ...common(source, 'scope'), planBody: inputs.sourceSnapshot.planBody,
-    repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
-    acceptedWidenings: canonicalArray(inputs.sourceSnapshot.acceptedWidenings as unknown as readonly BuildReviewProjectionJson[]),
-    operatorReseals: inputs.sourceSnapshot.operatorReseals ?? [],
-  }) as ScopeProjection;
-  const rootCause = seal({
-    ...common(source, 'rootCause'), planBody: inputs.sourceSnapshot.planBody,
-    repairContext: canonicalArray(inputs.sourceSnapshot.repairContext as unknown as readonly BuildReviewProjectionJson[]),
-  }) as RootCauseProjection;
-  const completeness = seal({
-    ...common(source, 'completeness'),
-    planBody: inputs.sourceSnapshot.planBody,
-    preservationContext: inputs.sourceSnapshot.preservationContext,
-  }) as CompletenessProjection;
-  return Object.freeze({ tautology, scope, rootCause, completeness });
+    preflight: source.testQuality.preflight,
+  }) as TestQualityProjection;
+  return Object.freeze({ testQuality });
 }

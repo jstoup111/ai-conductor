@@ -125,21 +125,15 @@ interface BuildReviewDispositionState {
   readonly records: readonly BuildReviewStoredDispositionRecord[];
 }
 
-const REDUCED_COVERAGE_RUBRICS = new Set<BuildReviewRubricId>(['tautology', 'scope', 'rootCause', 'completeness']);
+const REDUCED_COVERAGE_RUBRICS = new Set<BuildReviewRubricId>(['testQuality']);
 const REDUCED_COVERAGE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
   'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
   'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed',
 ]);
 
-/** Persisted records from these pre-registry rubrics have no current authority. */
-const RETIRED_BUILD_REVIEW_RUBRICS = new Set(['tautology', 'scope', 'rootCause', 'completeness']);
-
-/**
- * Deliberately narrower than "unregistered": this admits only known legacy
- * records, preserving the rejection path for a new unknown rubric.
- */
+/** A persisted record outside the sole active catalog has no current authority. */
 export function isRetiredBuildReviewRubric(value: unknown): value is string {
-  return typeof value === 'string' && RETIRED_BUILD_REVIEW_RUBRICS.has(value);
+  return typeof value === 'string' && value !== 'testQuality';
 }
 
 const defaultFilesystem: BuildReviewDispositionFilesystem = {
@@ -239,7 +233,18 @@ function isFindingDispositionRecord(value: BuildReviewStoredDispositionRecord): 
 function parseState(value: unknown): BuildReviewDispositionState | undefined {
   const source = record(value);
   if (!source || !exactKeys(source, ['version', 'records']) || source.version !== STORE_VERSION || !Array.isArray(source.records)) return undefined;
-  const records = source.records.map(parseStoredDispositionRecord);
+  // A persisted record outside the live registry is intentionally ignored
+  // before strict parsing: its retired anchor schema is no longer an input
+  // language, but it must not make a resumed feature unreadable.
+  const records = source.records.flatMap((entry) => {
+    const candidate = record(entry);
+    const finding = record(candidate?.finding);
+    const canonicalPayload = record(finding?.canonicalPayload);
+    const rubric = canonicalPayload?.rubric ?? record(candidate?.identity)?.rubric;
+    if (isRetiredBuildReviewRubric(rubric)) return [];
+    const parsed = parseStoredDispositionRecord(entry);
+    return parsed ? [parsed] : [undefined];
+  });
   return records.every((entry): entry is BuildReviewStoredDispositionRecord => entry !== undefined)
     ? { version: STORE_VERSION, records }
     : undefined;

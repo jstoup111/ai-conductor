@@ -1841,14 +1841,8 @@ export async function removeBuildReviewVerdict(dir: string): Promise<void> {
  * categories while still returning FAIL with free-form `reasons`.
  */
 export interface BuildReviewRubric {
-  /** Test asserts against its own implementation rather than real behavior. */
-  tautology: boolean;
-  /** Change reaches outside the task's declared scope. */
-  scope: boolean;
-  /** Fix addresses a symptom rather than the underlying root cause. */
-  rootCause: boolean;
-  /** Implementation addresses only part of the task's declared scope. */
-  completeness: boolean;
+  /** A changed test is insensitive to the behavior it claims to cover. */
+  testQuality: boolean;
 }
 
 /**
@@ -1878,12 +1872,7 @@ export interface BuildReviewVerdict {
   codeStamp?: string | null;
 }
 
-const BUILD_REVIEW_RUBRIC_NAMES = [
-  'tautology',
-  'scope',
-  'rootCause',
-  'completeness',
-] as const;
+const BUILD_REVIEW_RUBRIC_NAMES = ['testQuality'] as const;
 
 /**
  * Flatten a verdict's legacy summaries and structured findings for every

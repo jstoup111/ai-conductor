@@ -29,7 +29,7 @@ import {
   deriveBuildReviewRubricProjections,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
-  type BuildReviewTautologyProjectionInput,
+  type BuildReviewTestQualityProjectionInput,
 } from "./build-review-projections.js";
 import {
   projectTestQualityPreflight,
@@ -43,11 +43,8 @@ import type {
 import type { ConductorEvent } from "../types/events.js";
 import { canonicalizeBuildReviewFindingSet } from "./build-review-finding-identity.js";
 
-// The registry is the sole runtime membership authority. The legacy rubric
-// union remains temporarily at this boundary while its stored-artifact types
-// migrate in the following tasks.
-const BUILD_REVIEW_RUBRICS = BUILD_REVIEW_RUBRIC_IDS as unknown as readonly BuildReviewRubricId[];
-const TEST_QUALITY_RUBRIC = "testQuality" as unknown as BuildReviewRubricId;
+const BUILD_REVIEW_RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
+const TEST_QUALITY_RUBRIC: BuildReviewRubricId = "testQuality";
 
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
@@ -139,7 +136,7 @@ export interface BuildReviewCoordinationInput {
  * exit-code verdict plus a capped failure excerpt — never raw stdout/stderr
  * or merge-base file content, and never the same evidence twice.
  */
-export function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTautologyProjectionInput {
+export function preflightProjection(preflight: TautologyPreflightResult): BuildReviewTestQualityProjectionInput {
   if (preflight.classification === "infrastructure-failure") {
     return {
       changedTestSelectors: preflight.changedTestSelectors,
@@ -180,9 +177,9 @@ export function stampBuildReviewDispatchedCandidate(
     snapshotDigest: projection.snapshotDigest,
     findings: source?.findings,
     // The relocation audit is provider-owned EVIDENCE, not an envelope field:
-    // the tautology contract requires it on fixture-relocation results, the
+    // the test-quality contract validates it as typed evidence, the
     // artifact persists it, and the aggregate consumes it. Pass it through and
-    // let validation enforce rubric-appropriateness (non-tautology payloads
+    // let validation enforce rubric-appropriateness (unexpected payloads
     // carrying one are rejected with a named problem, never laundered here).
     ...(source?.relocationAudit === undefined ? {} : { relocationAudit: source.relocationAudit }),
   };
@@ -252,7 +249,7 @@ function validWrittenArtifact(
 export async function coordinateBuildReviewRubrics(
   input: BuildReviewCoordinationInput,
 ): Promise<BuildReviewCoordination> {
-  const testQualityPolicy = (input.config.rubrics as unknown as Partial<Record<string, ResolvedBuildReviewRubricPolicy>>).testQuality;
+  const testQualityPolicy = input.config.rubrics.testQuality;
   if (input.config.enabled && testQualityPolicy?.enabled && input.inputs.sourceSnapshot.testQuality?.inScopeTests.length === 0) {
     await input.emit?.({
       type: "build_review_outer_verdict",
@@ -295,16 +292,11 @@ export async function coordinateBuildReviewRubrics(
   const derivedProjections = deriveBuildReviewRubricProjections({
     lapId: input.lapId,
     inputs: input.inputs,
-    tautology: preflight ? preflightProjection(preflight) : {
+    testQuality: preflight ? preflightProjection(preflight) : {
       changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
-  // `testQuality` is the registry id while the stored projection envelope is
-  // still migrated from its legacy tautology key.  The preflight remains the
-  // same typed evidence object across that compatibility seam.
-  const projections = input.projections ?? {
-    testQuality: { ...derivedProjections.tautology, rubric: "testQuality" },
-  } as unknown as BuildReviewRubricProjections;
+  const projections = input.projections ?? derivedProjections;
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
 

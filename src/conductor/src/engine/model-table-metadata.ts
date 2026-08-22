@@ -158,33 +158,6 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     codexEffort: RESOLVED_RUBRIC_POLICY,
     why: 'Judges whether criterion-bound changed tests are insensitive to the behavior they claim to cover; preflight is evidence, never a verdict.',
   },
-  {
-    name: 'build-review-scope',
-    executionPath: 'engine-managed auxiliary rubric',
-    claudeModel: RESOLVED_RUBRIC_POLICY,
-    claudeEffort: RESOLVED_RUBRIC_POLICY,
-    codexModel: RESOLVED_RUBRIC_POLICY,
-    codexEffort: RESOLVED_RUBRIC_POLICY,
-    why: 'Judges changed paths and surfaces against the approved plan and accepted widening context.',
-  },
-  {
-    name: 'build-review-root-cause',
-    executionPath: 'engine-managed auxiliary rubric',
-    claudeModel: RESOLVED_RUBRIC_POLICY,
-    claudeEffort: RESOLVED_RUBRIC_POLICY,
-    codexModel: RESOLVED_RUBRIC_POLICY,
-    codexEffort: RESOLVED_RUBRIC_POLICY,
-    why: 'Judges whether the implementation addresses the stated defect rather than only a symptom.',
-  },
-  {
-    name: 'build-review-completeness',
-    executionPath: 'engine-managed auxiliary rubric',
-    claudeModel: RESOLVED_RUBRIC_POLICY,
-    claudeEffort: RESOLVED_RUBRIC_POLICY,
-    codexModel: RESOLVED_RUBRIC_POLICY,
-    codexEffort: RESOLVED_RUBRIC_POLICY,
-    why: 'Judges the approved plan holistically against the full implementation diff.',
-  },
 ];
 
 const INTERACTIVE_EXECUTION_PATH = 'supported-host interactive' as const;

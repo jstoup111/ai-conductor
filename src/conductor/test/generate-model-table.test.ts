@@ -398,14 +398,9 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
 });
 
 describe('build-review auxiliary rubric rows', () => {
-  const rubricSkills = [
-    'build-review-test-quality',
-    'build-review-scope',
-    'build-review-root-cause',
-    'build-review-completeness',
-  ];
+  const rubricSkills = ['build-review-test-quality'];
 
-  it('renders four retained engine-managed rubric skills with inherited resolved policy', () => {
+  it('renders the retained engine-managed rubric skill with inherited resolved policy', () => {
     expect(buildAuxiliaryRows()).toEqual(
       rubricSkills.map((name) => expect.objectContaining({
         name,

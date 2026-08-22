@@ -32,23 +32,12 @@ export function planContractPointers(
       return [`plan contract: ${planPath} — Task ${matchingTaskIds[0]} (anchor: ${fileAnchor})`];
     }
 
-    if (anchor.rubric !== 'completeness') return [];
-
-    const { planTask, missingSurface } = anchor;
-    const taskHeader = new RegExp(`^### Task ${escapeRegExp(planTask)}:`, 'm');
-    if (!taskHeader.test(plan)) return [];
-
-    return [`plan contract: ${planPath} — Task ${planTask} (anchor: ${missingSurface})`];
+    return [];
   });
 }
 
 function fileAnchorFor(anchor: BuildReviewFindingCanonicalPayload['anchor']): string | undefined {
-  switch (anchor.rubric) {
-    case 'scope': return anchor.path;
-    case 'tautology': return typeof anchor.changedTest === 'string' ? anchor.changedTest : anchor.changedTest.path;
-    case 'rootCause': return typeof anchor.locus === 'string' ? anchor.locus : anchor.locus.path;
-    case 'completeness': return undefined;
-  }
+  return anchor.locus.path;
 }
 
 /** Renders concise references to same-anchor findings from prior review laps. */

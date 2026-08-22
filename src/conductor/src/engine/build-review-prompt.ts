@@ -160,7 +160,7 @@ test files) through \`conduct-ts scoped-run\` — observe their output firsthand
 When you are done, write your verdict to \`.pipeline/build-review.json\` using
 exactly this reviewer-output JSON schema:
 
-{ reasons: string[], failedRubrics: ('tautology' | 'scope' | 'rootCause' | 'completeness')[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] } }
+{ reasons: string[], failedRubrics: ('testQuality')[], findings?: { testQuality?: string[] } }
 
 The engine derives PASS when \`failedRubrics\` is empty and FAIL otherwise.
 It also derives the public rubric booleans from this list; do not write a
@@ -168,8 +168,7 @@ It also derives the public rubric booleans from this list; do not write a
 the matching \`findings.<rubric>\` list for each one.
 \`reasons\` remains a backward-compatible one-line summary for each failing
 rubric item, plus any required relocation-audit evidence stated above. When
-Completeness fails, populate \`findings.completeness\`; use the matching
-\`findings.<rubric>\` key for the other rubric items. Each findings list contains **every independent finding**
+Populate \`findings.testQuality\`. Each findings list contains **every independent finding**
 you observed for that item. Use one finding per array entry — do not compress multiple actionable
 gaps into one summary. The list must be exhaustive for the diff and plan you
 were given. For a PASS verdict, omit \`findings\` or leave it empty.

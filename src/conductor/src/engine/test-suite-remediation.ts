@@ -8,7 +8,7 @@ export const BUILD_REVIEW_REPAIR_LEDGER = '.pipeline/build-review-rebase-repairs
 
 /**
  * Byte cap for one record's persisted diagnostic. Repair records ride into
- * the tautology, scope, and rootCause rubric prompts and accumulate across
+ * the test-quality prompt and accumulate across
  * rebases, so each diagnostic is bounded by construction at creation time —
  * pure byte-position head+tail truncation, no runner-output parsing.
  */

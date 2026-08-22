@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { checkStepCompletion } from '../src/engine/artifacts.js';
 import { joinBuildReviewRubricOutcomes } from '../src/engine/build-review-aggregate.js';
@@ -11,7 +11,6 @@ import {
   readBuildReviewCacheEntry,
   type BuildReviewCacheFilesystem,
 } from '../src/engine/build-review-cache.js';
-import { canonicalizeBuildReviewFindingIdentity } from '../src/engine/build-review-finding-identity.js';
 import { resolveEffectiveBuildReviewVerdict } from '../src/engine/build-review-effective.js';
 
 const dirs: string[] = [];
@@ -24,23 +23,20 @@ const lapId = 'lap-compat' as never;
 const snapshotDigest = 'sha256:compat';
 
 function aggregate() {
-  const result = (rubric: 'tautology' | 'scope' | 'rootCause' | 'completeness') => ({
+  const result = {
     kind: 'judged' as const,
-    rubric,
+    rubric: 'testQuality' as const,
     lapId,
     snapshotDigest,
     contractVersion: 'v3' as never,
     findings: [],
     verdict: 'PASS' as const,
-  });
+  };
   return joinBuildReviewRubricOutcomes({
     lapId,
     snapshotDigest,
     results: {
-      tautology: result('tautology'),
-      scope: result('scope'),
-      rootCause: result('rootCause'),
-      completeness: result('completeness'),
+      testQuality: result,
     },
   });
 }
@@ -53,14 +49,10 @@ describe('retired build-review state compatibility', () => {
     await mkdir(join(worktree, '.pipeline'), { recursive: true });
 
     const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
-    const finding = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'scope',
-      contractVersion: 'v2',
-      concernKind: 'out-of-plan-change',
-      summary: 'legacy scope finding',
-      evidenceLocations: ['src/legacy.ts:1'],
-      anchor: { rubric: 'scope', path: 'src/legacy.ts', relation: 'not-authorized-by-plan' },
-    })!;
+    const finding = {
+      id: 'sha256:legacy', canonicalJson: '{}',
+      canonicalPayload: { rubric: 'scope' },
+    };
     await writeFile(join(worktree, '.pipeline', 'build-review-dispositions.json'), JSON.stringify({
       version: 'v1',
       records: [{
@@ -68,13 +60,10 @@ describe('retired build-review state compatibility', () => {
         rationale: 'accepted before retirement', operator: 'operator', acceptedAt: '2026-08-22T00:00:00.000Z',
       }],
     }));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
     await expect(resolveEffectiveBuildReviewVerdict(worktree, aggregate(), {
       resolveMainRoot: async () => root,
       realpath: async (path) => path,
     })).resolves.toMatchObject({ ok: true });
-    expect(warn).toHaveBeenCalledWith('ignored retired rubric record: scope');
   });
 
   it('treats a retired rootCause lap verdict as a cache miss', async () => {

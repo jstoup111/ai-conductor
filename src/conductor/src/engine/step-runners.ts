@@ -1939,7 +1939,7 @@ export class DefaultStepRunner implements StepRunner {
       const verdict = {
         verdict: 'PASS' as const,
         reason: coordination.reason,
-        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        rubric: { testQuality: false },
       };
       const verdictPath = join(effectivePipelineDir, 'build-review.json');
       try {
@@ -2107,9 +2107,7 @@ export class DefaultStepRunner implements StepRunner {
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
   ): Promise<unknown> {
-    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
-      tautology: 'Tautology', scope: 'Scope', rootCause: 'Root Cause', completeness: 'Completeness',
-    };
+    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = { testQuality: 'Test Quality' };
     const contractShape = renderBuildReviewJudgedResultShape(branch.rubric);
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,

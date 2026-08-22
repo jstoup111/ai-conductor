@@ -17,7 +17,7 @@ import {
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
-const RUBRICS = ['tautology', 'scope', 'rootCause', 'completeness'] as const;
+const RUBRICS = ['testQuality'] as const;
 
 type Coverage = 'judged' | 'skipped' | 'infrastructure-failure';
 type RubricFlags = Record<BuildReviewRubricId, boolean>;
@@ -129,7 +129,7 @@ function coverageFor(result: BuildReviewRubricResult): Coverage {
 
 function legacyFindingDetails(result: BuildReviewRubricResult): string[] {
   switch (result.kind) {
-    case 'judged': return [...result.findings.map((finding) => finding.concernKind), ...(result.relocationAudit ?? [])];
+    case 'judged': return result.findings.map((finding) => finding.concernKind);
     case 'skipped': return [`skipped: ${result.reason}`];
     case 'infrastructure-failure': return [`infrastructure failure: ${result.detail}`];
   }
