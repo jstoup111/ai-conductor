@@ -26,6 +26,12 @@
 
 import type { RemediationGap } from './artifacts.js';
 
+/** A PRD-audit FIXABLE gap retains the criterion ownership the planner found. */
+export type CriterionBoundRemediationGap = RemediationGap & {
+  criterion?: string;
+  parentTask?: number;
+};
+
 /** H9 id grammar — must stay in lockstep with autoheal.ts TASK_ID_PATTERN. */
 const ID_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 
@@ -61,11 +67,26 @@ function existingTaskTitles(planText: string): Map<string, string> {
 }
 
 /** Render one appended plan task block. Format parses via parsePlanTaskPaths. */
-function renderTaskBlock(id: string, title: string, gateSource: string, rationale: string): string {
+function renderTaskBlock(
+  id: string,
+  title: string,
+  gateSource: string,
+  rationale: string,
+  criterion?: string,
+  parentTask?: number,
+): string {
   return [
     `### Task ${id}: ${title}`,
     `**Gate:** ${gateSource}`,
     `**Rationale:** ${rationale}`,
+    ...(criterion === undefined || parentTask === undefined
+      ? []
+      : [
+          `**Criterion:** ${criterion}`,
+          `**Parent task:** ${parentTask}`,
+          '**Done when:**',
+          `- ${criterion} is satisfied by this task.`,
+        ]),
     '',
   ].join('\n');
 }
@@ -78,7 +99,7 @@ function renderTaskBlock(id: string, title: string, gateSource: string, rational
  */
 export function appendRemediationTasks(
   planText: string,
-  gaps: RemediationGap[],
+  gaps: CriterionBoundRemediationGap[],
   gateSource: string,
 ): AppendRemediationResult {
   const source = sanitizeSegment(gateSource, 'gate source');
@@ -121,7 +142,14 @@ export function appendRemediationTasks(
         }
       }
 
-      blocks.push(renderTaskBlock(id, title, source, gap.rationale));
+      blocks.push(renderTaskBlock(
+        id,
+        title,
+        source,
+        gap.rationale,
+        gap.criterion,
+        gap.parentTask,
+      ));
       existing.set(id, title);
       ids.push(id);
     }

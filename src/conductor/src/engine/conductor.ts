@@ -148,6 +148,7 @@ import {
   checkStepCompletion,
   CUSTOM_COMPLETION_PREDICATES,
   classifyPrdAuditGaps,
+  parsePrdAuditReport,
   classifyRetryDecision,
   readRemediationPlan,
   REMEDIATION_PUBLICATION_DISPOSITION,
@@ -168,6 +169,10 @@ import {
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
 } from './artifacts.js';
+import {
+  appendRemediationTasks as appendCriterionBoundRemediationTasks,
+  type CriterionBoundRemediationGap,
+} from './remediation-append.js';
 import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
@@ -484,6 +489,18 @@ export function isEngineComputedStep(step: StepName): boolean {
 // Anti-ping-pong: a single gate may be re-opened by kickback at most this many
 // times per feature before the loop HALTs for a human.
 const MAX_KICKBACKS_PER_GATE = 2;
+
+/** PRD-audit owns its configured remediation allowance; other gates share the generic cap. */
+export function remediationLapCapForGate(
+  gate: string,
+  config: HarnessConfig,
+  genericCap = MAX_KICKBACKS_PER_GATE,
+): number {
+  if (gate !== 'prd_audit') return genericCap;
+  return (config as HarnessConfig & {
+    prd_audit?: { max_remediation_laps?: number };
+  }).prd_audit?.max_remediation_laps ?? 1;
+}
 
 /**
  * How many times one run may re-dispatch `finish` for a PUBLICATION defect —
@@ -2729,6 +2746,32 @@ export class Conductor {
     // plan work, and appending it would amend `.docs/plans/<slug>.md` — a
     // protected artifact — producing self-amendment warnings for a change that
     // never belonged in the plan.
+    const prdAuditRemediation = hintSource.evidenceFile === '.pipeline/prd-audit.md';
+    const prdAuditLapCap = remediationLapCapForGate('prd_audit', this.config);
+    const prdAuditFindings = new Map<string, { criterion: string; parentTask: number }>();
+    let activePlanText = '';
+    if (planPath && prdAuditRemediation) {
+      try {
+        activePlanText = await readFile(planPath, 'utf8');
+        const report = await readFile(join(this.projectRoot, hintSource.evidenceFile), 'utf8');
+        const parsed = parsePrdAuditReport(report, activePlanText);
+        if (parsed.ok) {
+          for (const finding of parsed.value.findings) {
+            if (finding.grade === 'FIXABLE' && finding.planTask !== undefined) {
+              prdAuditFindings.set(finding.criterion, {
+                criterion: finding.criterion,
+                parentTask: finding.planTask,
+              });
+            }
+          }
+        }
+      } catch {
+        // Existing remediation validation owns unreadable artifacts. Retain the
+        // ordinary append shape when this optional annotation cannot be read.
+      }
+    }
+
+    const appendGaps: CriterionBoundRemediationGap[] = [];
     const allTasks: Array<{ id: string; title: string }> = [];
     for (const gap of gaps) {
       if (
@@ -2737,6 +2780,11 @@ export class Conductor {
         gap.tasks &&
         gap.tasks.length > 0
       ) {
+        const finding = prdAuditFindings.get(gap.id.toUpperCase());
+        appendGaps.push({
+          ...gap,
+          ...(finding === undefined ? {} : finding),
+        });
         allTasks.push(...gap.tasks);
       }
     }
@@ -2752,11 +2800,52 @@ export class Conductor {
     let appendAttempted = allTasks.length === 0;
 
     if (allTasks.length > 0) {
+      let priorPrdAuditLaps = 0;
+      const hasCriterionBoundGaps = appendGaps.some(
+        (gap) => gap.criterion !== undefined && gap.parentTask !== undefined,
+      );
+      if (prdAuditRemediation) {
+        const ledger = await readKickbackLedger(this.projectRoot);
+        priorPrdAuditLaps = (
+          ledger.gates.prd_audit as (KickbackGateEntry & { laps?: number }) | undefined
+        )?.laps ?? 0;
+        if (priorPrdAuditLaps >= prdAuditLapCap) {
+          return {
+            kind: 'halt',
+            detail:
+              `prd_audit remediation lap cap reached (${priorPrdAuditLaps}/${prdAuditLapCap}) ` +
+              'before appending fix tasks',
+          };
+        }
+      }
       // Append remediation tasks to the plan
       if (planPath) {
-        const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks);
+        const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks, {
+          ...(hasCriterionBoundGaps
+            ? { criterionBoundGaps: appendGaps, gateSource: 'prd-audit' }
+            : {}),
+        });
         if (appendResult.success) {
           appendAttempted = true;
+          if (prdAuditRemediation) {
+            const ledger = await readKickbackLedger(this.projectRoot);
+            const existing = ledger.gates.prd_audit;
+            const next: KickbackGateEntry & { laps: number } = {
+              ...(existing ?? {
+                count: 0,
+                cumulative: 0,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: true,
+                resolvedBefore: 0,
+              }),
+              laps: priorPrdAuditLaps + 1,
+            };
+            await writeKickbackLedger(this.projectRoot, {
+              ...ledger,
+              gates: { ...ledger.gates, prd_audit: next },
+            });
+          }
           // Record the appended ids so the build completion predicate can
           // reject a later removal of their headings from the plan.
           try {
@@ -4163,6 +4252,10 @@ export class Conductor {
     // prd-audit back to a target step. Bounded like prdAuditSelfHeals so a gap the
     // planner can't actually close still halts for a human.
     let remediationRounds = 0;
+    // PRD-audit is deliberately not coupled to the generic remediation
+    // counter. Its configured one-lap default is the sole allowance for a
+    // criterion-bound repair; other gates retain MAX_KICKBACKS_PER_GATE.
+    const prdAuditRemediationLapCap = remediationLapCapForGate('prd_audit', this.config);
     // Daemon-only (#367): how many times a manual_test FAIL has routed back to
     // BUILD. Bounded like prdAuditSelfHeals so a bug BUILD can't actually fix
     // eventually halts for a human instead of ping-ponging.
@@ -5418,7 +5511,7 @@ export class Conductor {
                 outcomes[idx]?.verdict === 'pass' &&
                 gateVerdicts.get('prd_audit')?.satisfied !== true,
               );
-              if (this.daemon && prdAuditUnsatisfied && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+              if (this.daemon && prdAuditUnsatisfied && remediationRounds < prdAuditRemediationLapCap) {
                 remediationRounds++;
                 await this.planRemediation(
                   state,
@@ -8377,7 +8470,7 @@ export class Conductor {
               // re-surface on the next audit and HALT then. Falls back to the
               // deterministic classifyPrdAuditGaps routing when no usable plan is
               // produced or the remediation budget is exhausted.
-              if (remediationRounds < MAX_KICKBACKS_PER_GATE) {
+              if (remediationRounds < prdAuditRemediationLapCap) {
                 const outcome = await this.planRemediation(
                   state,
                   steps,
@@ -8435,7 +8528,7 @@ export class Conductor {
                 this.projectRoot,
                 state.session_started_at,
               );
-              if (cls.kind === 'impl-only' && prdAuditSelfHeals < MAX_KICKBACKS_PER_GATE) {
+              if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
                 prdAuditSelfHeals++;
                 await emitTracked({
                   type: 'kickback',
@@ -8479,7 +8572,7 @@ export class Conductor {
               }
               const reason =
                 cls.kind === 'impl-only'
-                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${cls.summary}`
+                  ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
               // Both terminal branches now require an operator: product/plan
               // gaps need DECIDE input, while an implementation gap reaches
@@ -10737,7 +10830,11 @@ export async function appendRemediationTasks(
   projectRoot: string,
   planPath: string,
   remediationList: Array<{ id: string; title: string }>,
-  options?: { log?: (msg: string) => void },
+  options?: {
+    log?: (msg: string) => void;
+    criterionBoundGaps?: CriterionBoundRemediationGap[];
+    gateSource?: string;
+  },
 ): Promise<{ success: true; appendedIds: string[] } | { success: false; error: string }> {
   const log = options?.log ?? (() => {});
 
@@ -10776,6 +10873,28 @@ export async function appendRemediationTasks(
   } catch {
     // If plan file doesn't exist, start with empty content
     planContent = '';
+  }
+
+  if (options?.criterionBoundGaps !== undefined && options.gateSource !== undefined) {
+    const rendered = appendCriterionBoundRemediationTasks(
+      planContent,
+      options.criterionBoundGaps,
+      options.gateSource,
+    );
+    const pipelineDir = join(projectRoot, '.pipeline');
+    await mkdir(pipelineDir, { recursive: true });
+    const tempFile = `${planPath}.tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    try {
+      await writeFile(tempFile, rendered.planText, 'utf-8');
+      await renameFile(tempFile, planPath);
+    } catch (error) {
+      await unlinkFile(tempFile).catch(() => {});
+      return {
+        success: false,
+        error: `Failed to append remediation tasks to plan: ${error instanceof Error ? error.message : 'unknown error'}`,
+      };
+    }
+    return { success: true, appendedIds: rendered.ids };
   }
 
   // Parse existing task headers to detect duplicates and content drift
