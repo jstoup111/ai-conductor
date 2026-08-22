@@ -33,6 +33,8 @@ export function isRuntimeSourcePath(path: string): boolean {
  * - 'feature-runtime': only the feature's own runtime source paths matter.
  * - 'feature-codetest': the feature's own runtime source paths OR its own
  *   test paths matter; foreign paths (runtime or test) do not.
+ * - 'feature-runtime-or-prd-inputs': the feature's own runtime source paths
+ *   OR any declared prd_audit stories/PRD input matters.
  * - 'all-runtime': any runtime source path in the repo matters.
  * - 'any-codetest': any code-or-test path (including test-only changes)
  *   matters.
@@ -43,8 +45,15 @@ export function isRuntimeSourcePath(path: string): boolean {
 export type GateSurfaceKind =
   | 'feature-runtime'
   | 'feature-codetest'
+  | 'feature-runtime-or-prd-inputs'
   | 'all-runtime'
   | 'any-codetest';
+
+const PRD_AUDIT_DOCUMENT_INPUT_PREFIXES = ['.docs/stories/', '.docs/specs/'];
+
+function isPrdAuditDocumentInput(path: string): boolean {
+  return PRD_AUDIT_DOCUMENT_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
 
 export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // Grades THE FEATURE'S OWN diff against its plan (plan-vs-diff
@@ -61,7 +70,11 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // Runtime behavior can be affected by foreign main-side runtime changes;
   // only a test/docs-only delta is safe to preserve (ADR-2026-07-20).
   manual_test: 'all-runtime',
-  prd_audit: 'feature-runtime',
+  // Stories are prd_audit's acceptance-criteria authority and PRDs supply
+  // intent context. Both are declared inputs, so their changes invalidate a
+  // prior PASS even though the runtime delta partition deliberately ignores
+  // markdown paths.
+  prd_audit: 'feature-runtime-or-prd-inputs',
   architecture_review_as_built: 'feature-runtime',
 };
 
@@ -126,8 +139,10 @@ export function featureTestPaths(D: string[], F: string[]): string[] {
  * lists.
  *
  * Per gate surface kind (see `GATE_SURFACE`):
- * - 'feature-runtime' (prd_audit, architecture_review_as_built): preserved
- *   iff `featureSrc` is empty.
+ * - 'feature-runtime' (architecture_review_as_built): preserved iff
+ *   `featureSrc` is empty.
+ * - 'feature-runtime-or-prd-inputs' (prd_audit): preserved iff
+ *   `featureSrc` and the declared stories/PRD inputs are both empty.
  * - 'feature-codetest' (build_review): preserved iff `featureSrc` AND the
  *   feature's own test paths are both empty — a foreign-only delta (runtime
  *   or test) cannot change the feature's own diff, so its plan-vs-diff grade
@@ -146,6 +161,7 @@ export function classifyGateInvalidation(
 ): { preserved: string[]; invalidated: string[] } {
   const { test, featureSrc, foreignSrc } = partitionDelta(D, F);
   const featureTest = featureTestPaths(D, F);
+  const prdAuditDocumentInputs = D.filter(isPrdAuditDocumentInput);
   const preserved: string[] = [];
   const invalidated: string[] = [];
 
@@ -161,6 +177,9 @@ export function classifyGateInvalidation(
         break;
       case 'feature-codetest':
         isPreserved = featureSrc.length === 0 && featureTest.length === 0;
+        break;
+      case 'feature-runtime-or-prd-inputs':
+        isPreserved = featureSrc.length === 0 && prdAuditDocumentInputs.length === 0;
         break;
       case 'all-runtime':
         isPreserved = featureSrc.length === 0 && foreignSrc.length === 0;

@@ -201,13 +201,14 @@ describe('engine/steps', () => {
       expect(s.skippableForTiers).toEqual(['S']);
     });
 
-    it('prd_audit is SHIP/gating loopGate, after manual_test, not skippable', () => {
+    it('prd_audit is SHIP/gating loopGate, after manual_test, and runs on every track', () => {
       const s = ALL_STEPS[17];
       expect(s.name).toBe('prd_audit');
       expect(s.phase).toBe('SHIP');
       expect(s.enforcement).toBe('gating');
       expect(s.prerequisites).toEqual(['manual_test']);
       expect(s.skippableForTiers).toEqual([]);
+      expect(s.skippableForTracks).toBeUndefined();
       expect(s.isCheckpoint).toBe(false);
       expect(s.loopGate).toBe(true);
       expect(s.skillName).toBe('prd-audit');
@@ -415,11 +416,11 @@ describe('engine/steps', () => {
   // --- shouldSkipForTrack ---
 
   describe('shouldSkipForTrack', () => {
-    it('skips prd + prd_audit on the technical track', () => {
+    it('skips only prd on the technical track', () => {
       expect(shouldSkipForTrack('prd', 'technical')).toBe(true);
-      expect(shouldSkipForTrack('prd_audit', 'technical')).toBe(true);
+      expect(shouldSkipForTrack('prd_audit', 'technical')).toBe(false);
     });
-    it('does NOT skip prd / prd_audit on the product track', () => {
+    it('does NOT skip prd or prd_audit on the product track', () => {
       expect(shouldSkipForTrack('prd', 'product')).toBe(false);
       expect(shouldSkipForTrack('prd_audit', 'product')).toBe(false);
     });

@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   classifyGateInvalidation,
   featureTestPaths,
@@ -138,6 +141,41 @@ describe('classifyGateInvalidation', () => {
     expect(result.invalidated.sort()).toEqual(
       ['test_suite', 'manual_test'].sort(),
     );
+  });
+});
+
+describe('prd_audit declared document inputs', () => {
+  let fixtureRoot: string;
+
+  beforeEach(async () => {
+    fixtureRoot = await mkdtemp(join(tmpdir(), 'gate-invalidation-'));
+  });
+
+  afterEach(async () => {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  async function editFixture(path: string): Promise<string> {
+    const fixturePath = join(fixtureRoot, path);
+    await mkdir(dirname(fixturePath), { recursive: true });
+    await writeFile(fixturePath, 'changed after prd_audit PASS\n');
+    return relative(fixtureRoot, fixturePath);
+  }
+
+  it('invalidates prd_audit when its fixture stories file changes after PASS', async () => {
+    const story = await editFixture('.docs/stories/fixture.md');
+
+    const result = classifyGateInvalidation([story], [story], true);
+
+    expect(result.invalidated).toContain('prd_audit');
+  });
+
+  it('invalidates prd_audit when its fixture PRD file changes after PASS', async () => {
+    const prd = await editFixture('.docs/specs/fixture.md');
+
+    const result = classifyGateInvalidation([prd], [prd], true);
+
+    expect(result.invalidated).toContain('prd_audit');
   });
 });
 
