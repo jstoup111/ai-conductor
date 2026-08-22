@@ -40,7 +40,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
-import type { ConductState, ConductorEvent, FinishPublicationEvent } from '../types/index.js';
+import type { ConductState, ConductorEvent, FinishPublicationEvent, RefusalKind } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
@@ -542,6 +542,11 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** A pre-dispatch condition refused this step; the dispatch loop owns its terminal handling. */
+  refused?: {
+    kind: RefusalKind;
+    reason: string;
+  };
   /** True only when this build-review lap observed an infrastructure fault. */
   currentLapMechanicalFault?: boolean;
   /**
