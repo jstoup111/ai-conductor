@@ -6387,10 +6387,7 @@ export class Conductor {
                             escalate: resolved.escalate,
                             modelOverride: esc.model,
                             effortOverride: esc.effort,
-                          }).catch((err: unknown) => ({
-                            success: false,
-                            output: err instanceof Error ? err.message : String(err),
-                          })));
+                          }));
           } finally {
             buildWatcher?.stop();
             closeoutTail?.stop();

@@ -452,7 +452,7 @@ describe('step refusal event spine', () => {
     }
   });
 
-  it('keeps a thrown build runner on the existing failed/HALT path', async () => {
+  it('keeps a thrown build runner on the existing outer-HALT path', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'step-refusal-runner-throw-'));
     const statePath = join(projectRoot, 'conduct-state.json');
     const events = new ConductorEventEmitter();
@@ -486,11 +486,11 @@ describe('step refusal event spine', () => {
         failures: records.filter((record) => record.type === 'step_failed'),
         halt: await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'),
       }).toEqual({
-        build: 'failed',
+        build: 'in_progress',
         runnerCalls: [expect.any(Array)],
         refusals: [],
-        failures: [expect.objectContaining({ step: 'build', error: expect.stringContaining('runner boom') })],
-        halt: "step 'build' failed in auto mode (retries exhausted)\n",
+        failures: [],
+        halt: expect.stringContaining('runner boom'),
       });
     } finally {
       persister.stop();
