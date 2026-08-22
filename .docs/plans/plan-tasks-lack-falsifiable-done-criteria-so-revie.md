@@ -134,10 +134,6 @@ spec from `/writing-system-tests`, and the existing daemon integration harness f
 3. In `landSpec`, after `validateArtifactContent('plan', …)`, call `validatePlanDoneWhen(planContent)` and throw naming every violation and its reason.
 4. Verify GREEN; commit "feat(land): reject plan tasks without a Done when: block".
 
-**Done when:**
-- The three land-spec cases pass and the error message contains the task id and reason for each violation.
-- `grep -n validatePlanDoneWhen src/conductor/src` lists exactly `plan-done-when.ts` and `engineer/land-spec.ts` — no daemon-backlog or conductor caller.
-
 > **Amended 2026-08-22 by #1785:** this task additionally authorizes the compatibility migration of
 > existing plan fixtures made invalid by the land gate it introduces. Every pre-existing test that
 > writes a plan fixture now needs a `Done when:` block to reach its own assertion, so the migration is
@@ -156,6 +152,10 @@ spec from `/writing-system-tests`, and the existing daemon integration harness f
 > `test/acceptance/verify-only-anchored-tautology-exception.acceptance.test.ts`.
 > Its plan is consumed by the new frozen criteria projection and must remain
 > land-valid; the existing verify-only assertions are retained unchanged.
+
+**Done when:**
+- The three land-spec cases pass and the error message contains the task id and reason for each violation.
+- `grep -n validatePlanDoneWhen src/conductor/src` lists exactly `plan-done-when.ts` and `engineer/land-spec.ts` — no daemon-backlog or conductor caller.
 
 **Files:**
 - src/conductor/src/engine/engineer/land-spec.ts
