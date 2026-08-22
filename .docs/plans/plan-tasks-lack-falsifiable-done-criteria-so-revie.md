@@ -631,3 +631,4 @@ prose nor judges falsifiability, and no task in this plan asks it to._
 **Done when:**
 - Blank blocks retain blank evidence rather than becoming missing blocks.
 - Compliant, blank, and fenced-example validation cases pass alongside existing reason coverage.
+### Task rem-rootcause-004: skills/build-review-root-cause/SKILL.md:31 and src/conductor/test/engine/build-review-rubric-skills.test.ts:1 — pin ADR D1's shape-only boundary and require authoring-only semantic-falsifiability concerns outside a failed task criterion to bind as `beyond`
