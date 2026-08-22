@@ -19,7 +19,9 @@ import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskVerifyOnly } from './autoheal.js';
 import { parsePlanTaskPaths, parsePlanTaskPreserves } from './plan-task-parse.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { classifyTautologyPaths } from './build-review-tautology-preflight.js';
+import { parseCoversMarkers } from './covers-marker.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -126,6 +128,8 @@ export interface BuildReviewSourceSnapshot {
   readonly preservationContext?: readonly BuildReviewPreservationContext[];
   /** Static title evidence read from the graded HEAD, never the live worktree. */
   readonly changedTestTitles?: readonly BuildReviewChangedTestTitle[];
+  /** Test-quality's closed, feature-local selector set. */
+  readonly testQuality?: BuildReviewTestQualityScope;
 }
 
 /** One executable changed-test selector's declared title evidence. */
@@ -134,6 +138,20 @@ export interface BuildReviewChangedTestTitle {
   readonly titleText: string;
   /** True when static parsing could not safely recover every declared title. */
   readonly staticExtractionFallback: boolean;
+}
+
+/** A changed test whose declared Covers reference does not bind to this feature. */
+export interface BuildReviewUnresolvedMarker {
+  readonly selector: string;
+  readonly reference: string;
+}
+
+/** Closed test-quality scope derived from the feature's active artifacts and graded diff. */
+export interface BuildReviewTestQualityScope {
+  /** Changed executable tests with at least one Covers reference bound to this feature. */
+  readonly inScopeTests: readonly string[];
+  /** Changed-test markers that name no criterion, FR, or task in this feature. */
+  readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
 }
 
 /** Immutable operator reseal record captured in a source snapshot. */
@@ -252,9 +270,9 @@ function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'co
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'verifyOnlyContext' | 'preservationContext'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'verifyOnlyContext' | 'preservationContext' | 'testQuality'
 >): string {
-  const { diff, planBody, repairContext, removalContext, verifyOnlyContext, preservationContext } = snapshot;
+  const { diff, planBody, repairContext, removalContext, verifyOnlyContext, preservationContext, testQuality } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff: withoutDiffBlobIdentities(diff),
     planBody,
@@ -262,6 +280,7 @@ function contentSnapshotDigest(snapshot: Pick<
     removalContext,
     verifyOnlyContext,
     preservationContext,
+    testQuality,
   })).digest('hex')}`;
 }
 
@@ -280,6 +299,72 @@ function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
 
 function changedPathsFromDiff(diff: string): readonly string[] {
   return [...diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+}
+
+function activeStoriesPath(projectRoot: string, planPath: string, planBody: string): string | undefined {
+  const planRepoPath = relative(projectRoot, planPath).replaceAll('\\', '/');
+  const storiesRepoPath = resolvePlanStoriesPath(planRepoPath, planBody);
+  return storiesRepoPath === null ? undefined : join(projectRoot, storiesRepoPath);
+}
+
+function markerReference(reference: { readonly kind: string; readonly id: string }): string {
+  return reference.kind === 'task' ? `task:${reference.id}` : reference.id;
+}
+
+/**
+ * Intersect changed executable tests with Covers references bound to the
+ * feature's own active plan and its plan-selected stories artifact. The
+ * artifact lookup is intentionally direct: a docs-directory scan could let
+ * another feature's criterion silently widen this review.
+ */
+async function snapshotTestQualityScope(
+  git: GitRunner,
+  headSha: string,
+  diff: string,
+  projectRoot: string,
+  planPath: string,
+  planBody: string,
+): Promise<BuildReviewTestQualityScope> {
+  const storiesPath = activeStoriesPath(projectRoot, planPath, planBody);
+  const storiesBody = storiesPath === undefined
+    ? ''
+    : await readFile(storiesPath, 'utf-8').catch(() => '');
+  const criterionIds = new Set(
+    [...storiesBody.matchAll(/\bS\d+\.\d+\b/gi)].map((match) => match[0].toUpperCase()),
+  );
+  const frIds = new Set(
+    [...storiesBody.matchAll(/\bFR-\d+\b/gi)].map((match) => match[0].toUpperCase()),
+  );
+  const taskIds = new Set(parsePlanTaskPaths(planBody).keys());
+  const selectors = classifyTautologyPaths(changedPathsFromDiff(diff)).tests;
+  const sources = await Promise.all(selectors.map(async (selector) => {
+    const result = await git(['show', `${headSha}:${selector}`]);
+    return { selector, source: result.exitCode === 0 ? result.stdout : undefined };
+  }));
+  const inScopeTests: string[] = [];
+  const unresolvedMarkers: BuildReviewUnresolvedMarker[] = [];
+
+  for (const { selector, source } of sources) {
+    if (source === undefined) continue;
+    let bound = false;
+    for (const reference of parseCoversMarkers(source)) {
+      const resolved = reference.kind === 'criterion'
+        ? criterionIds.has(reference.id.toUpperCase())
+        : reference.kind === 'fr'
+          ? frIds.has(reference.id.toUpperCase())
+          : taskIds.has(reference.id);
+      if (resolved) bound = true;
+      else unresolvedMarkers.push({ selector, reference: markerReference(reference) });
+    }
+    if (bound) inScopeTests.push(selector);
+  }
+
+  return Object.freeze({
+    inScopeTests: Object.freeze(inScopeTests),
+    unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
+      `${left.selector}\u0000${left.reference}`.localeCompare(`${right.selector}\u0000${right.reference}`),
+    )),
+  });
 }
 
 type StaticTestTitle = Pick<BuildReviewChangedTestTitle, 'titleText' | 'staticExtractionFallback'>;
@@ -565,6 +650,14 @@ export async function assembleBuildReviewInputs(
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
   const changedTestTitles = await snapshotChangedTestTitles(git, inspection.evidence.provenanceHeadSha, diffResult.stdout);
+  const testQuality = await snapshotTestQualityScope(
+    git,
+    inspection.evidence.provenanceHeadSha,
+    diffResult.stdout,
+    projectRootForPlan(planPath),
+    planPath,
+    planBody,
+  );
   const snapshotWithoutDigest = {
     baseRef,
     mergeBase: mergeBaseSha,
@@ -597,6 +690,7 @@ export async function assembleBuildReviewInputs(
       behavior: context.behavior,
     }))),
     changedTestTitles,
+    testQuality,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,

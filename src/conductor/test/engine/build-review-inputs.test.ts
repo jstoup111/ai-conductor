@@ -758,6 +758,69 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.planBody).toContain('Fixture plan.');
     });
 
+    it('projects only changed tests whose Covers markers bind to this plan or its referenced stories', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/selected.md');
+      const selectedStoriesPath = join(dir, '.docs/stories/selected.md');
+
+      await git('checkout', 'main');
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(selectedStoriesPath, '# Selected stories\n\nCriterion S3.1 exists here.\n');
+      // This criterion must not resolve `Covers: S9.9`: the plan selects the
+      // preceding artifact, and build_review must never glob `.docs/stories`.
+      await writeFile(join(dir, '.docs/stories/unrelated.md'), '# Unrelated stories\n\nCriterion S9.9 exists here.\n');
+      await writeFile(scopedPlanPath, [
+        '**Stories:** .docs/stories/selected.md',
+        '',
+        '### Task 7: selected behavior',
+        '',
+        '**Files:** src/selected.ts',
+      ].join('\n'));
+      await git('add', '.');
+      await git('commit', '-m', 'add selected plan and stories');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+
+      await git('checkout', '-b', 'feature/test-quality-projection');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await Promise.all([
+        writeFile(join(dir, 'test/criterion.test.ts'), '// Covers: S3.1\nit(\'criterion\', () => {});\n'),
+        writeFile(join(dir, 'test/task.test.ts'), '// Covers: task:7\nit(\'task\', () => {});\n'),
+        writeFile(join(dir, 'test/unmarked.test.ts'), 'it(\'unmarked\', () => {});\n'),
+        writeFile(join(dir, 'test/unresolved.test.ts'), '// Covers: S9.9\nit(\'unresolved\', () => {});\n'),
+      ]);
+      await git('add', 'test');
+      await git('commit', '-m', 'add feature tests');
+
+      const currentProof = async (): Promise<FullSuiteInspectionResult> => ({
+        status: 'CURRENT',
+        evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+      } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>);
+      const assembleProjection = () => assembleInputs(realGit(), scopedPlanPath, { inspectTestSuite: currentProof });
+
+      const beforeRebase = await assembleProjection();
+
+      expect(beforeRebase.sourceSnapshot.testQuality).toEqual({
+        inScopeTests: ['test/criterion.test.ts', 'test/task.test.ts'],
+        unresolvedMarkers: [{ selector: 'test/unresolved.test.ts', reference: 'S9.9' }],
+      });
+
+      // Another feature's test reaches the base before this feature is rebased.
+      // It must disappear from this feature's fresh merge-base diff.
+      await git('checkout', 'main');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'test/other-feature.test.ts'), '// Covers: S3.1\nit(\'other feature\', () => {});\n');
+      await git('add', 'test/other-feature.test.ts');
+      await git('commit', '-m', 'add other feature test');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+      await git('checkout', 'feature/test-quality-projection');
+      await git('rebase', 'main');
+
+      const afterRebase = await assembleProjection();
+
+      expect(afterRebase.diff).not.toContain('other-feature.test.ts');
+      expect(afterRebase.sourceSnapshot.testQuality).toEqual(beforeRebase.sourceSnapshot.testQuality);
+    });
+
     // End-to-end form of the engine-append exclusion: the plan is committed on
     // the base branch and the feature branch carries the engine's own
     // remediation append. Scope may never see that append as an out-of-plan
