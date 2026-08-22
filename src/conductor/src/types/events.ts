@@ -200,6 +200,15 @@ export type ConductorEvent =
       reason: string;
       operator: string;
     }
+  | {
+      /** A daemon reconciliation filed one non-blocking beyond finding as an intake issue. */
+      type: 'build_review_beyond_filed';
+      feature: string;
+      lapId: string;
+      rubric: string;
+      findingId: string;
+      issueUrl: string;
+    }
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
   | { type: 'build_review_disposition_version_invalidated'; feature: string; findingId: string; rubric: string; contractVersion: string }
   | { type: 'build_review_outer_verdict'; lapId: string; rawVerdict: 'PASS' | 'FAIL'; effectiveVerdict: 'PASS' | 'FAIL' }
