@@ -138,9 +138,29 @@ spec from `/writing-system-tests`, and the existing daemon integration harness f
 - The three land-spec cases pass and the error message contains the task id and reason for each violation.
 - `grep -n validatePlanDoneWhen src/conductor/src` lists exactly `plan-done-when.ts` and `engineer/land-spec.ts` — no daemon-backlog or conductor caller.
 
+> **Amended 2026-08-22 by #1785:** this task additionally authorizes the compatibility migration of
+> existing plan fixtures made invalid by the land gate it introduces. Every pre-existing test that
+> writes a plan fixture now needs a `Done when:` block to reach its own assertion, so the migration is
+> a mechanical consequence of this task and could not be enumerated before the gate existed.
+> Authorized files, additive fixture text only — no assertion may be weakened or removed:
+> `test/acceptance/adr-approval-gate-before-build.acceptance.test.ts:49`,
+> `test/acceptance/build-review-no-longer-judges-wiring.acceptance.test.ts:72,234`,
+> `test/acceptance/build-tasks-can-amend-protected-docs-artifacts-ame.acceptance.test.ts:111,127`,
+> `test/acceptance/decide-artifact-coherence-check.acceptance.test.ts:114,504`,
+> `test/acceptance/engineer-agent-hosted.test.ts:71,427,690`,
+> `test/acceptance/engineer-worktree-isolation.test.ts:91`, and
+> `test/engine/engineer/engineer-cli-launch-intake.test.ts:106`.
+
 **Files:**
 - src/conductor/src/engine/engineer/land-spec.ts
 - src/conductor/test/engine/engineer/land-spec.test.ts
+- src/conductor/test/acceptance/adr-approval-gate-before-build.acceptance.test.ts — Done-when fixture migration (amended 2026-08-22)
+- src/conductor/test/acceptance/build-review-no-longer-judges-wiring.acceptance.test.ts — Done-when fixture migration (amended 2026-08-22)
+- src/conductor/test/acceptance/build-tasks-can-amend-protected-docs-artifacts-ame.acceptance.test.ts — Done-when fixture migration (amended 2026-08-22)
+- src/conductor/test/acceptance/decide-artifact-coherence-check.acceptance.test.ts — Done-when fixture migration (amended 2026-08-22)
+- src/conductor/test/acceptance/engineer-agent-hosted.test.ts — Done-when fixture migration (amended 2026-08-22)
+- src/conductor/test/acceptance/engineer-worktree-isolation.test.ts — Done-when fixture migration (amended 2026-08-22)
+- src/conductor/test/engine/engineer/engineer-cli-launch-intake.test.ts — Done-when fixture migration (amended 2026-08-22)
 
 **Dependencies:** 3
 
@@ -482,8 +502,15 @@ spec from `/writing-system-tests`, and the existing daemon integration harness f
 - [ ] All happy path criteria covered by at least one task
 - [ ] All negative path criteria covered by at least one task
 - [ ] No task exceeds 5 minutes of work
-- [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
+- [ ] Every task has a `Done when:` block of falsifiable checks
+- [ ] No unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+_Revised 2026-08-22 (#1785): the two `Done when:` checks above are authoring judgement, exercised here and by the
+`build_review` rubric prompt. The land gate this feature delivers is mechanically shape-only —
+presence of the block and 2–5 non-blank criteria — per approved ADR D1 ("mechanical shape at land;
+the quality-word rule stays prompt", adr-2026-07-22). `validatePlanDoneWhen` neither reads criterion
+prose nor judges falsifiability, and no task in this plan asks it to._
 ### Task rem-scope-001: src/conductor/test/acceptance/adr-approval-gate-before-build.acceptance.test.ts:49 — add the existing plan fixture to the approved Done-when compatibility-migration scope and pin that ADR approval behavior still reaches its intended assertion
 ### Task rem-scope-002: src/conductor/test/acceptance/build-review-no-longer-judges-wiring.acceptance.test.ts:72 — authorize and verify both cited Done-when fixture migrations while preserving the legacy-wiring scenarios
 ### Task rem-scope-003: src/conductor/test/acceptance/build-tasks-can-amend-protected-docs-artifacts-ame.acceptance.test.ts:111 — authorize and verify the cited Done-when fixture migrations without changing protected-artifact behavior
