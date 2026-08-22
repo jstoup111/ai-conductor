@@ -4,7 +4,7 @@
   "type": "module",
   "main": "dist/index.js",
   "engines": {
-    "node": ">=20.5.0"
+    "node": ">=26.0.0"
   },
   "scripts": {
     "build": "node scripts/publish-engine.mjs",
